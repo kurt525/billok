@@ -191,8 +191,10 @@ test.describe('Placeholder Members', () => {
     });
     const token = (await invRes.json()).result?.data?.json?.token;
 
-    // Charlie joins via the linked invite
+    // Charlie joins via the linked invite, which names the placeholder he takes over
     const charlie = await authedContext(users.charlie.email, users.charlie.password);
+    const invite = await trpcResult(await trpcQuery(charlie, 'groups.getInvite', { token }));
+    expect(invite.placeholderName).toBe('Charlie Placeholder');
     const joinRes = await trpcMutation(charlie, 'groups.joinByInvite', { token });
     expect((await joinRes.json()).result?.data?.json?.alreadyMember).toBe(false);
 
@@ -202,6 +204,126 @@ test.describe('Placeholder Members', () => {
     const charlieBal = balances.find((b: { userId: string }) => b.userId !== aliceId);
     expect(charlieBal).toBeDefined();
     expect(charlieBal.net).toBe(-1000);
+
+    await charlie.dispose();
+    await dispose();
+  });
+
+  // #276: merging only added the amounts of a placeholder and a member who were
+  // both in an expense, so the edit form opened on a different split, and a
+  // payment between them became a payment to themselves.
+  test('merging keeps the amounts of an expense both were in, and drops payments between them', async () => {
+    const { owner, groupId, memberIds, dispose } = await createTestGroup(
+      users.alice.email,
+      users.alice.password,
+      [{ email: users.bob.email, password: users.bob.password }],
+      'Merge Overlap Test',
+    );
+    const aliceId = memberIds[users.alice.email]!;
+    const bobId = memberIds[users.bob.email]!;
+    const phRes = await trpcMutation(owner, 'groups.addPlaceholder', { groupId, name: 'Hank' });
+    const hankId = (await phRes.json()).result?.data?.json?.id;
+
+    const created = await trpcMutation(owner, 'expenses.create', {
+      groupId,
+      title: 'Cabin',
+      amount: 3000,
+      paidById: aliceId,
+      splitMode: 'EQUAL',
+      shares: [
+        { userId: aliceId, amount: 1000 },
+        { userId: bobId, amount: 1000 },
+        { userId: hankId, amount: 1000 },
+      ],
+    });
+    const expense = (await created.json()).result?.data?.json;
+    await trpcMutation(owner, 'settlements.create', { groupId, fromId: hankId, toId: bobId, amount: 500 });
+
+    const mergeRes = await trpcMutation(owner, 'groups.mergePlaceholder', {
+      groupId,
+      placeholderUserId: hankId,
+      realUserId: bobId,
+    });
+    expect((await mergeRes.json()).result?.data?.json?.success).toBe(true);
+
+    // Bob holds both parts, kept as exact amounts so saving the expense unchanged moves nothing
+    const after = await trpcResult(await trpcQuery(owner, 'expenses.get', { groupId, expenseId: expense.id }));
+    expect(after.splitMode).toBe('EXACT');
+    const shares = Object.fromEntries(
+      after.shares.map((s: { userId: string; amount: number }) => [s.userId, s.amount]),
+    );
+    expect(shares).toEqual({ [aliceId]: 1000, [bobId]: 2000 });
+
+    // The payment from Hank to Bob would now be Bob paying himself
+    const payments = await trpcResult(await trpcQuery(owner, 'settlements.list', { groupId }));
+    expect(payments.items).toEqual([]);
+    const balances = (await trpcResult(await trpcQuery(owner, 'balances.getGroupBalances', { groupId }))).balances;
+    expect(balances.find((b: { userId: string }) => b.userId === bobId).net).toBe(-2000);
+    expect(balances.find((b: { userId: string }) => b.userId === aliceId).net).toBe(2000);
+
+    await dispose();
+  });
+
+  // #276: someone who joined through a plain link first, then got the claim link
+  test('a member who opens a claim link takes over the placeholder', async () => {
+    const { owner, memberContexts, groupId, memberIds, dispose } = await createTestGroup(
+      users.alice.email,
+      users.alice.password,
+      [{ email: users.charlie.email, password: users.charlie.password }],
+      'Member Claim Test',
+    );
+    const charlie = memberContexts[0]!;
+    const aliceId = memberIds[users.alice.email]!;
+    const charlieId = memberIds[users.charlie.email]!;
+    const phRes = await trpcMutation(owner, 'groups.addPlaceholder', { groupId, name: 'Ivy' });
+    const ivyId = (await phRes.json()).result?.data?.json?.id;
+    await trpcMutation(owner, 'expenses.create', {
+      groupId,
+      title: 'Ivy owes half',
+      amount: 2000,
+      paidById: aliceId,
+      splitMode: 'EQUAL',
+      shares: [
+        { userId: aliceId, amount: 1000 },
+        { userId: ivyId, amount: 1000 },
+      ],
+    });
+    const invRes = await trpcMutation(owner, 'groups.createInvite', { groupId, placeholderUserId: ivyId });
+    const token = (await invRes.json()).result?.data?.json?.token;
+
+    const joinRes = await trpcMutation(charlie, 'groups.joinByInvite', { token });
+    expect((await joinRes.json()).result?.data?.json).toEqual({ groupId, alreadyMember: true });
+
+    const balances = (await trpcResult(await trpcQuery(owner, 'balances.getGroupBalances', { groupId }))).balances;
+    expect(balances.find((b: { userId: string }) => b.userId === charlieId).net).toBe(-1000);
+    expect(balances.find((b: { userId: string }) => b.userId === ivyId)).toBeUndefined();
+    // The link is used up
+    expect(await trpcResult(await trpcQuery(charlie, 'groups.getInvite', { token }))).toBeNull();
+
+    await dispose();
+  });
+
+  // #276: a claim link is for its placeholder only, not a general way into the group
+  test('a claim link stops working once its placeholder is merged', async () => {
+    const { owner, groupId, memberIds, dispose } = await createTestGroup(
+      users.alice.email,
+      users.alice.password,
+      [{ email: users.bob.email, password: users.bob.password }],
+      'Stale Claim Link Test',
+    );
+    const bobId = memberIds[users.bob.email]!;
+    const phRes = await trpcMutation(owner, 'groups.addPlaceholder', { groupId, name: 'Jo' });
+    const joId = (await phRes.json()).result?.data?.json?.id;
+    const invRes = await trpcMutation(owner, 'groups.createInvite', { groupId, placeholderUserId: joId });
+    const token = (await invRes.json()).result?.data?.json?.token;
+    await trpcMutation(owner, 'groups.mergePlaceholder', { groupId, placeholderUserId: joId, realUserId: bobId });
+
+    const charlie = await authedContext(users.charlie.email, users.charlie.password);
+    expect(await trpcResult(await trpcQuery(charlie, 'groups.getInvite', { token }))).toBeNull();
+    const err = await trpcError(await trpcMutation(charlie, 'groups.joinByInvite', { token }));
+    expect(err?.data?.code).toBe('NOT_FOUND');
+    const group = await trpcResult(await trpcQuery(owner, 'groups.get', { groupId }));
+    expect(group.members.map((m: { user: { email: string } }) => m.user.email)).not.toContain(users.charlie.email);
 
     await charlie.dispose();
     await dispose();
