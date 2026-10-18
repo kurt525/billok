@@ -18,6 +18,61 @@ export function claimStorageKey(shareToken: string): string {
   return `sharetab-claim:${shareToken}`;
 }
 
+export function getStoredClaimIdentity(shareToken: string): StoredClaimIdentity | null {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const raw = window.localStorage.getItem(claimStorageKey(shareToken));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    const identity = storedClaimIdentitySchema.safeParse(parsed);
+    return identity.success ? identity.data : null;
+  } catch {
+    return null;
+  }
+}
+
+export function removeStoredClaimIdentity(shareToken: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(claimStorageKey(shareToken));
+  } catch {
+    // Non-fatal, like setStoredClaimIdentity.
+  }
+}
+
+/**
+ * Whether this browser lets the page store a claim identity: storage can be disabled, refused
+ * or full. The pages that create a session only have the server join the creator when it can,
+ * since a creator whose token isn't stored can neither resume it nor join under their own name
+ * (#263).
+ */
+export function canStoreClaimIdentity(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const key = claimStorageKey('probe');
+    window.localStorage.setItem(key, '1');
+    window.localStorage.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Store who this device is in a claim session. The claim page does this when it joins or adopts
+ * someone; the pages that create a session do it for the creator before opening the claim page,
+ * which then resumes them (#263).
+ */
+export function setStoredClaimIdentity(shareToken: string, identity: StoredClaimIdentity) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(claimStorageKey(shareToken), JSON.stringify(identity));
+  } catch {
+    // Non-fatal: failing to persist rejoin state should not block the claim flow.
+  }
+}
+
 export function normalizeGuestName(name: string): string {
   return name.trim().toLowerCase();
 }
