@@ -31,7 +31,7 @@ import {
   Scissors,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { getInitials } from '@/lib/avatar';
+import { chipLabels, getInitials } from '@/lib/avatar';
 
 type Step = 'upload' | 'processing' | 'people' | 'assign';
 
@@ -481,6 +481,8 @@ export default function GuestSplitPage() {
   }
 
   const initials = getInitials;
+  // First names, or whole names where two people share one (#277)
+  const labels = chipLabels(people);
 
   return (
     <div className="space-y-6 pb-24">
@@ -1018,7 +1020,7 @@ export default function GuestSplitPage() {
                             key={personIdx}
                             type="button"
                             onClick={() => toggleAssignment(itemIdx, personIdx)}
-                            className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-sm transition-colors min-h-[36px] ${
+                            className={`flex max-w-full items-center gap-1 rounded-full px-3 py-1.5 text-sm transition-colors min-h-[36px] ${
                               isAssigned
                                 ? 'bg-primary text-primary-foreground'
                                 : 'bg-muted text-muted-foreground hover:bg-muted/80'
@@ -1027,7 +1029,13 @@ export default function GuestSplitPage() {
                             <Avatar className="h-5 w-5">
                               <AvatarFallback className="text-[9px]">{initials(name)}</AvatarFallback>
                             </Avatar>
-                            {name.split(' ')[0]}
+                            <span
+                              data-testid="chip-label"
+                              className="min-w-0 text-left [overflow-wrap:anywhere]"
+                              title={name.trim()}
+                            >
+                              {labels[personIdx]}
+                            </span>
                             {isAssigned && <Check className="h-3 w-3" />}
                           </button>
                         );
