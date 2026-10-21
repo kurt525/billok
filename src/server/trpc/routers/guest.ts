@@ -536,10 +536,10 @@ export const guestRouter = createTRPCRouter({
       );
 
       const guestSplit = await ctx.db.$transaction(async (tx) => {
-        const receiptId = await lockReceiptForSplit(tx, input.receiptId);
+        const receiptId = await lockReceiptForSplit(tx, input.receiptId, ctx.session?.user?.id);
         return tx.guestSplit.create({
           data: {
-            ...(receiptId !== undefined ? { receiptId } : {}),
+            ...(receiptId !== undefined ? { receiptId, receiptShared: true } : {}),
             receiptData: {
               ...input.receiptData,
               tip,
@@ -714,10 +714,10 @@ export const guestRouter = createTRPCRouter({
       );
 
       const session = await ctx.db.$transaction(async (tx) => {
-        const receiptId = await lockReceiptForSplit(tx, input.receiptId);
+        const receiptId = await lockReceiptForSplit(tx, input.receiptId, ctx.session?.user?.id);
         return tx.guestSplit.create({
           data: {
-            ...(receiptId !== undefined ? { receiptId } : {}),
+            ...(receiptId !== undefined ? { receiptId, receiptShared: true } : {}),
             receiptData: input.receiptData as unknown as Prisma.InputJsonValue,
             items: expandedItems as unknown as Prisma.InputJsonValue,
             people: people as unknown as Prisma.InputJsonValue,

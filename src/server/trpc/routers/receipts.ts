@@ -9,6 +9,7 @@ import { parseExtractedData } from '../../lib/json-schemas';
 import { getExchangeRate, convertCents } from '../../lib/exchange-rates';
 import { stripUndefined } from '../../lib/strip-undefined';
 import { lockActiveGroup } from '../../lib/group-balances';
+import { deleteUnusedSplitReceipts, removeReceiptFiles } from '../../lib/receipt-cleanup';
 
 const ARCHIVED_CREATE_EXPENSE = 'Cannot create expenses in archived groups';
 
@@ -18,7 +19,7 @@ const ARCHIVED_CREATE_EXPENSE = 'Cannot create expenses in archived groups';
  * Prisma cannot statically infer dynamic includes -- callers should cast as needed.
  */
 async function verifyReceiptAccess(
-  db: PrismaClient,
+  db: PrismaClient | Prisma.TransactionClient,
   receiptId: string,
   userId: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -79,9 +80,14 @@ export const receiptsRouter = createTRPCRouter({
       // (crashed run) and may be re-claimed. The threshold deliberately
       // exceeds the worst-case provider pipeline (2 passes x per-provider
       // timeouts of 30-120s) so a slow-but-live run is never re-claimed.
+      // It also claims it only while it's still in the group the access check above found it
+      // in: deleting it from the pending list takes it off the group and keeps it while a
+      // claim session uses it (#318), and this update, queued behind that delete's row lock,
+      // would otherwise put it back
       const claimed = await ctx.db.receipt.updateMany({
         where: {
           id: input.receiptId,
+          groupId: receipt.groupId,
           OR: [{ status: { not: 'PROCESSING' } }, { updatedAt: { lt: new Date(Date.now() - 15 * 60 * 1000) } }],
         },
         data: {
@@ -90,9 +96,13 @@ export const receiptsRouter = createTRPCRouter({
         },
       });
       if (claimed.count === 0) {
+        const now = await ctx.db.receipt.findUnique({ where: { id: input.receiptId }, select: { groupId: true } });
         throw new TRPCError({
           code: 'CONFLICT',
-          message: 'Receipt is already being processed',
+          message:
+            now?.groupId === receipt.groupId
+              ? 'Receipt is already being processed'
+              : 'Receipt was removed from this group',
         });
       }
 
@@ -524,6 +534,15 @@ export const receiptsRouter = createTRPCRouter({
       const expense = await ctx.db.$transaction(async (tx) => {
         await lockActiveGroup(tx, input.groupId, ARCHIVED_CREATE_EXPENSE);
 
+        // Deleting the receipt from the pending list takes it off the group, and keeps it while
+        // a claim session uses it (#318). Under its lock, that either waits for this expense
+        // (and is refused) or finished first and is seen here
+        const [current] = await tx.$queryRaw<{ groupId: string | null }[]>`
+          SELECT "groupId" FROM "Receipt" WHERE "id" = ${input.receiptId} FOR SHARE`;
+        if (!current || current.groupId !== receipt.groupId) {
+          throw new TRPCError({ code: 'CONFLICT', message: 'Receipt was removed from this group' });
+        }
+
         // Verify paidBy and all assignees are members of this group (after the lock,
         // so someone leaving meanwhile is either gone or waits for this, #279)
         const groupMembers = await tx.groupMember.findMany({
@@ -609,10 +628,12 @@ export const receiptsRouter = createTRPCRouter({
       await verifyReceiptAccess(ctx.db, input.receiptId, ctx.user.id);
 
       await ctx.db.$transaction(async (tx) => {
-        const receipt = await tx.receipt.findUnique({
-          where: { id: input.receiptId },
-        });
-        if (!receipt || receipt.status !== 'COMPLETED') {
+        // Deleting it from the pending list takes it off the group and keeps it while a claim
+        // session uses it (#318). Under its lock, that either waits for this save or is seen
+        // here, and the access check above runs again on what the delete left
+        await tx.$queryRaw`SELECT 1 FROM "Receipt" WHERE "id" = ${input.receiptId} FOR NO KEY UPDATE`;
+        const receipt = await verifyReceiptAccess(tx, input.receiptId, ctx.user.id);
+        if (receipt.status !== 'COMPLETED') {
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'Receipt must be processed first' });
         }
         // Check it's not already linked to an expense
@@ -751,30 +772,25 @@ export const receiptsRouter = createTRPCRouter({
     if (!isUploader && !isSaver) {
       throw new TRPCError({ code: 'FORBIDDEN' });
     }
-    // Can't delete if already linked to expense
-    const expense = await ctx.db.expense.findUnique({
-      where: { receiptId: input.receiptId },
+
+    // It leaves the group's pending list either way. A claim session made from it (the group
+    // scan page's Share Link) still shows its image, so then it stays until no split uses it
+    // and deleteUnusedSplitReceipts deletes it (#318); otherwise it's deleted now. The row
+    // lock comes first, so an expense or a split being made from it meanwhile is seen.
+    const imagePaths = await ctx.db.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<unknown[]>`SELECT 1 FROM "Receipt" WHERE "id" = ${input.receiptId} FOR UPDATE`;
+      if (locked.length === 0) {
+        throw new TRPCError({ code: 'NOT_FOUND' });
+      }
+      // Can't delete if already linked to expense
+      const expense = await tx.expense.findUnique({ where: { receiptId: input.receiptId } });
+      if (expense) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Receipt has an expense' });
+      }
+      await tx.receipt.update({ where: { id: input.receiptId }, data: { groupId: null } });
+      return deleteUnusedSplitReceipts(tx, [input.receiptId]);
     });
-    if (expense) {
-      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Receipt has an expense' });
-    }
-
-    await ctx.db.receiptItem.deleteMany({ where: { receiptId: input.receiptId } });
-    await ctx.db.receipt.delete({ where: { id: input.receiptId } });
-
-    // Clean up the uploaded image file
-    try {
-      const { unlink } = await import('fs/promises');
-      const { resolveUploadPath } = await import('../../lib/upload-dir');
-      const filepath = resolveUploadPath(receipt.imagePath);
-      await unlink(filepath);
-    } catch {
-      // Non-fatal: file may already be missing
-      logger.warn('receipt.delete.fileCleanupFailed', {
-        receiptId: input.receiptId,
-        imagePath: receipt.imagePath,
-      });
-    }
+    await removeReceiptFiles(imagePaths);
 
     return { success: true };
   }),
