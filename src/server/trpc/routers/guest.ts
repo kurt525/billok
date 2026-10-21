@@ -10,6 +10,12 @@ import { checkClaimWriteRateLimit, checkSessionReadRateLimit } from '../../lib/g
 import { getClientIp } from '../../lib/client-ip';
 import { guestTransaction } from '../../lib/guest-transaction';
 import {
+  deleteExpiredSplits,
+  deleteUnusedSplitReceipts,
+  lockReceiptForSplit,
+  removeReceiptFiles,
+} from '../../lib/receipt-cleanup';
+import {
   parseExtractedData,
   parseGuestItems,
   parseGuestPeople,
@@ -197,11 +203,11 @@ function createExpiryDate(): Date {
 
 /** Fire-and-forget cleanup of expired GuestSplit records. */
 function cleanupExpiredSplits(db: typeof import('@/server/db').db, logPrefix: string): void {
-  db.guestSplit
-    .deleteMany({ where: { expiresAt: { lt: new Date() } } })
-    .then((result) => {
-      if (result.count > 0) {
-        logger.info(`${logPrefix}.cleanup`, { deletedCount: result.count });
+  // One batch per new split keeps up with expiry; a backlog clears over the next few
+  deleteExpiredSplits(db, 100)
+    .then((deletedCount) => {
+      if (deletedCount > 0) {
+        logger.info(`${logPrefix}.cleanup`, { deletedCount });
       }
     })
     .catch((err) => {
@@ -229,12 +235,17 @@ export const guestRouter = createTRPCRouter({
   deleteSplit: protectedProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
     const split = await ctx.db.guestSplit.findUnique({
       where: { id: input.id },
-      select: { userId: true },
+      select: { userId: true, receiptId: true },
     });
     if (!split || split.userId !== ctx.user.id) {
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Split not found' });
     }
-    await ctx.db.guestSplit.delete({ where: { id: input.id } });
+    // Its receipt goes too, unless a group or another split still uses it (#265)
+    const imagePaths = await ctx.db.$transaction(async (tx) => {
+      await tx.guestSplit.delete({ where: { id: input.id } });
+      return deleteUnusedSplitReceipts(tx, split.receiptId ? [split.receiptId] : []);
+    });
+    await removeReceiptFiles(imagePaths);
     return { success: true };
   }),
 
@@ -524,23 +535,26 @@ export const guestRouter = createTRPCRouter({
         filteredPeople[remappedPaidBy]?.name,
       );
 
-      const guestSplit = await ctx.db.guestSplit.create({
-        data: {
-          ...(input.receiptId !== undefined ? { receiptId: input.receiptId } : {}),
-          receiptData: {
-            ...input.receiptData,
-            tip,
-            ...(input.tipOverride != null ? { total: input.receiptData.subtotal + input.receiptData.tax + tip } : {}),
-          } as unknown as Prisma.InputJsonValue,
-          items: input.items as unknown as Prisma.InputJsonValue,
-          people: filteredPeople as unknown as Prisma.InputJsonValue,
-          assignments: remappedAssignments as unknown as Prisma.InputJsonValue,
-          summary: summaryWithNames as unknown as Prisma.InputJsonValue,
-          paidByIndex: remappedPaidBy,
-          payerVenmoHandle,
-          userId: ctx.session?.user?.id ?? null,
-          expiresAt: createExpiryDate(),
-        },
+      const guestSplit = await ctx.db.$transaction(async (tx) => {
+        const receiptId = await lockReceiptForSplit(tx, input.receiptId);
+        return tx.guestSplit.create({
+          data: {
+            ...(receiptId !== undefined ? { receiptId } : {}),
+            receiptData: {
+              ...input.receiptData,
+              tip,
+              ...(input.tipOverride != null ? { total: input.receiptData.subtotal + input.receiptData.tax + tip } : {}),
+            } as unknown as Prisma.InputJsonValue,
+            items: input.items as unknown as Prisma.InputJsonValue,
+            people: filteredPeople as unknown as Prisma.InputJsonValue,
+            assignments: remappedAssignments as unknown as Prisma.InputJsonValue,
+            summary: summaryWithNames as unknown as Prisma.InputJsonValue,
+            paidByIndex: remappedPaidBy,
+            payerVenmoHandle,
+            userId: ctx.session?.user?.id ?? null,
+            expiresAt: createExpiryDate(),
+          },
+        });
       });
 
       cleanupExpiredSplits(ctx.db, 'guest.split');
@@ -699,19 +713,22 @@ export const guestRouter = createTRPCRouter({
         people[paidByIndex]?.name,
       );
 
-      const session = await ctx.db.guestSplit.create({
-        data: {
-          ...(input.receiptId !== undefined ? { receiptId: input.receiptId } : {}),
-          receiptData: input.receiptData as unknown as Prisma.InputJsonValue,
-          items: expandedItems as unknown as Prisma.InputJsonValue,
-          people: people as unknown as Prisma.InputJsonValue,
-          assignments: [] as unknown as Prisma.InputJsonValue,
-          paidByIndex,
-          payerVenmoHandle: claimPayerVenmoHandle,
-          status: GuestSplitStatus.CLAIMING,
-          userId: ctx.session?.user?.id ?? null,
-          expiresAt: createExpiryDate(),
-        },
+      const session = await ctx.db.$transaction(async (tx) => {
+        const receiptId = await lockReceiptForSplit(tx, input.receiptId);
+        return tx.guestSplit.create({
+          data: {
+            ...(receiptId !== undefined ? { receiptId } : {}),
+            receiptData: input.receiptData as unknown as Prisma.InputJsonValue,
+            items: expandedItems as unknown as Prisma.InputJsonValue,
+            people: people as unknown as Prisma.InputJsonValue,
+            assignments: [] as unknown as Prisma.InputJsonValue,
+            paidByIndex,
+            payerVenmoHandle: claimPayerVenmoHandle,
+            status: GuestSplitStatus.CLAIMING,
+            userId: ctx.session?.user?.id ?? null,
+            expiresAt: createExpiryDate(),
+          },
+        });
       });
 
       cleanupExpiredSplits(ctx.db, 'guest.session');
