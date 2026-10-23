@@ -67,3 +67,58 @@ jobs:
         uses: actions/checkout@v4
       - name: Test mobile PWA contract
         run: python3 scripts/test_billok_pwa.py
+
+  coverage-regression:
+    name: Coverage regression (%)
+    runs-on: [self-hosted, Linux, X64, billok]
+    timeout-minutes: 35
+    steps:
+      - name: Checkout BillOK (including main for baseline)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Test coverage comparison logic
+        run: node --test scripts/check-coverage-regression.test.mjs
+      - name: Measure current branch coverage
+        run: npm run test:coverage -- --coverage.reportsDirectory="$RUNNER_TEMP/billok-current-coverage"
+      - name: Measure main baseline coverage
+        if: github.ref != 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline_dir="$(mktemp -d "$RUNNER_TEMP/billok-main-XXXXXX")"
+          trap 'rm -rf "$baseline_dir"' EXIT
+          git fetch origin 'refs/heads/main:refs/remotes/origin/main' --no-tags
+          git archive origin/main | tar -x -C "$baseline_dir"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$baseline_dir/node_modules"
+          # Same coverage scope/config for both branches, even if main has older config.
+          cp "$GITHUB_WORKSPACE/vitest.config.ts" "$baseline_dir/vitest.config.ts"
+          echo "COVERAGE_BASE_SHA=$(git rev-parse origin/main)" >> "$GITHUB_ENV"
+          ( cd "$baseline_dir" && "$GITHUB_WORKSPACE/node_modules/.bin/prisma" generate )
+          (
+            cd "$baseline_dir"
+            "$GITHUB_WORKSPACE/node_modules/.bin/vitest" run --coverage \
+              --coverage.reportsDirectory="$RUNNER_TEMP/billok-main-coverage"
+          )
+      - name: Check regression percentage and publish report
+        shell: bash
+        env:
+          MAX_COVERAGE_DROP_PP: '0.5'
+        run: |
+          set -euo pipefail
+          current="$RUNNER_TEMP/billok-current-coverage/coverage-summary.json"
+          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            node scripts/check-coverage-regression.mjs "$current"
+          else
+            node scripts/check-coverage-regression.mjs "$current" \
+              "$RUNNER_TEMP/billok-main-coverage/coverage-summary.json"
+          fi

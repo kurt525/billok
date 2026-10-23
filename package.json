@@ -41,7 +41,8 @@
     "test:ai": "RUN_AI_TESTS=1 npx playwright test ai-provider-test.spec.ts",
     "demo": "tsx e2e/demo-video.ts",
     "demo:gifs": "tsx e2e/demo-gifs.ts",
-    "lint:i18n": "npx tsx scripts/check-translations.ts"
+    "lint:i18n": "npx tsx scripts/check-translations.ts",
+    "test:coverage": "vitest run --coverage"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"
@@ -92,6 +93,7 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "4.1.11",
     "embedded-postgres": "^18.3.0-beta.16",
     "eslint": "^9",
     "eslint-config-next": "16.4.2",
