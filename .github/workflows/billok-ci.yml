@@ -3,8 +3,6 @@ name: BillOK CI
 on:
   push:
     branches: [main, 'billok/**']
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -16,8 +14,7 @@ concurrency:
 
 jobs:
   validate:
-    # Never run untrusted fork pull requests on our self-hosted CI VPS.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Only trusted branch pushes and authorized manual runs. Never public PR code.
     runs-on: [self-hosted, Linux, X64, billok]
     timeout-minutes: 35
     steps:
