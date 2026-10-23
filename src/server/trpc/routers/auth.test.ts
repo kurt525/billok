@@ -59,16 +59,31 @@ afterEach(() => {
 describe('auth.getLoginOptions', () => {
   test('defaults to password login only', async () => {
     const api = await caller();
-    expect(await api.getLoginOptions()).toEqual({ passwordLogin: true, magicLink: false, oidc: null });
+    expect(await api.getLoginOptions()).toEqual({ passwordLogin: true, magicLink: false, oidc: null, google: false });
   });
 
   test('exposes the OIDC button name but never the issuer or secret', async () => {
     stubEnv({ ...OIDC_ENV, EMAIL_SERVER_HOST: 'smtp.example.com', DISABLE_PASSWORD_LOGIN: 'true' });
     const api = await caller();
     const options = await api.getLoginOptions();
-    expect(options).toEqual({ passwordLogin: false, magicLink: true, oidc: { name: 'Authentik' } });
+    expect(options).toEqual({ passwordLogin: false, magicLink: true, oidc: { name: 'Authentik' }, google: false });
     expect(JSON.stringify(options)).not.toContain('s3cret');
     expect(JSON.stringify(options)).not.toContain('auth.example.com');
+  });
+
+  test('reports Google when configured, without its client id or secret', async () => {
+    stubEnv({ GOOGLE_CLIENT_ID: 'id.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'g-secret' });
+    const api = await caller();
+    const options = await api.getLoginOptions();
+    expect(options).toEqual({ passwordLogin: true, magicLink: false, oidc: null, google: true });
+    expect(JSON.stringify(options)).not.toContain('g-secret');
+    expect(JSON.stringify(options)).not.toContain('googleusercontent');
+  });
+
+  test('a partial Google config shows no Google button', async () => {
+    stubEnv({ GOOGLE_CLIENT_ID: 'id.apps.googleusercontent.com' });
+    const api = await caller();
+    expect((await api.getLoginOptions()).google).toBe(false);
   });
 });
 
@@ -206,6 +221,33 @@ describe('password login enabled', () => {
     mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'invite-only' });
     const api = await caller();
     expect(await api.getRegistrationMode()).toEqual({ mode: 'invite-only' });
+  });
+
+  test('getRegistrationMode reads an unrecognised setting as open, as register does', async () => {
+    mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'something-else' });
+    const api = await caller();
+    expect(await api.getRegistrationMode()).toEqual({ mode: 'open' });
+  });
+
+  test('register is refused while the setting is closed', async () => {
+    stubEnv({ REGISTER_RATE_LIMIT_MAX: '9999' });
+    mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'closed' });
+    const api = await caller();
+    await expect(
+      api.register({ name: 'Ada', email: 'ada@example.com', password: 'password123' }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('register goes ahead with an unrecognised setting, read as open', async () => {
+    stubEnv({ REGISTER_RATE_LIMIT_MAX: '9999' });
+    mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'something-else' });
+    mockDb.$queryRaw.mockResolvedValue([]);
+    const tx = { user: { create: vi.fn().mockResolvedValue({ id: 'new', name: 'Ada', email: 'ada@example.com' }) } };
+    mockDb.$transaction.mockImplementation(async (fn: (client: typeof tx) => unknown) => fn(tx));
+    const api = await caller();
+    await api.register({ name: 'Ada', email: 'ada@example.com', password: 'password123' });
+    expect(tx.user.create).toHaveBeenCalled();
   });
 });
 

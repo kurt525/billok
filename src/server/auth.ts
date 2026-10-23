@@ -9,14 +9,10 @@ import type { SMTPTransportOptions } from 'nodemailer';
 import { db } from './db';
 import { logger } from './lib/logger';
 import { parseAuthConfig } from './lib/auth-config';
-import {
-  OIDC_PROVIDER_ID,
-  decideOidcSignIn,
-  gatherOidcFacts,
-  mapOidcProfile,
-  readEmailVerified,
-} from './lib/oidc-sign-in';
+import { GOOGLE_PROVIDER_ID, checkGoogleSignIn, googleProviderOptions } from './lib/google-sign-in';
+import { OIDC_PROVIDER_ID, checkOidcSignIn, mapOidcProfile } from './lib/oidc-sign-in';
 import { authorizePasswordLogin } from './lib/password-login';
+import { readEmailVerified } from './lib/sign-in-identity';
 import { findUserByEmail } from './lib/user-email';
 
 const authConfig = parseAuthConfig(process.env);
@@ -49,13 +45,8 @@ if (authConfig.passwordLogin) {
   );
 }
 
-if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-  providers.push(
-    Google({
-      clientId: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    }),
-  );
+if (authConfig.google) {
+  providers.push(Google(googleProviderOptions(authConfig.google)));
 }
 
 if (authConfig.magicLink) {
@@ -99,6 +90,19 @@ if (authConfig.oidc) {
   });
 }
 
+const LOGIN_EVENTS: Record<string, string> = {
+  [OIDC_PROVIDER_ID]: 'auth.oidc_login',
+  [GOOGLE_PROVIDER_ID]: 'auth.google_login',
+};
+
+/**
+ * Who is already signed in in this browser, so the OIDC and Google policies
+ * never attach a new identity to someone else's account.
+ */
+async function sessionCookieUserId(): Promise<string | null> {
+  return (await auth())?.user?.id ?? null;
+}
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter,
   session: { strategy: 'jwt' },
@@ -112,37 +116,38 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   providers,
   events: {
     signIn({ user, account, isNewUser }) {
-      if (account?.provider === OIDC_PROVIDER_ID) {
-        logger.info('auth.oidc_login', { userId: user.id, email: user.email, isNewUser: isNewUser ?? false });
-      }
+      // External identity providers: the log shows who signed in, and isNewUser when it made the account.
+      const event = account?.provider ? LOGIN_EVENTS[account.provider] : undefined;
+      if (event) logger.info(event, { userId: user.id, email: user.email, isNewUser: isNewUser ?? false });
     },
   },
   callbacks: {
     async signIn({ user, account, profile }): Promise<boolean | string> {
-      if (account?.provider !== OIDC_PROVIDER_ID || !authConfig.oidc) return true;
+      if (account?.provider === GOOGLE_PROVIDER_ID) {
+        return checkGoogleSignIn(db, {
+          providerAccountId: account.providerAccountId,
+          email: user.email ?? null,
+          // Claims from Google's ID token.
+          claims: profile ?? {},
+          sessionUserId: await sessionCookieUserId(),
+          adminEmail: process.env.ADMIN_EMAIL,
+        });
+      }
 
-      // The session this browser already has, if any, so an unlinked IdP
-      // identity is never attached to someone else's account.
-      const session = await auth();
-      const facts = await gatherOidcFacts(db, {
-        providerAccountId: account.providerAccountId,
-        email: user.email ?? null,
-        // Raw claims from the UserInfo endpoint (see `idToken: false` above).
-        emailVerified: readEmailVerified(profile ?? {}),
-        sessionUserId: session?.user?.id ?? null,
-        autoRegister: authConfig.oidc.autoRegister,
-        allowEmailLinking: authConfig.oidc.allowEmailLinking,
-        passwordLogin: authConfig.passwordLogin,
-      });
-      const decision = decideOidcSignIn(facts);
-      if (decision.allow) return true;
+      if (account?.provider === OIDC_PROVIDER_ID && authConfig.oidc) {
+        return checkOidcSignIn(db, {
+          providerAccountId: account.providerAccountId,
+          email: user.email ?? null,
+          // Raw claims from the UserInfo endpoint (see `idToken: false` above).
+          emailVerified: readEmailVerified(profile ?? {}),
+          sessionUserId: await sessionCookieUserId(),
+          autoRegister: authConfig.oidc.autoRegister,
+          allowEmailLinking: authConfig.oidc.allowEmailLinking,
+          passwordLogin: authConfig.passwordLogin,
+        });
+      }
 
-      logger.warn('auth.oidc_denied', {
-        error: decision.error,
-        ...('reason' in decision ? { reason: decision.reason } : {}),
-        email: user.email ?? null,
-      });
-      return `/login?error=${decision.error}`;
+      return true;
     },
     async jwt({ token, user }) {
       if (user?.id) {
@@ -152,12 +157,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       }
       // Always refresh profile fields from DB to pick up profile changes.
       if (token.id) {
-        const fresh = await db.user.findUnique({
-          where: { id: token.id as string },
-          select: { name: true, locale: true },
-        });
-        if (fresh?.name) token.name = fresh.name;
-        if (fresh?.locale) token.locale = fresh.locale;
+        try {
+          const fresh = await db.user.findUnique({
+            where: { id: token.id as string },
+            select: { name: true, locale: true },
+          });
+          if (fresh?.name) token.name = fresh.name;
+          if (fresh?.locale) token.locale = fresh.locale;
+        } catch (error) {
+          // Keep the session with the fields it has. A throw here makes auth()
+          // return no session, and the OIDC and Google policies would then
+          // miss that someone is signed in while Auth.js itself still sees them.
+          logger.warn('auth.session_refresh_failed', { error: error instanceof Error ? error.name : 'unknown' });
+        }
       }
       return token;
     },
