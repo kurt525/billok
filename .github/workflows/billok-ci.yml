@@ -1,0 +1,44 @@
+name: BillOK CI
+
+on:
+  push:
+    branches: [main, 'billok/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: billok-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    # Never run untrusted fork pull requests on our self-hosted CI VPS.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, billok]
+    timeout-minutes: 35
+    steps:
+      - name: Checkout BillOK
+        uses: actions/checkout@v4
+      - name: Install Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Verify translation keys
+        run: npm run lint:i18n
+      - name: Check formatting
+        run: npm run format:check
+      - name: Lint
+        run: npm run lint
+      - name: TypeScript check
+        run: npx tsc --noEmit
+      - name: Unit tests
+        run: npm test
