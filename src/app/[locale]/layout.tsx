@@ -21,13 +21,14 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'ShareTab',
-  description: 'Self-hosted expense splitting with AI receipt scanning',
+  title: 'BillOK',
+  description: 'Разделение общего чека и расчёт переводов между участниками',
+  applicationName: 'BillOK',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
-    title: 'ShareTab',
+    title: 'BillOK',
   },
 };
 
@@ -35,7 +36,8 @@ export const viewport: Viewport = {
   themeColor: '#18181b',
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
+  viewportFit: 'cover',
+  interactiveWidget: 'resizes-content',
 };
 
 export function generateStaticParams() {
