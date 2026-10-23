@@ -12,9 +12,10 @@ concurrency:
   group: billok-ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Trusted branches only: never run public pull_request code on the self-hosted VPS.
 jobs:
-  validate:
-    # Only trusted branch pushes and authorized manual runs. Never public PR code.
+  code-quality:
+    name: Code quality and types
     runs-on: [self-hosted, Linux, X64, billok]
     timeout-minutes: 35
     steps:
@@ -37,5 +38,32 @@ jobs:
         run: npm run lint
       - name: TypeScript check
         run: npx tsc --noEmit
+
+  unit-tests:
+    name: Unit tests (Vitest)
+    runs-on: [self-hosted, Linux, X64, billok]
+    timeout-minutes: 35
+    steps:
+      - name: Checkout BillOK
+        uses: actions/checkout@v4
+      - name: Install Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Generate Prisma client
+        run: npx prisma generate
       - name: Unit tests
         run: npm test
+
+  mobile-pwa-tests:
+    name: BillOK mobile PWA tests
+    runs-on: [self-hosted, Linux, X64, billok]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout BillOK
+        uses: actions/checkout@v4
+      - name: Test mobile PWA contract
+        run: python3 scripts/test_billok_pwa.py
