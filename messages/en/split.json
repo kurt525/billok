@@ -113,7 +113,7 @@
     "orJoinAs": "Or join as:",
     "continueOnAnotherDevice": "Continue on another device",
     "personalLinkHint": "Your personal link lets another device continue as you. Only open it on your own devices: anyone with it can act as you in this split.",
-    "personalLinkShareTitle": "My private ShareTab link (don't share it)",
+    "personalLinkShareTitle": "My private BillOK link (don't share it)",
     "personalLinkCopied": "Personal link copied. Open it on your other device to continue as yourself. Anyone with this link can act as you in this split.",
     "personalLinkInvalid": "This personal link no longer works. That person may have been removed from the split.",
     "personalLinkShared": "Only send this link to yourself: anyone with it can act as you in this split.",

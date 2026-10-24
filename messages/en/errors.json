@@ -119,7 +119,7 @@
   "onlyCreatorSetsVenmo": "Only the split creator can update the Venmo handle",
   "personNameRequired": "At least one person with a name is required",
   "splitBusy": "Someone else is updating this split right now. Please try again.",
-  "serverBusy": "ShareTab is busy right now. Please try again in a moment.",
+  "serverBusy": "BillOK is busy right now. Please try again in a moment.",
   "invalidData": "Invalid {label} data",
   "invalidItemIndex": "Invalid item index",
   "invalidItemIndexValue": "Invalid item index: {index}",

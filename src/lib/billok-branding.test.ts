@@ -32,6 +32,14 @@ describe('BillOK brand foundation', () => {
     }
   });
 
+  test('default translation copy has no upstream brand remaining', () => {
+    for (const name of ['common', 'auth', 'split', 'errors']) {
+      const content = source(`messages/en/${name}.json`);
+      expect(content).toContain('BillOK');
+      expect(content).not.toContain('ShareTab');
+    }
+  });
+
   test('PWA and app icons share the same SVG ruble-receipt design', () => {
     const svg = source('public/icons/icon.svg');
     expect(svg).toBe(source('src/app/icon.svg'));
