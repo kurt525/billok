@@ -15,6 +15,13 @@ describe('BillOK Russian-only user-facing fallbacks', () => {
     expect(claim).toContain("'Разделение чека'");
   });
 
+  it('redirects the landing page to canonical locale-free destinations', () => {
+    const root = source('src/app/[locale]/page.tsx');
+    expect(root).toContain("'/dashboard'");
+    expect(root).toContain("'/login'");
+    expect(root).not.toContain('/${locale}/');
+  });
+
   it('localizes administrator login errors and uses unprefixed redirects', () => {
     for (const section of ['meridian-auth-section', 'openai-codex-auth-section']) {
       const code = source(`src/components/admin/${section}.tsx`);
