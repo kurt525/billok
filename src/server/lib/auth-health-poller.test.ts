@@ -416,7 +416,7 @@ describe('MeridianHealthPoller', () => {
     expect(mockSendMail).toHaveBeenCalledTimes(1);
     const call = mockSendMail.mock.calls[0]![0];
     expect(call.to).toBe('admin@test.com');
-    expect(call.subject).toContain('Claude AI authentication expired');
+    expect(call.subject).toContain('Срок действия авторизации Claude AI истёк');
   });
 
   test('sendAuthExpiryEmail skips when email is not configured', async () => {
@@ -589,7 +589,7 @@ describe('MeridianHealthPoller - poll lifecycle', () => {
     await _pollTick();
 
     expect(mockSendMail).toHaveBeenCalledTimes(1);
-    expect(mockSendMail.mock.calls[0]![0].subject).toContain('Claude AI authentication expired');
+    expect(mockSendMail.mock.calls[0]![0].subject).toContain('Срок действия авторизации Claude AI истёк');
   });
 
   test('does not send email on first not_running (startup grace period)', async () => {
@@ -618,7 +618,7 @@ describe('MeridianHealthPoller - poll lifecycle', () => {
     mockUnhealthy(); // re-check after refresh attempt
     await _pollTick();
     expect(mockSendMail).toHaveBeenCalledTimes(1);
-    expect(mockSendMail.mock.calls[0]![0].subject).toContain('Claude AI authentication expired');
+    expect(mockSendMail.mock.calls[0]![0].subject).toContain('Срок действия авторизации Claude AI истёк');
   });
 
   test("does not send duplicate email with 'once' interval", async () => {
@@ -795,7 +795,7 @@ describe('MeridianHealthPoller - poll lifecycle', () => {
 
     expect(mockSendMail).toHaveBeenCalledTimes(1);
     const call = mockSendMail.mock.calls[0]![0];
-    expect(call.subject).toContain('ChatGPT OAuth (OpenAI Codex) authentication expired');
+    expect(call.subject).toContain('Срок действия авторизации ChatGPT OAuth (OpenAI Codex) истёк');
   });
 
   test('does not send openai-codex email before first healthy state', async () => {
