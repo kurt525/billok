@@ -12,6 +12,7 @@ const namespaces = [
   'groups',
   'expenses',
   'split',
+  'admin',
 ] as const;
 
 function load(locale: string, namespace: string): Record<string, unknown> {
@@ -161,6 +162,25 @@ describe('Russian translations (incremental staging)', () => {
     expect(claim.claimConflict).toContain('many {');
     expect(result.paidBy).toBe('Оплатил <name>{payer}</name>');
     expect(result.shareText).toContain('{total}');
+  });
+
+  it('preserves administrator labels and deletion messages', () => {
+    const admin = load('ru', 'admin');
+    const users = admin.users as Record<string, string>;
+    const registration = admin.registration as Record<string, string>;
+    expect(users.deleteDescription).toContain('{name}');
+    expect(users.deleteDescription).toMatch(/безвозвратно/);
+    expect(registration.inviteOnly).toMatch(/приглашению/);
+    expect(registration.statusUsedBy).toContain('{name}');
+  });
+
+  it('preserves audit records and email notification arguments', () => {
+    const admin = load('ru', 'admin');
+    const tools = admin.tools as Record<string, string>;
+    const audit = admin.audit as Record<string, string>;
+    expect(tools.emailSentTo).toContain('{email}');
+    expect(tools.exportFailed).toContain('{error}');
+    expect(audit.actionTestEmail).toMatch(/письмо/);
   });
 
   it('does not expose the incomplete Russian language to end users', () => {
