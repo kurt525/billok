@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
 import { formatCents, centsToDecimal, parseToCents, isValidMoneyInput } from '@/lib/money';
+import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -214,8 +215,8 @@ export function ItemAssignment({
       toast.error(t('validationPricePositive'));
       return;
     }
-    const quantity = parseInt(editValues.quantity);
-    if (!Number.isInteger(quantity) || quantity < 1) {
+    const quantity = parseReceiptQuantity(editValues.quantity);
+    if (quantity === null) {
       toast.error(t('validationQtyPositive'));
       return;
     }
@@ -230,8 +231,12 @@ export function ItemAssignment({
 
   function handleAddItem() {
     const totalPrice = parseToCents(newItem.totalPrice);
-    const quantity = parseInt(newItem.quantity) || 1;
-    if (!newItem.name.trim() || totalPrice <= 0 || quantity < 1) return;
+    const quantity = parseReceiptQuantity(newItem.quantity);
+    if (quantity === null) {
+      toast.error(t('validationQtyPositive'));
+      return;
+    }
+    if (!newItem.name.trim() || totalPrice <= 0) return;
     addItem.mutate({
       receiptId,
       name: newItem.name.trim(),
@@ -551,8 +556,15 @@ export function ItemAssignment({
       </Card>
 
       {/* Quick actions */}
-      <div className="flex gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={assignAllToEveryone} data-testid="split-all-btn">
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="min-h-11 whitespace-normal"
+          onClick={assignAllToEveryone}
+          data-testid="split-all-btn"
+        >
           <Users className="mr-2 h-4 w-4" />
           {t('splitAllEqually')}
         </Button>
@@ -560,6 +572,7 @@ export function ItemAssignment({
           type="button"
           variant="outline"
           size="sm"
+          className="min-h-11 whitespace-normal"
           onClick={() => setAddingItem(true)}
           data-testid="add-item-btn"
         >
@@ -581,19 +594,20 @@ export function ItemAssignment({
                 }
               }}
             >
-              <div className="flex gap-2">
+              <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1fr)_4rem_6rem]">
                 <Input
                   placeholder={t('itemNamePlaceholder')}
                   value={newItem.name}
                   onChange={(e) => setNewItem((p) => ({ ...p, name: e.target.value }))}
-                  className="flex-1"
+                  className="col-span-2 h-11 min-w-0 sm:col-span-1"
                 />
                 <Input
                   type="number"
                   placeholder={t('qtyPlaceholder')}
                   value={newItem.quantity}
                   onChange={(e) => setNewItem((p) => ({ ...p, quantity: e.target.value }))}
-                  className="w-16"
+                  inputMode="numeric"
+                  className="h-11 min-w-0"
                   min="1"
                 />
                 <Input
@@ -602,14 +616,26 @@ export function ItemAssignment({
                   placeholder={t('pricePlaceholder')}
                   value={newItem.totalPrice}
                   onChange={(e) => setNewItem((p) => ({ ...p, totalPrice: e.target.value }))}
-                  className="w-24"
+                  className="h-11 min-w-0"
                 />
               </div>
               <div className="flex gap-2">
-                <Button type="button" size="sm" disabled={addItem.isPending} onClick={handleAddItem}>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={addItem.isPending}
+                  className="min-h-11"
+                  onClick={handleAddItem}
+                >
                   {addItem.isPending ? t('adding') : t('add')}
                 </Button>
-                <Button type="button" variant="ghost" size="sm" onClick={() => setAddingItem(false)}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="min-h-11"
+                  onClick={() => setAddingItem(false)}
+                >
                   {t('cancel')}
                 </Button>
               </div>
@@ -634,18 +660,19 @@ export function ItemAssignment({
               <CardContent className="py-3">
                 {isEditing ? (
                   <div className="mb-2 space-y-2">
-                    <div className="flex gap-2">
+                    <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1fr)_4rem_6rem]">
                       <Input
                         value={editValues.name}
                         onChange={(e) => setEditValues((p) => ({ ...p, name: e.target.value }))}
-                        className="flex-1"
+                        className="col-span-2 h-11 min-w-0 sm:col-span-1"
                         placeholder={t('itemNamePlaceholder')}
                       />
                       <Input
                         type="number"
                         value={editValues.quantity}
                         onChange={(e) => setEditValues((p) => ({ ...p, quantity: e.target.value }))}
-                        className="w-16"
+                        inputMode="numeric"
+                        className="h-11 min-w-0"
                         placeholder={t('qtyPlaceholder')}
                         min="1"
                       />
@@ -654,28 +681,40 @@ export function ItemAssignment({
                         inputMode="decimal"
                         value={editValues.totalPrice}
                         onChange={(e) => setEditValues((p) => ({ ...p, totalPrice: e.target.value }))}
-                        className="w-24"
+                        className="h-11 min-w-0"
                         placeholder={t('pricePlaceholder')}
                       />
                     </div>
                     <div className="flex gap-1">
-                      <Button type="button" size="sm" onClick={() => saveEdit(item.id)} disabled={updateItem.isPending}>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="min-h-11"
+                        onClick={() => saveEdit(item.id)}
+                        disabled={updateItem.isPending}
+                      >
                         {t('save')}
                       </Button>
-                      <Button type="button" variant="ghost" size="sm" onClick={() => setEditingItem(null)}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="min-h-11"
+                        onClick={() => setEditingItem(null)}
+                      >
                         {t('cancel')}
                       </Button>
                     </div>
                   </div>
                 ) : (
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{item.name}</span>
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1">
+                      <span className="min-w-0 break-words font-medium">{item.name}</span>
                       {item.quantity > 1 && <span className="text-xs text-muted-foreground">x{item.quantity}</span>}
                       <button
                         type="button"
                         onClick={() => startEditing(item)}
-                        className="text-muted-foreground hover:text-foreground"
+                        className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
                         aria-label={t('editItem', { name: item.name })}
                         title={t('editItem', { name: item.name })}
                       >
@@ -684,7 +723,7 @@ export function ItemAssignment({
                       <button
                         type="button"
                         onClick={() => setRemoveItem({ id: item.id, name: item.name })}
-                        className="text-muted-foreground hover:text-destructive"
+                        className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-destructive"
                         aria-label={t('removeItem', { name: item.name })}
                         title={t('removeItem', { name: item.name })}
                       >
@@ -697,7 +736,7 @@ export function ItemAssignment({
                             setSplittingItem(item.id);
                             setSplitQuantity('1');
                           }}
-                          className="text-muted-foreground hover:text-foreground"
+                          className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
                           title={t('split')}
                           aria-label={t('splitAriaLabel', { name: item.name })}
                           data-testid={`split-btn-${item.id}`}
@@ -717,7 +756,7 @@ export function ItemAssignment({
                     const parsed = Number(splitQuantity);
                     const validQty = Number.isSafeInteger(parsed) && parsed >= 1 && parsed < item.quantity;
                     return (
-                      <div className="mb-2 flex items-center gap-2" data-testid="split-form">
+                      <div className="mb-2 flex flex-wrap items-center gap-2" data-testid="split-form">
                         <span className="text-xs text-muted-foreground">{t('splitOff')}</span>
                         <Input
                           type="number"
@@ -725,7 +764,8 @@ export function ItemAssignment({
                           max={item.quantity - 1}
                           value={splitQuantity}
                           onChange={(e) => setSplitQuantity(e.target.value)}
-                          className="w-16 h-7 text-xs"
+                          inputMode="numeric"
+                          className="h-11 w-20 text-base"
                           data-testid="split-qty-input"
                         />
                         <span className="text-xs text-muted-foreground">
@@ -734,7 +774,7 @@ export function ItemAssignment({
                         <Button
                           type="button"
                           size="sm"
-                          className="h-7 text-xs"
+                          className="min-h-11"
                           disabled={splitItem.isPending || !validQty}
                           data-testid="split-submit"
                           onClick={() => {
@@ -749,7 +789,7 @@ export function ItemAssignment({
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="h-7 text-xs"
+                          className="min-h-11"
                           onClick={() => setSplittingItem(null)}
                         >
                           {t('cancel')}
@@ -766,7 +806,7 @@ export function ItemAssignment({
                         type="button"
                         onClick={() => toggleAssignment(item.id, m.id)}
                         data-testid={`member-toggle-${m.id}`}
-                        className={`flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-xs transition-colors ${
+                        className={`flex min-h-11 max-w-full items-center gap-1 rounded-full px-3 py-2 text-sm transition-colors ${
                           isAssigned
                             ? 'bg-primary text-primary-foreground'
                             : 'bg-muted text-muted-foreground hover:bg-muted/80'
@@ -820,7 +860,7 @@ export function ItemAssignment({
 
       <Button
         type="submit"
-        className="w-full"
+        className="min-h-11 w-full"
         disabled={createExpense.isPending || !allAssigned || !effectivePaidById}
         data-testid="create-expense-btn"
       >
@@ -835,7 +875,7 @@ export function ItemAssignment({
         <Button
           type="button"
           variant="outline"
-          className="w-full"
+          className="min-h-11 w-full"
           onClick={handleSaveForLater}
           disabled={saveForLater.isPending}
           data-testid="save-for-later-btn"

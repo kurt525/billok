@@ -7,6 +7,7 @@ import { Link, useRouter } from '@/i18n/navigation';
 import { trpc } from '@/lib/trpc';
 import { localeHeaders } from '@/lib/locale-header';
 import { formatCents, centsToDecimal, parseToCents, isValidMoneyInput } from '@/lib/money';
+import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
 import { canStoreClaimIdentity, setStoredClaimIdentity } from '@/lib/guest-session';
 import { loadingMessageKeys, randomLoadingMessageIndex } from '@/lib/loading-messages';
@@ -285,8 +286,8 @@ export default function GuestSplitPage() {
       toast.error(t('assign.validationPricePositive'));
       return;
     }
-    const quantity = parseInt(editValues.quantity);
-    if (!Number.isInteger(quantity) || quantity < 1) {
+    const quantity = parseReceiptQuantity(editValues.quantity);
+    if (quantity === null) {
       toast.error(t('assign.validationQtyPositive'));
       return;
     }
@@ -320,7 +321,11 @@ export default function GuestSplitPage() {
   function handleAddItem(e: React.FormEvent) {
     e.preventDefault();
     const totalPrice = parseToCents(newItem.totalPrice);
-    const quantity = parseInt(newItem.quantity) || 1;
+    const quantity = parseReceiptQuantity(newItem.quantity);
+    if (quantity === null) {
+      toast.error(t('assign.validationQtyPositive'));
+      return;
+    }
     if (!newItem.name || totalPrice <= 0) return;
     setItems((prev) => [
       ...prev,
@@ -485,7 +490,7 @@ export default function GuestSplitPage() {
   const labels = chipLabels(people);
 
   return (
-    <div className="space-y-6 pb-24">
+    <div className={step === 'assign' ? 'space-y-6 pb-56' : 'space-y-6 pb-24'}>
       {/* Step: Upload */}
       {step === 'upload' && (
         <div className="space-y-6">
@@ -825,12 +830,24 @@ export default function GuestSplitPage() {
           </div>
 
           {/* Quick actions */}
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={assignAllToEveryone} data-testid="guest-split-all-btn">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="min-h-11 whitespace-normal"
+              onClick={assignAllToEveryone}
+              data-testid="guest-split-all-btn"
+            >
               <Users className="mr-2 h-4 w-4" />
               {t('assign.splitAllEqually')}
             </Button>
-            <Button variant="outline" size="sm" onClick={() => setAddingItem(true)} data-testid="guest-add-item-btn">
+            <Button
+              variant="outline"
+              size="sm"
+              className="min-h-11 whitespace-normal"
+              onClick={() => setAddingItem(true)}
+              data-testid="guest-add-item-btn"
+            >
               <Plus className="mr-2 h-4 w-4" />
               {t('assign.addItem')}
             </Button>
@@ -848,13 +865,14 @@ export default function GuestSplitPage() {
                     required
                     className="h-12"
                   />
-                  <div className="flex gap-2">
+                  <div className="grid min-w-0 grid-cols-2 gap-2">
                     <Input
                       type="number"
+                      inputMode="numeric"
                       placeholder={t('assign.qtyPlaceholder')}
                       value={newItem.quantity}
                       onChange={(e) => setNewItem((p) => ({ ...p, quantity: e.target.value }))}
-                      className="w-20 h-12"
+                      className="h-12 min-w-0"
                       min="1"
                     />
                     <Input
@@ -863,15 +881,21 @@ export default function GuestSplitPage() {
                       placeholder={t('assign.pricePlaceholder')}
                       value={newItem.totalPrice}
                       onChange={(e) => setNewItem((p) => ({ ...p, totalPrice: e.target.value }))}
-                      className="flex-1 h-12"
+                      className="h-12 min-w-0"
                       required
                     />
                   </div>
                   <div className="flex gap-2">
-                    <Button type="submit" size="sm" data-testid="guest-add-item-submit">
+                    <Button type="submit" size="sm" className="min-h-11" data-testid="guest-add-item-submit">
                       {t('assign.add')}
                     </Button>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => setAddingItem(false)}>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="min-h-11"
+                      onClick={() => setAddingItem(false)}
+                    >
                       {t('assign.cancel')}
                     </Button>
                   </div>
@@ -902,12 +926,13 @@ export default function GuestSplitPage() {
                           placeholder={t('assign.itemNamePlaceholder')}
                           className="h-12"
                         />
-                        <div className="flex gap-2">
+                        <div className="grid min-w-0 grid-cols-2 gap-2">
                           <Input
                             type="number"
+                            inputMode="numeric"
                             value={editValues.quantity}
                             onChange={(e) => setEditValues((p) => ({ ...p, quantity: e.target.value }))}
-                            className="w-20 h-12"
+                            className="h-12 min-w-0"
                             placeholder={t('assign.qtyPlaceholder')}
                             min="1"
                           />
@@ -916,28 +941,34 @@ export default function GuestSplitPage() {
                             inputMode="decimal"
                             value={editValues.totalPrice}
                             onChange={(e) => setEditValues((p) => ({ ...p, totalPrice: e.target.value }))}
-                            className="flex-1 h-12"
+                            className="h-12 min-w-0"
                             placeholder={t('assign.pricePlaceholder')}
                           />
                         </div>
                         <div className="flex gap-1">
-                          <Button type="button" size="sm" onClick={saveEdit}>
+                          <Button type="button" size="sm" className="min-h-11" onClick={saveEdit}>
                             {t('assign.save')}
                           </Button>
-                          <Button type="button" variant="ghost" size="sm" onClick={() => setEditingItem(null)}>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="min-h-11"
+                            onClick={() => setEditingItem(null)}
+                          >
                             {t('assign.cancel')}
                           </Button>
                         </div>
                       </div>
                     ) : (
-                      <div className="mb-2 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{item.name}</span>
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex min-w-0 flex-wrap items-center gap-1">
+                          <span className="min-w-0 break-words font-medium">{item.name}</span>
                           {item.quantity > 1 && <span className="text-xs text-muted-foreground">x{item.quantity}</span>}
                           <button
                             type="button"
                             onClick={() => startEditing(itemIdx)}
-                            className="text-muted-foreground hover:text-foreground p-1"
+                            className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
                             aria-label={t('assign.editItem', { name: item.name })}
                             title={t('assign.editItem', { name: item.name })}
                           >
@@ -946,7 +977,7 @@ export default function GuestSplitPage() {
                           <button
                             type="button"
                             onClick={() => deleteItem(itemIdx)}
-                            className="text-muted-foreground hover:text-destructive p-1"
+                            className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-destructive"
                             aria-label={t('assign.removeItem', { name: item.name })}
                             title={t('assign.removeItem', { name: item.name })}
                           >
@@ -959,7 +990,7 @@ export default function GuestSplitPage() {
                                 setSplittingIndex(itemIdx);
                                 setSplitQuantity('1');
                               }}
-                              className="text-muted-foreground hover:text-foreground p-1"
+                              className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
                               title={t('assign.split')}
                               aria-label={t('assign.split') + ` ${item.name}`}
                               data-testid={`guest-split-btn-${itemIdx}`}
@@ -977,7 +1008,7 @@ export default function GuestSplitPage() {
                         const parsed = Number(splitQuantity);
                         const validQty = Number.isSafeInteger(parsed) && parsed >= 1 && parsed < item.quantity;
                         return (
-                          <div className="mb-2 flex items-center gap-2">
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
                             <span className="text-xs text-muted-foreground">{t('assign.splitOff')}</span>
                             <Input
                               type="number"
@@ -985,7 +1016,8 @@ export default function GuestSplitPage() {
                               max={item.quantity - 1}
                               value={splitQuantity}
                               onChange={(e) => setSplitQuantity(e.target.value)}
-                              className="w-16 h-7 text-xs"
+                              inputMode="numeric"
+                              className="h-11 w-20 text-base"
                               data-testid={`guest-split-qty-${itemIdx}`}
                             />
                             <span className="text-xs text-muted-foreground">
@@ -994,7 +1026,7 @@ export default function GuestSplitPage() {
                             <Button
                               type="button"
                               size="sm"
-                              className="h-7 text-xs"
+                              className="min-h-11"
                               disabled={!validQty}
                               onClick={() => handleSplitItem(itemIdx)}
                               data-testid={`guest-split-submit-${itemIdx}`}
@@ -1005,7 +1037,7 @@ export default function GuestSplitPage() {
                               type="button"
                               variant="ghost"
                               size="sm"
-                              className="h-7 text-xs"
+                              className="min-h-11"
                               onClick={() => setSplittingIndex(null)}
                             >
                               {t('assign.cancel')}
@@ -1023,7 +1055,7 @@ export default function GuestSplitPage() {
                             key={personIdx}
                             type="button"
                             onClick={() => toggleAssignment(itemIdx, personIdx)}
-                            className={`flex max-w-full items-center gap-1 rounded-full px-3 py-1.5 text-sm transition-colors min-h-[36px] ${
+                            className={`flex min-h-11 max-w-full items-center gap-1 rounded-full px-3 py-2 text-sm transition-colors ${
                               isAssigned
                                 ? 'bg-primary text-primary-foreground'
                                 : 'bg-muted text-muted-foreground hover:bg-muted/80'
@@ -1070,7 +1102,7 @@ export default function GuestSplitPage() {
           )}
 
           {/* Next button - sticky bottom */}
-          <div className="fixed bottom-0 left-0 right-0 p-4 bg-background border-t">
+          <div className="fixed right-0 bottom-0 left-0 border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
             <div className="mx-auto max-w-lg space-y-3">
               <Button
                 className="w-full h-14 text-lg"
