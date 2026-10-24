@@ -86,7 +86,7 @@ function ScanReceiptContent({ params }: { params: Promise<{ groupId: string }> }
 
     const myId = authSession?.user?.id;
     const myMember = myId ? currentMembers.find((m) => m.id === myId) : undefined;
-    const myName = myMember?.name ?? authSession?.user?.name ?? currentMembers[0]?.name ?? 'Unknown';
+    const myName = myMember?.name ?? authSession?.user?.name ?? currentMembers[0]?.name ?? tc('errors.notFound');
 
     try {
       const result = await shareForClaiming.mutateAsync({

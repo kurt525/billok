@@ -1,7 +1,6 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
-import en from '../../../../messages/en/errors.json';
-import de from '../../../../messages/de/errors.json';
+import ru from '../../../../messages/ru/errors.json';
 
 const { auth, writeFile, mkdir } = vi.hoisted(() => ({
   auth: vi.fn(),
@@ -118,18 +117,18 @@ describe('POST /api/upload?guest=true', () => {
   });
 });
 
-// #266: the upload's errors were English in every locale
+// BillOK must return Russian messages regardless of stale x-locale values.
 describe('POST /api/upload errors', () => {
-  test('come back in the language the page sends, and in English when it sends none', async () => {
+  test('always use Russian for old language headers and missing headers', async () => {
     guestUploadsSetting('false');
     const { POST } = await import('./route');
 
     const german = await POST(uploadRequest('203.0.113.6', { 'x-locale': 'de' }));
     expect(german.status).toBe(403);
-    expect(await german.json()).toEqual({ error: de.guestUploadsDisabled });
+    expect(await german.json()).toEqual({ error: ru.guestUploadsDisabled });
 
     const english = await POST(uploadRequest('203.0.113.7'));
-    expect(await english.json()).toEqual({ error: en.guestUploadsDisabled });
+    expect(await english.json()).toEqual({ error: ru.guestUploadsDisabled });
   });
 
   test('fill in their details', async () => {
@@ -145,7 +144,7 @@ describe('POST /api/upload errors', () => {
     );
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({
-      error: de.invalidFileType.replace('{types}', 'image/jpeg, image/png, image/webp, image/heic'),
+      error: ru.invalidFileType.replace('{types}', 'image/jpeg, image/png, image/webp, image/heic'),
     });
   });
 });

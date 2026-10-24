@@ -110,7 +110,7 @@ export async function GET() {
     return new Response(json, {
       headers: {
         'Content-Type': 'application/json',
-        'Content-Disposition': `attachment; filename="sharetab-export-${timestamp}.json"`,
+        'Content-Disposition': `attachment; filename="billok-export-${timestamp}.json"`,
       },
     });
   } catch (error) {

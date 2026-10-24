@@ -47,7 +47,7 @@ export function OpenAICodexAuthSection() {
         utils.admin.getSystemHealth.invalidate();
       } else {
         setLoginState('error');
-        setLoginError(data.error ?? 'Login failed');
+        setLoginError(data.error ?? 'Не удалось войти');
       }
     },
     onError: (err) => {

@@ -65,7 +65,7 @@ if (authConfig.magicLink) {
   providers.push(
     Nodemailer({
       server,
-      from: process.env.EMAIL_FROM ?? 'ShareTab <noreply@sharetab.local>',
+      from: process.env.EMAIL_FROM ?? 'BillOK <noreply@billok.ru>',
     }),
   );
 }

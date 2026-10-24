@@ -62,7 +62,7 @@ export function EqualSplit({
       {members.map((m) => (
         <label
           key={m.id}
-          className="flex cursor-pointer items-center justify-between rounded-md border p-3 hover:bg-muted/50"
+          className="flex flex-wrap cursor-pointer items-center justify-between gap-2 rounded-md border p-3 hover:bg-muted/50"
         >
           <div className="flex items-center gap-2">
             <input
@@ -71,7 +71,7 @@ export function EqualSplit({
               onChange={() => toggle(m.id)}
               className="h-4 w-4 rounded border-gray-300"
             />
-            <span className="text-sm">{m.name ?? 'Unnamed'}</span>
+            <span className="min-w-0 break-words text-sm">{m.name ?? 'Без имени'}</span>
           </div>
           {selected.has(m.id) && totalCents > 0 && (
             <span className="text-sm text-muted-foreground">
@@ -82,7 +82,7 @@ export function EqualSplit({
       ))}
       {selected.size > 0 && totalCents > 0 && (
         <p className="text-xs text-muted-foreground">
-          {formatCents(Math.round(perPerson), currency, locale)} per person ({selected.size} selected)
+          На человека: {formatCents(Math.round(perPerson), currency, locale)} (выбрано: {selected.size})
         </p>
       )}
     </div>

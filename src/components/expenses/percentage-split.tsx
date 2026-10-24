@@ -108,7 +108,7 @@ export function PercentageSplit({
         const share = Math.round((totalCents * pct) / 100);
         return (
           <div key={m.id} className="flex items-center gap-3 rounded-md border p-3">
-            <span className="flex-1 text-sm">{m.name ?? 'Unnamed'}</span>
+            <span className="min-w-0 flex-1 break-words text-sm">{m.name ?? 'Без имени'}</span>
             <div className="flex items-center gap-1">
               <Input
                 type="number"
@@ -135,8 +135,8 @@ export function PercentageSplit({
           Math.abs(totalPct - 100) < percentTolerance(participatingCount) ? 'text-green-600' : 'text-amber-600'
         }`}
       >
-        Total: {totalPct.toFixed(1)}%
-        {Math.abs(totalPct - 100) >= percentTolerance(participatingCount) && ` (should be 100%)`}
+        Всего: {new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(totalPct)}{' '}
+        %{Math.abs(totalPct - 100) >= percentTolerance(participatingCount) && ` (должно быть 100 %)`}
       </p>
     </div>
   );

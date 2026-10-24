@@ -1,15 +1,15 @@
 // Types t() keys against the English messages, so `tsc --noEmit` fails on a key that
 // doesn't exist (lint:i18n only compares the other locales with en). A new namespace
 // needs an entry here as well as in src/i18n/request.ts.
-import type admin from '../../messages/en/admin.json';
-import type auth from '../../messages/en/auth.json';
-import type common from '../../messages/en/common.json';
-import type dashboard from '../../messages/en/dashboard.json';
-import type expenses from '../../messages/en/expenses.json';
-import type groups from '../../messages/en/groups.json';
-import type settings from '../../messages/en/settings.json';
-import type split from '../../messages/en/split.json';
-import type splits from '../../messages/en/splits.json';
+import type admin from '../../messages/ru/admin.json';
+import type auth from '../../messages/ru/auth.json';
+import type common from '../../messages/ru/common.json';
+import type dashboard from '../../messages/ru/dashboard.json';
+import type expenses from '../../messages/ru/expenses.json';
+import type groups from '../../messages/ru/groups.json';
+import type settings from '../../messages/ru/settings.json';
+import type split from '../../messages/ru/split.json';
+import type splits from '../../messages/ru/splits.json';
 
 declare module 'next-intl' {
   interface AppConfig {

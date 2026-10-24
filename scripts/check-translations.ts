@@ -3,6 +3,8 @@ import { join } from 'path';
 
 const messagesDir = join(process.cwd(), 'messages');
 const sourceLocale = 'en';
+// Russian is introduced namespace-by-namespace, never activate it in routing until complete.
+const localesInProgress = new Set(['ru']);
 
 function getKeys(obj: Record<string, unknown>, prefix = ''): string[] {
   const keys: string[] = [];
@@ -36,6 +38,9 @@ let hasErrors = false;
 
 for (const locale of locales) {
   for (const namespace of namespaces) {
+    const filePath = join(messagesDir, locale, `${namespace}.json`);
+    if (localesInProgress.has(locale) && !existsSync(filePath)) continue;
+
     const sourceKeys = getKeys(loadNamespace(sourceLocale, namespace));
     const targetKeys = getKeys(loadNamespace(locale, namespace));
 
@@ -57,7 +62,7 @@ for (const locale of locales) {
 
   for (const namespace of namespaces) {
     const filePath = join(messagesDir, locale, `${namespace}.json`);
-    if (!existsSync(filePath)) {
+    if (!existsSync(filePath) && !localesInProgress.has(locale)) {
       hasErrors = true;
       console.error(`[${locale}] Missing file: ${namespace}.json`);
     }

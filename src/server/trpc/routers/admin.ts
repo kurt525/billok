@@ -842,22 +842,22 @@ export const adminRouter = createTRPCRouter({
       },
     });
 
-    const from = process.env.EMAIL_FROM ?? 'ShareTab <noreply@sharetab.local>';
+    const from = process.env.EMAIL_FROM ?? 'BillOK <noreply@billok.ru>';
     const to = ctx.user.email!;
 
     try {
       await transport.sendMail({
         from,
         to,
-        subject: 'ShareTab Test Email',
-        text: `This is a test email from ShareTab admin dashboard.\n\nSent at: ${new Date().toISOString()}\nAdmin: ${ctx.user.email}`,
+        subject: 'Проверка электронной почты BillOK',
+        text: `Это тестовое письмо из панели администратора BillOK.\n\nОтправлено: ${new Date().toISOString()}\nАдминистратор: ${ctx.user.email}`,
         html: `
           <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-            <h2 style="color: #10b981;">ShareTab Test Email</h2>
-            <p>This is a test email from the ShareTab admin dashboard.</p>
+            <h2 style="color: #10b981;">Проверка электронной почты BillOK</h2>
+            <p>Это тестовое письмо из панели администратора BillOK.</p>
             <p style="color: #666; font-size: 14px;">
-              Sent at: ${new Date().toISOString()}<br/>
-              Admin: ${ctx.user.email}
+              Отправлено: ${new Date().toISOString()}<br/>
+              Администратор: ${ctx.user.email}
             </p>
           </div>
         `,

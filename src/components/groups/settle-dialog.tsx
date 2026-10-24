@@ -150,10 +150,9 @@ function SettleForm({
         <Label htmlFor="settle-amount">{t('settle.amount')}</Label>
         <Input
           id="settle-amount"
-          type="number"
-          step="0.01"
-          min="0.01"
-          placeholder="0.00"
+          type="text"
+          inputMode="decimal"
+          placeholder="0,00"
           value={amountStr}
           onChange={(e) => setAmountStr(e.target.value)}
           required

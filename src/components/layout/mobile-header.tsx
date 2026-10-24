@@ -8,8 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { LayoutDashboard, Users, Receipt, LogOut, Settings, Shield, Menu, Scissors } from 'lucide-react';
 import { ThemeToggle } from '@/components/layout/theme-toggle';
-import { LanguageSwitcher } from '@/components/layout/language-switcher';
-import { useTranslations, useLocale } from 'next-intl';
+import { useTranslations } from 'next-intl';
 
 const navItems = [
   { href: '/dashboard', key: 'dashboard', icon: LayoutDashboard },
@@ -23,13 +22,12 @@ export function MobileHeader({ isAdmin }: { isAdmin?: boolean }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const t = useTranslations('common');
-  const locale = useLocale();
 
   return (
     <header className="sticky top-0 z-50 flex h-14 items-center justify-between border-b border-border/60 bg-background/80 px-4 backdrop-blur-md supports-[backdrop-filter]:bg-background/60 lg:hidden">
       <div className="flex items-center gap-2.5">
         <Receipt className="h-5 w-5 text-primary drop-shadow-sm" />
-        <span className="text-lg font-bold tracking-wide">ShareTab</span>
+        <span className="text-lg font-bold tracking-wide">BillOK</span>
       </div>
 
       <Sheet open={open} onOpenChange={setOpen}>
@@ -40,7 +38,7 @@ export function MobileHeader({ isAdmin }: { isAdmin?: boolean }) {
           <SheetHeader>
             <SheetTitle className="flex items-center gap-2.5">
               <Receipt className="h-5 w-5 text-primary drop-shadow-sm" />
-              <span className="tracking-wide">ShareTab</span>
+              <span className="tracking-wide">BillOK</span>
             </SheetTitle>
           </SheetHeader>
           <nav className="mt-6 space-y-1">
@@ -81,14 +79,13 @@ export function MobileHeader({ isAdmin }: { isAdmin?: boolean }) {
               <button
                 onClick={() => {
                   setOpen(false);
-                  signOut({ callbackUrl: `/${locale}/login` });
+                  signOut({ callbackUrl: '/login' });
                 }}
                 className="flex flex-1 items-center gap-3 text-sm font-medium text-muted-foreground transition-colors duration-200 hover:text-foreground"
               >
                 <LogOut className="h-5 w-5" />
                 {t('nav.signOut')}
               </button>
-              <LanguageSwitcher />
               <ThemeToggle />
             </div>
           </nav>
