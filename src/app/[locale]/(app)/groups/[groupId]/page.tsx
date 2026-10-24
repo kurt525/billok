@@ -218,7 +218,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                 to?.venmoUsername &&
                 isValidVenmoHandle(to.venmoUsername);
               const venmoUrl = showVenmo
-                ? buildVenmoPayUrl(to.venmoUsername!, debt.amount, `ShareTab: ${g.name}`)
+                ? buildVenmoPayUrl(to.venmoUsername!, debt.amount, `BillOK: ${g.name}`)
                 : null;
               return (
                 <div key={i} className="flex items-center gap-2">

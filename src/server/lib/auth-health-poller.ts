@@ -250,42 +250,44 @@ export async function sendAuthExpiryEmail(
     },
   });
 
-  const from = process.env.EMAIL_FROM ?? 'ShareTab <noreply@sharetab.local>';
+  const from = process.env.EMAIL_FROM ?? 'BillOK <noreply@billok.ru>';
   const dashboardUrl = `${process.env.NEXTAUTH_URL ?? 'http://localhost:3000'}/admin`;
   const providerLabel = provider === 'openai-codex' ? 'ChatGPT OAuth (OpenAI Codex)' : 'Claude AI';
 
-  const loginSection = loginUrl ? `<p><strong>Login URL:</strong><br/><a href="${loginUrl}">${loginUrl}</a></p>` : '';
+  const loginSection = loginUrl
+    ? `<p><strong>Ссылка для входа:</strong><br/><a href="${loginUrl}">${loginUrl}</a></p>`
+    : '';
 
   await transport.sendMail({
     from,
     to: adminEmail,
-    subject: `[ShareTab] ${providerLabel} authentication expired`,
+    subject: `[BillOK] Срок действия авторизации ${providerLabel} истёк`,
     text: [
-      `ShareTab detected that ${providerLabel} authentication has expired.`,
+      `BillOK: срок действия авторизации ${providerLabel} истёк.`,
       '',
-      `Error: ${error}`,
+      `Ошибка: ${error}`,
       '',
-      loginUrl ? `Login URL: ${loginUrl}` : '',
+      loginUrl ? `Ссылка для входа: ${loginUrl}` : '',
       '',
-      `Re-authenticate from the admin dashboard: ${dashboardUrl}`,
+      `Повторно войдите через панель администратора: ${dashboardUrl}`,
       '',
-      `Timestamp: ${new Date().toISOString()}`,
+      `Время: ${new Date().toISOString()}`,
     ]
       .filter(Boolean)
       .join('\n'),
     html: `
       <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-        <h2 style="color: #ef4444;">${providerLabel} Authentication Expired</h2>
-        <p>ShareTab detected that ${providerLabel} authentication has expired.</p>
-        <p><strong>Error:</strong> ${error}</p>
+        <h2 style="color: #ef4444;">Срок действия авторизации ${providerLabel} истёк</h2>
+        <p>BillOK: срок действия авторизации ${providerLabel} истёк.</p>
+        <p><strong>Ошибка:</strong> ${error}</p>
         ${loginSection}
         <p>
           <a href="${dashboardUrl}" style="display: inline-block; padding: 8px 16px; background: #10b981; color: white; text-decoration: none; border-radius: 6px;">
-            Open Admin Dashboard
+            Открыть панель администратора
           </a>
         </p>
         <p style="color: #666; font-size: 14px;">
-          Timestamp: ${new Date().toISOString()}
+          Время: ${new Date().toISOString()}
         </p>
       </div>
     `,

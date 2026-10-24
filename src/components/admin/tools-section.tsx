@@ -32,7 +32,7 @@ export function ToolsSection() {
       a.href = url;
       const disposition = res.headers.get('Content-Disposition');
       const match = disposition?.match(/filename="(.+)"/);
-      a.download = match?.[1] ?? 'sharetab-export.json';
+      a.download = match?.[1] ?? 'billok-export.json';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

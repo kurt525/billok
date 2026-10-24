@@ -67,7 +67,7 @@ export function AppSidebar({ user, isAdmin }: { user: SidebarUser; isAdmin?: boo
       {/* Brand area */}
       <div className="flex h-14 items-center gap-2.5 px-5 border-b border-transparent bg-gradient-to-r from-primary/[0.06] via-transparent to-transparent [border-image:linear-gradient(to_right,var(--color-primary)/0.15,transparent)_1]">
         <Receipt className="h-6 w-6 text-primary drop-shadow-sm" />
-        <span className="text-lg font-bold tracking-wide text-foreground">ShareTab</span>
+        <span className="text-lg font-bold tracking-wide text-foreground">BillOK</span>
       </div>
 
       {/* Navigation */}

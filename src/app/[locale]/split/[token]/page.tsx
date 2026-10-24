@@ -236,7 +236,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
                       href={buildVenmoPayUrl(
                         venmoHandle,
                         person.total,
-                        `ShareTab: ${data.receiptData.merchantName ?? t('billSplit')}`,
+                        `BillOK: ${data.receiptData.merchantName ?? t('billSplit')}`,
                       )!}
                       target="_blank"
                       rel="noopener noreferrer"
