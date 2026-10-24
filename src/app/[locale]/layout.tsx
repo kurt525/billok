@@ -5,7 +5,7 @@ import { NextIntlClientProvider } from 'next-intl';
 import { getMessages, setRequestLocale } from 'next-intl/server';
 import { Providers } from '@/components/providers';
 import { Toaster } from '@/components/ui/sonner';
-import { routing, rtlLocales } from '@/i18n/routing';
+import { routing } from '@/i18n/routing';
 import type { Locale } from '@/i18n/routing';
 
 const inter = Inter({
@@ -59,12 +59,11 @@ export default async function LocaleLayout({
 
   setRequestLocale(locale);
   const messages = await getMessages();
-  const dir = rtlLocales.includes(locale as Locale) ? 'rtl' : 'ltr';
 
   return (
     <html
       lang={locale}
-      dir={dir}
+      dir="ltr"
       suppressHydrationWarning
       className={`${inter.variable} ${jetbrainsMono.variable} antialiased`}
     >

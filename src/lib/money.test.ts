@@ -3,29 +3,29 @@ import { formatCents, parseToCents, centsToDecimal } from './money';
 
 describe('formatCents', () => {
   test('formats whole dollar amounts', () => {
-    expect(formatCents(1000)).toBe('$10.00');
-    expect(formatCents(100)).toBe('$1.00');
-    expect(formatCents(0)).toBe('$0.00');
+    expect(formatCents(1000, 'USD', 'en-US')).toBe('$10.00');
+    expect(formatCents(100, 'USD', 'en-US')).toBe('$1.00');
+    expect(formatCents(0, 'USD', 'en-US')).toBe('$0.00');
   });
 
   test('formats cents correctly', () => {
-    expect(formatCents(1299)).toBe('$12.99');
-    expect(formatCents(1)).toBe('$0.01');
-    expect(formatCents(50)).toBe('$0.50');
+    expect(formatCents(1299, 'USD', 'en-US')).toBe('$12.99');
+    expect(formatCents(1, 'USD', 'en-US')).toBe('$0.01');
+    expect(formatCents(50, 'USD', 'en-US')).toBe('$0.50');
   });
 
   test('formats large amounts', () => {
-    expect(formatCents(10000000)).toBe('$100,000.00');
-    expect(formatCents(999999)).toBe('$9,999.99');
+    expect(formatCents(10000000, 'USD', 'en-US')).toBe('$100,000.00');
+    expect(formatCents(999999, 'USD', 'en-US')).toBe('$9,999.99');
   });
 
   test('formats negative amounts', () => {
-    expect(formatCents(-1299)).toBe('-$12.99');
+    expect(formatCents(-1299, 'USD', 'en-US')).toBe('-$12.99');
   });
 
   test('respects currency parameter', () => {
-    expect(formatCents(1000, 'EUR')).toBe('€10.00');
-    expect(formatCents(1000, 'GBP')).toBe('£10.00');
+    expect(formatCents(1000, 'EUR', 'en-US')).toBe('€10.00');
+    expect(formatCents(1000, 'GBP', 'en-US')).toBe('£10.00');
   });
 
   test('formats JPY without decimals', () => {
@@ -38,8 +38,15 @@ describe('formatCents', () => {
     expect(result).toContain('1.234,56');
   });
 
+  test('Russian-only BillOK defaults to rubles and keeps kopecks', () => {
+    const result = formatCents(1299).replace(/[  ]/g, ' ');
+    expect(result).toBe('12,99 ₽');
+    expect(formatCents(1).replace(/[  ]/g, ' ')).toBe('0,01 ₽');
+    expect(formatCents(-1299).replace(/[  ]/g, ' ')).toBe('-12,99 ₽');
+  });
+
   test('defaults to configured app locale when not specified', () => {
-    expect(formatCents(1299, 'USD')).toBe('$12.99');
+    expect(formatCents(1299, 'USD').replace(/[  ]/g, ' ')).toBe('12,99 $');
     expect(formatCents(1299, 'USD', 'en-US')).toBe('$12.99');
   });
 

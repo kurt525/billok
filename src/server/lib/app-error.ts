@@ -2,31 +2,14 @@ import { TRPCError } from '@trpc/server';
 import { createTranslator, type AbstractIntlMessages } from 'next-intl';
 import type { Locale } from '@/i18n/routing';
 import en from '../../../messages/en/errors.json';
-import es from '../../../messages/es/errors.json';
-import sv from '../../../messages/sv/errors.json';
-import fr from '../../../messages/fr/errors.json';
-import de from '../../../messages/de/errors.json';
-import ptBR from '../../../messages/pt-BR/errors.json';
-import ja from '../../../messages/ja/errors.json';
-import zhCN from '../../../messages/zh-CN/errors.json';
-import ko from '../../../messages/ko/errors.json';
+import ru from '../../../messages/ru/errors.json';
 
 type ErrorCode = TRPCError['code'];
 // `generic` holds the messages for errors without a key
 export type ErrorKey = Exclude<keyof typeof en, 'generic'>;
 export type ErrorValues = Record<string, string | number>;
 
-const catalogs: Record<Locale, AbstractIntlMessages> = {
-  en,
-  es,
-  sv,
-  fr,
-  de,
-  'pt-BR': ptBR,
-  ja,
-  'zh-CN': zhCN,
-  ko,
-};
+const catalogs: Record<Locale, AbstractIntlMessages> = { ru };
 
 function translate(locale: Locale, key: string, values?: ErrorValues): string {
   // Typed loosely: the keys are checked by ErrorKey, and the catalogs aren't the app's Messages
@@ -49,7 +32,7 @@ export class AppError extends TRPCError {
   readonly messageValues: ErrorValues | undefined;
 
   constructor(code: ErrorCode, key?: ErrorKey, values?: ErrorValues, options?: { cause?: unknown }) {
-    super({ code, message: key ? translate('en', key, values) : genericMessage(code, 'en'), cause: options?.cause });
+    super({ code, message: key ? englishMessage(key, values) : englishGeneric(code), cause: options?.cause });
     this.name = 'AppError';
     this.messageKey = key ?? null;
     this.messageValues = values;
@@ -64,6 +47,18 @@ const GENERIC_KEYS: Partial<Record<ErrorCode, keyof typeof en.generic>> = {
   CONFLICT: 'conflict',
   TOO_MANY_REQUESTS: 'tooManyRequests',
 };
+
+function englishMessage(key: string, values?: ErrorValues): string {
+  const t = createTranslator({ locale: 'en', messages: en }) as unknown as (
+    key: string,
+    values?: ErrorValues,
+  ) => string;
+  return t(key, values);
+}
+
+function englishGeneric(code: ErrorCode): string {
+  return englishMessage(`generic.${GENERIC_KEYS[code] ?? 'other'}`);
+}
 
 function genericMessage(code: ErrorCode, locale: Locale): string {
   return translate(locale, `generic.${GENERIC_KEYS[code] ?? 'other'}`);

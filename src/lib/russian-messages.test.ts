@@ -183,8 +183,22 @@ describe('Russian translations (incremental staging)', () => {
     expect(audit.actionTestEmail).toMatch(/письмо/);
   });
 
-  it('does not expose the incomplete Russian language to end users', () => {
+  it('requires every Russian namespace to exist before activating the Russian-only app', () => {
+    const english = [
+      'common',
+      'auth',
+      'dashboard',
+      'settings',
+      'splits',
+      'errors',
+      'groups',
+      'expenses',
+      'split',
+      'admin',
+    ];
+    expect([...namespaces].sort()).toEqual([...english].sort());
     const routing = readFileSync(resolve(process.cwd(), 'src/i18n/routing.ts'), 'utf8');
-    expect(routing).not.toMatch(/locales\s*=\s*\[[^\]]*['"]ru['"]/);
+    expect(routing).toContain("export const locales = ['ru'] as const");
+    expect(routing).toContain("defaultLocale: Locale = 'ru'");
   });
 });
