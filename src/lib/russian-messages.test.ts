@@ -2,7 +2,17 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const namespaces = ['common', 'auth', 'dashboard', 'settings', 'splits', 'errors', 'groups', 'expenses'] as const;
+const namespaces = [
+  'common',
+  'auth',
+  'dashboard',
+  'settings',
+  'splits',
+  'errors',
+  'groups',
+  'expenses',
+  'split',
+] as const;
 
 function load(locale: string, namespace: string): Record<string, unknown> {
   return JSON.parse(readFileSync(resolve(process.cwd(), `messages/${locale}/${namespace}.json`), 'utf8')) as Record<
@@ -127,6 +137,30 @@ describe('Russian translations (incremental staging)', () => {
     expect(expenseNew.differentCurrencyNote).toContain('{groupCurrency}');
     const transfer = groups.transfer as Record<string, string>;
     expect(transfer.done).toContain('{name}');
+  });
+
+  it('retains identity and personal-link security warnings for guests', () => {
+    const claim = load('ru', 'split').claim as Record<string, string>;
+    for (const key of ['personalLinkHint', 'personalLinkCopied', 'personalLinkShared']) {
+      expect(claim[key]).toMatch(/ссылк/);
+      expect(claim[key]).toMatch(/от вашего имени/);
+    }
+    expect(claim.personalLinkOfferBody).toContain('{name}');
+    expect(claim.personalLinkOfferReplaces).toContain('{current}');
+    expect(claim.personalLinkOfferReplaces).toContain('{name}');
+    expect(claim.personalLinkInvalid).toMatch(/не действует/);
+  });
+
+  it('preserves guest participants, shared item claims and payer labels', () => {
+    const split = load('ru', 'split');
+    const claim = split.claim as Record<string, string>;
+    const result = split.result as Record<string, string>;
+    expect(claim.tapToClaim).toMatch(/позици/);
+    expect(claim.alreadyClaimed).toMatch(/выбрано/);
+    expect(claim.claimConflict).toContain('{names}');
+    expect(claim.claimConflict).toContain('many {');
+    expect(result.paidBy).toBe('Оплатил <name>{payer}</name>');
+    expect(result.shareText).toContain('{total}');
   });
 
   it('does not expose the incomplete Russian language to end users', () => {
