@@ -116,14 +116,14 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
         body: JSON.stringify({ userId }),
       });
       if (res.ok) {
-        const [, locale] = window.location.pathname.split('/');
-        window.location.href = locale ? `/${locale}/dashboard` : '/dashboard';
+        // BillOK uses canonical, unprefixed Russian-only URLs.
+        window.location.assign(new URL('/dashboard', window.location.origin).href);
       } else {
         const data = await res.json().catch(() => null);
-        toast.error(data?.error ?? `Impersonation failed (${res.status})`);
+        toast.error(data?.error ?? `Не удалось войти от имени пользователя (код ${res.status})`);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Impersonation failed');
+      toast.error(err instanceof Error ? err.message : 'Не удалось войти от имени пользователя');
     } finally {
       setImpersonating(false);
     }

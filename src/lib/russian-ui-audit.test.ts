@@ -1,0 +1,63 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+function source(path: string): string {
+  return readFileSync(resolve(process.cwd(), path), 'utf8');
+}
+
+describe('BillOK Russian-only user-facing fallbacks', () => {
+  it('does not expose English errors or receipt titles in guest and group flows', () => {
+    const groupScan = source('src/app/[locale]/(app)/groups/[groupId]/scan/page.tsx');
+    const claim = source('src/app/[locale]/split/[token]/claim/page.tsx');
+    expect(groupScan).not.toContain("'Unknown'");
+    expect(claim).not.toContain("'Bill split'");
+    expect(claim).toContain("'Разделение чека'");
+  });
+
+  it('localizes administrator login errors and uses unprefixed redirects', () => {
+    for (const section of ['meridian-auth-section', 'openai-codex-auth-section']) {
+      const code = source(`src/components/admin/${section}.tsx`);
+      expect(code).not.toContain("'Login failed'");
+      expect(code).toContain("'Не удалось войти'");
+    }
+    const users = source('src/components/admin/user-management-section.tsx');
+    expect(users).not.toContain('Impersonation failed');
+    expect(users).toContain("window.location.assign(new URL('/dashboard', window.location.origin).href)");
+    expect(users).not.toContain("window.location.pathname.split('/')");
+  });
+
+  it('localizes announcement accessibility labels and default dialog close', () => {
+    const banner = source('src/components/layout/announcement-banner.tsx');
+    const dialog = source('src/components/ui/dialog.tsx');
+    expect(banner).toContain('aria-label="Скрыть объявление"');
+    expect(banner).not.toContain('Dismiss announcement');
+    expect(dialog).toContain("t('actions.close')");
+    expect(dialog).not.toContain('>Close</DialogPrimitive.Close>');
+  });
+});
+
+describe('BillOK small Android viewport static contracts', () => {
+  it('uses device viewport with keyboard resizing and safe-area support', () => {
+    const layout = source('src/app/[locale]/layout.tsx');
+    expect(layout).toContain("width: 'device-width'");
+    expect(layout).toContain("viewportFit: 'cover'");
+    expect(layout).toContain("interactiveWidget: 'resizes-content'");
+  });
+
+  it('provides a fixed-size tap target and wraps long announcement text at 320–412 px', () => {
+    const banner = source('src/components/layout/announcement-banner.tsx');
+    expect(banner).toContain('h-10 w-10');
+    expect(banner).toContain('min-w-0 flex-1 break-words');
+    expect(banner).toContain('shrink-0');
+  });
+
+  it('keeps mobile navigation and guest header reachable without desktop-only layouts', () => {
+    const header = source('src/components/layout/mobile-header.tsx');
+    const splitLayout = source('src/app/[locale]/split/layout.tsx');
+    expect(header).toContain('lg:hidden');
+    expect(header).toContain('<Sheet');
+    expect(splitLayout).toContain('min-h-[100dvh]');
+    expect(splitLayout).toContain('px-4');
+  });
+});
