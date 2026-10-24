@@ -45,6 +45,31 @@ async function main() {
         },
       },
     });
+    const guestReceipt = await db.receipt.create({
+      data: {
+        isGuest: true,
+        imagePath: '',
+        originalName: 'anonymous-mobile-fixture.png',
+        mimeType: 'image/png',
+        fileSize: 0,
+        status: 'COMPLETED',
+        extractedData: {
+          merchantName: 'Гостевой тестовый чек',
+          subtotal: 9000,
+          tax: 0,
+          tip: 0,
+          total: 9000,
+          currency: 'RUB',
+        },
+        items: {
+          create: [
+            { name: 'Суп', quantity: 3, unitPrice: 2000, totalPrice: 6000, sortOrder: 0 },
+            { name: 'Чай', quantity: 1, unitPrice: 3000, totalPrice: 3000, sortOrder: 1 },
+          ],
+        },
+      },
+    });
+    process.stdout.write('BILLOK_MOBILE_GUEST_RECEIPT_ID=' + guestReceipt.id + '\n');
     process.stdout.write('BILLOK_MOBILE_RECEIPT_ID=' + receipt.id + '\n');
     process.stdout.write('BILLOK_MOBILE_GROUP_ID=' + group.id + '\n');
   } finally {
