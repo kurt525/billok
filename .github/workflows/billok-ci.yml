@@ -114,6 +114,8 @@ jobs:
             sleep 1
           done
           npx prisma db push
+          # Create only disposable fixtures for authenticated mobile flows.
+          npm run db:seed
       - name: Start local BillOK for real browser checks
         shell: bash
         run: |
@@ -123,6 +125,8 @@ jobs:
           export NEXTAUTH_URL="http://127.0.0.1:$qa_port"
           export AUTH_URL="$NEXTAUTH_URL"
           export AUTH_SECRET="$(openssl rand -hex 32)"
+          export ADMIN_EMAIL="alice@example.com"
+          echo "ADMIN_EMAIL=$ADMIN_EMAIL" >> "$GITHUB_ENV"
           echo "NEXTAUTH_URL=$NEXTAUTH_URL" >> "$GITHUB_ENV"
           echo "AUTH_URL=$AUTH_URL" >> "$GITHUB_ENV"
           echo "AUTH_SECRET=$AUTH_SECRET" >> "$GITHUB_ENV"
@@ -152,6 +156,7 @@ jobs:
             mcr.microsoft.com/playwright:v1.64.1-noble \
             node /work/node_modules/@playwright/test/cli.js test \
               e2e/billok-mobile-public.spec.ts \
+              e2e/billok-mobile-authenticated.spec.ts \
               --project=parallel --no-deps --workers=2 --retries=0 \
               --reporter=line --output=/tmp/billok-mobile-playwright-results
       - name: Clean up isolated browser test resources
