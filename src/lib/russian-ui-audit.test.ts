@@ -59,6 +59,19 @@ describe('BillOK small Android viewport static contracts', () => {
     expect(banner).toContain('shrink-0');
   });
 
+  it('keeps mobile navigation tap targets at least 44 CSS pixels high', () => {
+    const menu = source('src/components/layout/mobile-header.tsx');
+    const theme = source('src/components/layout/theme-toggle.tsx');
+    const sheet = source('src/components/ui/sheet.tsx');
+
+    expect(menu).toContain('className="size-11"');
+    expect(menu).toContain('min-h-11');
+    expect(menu).toContain('min-h-0 flex-1 space-y-1 overflow-y-auto');
+    expect(menu).toContain('<ThemeToggle className="size-11" />');
+    expect(theme).toContain('className={className}');
+    expect(sheet).toContain('absolute top-2 right-2 size-11');
+  });
+
   it('keeps mobile navigation and guest header reachable without desktop-only layouts', () => {
     const header = source('src/components/layout/mobile-header.tsx');
     const splitLayout = source('src/app/[locale]/split/layout.tsx');

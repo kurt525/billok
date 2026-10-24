@@ -31,24 +31,26 @@ export function MobileHeader({ isAdmin }: { isAdmin?: boolean }) {
       </div>
 
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetTrigger render={<Button variant="ghost" size="icon" aria-label={t('actions.openMenu')} />}>
+        <SheetTrigger
+          render={<Button variant="ghost" size="icon" className="size-11" aria-label={t('actions.openMenu')} />}
+        >
           <Menu className="h-5 w-5" />
         </SheetTrigger>
-        <SheetContent side="right" className="w-64">
+        <SheetContent side="right" className="w-64 max-w-[calc(100vw-1rem)]">
           <SheetHeader>
             <SheetTitle className="flex items-center gap-2.5">
               <Receipt className="h-5 w-5 text-primary drop-shadow-sm" />
               <span className="tracking-wide">BillOK</span>
             </SheetTitle>
           </SheetHeader>
-          <nav className="mt-6 space-y-1">
+          <nav className="mt-6 min-h-0 flex-1 space-y-1 overflow-y-auto">
             {navItems.map((item) => {
               const active = pathname === item.href || pathname.startsWith(item.href + '/');
               return (
-                <Link key={item.href} href={item.href} onClick={() => setOpen(false)}>
+                <Link key={item.href} href={item.href} className="block" onClick={() => setOpen(false)}>
                   <span
                     className={cn(
-                      'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200',
+                      'flex min-h-11 items-center gap-3 rounded-lg px-3 py-2.5 text-sm leading-snug font-medium whitespace-normal break-words transition-all duration-200',
                       active
                         ? 'border-l-[3px] border-primary bg-primary/10 text-primary shadow-sm'
                         : 'border-l-[3px] border-transparent text-muted-foreground hover:bg-muted/80 hover:text-foreground',
@@ -61,10 +63,10 @@ export function MobileHeader({ isAdmin }: { isAdmin?: boolean }) {
               );
             })}
             {isAdmin && (
-              <Link href="/admin" onClick={() => setOpen(false)}>
+              <Link href="/admin" className="block" onClick={() => setOpen(false)}>
                 <span
                   className={cn(
-                    'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200',
+                    'flex min-h-11 items-center gap-3 rounded-lg px-3 py-2.5 text-sm leading-snug font-medium whitespace-normal break-words transition-all duration-200',
                     pathname === '/admin'
                       ? 'border-l-[3px] border-primary bg-primary/10 text-primary shadow-sm'
                       : 'border-l-[3px] border-transparent text-muted-foreground hover:bg-muted/80 hover:text-foreground',
@@ -81,12 +83,12 @@ export function MobileHeader({ isAdmin }: { isAdmin?: boolean }) {
                   setOpen(false);
                   signOut({ callbackUrl: '/login' });
                 }}
-                className="flex flex-1 items-center gap-3 text-sm font-medium text-muted-foreground transition-colors duration-200 hover:text-foreground"
+                className="flex min-h-11 min-w-0 flex-1 items-center gap-3 text-left text-sm font-medium text-muted-foreground transition-colors duration-200 hover:text-foreground"
               >
                 <LogOut className="h-5 w-5" />
                 {t('nav.signOut')}
               </button>
-              <ThemeToggle />
+              <ThemeToggle className="size-11" />
             </div>
           </nav>
         </SheetContent>

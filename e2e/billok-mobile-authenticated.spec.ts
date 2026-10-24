@@ -47,9 +47,35 @@ test('Russian mobile dashboard, groups, expenses and admin at all 4 phone widths
 
     const hamburger = page.getByRole('button', { name: 'Открыть меню' });
     await expect(hamburger).toBeVisible();
+    const trigger = await hamburger.boundingBox();
+    expect(trigger?.height).toBeGreaterThanOrEqual(44);
+    expect(trigger?.width).toBeGreaterThanOrEqual(44);
     await hamburger.click();
-    await expect(page.getByRole('dialog')).toContainText('Группы');
-    await page.getByRole('dialog').getByText('Группы', { exact: true }).click();
+
+    const menu = page.getByRole('dialog');
+    await expect(menu).toContainText('Группы');
+    for (const name of ['Главная', 'Группы', 'Разделить чек', 'Мои чеки', 'Настройки', 'Администрирование']) {
+      const link = menu.getByRole('link', { name, exact: true });
+      await expect(link).toBeVisible();
+      const box = await link.boundingBox();
+      expect(box?.height, `Menu link "${name}" at ${width}px`).toBeGreaterThanOrEqual(44);
+    }
+
+    for (const name of ['Выйти', 'Переключить тему', 'Закрыть']) {
+      const button = menu.getByRole('button', { name });
+      await expect(button).toBeVisible();
+      const box = await button.boundingBox();
+      expect(box?.width, `Menu button "${name}" at ${width}px`).toBeGreaterThanOrEqual(44);
+      expect(box?.height, `Menu button "${name}" at ${width}px`).toBeGreaterThanOrEqual(44);
+    }
+
+    await page.setViewportSize({ width, height: 460 });
+    const exit = menu.getByRole('button', { name: 'Выйти' });
+    await exit.scrollIntoViewIfNeeded();
+    await expect(exit).toBeInViewport();
+    await checkPhoneLayout(page, width, true);
+    await page.setViewportSize({ width, height: 800 });
+    await menu.getByRole('link', { name: 'Группы', exact: true }).click();
     await expect(page).toHaveURL(/\/groups$/);
     await expect(page.getByRole('heading', { name: 'Группы' })).toBeVisible();
     await checkPhoneLayout(page, width);
