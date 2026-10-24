@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const namespaces = ['common', 'auth', 'dashboard', 'settings', 'splits', 'errors'] as const;
+const namespaces = ['common', 'auth', 'dashboard', 'settings', 'splits', 'errors', 'groups', 'expenses'] as const;
 
 function load(locale: string, namespace: string): Record<string, unknown> {
   return JSON.parse(readFileSync(resolve(process.cwd(), `messages/${locale}/${namespace}.json`), 'utf8')) as Record<
@@ -53,6 +53,8 @@ describe('Russian translations (incremental staging)', () => {
             'login.passwordPlaceholder',
             'profile.venmoPlaceholder',
             'detail',
+            'new.amountPlaceholder',
+            'new.exchangeRatePlaceholder',
           ].includes(key)
         ) {
           expect(russian[key], `Untranslated: ${namespace}.${key}`).toMatch(/[А-Яа-яЁё]/);
@@ -102,6 +104,29 @@ describe('Russian translations (incremental staging)', () => {
       'few',
       'many',
     ]);
+  });
+
+  it('uses the Russian plural forms for group member and expense counters', () => {
+    const groups = load('ru', 'groups');
+    const list = groups.list as Record<string, string>;
+    for (const name of ['memberCount', 'expenseCount']) {
+      expect(list[name]).toContain('one {');
+      expect(list[name]).toContain('few {');
+      expect(list[name]).toContain('many {');
+      expect(list[name]).toContain('other {');
+    }
+  });
+
+  it('keeps payer, group transfer and currency placeholders when splitting expenses', () => {
+    const groups = load('ru', 'groups');
+    const expenses = load('ru', 'expenses');
+    const groupDetail = groups.detail as Record<string, string>;
+    const expenseNew = expenses.new as Record<string, string>;
+    expect(groupDetail.paidBy).toContain('{name}');
+    expect(expenseNew.differentCurrencyNote).toContain('{expenseCurrency}');
+    expect(expenseNew.differentCurrencyNote).toContain('{groupCurrency}');
+    const transfer = groups.transfer as Record<string, string>;
+    expect(transfer.done).toContain('{name}');
   });
 
   it('does not expose the incomplete Russian language to end users', () => {
