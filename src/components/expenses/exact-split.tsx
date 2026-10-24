@@ -48,7 +48,7 @@ export function ExactSplit({
     <div className="space-y-2">
       {members.map((m) => (
         <div key={m.id} className="flex items-center gap-3 rounded-md border p-3">
-          <span className="flex-1 text-sm">{m.name ?? 'Без имени'}</span>
+          <span className="min-w-0 flex-1 break-words text-sm">{m.name ?? 'Без имени'}</span>
           <Input
             type="text"
             inputMode="decimal"
@@ -65,10 +65,10 @@ export function ExactSplit({
         }`}
       >
         {remaining === 0
-          ? 'Fully allocated'
+          ? 'Сумма распределена полностью'
           : remaining > 0
-            ? `${formatCents(remaining, currency, locale)} remaining`
-            : `${formatCents(-remaining, currency, locale)} over-allocated`}
+            ? `Осталось распределить: ${formatCents(remaining, currency, locale)}`
+            : `Превышение суммы: ${formatCents(-remaining, currency, locale)}`}
       </p>
     </div>
   );
