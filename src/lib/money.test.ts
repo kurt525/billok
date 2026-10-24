@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { formatCents, parseToCents, centsToDecimal } from './money';
+import { formatCents, parseToCents, centsToDecimal, isValidMoneyInput } from './money';
 
 describe('formatCents', () => {
   test('formats whole dollar amounts', () => {
@@ -103,15 +103,41 @@ describe('parseToCents', () => {
     expect(parseToCents('0.50')).toBe(50);
   });
 
-  test('truncates beyond two decimal places', () => {
-    expect(parseToCents('12.999')).toBe(1299);
-    expect(parseToCents('12.994')).toBe(1299);
-    expect(parseToCents('0.005')).toBe(0);
+  test('accepts Russian commas and separated thousands without losing kopecks', () => {
+    expect(parseToCents('12,50')).toBe(1250);
+    expect(parseToCents('0,01')).toBe(1);
+    expect(parseToCents('1 234,56')).toBe(123456);
+    expect(parseToCents('1\u00a0234,56')).toBe(123456);
+    expect(parseToCents('1\u202f234,56')).toBe(123456);
+    expect(parseToCents('-12,50')).toBe(-1250);
+    expect(parseToCents('12,50')).toBe(parseToCents('12.50'));
+    expect(formatCents(parseToCents('1 234,56')).replace(/[\u00a0\u202f]/g, ' ')).toBe('1 234,56 ₽');
   });
 
-  test('avoids floating-point corruption', () => {
-    expect(parseToCents('1.005')).toBe(100);
-    expect(parseToCents('2.675')).toBe(267);
+  test('can distinguish a valid zero-kopeck amount from invalid entered text', () => {
+    expect(isValidMoneyInput('0,00')).toBe(true);
+    expect(isValidMoneyInput('1 234,50')).toBe(true);
+    expect(isValidMoneyInput('не сумма')).toBe(false);
+  });
+
+  test('rejects ambiguous or malformed grouping instead of misinterpreting a receipt', () => {
+    expect(parseToCents('12,50,00')).toBe(0);
+    expect(parseToCents('1 23,45')).toBe(0);
+    expect(parseToCents('1.234,56')).toBe(0);
+    expect(parseToCents('12 руб')).toBe(0);
+  });
+
+  test('rounds monetary values half-up to the nearest kopeck', () => {
+    expect(parseToCents('12.999')).toBe(1300);
+    expect(parseToCents('12,994')).toBe(1299);
+    expect(parseToCents('12,995')).toBe(1300);
+    expect(parseToCents('0,005')).toBe(1);
+    expect(parseToCents('-0,005')).toBe(-1);
+  });
+
+  test('avoids floating-point corruption in decimal rounding', () => {
+    expect(parseToCents('1.005')).toBe(101);
+    expect(parseToCents('2.675')).toBe(268);
     expect(parseToCents('1.15')).toBe(115);
   });
 

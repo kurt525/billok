@@ -48,12 +48,11 @@ export function ExactSplit({
     <div className="space-y-2">
       {members.map((m) => (
         <div key={m.id} className="flex items-center gap-3 rounded-md border p-3">
-          <span className="flex-1 text-sm">{m.name ?? 'Unnamed'}</span>
+          <span className="flex-1 text-sm">{m.name ?? 'Без имени'}</span>
           <Input
-            type="number"
-            step="0.01"
-            min="0"
-            placeholder="0.00"
+            type="text"
+            inputMode="decimal"
+            placeholder="0,00"
             className="w-28"
             value={amounts[m.id] ?? ''}
             onChange={(e) => setAmount(m.id, e.target.value)}

@@ -153,8 +153,8 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
                 <Label htmlFor="amount">{t('new.amount')}</Label>
                 <Input
                   id="amount"
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
                   min="0.01"
                   placeholder={t('new.amountPlaceholder')}
                   value={amountStr}

@@ -6,7 +6,7 @@ import { TRPCClientError } from '@trpc/client';
 import { Link, useRouter } from '@/i18n/navigation';
 import { trpc } from '@/lib/trpc';
 import { localeHeaders } from '@/lib/locale-header';
-import { formatCents, centsToDecimal, parseToCents } from '@/lib/money';
+import { formatCents, centsToDecimal, parseToCents, isValidMoneyInput } from '@/lib/money';
 import { calculateSplitTotals } from '@/lib/split-calculator';
 import { canStoreClaimIdentity, setStoredClaimIdentity } from '@/lib/guest-session';
 import { loadingMessageKeys, randomLoadingMessageIndex } from '@/lib/loading-messages';
@@ -378,8 +378,9 @@ export default function GuestSplitPage() {
   }
 
   // Calculate totals
-  const parsedTip = parseFloat(tipOverride);
-  const tip = tipOverride !== '' && isFinite(parsedTip) ? Math.round(parsedTip * 100) : (extracted?.tip ?? 0);
+  const parsedTip = parseToCents(tipOverride);
+  const tip =
+    tipOverride !== '' && isValidMoneyInput(tipOverride) && parsedTip >= 0 ? parsedTip : (extracted?.tip ?? 0);
   const currency = extracted?.currency ?? 'USD';
 
   const getPerPersonTotals = useCallback(() => {
@@ -440,10 +441,7 @@ export default function GuestSplitPage() {
         people: validPeople.map((n) => ({ name: n })),
         assignments: assignmentList,
         paidByIndex: remappedPaidBy,
-        tipOverride:
-          tipOverride !== '' && isFinite(parseFloat(tipOverride))
-            ? Math.round(parseFloat(tipOverride) * 100)
-            : undefined,
+        tipOverride: tipOverride !== '' && isValidMoneyInput(tipOverride) && parsedTip >= 0 ? parsedTip : undefined,
       });
       router.push(`/split/${result.shareToken}`);
     } catch (err) {
@@ -817,9 +815,8 @@ export default function GuestSplitPage() {
             <Label htmlFor="guest-tip">{t('assign.tipOverrideLabel')}</Label>
             <Input
               id="guest-tip"
-              type="number"
-              step="0.01"
-              min="0"
+              type="text"
+              inputMode="decimal"
               placeholder={t('assign.tipDetected', { amount: formatCents(extracted.tip, currency, locale) })}
               value={tipOverride}
               onChange={(e) => setTipOverride(e.target.value)}
@@ -861,8 +858,8 @@ export default function GuestSplitPage() {
                       min="1"
                     />
                     <Input
-                      type="number"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       placeholder={t('assign.pricePlaceholder')}
                       value={newItem.totalPrice}
                       onChange={(e) => setNewItem((p) => ({ ...p, totalPrice: e.target.value }))}
@@ -915,8 +912,8 @@ export default function GuestSplitPage() {
                             min="1"
                           />
                           <Input
-                            type="number"
-                            step="0.01"
+                            type="text"
+                            inputMode="decimal"
                             value={editValues.totalPrice}
                             onChange={(e) => setEditValues((p) => ({ ...p, totalPrice: e.target.value }))}
                             className="flex-1 h-12"

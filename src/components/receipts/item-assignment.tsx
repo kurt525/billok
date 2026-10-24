@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
-import { formatCents, centsToDecimal, parseToCents } from '@/lib/money';
+import { formatCents, centsToDecimal, parseToCents, isValidMoneyInput } from '@/lib/money';
 import { calculateSplitTotals } from '@/lib/split-calculator';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -157,9 +157,11 @@ export function ItemAssignment({
 
   const { receipt, items } = receiptData.data ?? { receipt: null, items: [] };
   const extracted = receipt?.extractedData ?? null;
-  const parsedTip = parseFloat(tipOverride);
+  const parsedTip = parseToCents(tipOverride);
   const tip =
-    extracted && tipOverride !== '' && isFinite(parsedTip) ? Math.round(parsedTip * 100) : (extracted?.tip ?? 0);
+    extracted && tipOverride !== '' && isValidMoneyInput(tipOverride) && parsedTip >= 0
+      ? parsedTip
+      : (extracted?.tip ?? 0);
   // Until someone picks a payer or a saved one loads, default to the current user (when
   // they're in the group), as Add Expense does (#271, #265)
   const currentUserId = profile.data?.id;
@@ -325,8 +327,7 @@ export function ItemAssignment({
       receiptId,
       title,
       paidById: effectivePaidById,
-      tipOverride:
-        tipOverride !== '' && isFinite(parseFloat(tipOverride)) ? Math.round(parseFloat(tipOverride) * 100) : undefined,
+      tipOverride: tipOverride !== '' && isValidMoneyInput(tipOverride) && parsedTip >= 0 ? parsedTip : undefined,
       assignments: Object.entries(assignments)
         .filter(([, userIds]) => userIds.size > 0)
         .map(([receiptItemId, userIds]) => ({
@@ -539,9 +540,8 @@ export function ItemAssignment({
             <Label htmlFor="tip">{t('tipOverride')}</Label>
             <Input
               id="tip"
-              type="number"
-              step="0.01"
-              min="0"
+              type="text"
+              inputMode="decimal"
               placeholder={t('tipDetected', { amount: formatCents(safeExtracted.tip, safeExtracted.currency, locale) })}
               value={tipOverride}
               onChange={(e) => setTipOverride(e.target.value)}
@@ -597,8 +597,8 @@ export function ItemAssignment({
                   min="1"
                 />
                 <Input
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
                   placeholder={t('pricePlaceholder')}
                   value={newItem.totalPrice}
                   onChange={(e) => setNewItem((p) => ({ ...p, totalPrice: e.target.value }))}
@@ -650,8 +650,8 @@ export function ItemAssignment({
                         min="1"
                       />
                       <Input
-                        type="number"
-                        step="0.01"
+                        type="text"
+                        inputMode="decimal"
                         value={editValues.totalPrice}
                         onChange={(e) => setEditValues((p) => ({ ...p, totalPrice: e.target.value }))}
                         className="w-24"

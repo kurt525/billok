@@ -1,5 +1,7 @@
 'use client';
 
+import { formatRussianTime } from '@/lib/ru-format';
+
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
@@ -154,7 +156,7 @@ export function ServerLogsSection() {
                     {logs.data?.entries.map((entry) => (
                       <tr key={entry.id} className="border-b border-border/50 hover:bg-muted/50">
                         <td className="whitespace-nowrap px-3 py-1.5 align-top text-muted-foreground">
-                          {formatTime(entry.ts)}
+                          {formatRussianTime(entry.ts)}
                         </td>
                         <td className="px-2 py-1.5 align-top">
                           <span
@@ -185,16 +187,6 @@ export function ServerLogsSection() {
       </Card>
     </section>
   );
-}
-
-function formatTime(isoString: string): string {
-  const d = new Date(isoString);
-  return d.toLocaleTimeString('en-US', {
-    hour12: false,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
 }
 
 function formatData(data: Record<string, unknown>): string {
