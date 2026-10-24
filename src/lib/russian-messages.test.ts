@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const namespaces = ['common', 'auth', 'dashboard'] as const;
+const namespaces = ['common', 'auth', 'dashboard', 'settings', 'splits', 'errors'] as const;
 
 function load(locale: string, namespace: string): Record<string, unknown> {
   return JSON.parse(readFileSync(resolve(process.cwd(), `messages/${locale}/${namespace}.json`), 'utf8')) as Record<
@@ -46,9 +46,14 @@ describe('Russian translations (incremental staging)', () => {
         expect(params(russian[key]!), `Variables: ${namespace}.${key}`).toEqual(params(english[key]!));
         expect(richTags(russian[key]!), `Rich text: ${namespace}.${key}`).toEqual(richTags(english[key]!));
         if (
-          !['brand.name', 'login.emailPlaceholder', 'register.emailPlaceholder', 'login.passwordPlaceholder'].includes(
-            key,
-          )
+          ![
+            'brand.name',
+            'login.emailPlaceholder',
+            'register.emailPlaceholder',
+            'login.passwordPlaceholder',
+            'profile.venmoPlaceholder',
+            'detail',
+          ].includes(key)
         ) {
           expect(russian[key], `Untranslated: ${namespace}.${key}`).toMatch(/[А-Яа-яЁё]/);
         }
@@ -62,6 +67,41 @@ describe('Russian translations (incremental staging)', () => {
       expect(stringified).toContain('few {');
       expect(stringified).toContain('many {');
     }
+  });
+
+  it('keeps the error detail placeholder available without adding unsafe text', () => {
+    const errors = load('ru', 'errors');
+    expect(errors.detail).toBe('{detail}');
+    expect((errors.generic as Record<string, string>).unauthorized).toMatch(/Сеанс завершён/);
+  });
+
+  it('has unique Russian names for split states and human-readable rejection messages', () => {
+    const splits = load('ru', 'splits');
+    expect(splits.claiming).not.toBe(splits.finalized);
+    const errors = load('ru', 'errors');
+    expect(errors.joinNameTaken).toMatch(/имене[мни]/);
+    expect(errors.serverBusy).toContain('BillOK');
+  });
+
+  it('includes correct plural branches for split counters', () => {
+    const splits = load('ru', 'splits');
+    for (const key of ['people', 'items']) {
+      const template = String(splits[key]);
+      expect(template).toContain('one {');
+      expect(template).toContain('few {');
+      expect(template).toContain('many {');
+      expect(template).toContain('other {');
+    }
+
+    const plural = new Intl.PluralRules('ru');
+    expect([1, 2, 5, 21, 22, 25].map((count) => plural.select(count))).toEqual([
+      'one',
+      'few',
+      'many',
+      'one',
+      'few',
+      'many',
+    ]);
   });
 
   it('does not expose the incomplete Russian language to end users', () => {
