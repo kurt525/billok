@@ -90,6 +90,80 @@ describe('manual group bill authorization and storage', () => {
   });
 });
 
+describe('manual receipt: consumed portions and creator rounding', () => {
+  beforeEach(() => {
+    mockDb.groupMember.findUnique.mockResolvedValue({ role: 'MEMBER', userId: 'u1', groupId: 'g1' });
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'RUB' });
+    mockDb.groupMember.findMany.mockResolvedValue([{ userId: 'u1' }, { userId: 'u2' }, { userId: 'u3' }]);
+    mockDb.receipt.findUnique.mockResolvedValue({
+      id: 'r1',
+      originalName: 'billok-manual',
+      uploadedById: 'u1',
+      groupId: 'g1',
+      status: 'COMPLETED',
+      extractedData: { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' },
+      items: [{ id: 'pizza', totalPrice: 101 }],
+    });
+    mockDb.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) =>
+      strings.join('?').includes('FROM "Receipt"') ? [{ groupId: 'g1' }] : [{ archivedAt: null }],
+    );
+    mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => unknown) => fn(mockDb));
+    mockDb.expense.create.mockResolvedValue({ id: 'expense1' });
+  });
+
+  const finish = {
+    groupId: 'g1',
+    receiptId: 'r1',
+    title: 'Пицца',
+    paidById: 'u2',
+    assignments: [{ receiptItemId: 'pizza', userIds: ['u2', 'u3'], parts: [3, 5] }],
+  };
+
+  test('saves actual portions; the rounding kopeck goes to creator, not payer', async () => {
+    await (await caller()).assignItemsAndCreateExpense(finish);
+    expect(mockDb.expense.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        amount: 101,
+        paidById: 'u2',
+        addedById: 'u1',
+        splitMode: 'ITEM',
+        shares: {
+          create: expect.arrayContaining([
+            { userId: 'u2', amount: 37 },
+            { userId: 'u3', amount: 63 },
+            { userId: 'u1', amount: 1 },
+          ]),
+        },
+      }),
+    });
+    expect(mockDb.receiptItemAssignment.createMany).toHaveBeenCalledWith({
+      data: [
+        { receiptItemId: 'pizza', userId: 'u2', shareOfItem: 3 },
+        { receiptItemId: 'pizza', userId: 'u3', shareOfItem: 5 },
+      ],
+      skipDuplicates: true,
+    });
+  });
+
+  test('rejects mismatched portions before writing', async () => {
+    await expect(
+      (await caller()).assignItemsAndCreateExpense({
+        ...finish,
+        assignments: [{ receiptItemId: 'pizza', userIds: ['u2', 'u3'], parts: [3] }],
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+
+  test('requires creator membership when a rounding kopeck is owed', async () => {
+    mockDb.groupMember.findMany.mockResolvedValue([{ userId: 'u2' }, { userId: 'u3' }]);
+    await expect((await caller()).assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('AI provider setup (#280)', () => {
   test('no receipts procedure exposes the AI provider setup', async () => {
     const { receiptsRouter } = await import('./receipts');

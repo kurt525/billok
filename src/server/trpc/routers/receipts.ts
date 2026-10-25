@@ -9,6 +9,7 @@ import { parseExtractedData } from '../../lib/json-schemas';
 import { getExchangeRate, convertCents } from '../../lib/exchange-rates';
 import { stripUndefined } from '../../lib/strip-undefined';
 import { lockActiveGroup } from '../../lib/group-balances';
+import { calculateManualReceiptTotals } from '@/lib/manual-receipt-split';
 import { deleteUnusedSplitReceipts, removeReceiptFiles } from '../../lib/receipt-cleanup';
 
 /**
@@ -181,6 +182,7 @@ export const receiptsRouter = createTRPCRouter({
         status: receiptWithItems.status,
         imagePath: receiptWithItems.imagePath,
         isManual: receiptWithItems.originalName === 'billok-manual',
+        creatorId: receiptWithItems.uploadedById,
         paidById: receiptWithItems.paidById,
         extractedData: receiptWithItems.extractedData as {
           merchantName?: string;
@@ -409,6 +411,7 @@ export const receiptsRouter = createTRPCRouter({
           z.object({
             receiptItemId: z.string(),
             userIds: z.array(z.string()).min(1),
+            parts: z.array(z.number().int().min(1).max(10000)).optional(),
           }),
         ),
       }),
@@ -451,7 +454,11 @@ export const receiptsRouter = createTRPCRouter({
           input.assignments.length !== itemIds.size ||
           new Set(assigned).size !== itemIds.size ||
           assigned.some((id) => !itemIds.has(id)) ||
-          input.assignments.some((a) => new Set(a.userIds).size !== a.userIds.length)
+          input.assignments.some(
+            (a) =>
+              new Set(a.userIds).size !== a.userIds.length ||
+              (a.parts !== undefined && a.parts.length !== a.userIds.length),
+          )
         ) {
           throw new AppError('BAD_REQUEST', 'receiptNotReady');
         }
@@ -471,55 +478,73 @@ export const receiptsRouter = createTRPCRouter({
       // Calculate per-user item subtotals
       const userSubtotals = new Map<string, number>();
 
-      for (const assignment of input.assignments) {
-        const item = itemMap.get(assignment.receiptItemId)!;
+      if (receipt.originalName !== 'billok-manual')
+        for (const assignment of input.assignments) {
+          const item = itemMap.get(assignment.receiptItemId)!;
 
-        const perPerson = Math.floor(item.totalPrice / assignment.userIds.length);
-        const remainder = item.totalPrice - perPerson * assignment.userIds.length;
+          const perPerson = Math.floor(item.totalPrice / assignment.userIds.length);
+          const remainder = item.totalPrice - perPerson * assignment.userIds.length;
 
-        for (const [i, userId] of assignment.userIds.entries()) {
-          const amount = perPerson + (i < remainder ? 1 : 0);
-          userSubtotals.set(userId, (userSubtotals.get(userId) ?? 0) + amount);
+          for (const [i, userId] of assignment.userIds.entries()) {
+            const amount = perPerson + (i < remainder ? 1 : 0);
+            userSubtotals.set(userId, (userSubtotals.get(userId) ?? 0) + amount);
+          }
         }
-      }
 
       // Proportionally distribute tax and tip using receipt subtotal as denominator.
       // This ensures each assigned item gets its fair share of tax/tip relative to
       // the full receipt subtotal, even when not all items are assigned.
       const actualSubtotal = Array.from(userSubtotals.values()).reduce((a, b) => a + b, 0);
       const receiptSubtotal = extractedData.subtotal > 0 ? extractedData.subtotal : actualSubtotal;
-      const totalAmount = actualSubtotal + tax + tip;
+      const totalAmount =
+        receipt.originalName === 'billok-manual'
+          ? receipt.items.reduce((sum, item) => sum + item.totalPrice, 0) + tax + tip
+          : actualSubtotal + tax + tip;
 
-      const userTotals = new Map<string, number>();
+      const userTotals =
+        receipt.originalName === 'billok-manual'
+          ? calculateManualReceiptTotals({
+              items: receipt.items,
+              assignments: input.assignments.map((a) => ({
+                receiptItemId: a.receiptItemId,
+                people: a.userIds.map((userId, i) => ({ userId, parts: a.parts?.[i] ?? 1 })),
+              })),
+              creatorId: receipt.uploadedById ?? ctx.user.id,
+              tax,
+              tip,
+            })
+          : new Map<string, number>();
       let allocatedTotal = 0;
       const userEntries = Array.from(userSubtotals.entries());
 
-      for (const [i, [userId, itemTotal]] of userEntries.entries()) {
-        const proportion = receiptSubtotal > 0 ? itemTotal / receiptSubtotal : 0;
+      if (receipt.originalName !== 'billok-manual')
+        for (const [i, [userId, itemTotal]] of userEntries.entries()) {
+          const proportion = receiptSubtotal > 0 ? itemTotal / receiptSubtotal : 0;
 
-        let userTax: number;
-        let userTip: number;
+          let userTax: number;
+          let userTip: number;
 
-        if (i === userEntries.length - 1) {
-          // Last user gets remainder to prevent off-by-one
-          const alreadyAllocated = allocatedTotal;
-          const userTotal = totalAmount - alreadyAllocated;
-          userTotals.set(userId, userTotal);
-          allocatedTotal += userTotal;
-        } else {
-          userTax = Math.round(tax * proportion);
-          userTip = Math.round(tip * proportion);
-          const userTotal = itemTotal + userTax + userTip;
-          userTotals.set(userId, userTotal);
-          allocatedTotal += userTotal;
+          if (i === userEntries.length - 1) {
+            // Last user gets remainder to prevent off-by-one
+            const alreadyAllocated = allocatedTotal;
+            const userTotal = totalAmount - alreadyAllocated;
+            userTotals.set(userId, userTotal);
+            allocatedTotal += userTotal;
+          } else {
+            userTax = Math.round(tax * proportion);
+            userTip = Math.round(tip * proportion);
+            const userTotal = itemTotal + userTax + userTip;
+            userTotals.set(userId, userTotal);
+            allocatedTotal += userTotal;
+          }
         }
-      }
 
       // Save assignments in a single batch (replaces N×M individual upserts)
       const assignmentData = input.assignments.flatMap((a) =>
-        a.userIds.map((userId) => ({
+        a.userIds.map((userId, i) => ({
           receiptItemId: a.receiptItemId,
           userId,
+          shareOfItem: a.parts?.[i] ?? 1,
         })),
       );
 
@@ -569,6 +594,13 @@ export const receiptsRouter = createTRPCRouter({
             if (!memberIds.has(uid)) {
               throw new AppError('BAD_REQUEST', 'assigneeNotMember');
             }
+          }
+        }
+
+        if (receipt.originalName === 'billok-manual') {
+          // Remaining kopecks may belong to the creator who consumed no item.
+          for (const userId of userTotals.keys()) {
+            if (!memberIds.has(userId)) throw new AppError('BAD_REQUEST', 'assigneeNotMember');
           }
         }
 
@@ -629,6 +661,7 @@ export const receiptsRouter = createTRPCRouter({
             z.object({
               receiptItemId: z.string(),
               userIds: z.array(z.string()).max(100),
+              parts: z.array(z.number().int().min(1).max(10000)).optional(),
             }),
           )
           .max(200)
@@ -691,6 +724,10 @@ export const receiptsRouter = createTRPCRouter({
           },
         });
 
+        if (input.assignments?.some((a) => a.parts && a.parts.length !== a.userIds.length)) {
+          throw new AppError('BAD_REQUEST', 'receiptNotReady');
+        }
+
         // Save partial assignments if provided (empty array clears existing)
         if (input.assignments) {
           // Validate that all receiptItemIds belong to this receipt
@@ -717,9 +754,9 @@ export const receiptsRouter = createTRPCRouter({
 
           // Create new assignments
           const seenAssignments = new Set<string>();
-          const assignmentData: { receiptItemId: string; userId: string }[] = [];
+          const assignmentData: { receiptItemId: string; userId: string; shareOfItem: number }[] = [];
           for (const assignment of input.assignments) {
-            for (const userId of assignment.userIds) {
+            for (const [i, userId] of assignment.userIds.entries()) {
               const key = `${assignment.receiptItemId}\u0000${userId}`;
               if (seenAssignments.has(key)) {
                 continue;
@@ -728,6 +765,7 @@ export const receiptsRouter = createTRPCRouter({
               assignmentData.push({
                 receiptItemId: assignment.receiptItemId,
                 userId,
+                shareOfItem: assignment.parts?.[i] ?? 1,
               });
             }
           }

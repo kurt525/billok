@@ -6,6 +6,7 @@ import { trpc } from '@/lib/trpc';
 import { formatCents, centsToDecimal, parseToCents, isValidMoneyInput } from '@/lib/money';
 import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
+import { calculateManualReceiptTotals } from '@/lib/manual-receipt-split';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -43,6 +44,7 @@ export function ItemAssignment({
   const utils = trpc.useUtils();
 
   const [assignments, setAssignments] = useState<Assignments>({});
+  const [partsByItem, setPartsByItem] = useState<Record<string, Record<string, number>>>({});
   const [title, setTitle] = useState('');
   const [paidById, setPaidById] = useState('');
   const [tipOverride, setTipOverride] = useState<string>('');
@@ -143,13 +145,18 @@ export function ItemAssignment({
         setPaidById(data.receipt.paidById!);
       }
       const restored: Assignments = {};
+      const restoredParts: Record<string, Record<string, number>> = {};
       for (const item of data.items) {
         if (item.assignments && item.assignments.length > 0) {
           restored[item.id] = new Set(item.assignments.map((a: { userId: string }) => a.userId));
+          restoredParts[item.id] = Object.fromEntries(
+            item.assignments.map((a: { userId: string; shareOfItem: number }) => [a.userId, a.shareOfItem || 1]),
+          );
         }
       }
       if (Object.keys(restored).length > 0) {
         setAssignments(restored);
+        setPartsByItem(restoredParts);
       }
       hasRestoredRef.current = true;
     }
@@ -174,6 +181,10 @@ export function ItemAssignment({
   // (id-based) while split/page uses Record<number, Set<number>> (index-based).
   // The different key types make a shared abstraction more complex than the duplication.
   function toggleAssignment(itemId: string, userId: string) {
+    setPartsByItem((prev) => ({
+      ...prev,
+      [itemId]: { ...prev[itemId], [userId]: 1 },
+    }));
     setAssignments((prev) => {
       const next = { ...prev };
       const current = new Set(next[itemId] ?? []);
@@ -193,6 +204,7 @@ export function ItemAssignment({
       next[item.id] = new Set(members.map((m) => m.id));
     }
     setAssignments(next);
+    setPartsByItem({});
   }
 
   function startEditing(item: { id: string; name: string; quantity: number; totalPrice: number }) {
@@ -249,6 +261,27 @@ export function ItemAssignment({
   // Calculate per-person totals using shared calculateSplitTotals (Finding #30).
   // Memoized to avoid recomputation on every render (Finding #36).
   const perPersonTotals = useMemo(() => {
+    if (receipt?.isManual && receipt.creatorId) {
+      const chosen = Object.entries(assignments)
+        .filter(([receiptItemId, userIds]) => userIds.size > 0 && items.some((item) => item.id === receiptItemId))
+        .map(([receiptItemId, userIds]) => ({
+          receiptItemId,
+          people: [...userIds].map((userId) => ({
+            userId,
+            parts: partsByItem[receiptItemId]?.[userId] ?? 1,
+          })),
+        }));
+      if (chosen.some((a) => a.people.some((p) => !Number.isSafeInteger(p.parts) || p.parts < 1 || p.parts > 10000))) {
+        return new Map<string, number>();
+      }
+      return calculateManualReceiptTotals({
+        items: items.filter((item) => chosen.some((a) => a.receiptItemId === item.id)),
+        assignments: chosen,
+        creatorId: receipt.creatorId,
+        tax: chosen.length === items.length ? (extracted?.tax ?? 0) : 0,
+        tip: chosen.length === items.length ? tip : 0,
+      });
+    }
     // Build member-id -> index mapping for calculateSplitTotals
     const memberIdToIndex = new Map<string, number>();
     members.forEach((m, i) => memberIdToIndex.set(m.id, i));
@@ -281,9 +314,15 @@ export function ItemAssignment({
       if (member) totals.set(member.id, r.total);
     }
     return totals;
-  }, [items, assignments, members, extracted, tip]);
-  const assignedItemCount = Object.values(assignments).filter((s) => s.size > 0).length;
-  const allAssigned = items.length > 0 && assignedItemCount === items.length;
+  }, [items, assignments, partsByItem, receipt, members, extracted, tip]);
+  const assignedItemCount = items.filter((item) => (assignments[item.id]?.size ?? 0) > 0).length;
+  const partsAreValid = Object.entries(assignments).every(([itemId, users]) =>
+    [...users].every((userId) => {
+      const parts = partsByItem[itemId]?.[userId] ?? 1;
+      return Number.isSafeInteger(parts) && parts >= 1 && parts <= 10000;
+    }),
+  );
+  const allAssigned = items.length > 0 && assignedItemCount === items.length && (!receipt?.isManual || partsAreValid);
 
   // Precompute member initials to avoid recalculation every render (Finding #37)
   const memberInitials = useMemo(
@@ -337,10 +376,15 @@ export function ItemAssignment({
       paidById: effectivePaidById,
       tipOverride: tipOverride !== '' && isValidMoneyInput(tipOverride) && parsedTip >= 0 ? parsedTip : undefined,
       assignments: Object.entries(assignments)
-        .filter(([, userIds]) => userIds.size > 0)
+        .filter(([itemId, userIds]) => userIds.size > 0 && items.some((item) => item.id === itemId))
         .map(([receiptItemId, userIds]) => ({
           receiptItemId,
           userIds: Array.from(userIds),
+          ...(receipt?.isManual
+            ? {
+                parts: Array.from(userIds).map((userId) => partsByItem[receiptItemId]?.[userId] ?? 1),
+              }
+            : {}),
         })),
     });
   }
@@ -351,10 +395,15 @@ export function ItemAssignment({
       receiptId,
       paidById: effectivePaidById || null,
       assignments: Object.entries(assignments)
-        .filter(([, userIds]) => userIds.size > 0)
+        .filter(([itemId, userIds]) => userIds.size > 0 && items.some((item) => item.id === itemId))
         .map(([receiptItemId, userIds]) => ({
           receiptItemId,
           userIds: Array.from(userIds),
+          ...(receipt?.isManual
+            ? {
+                parts: Array.from(userIds).map((userId) => partsByItem[receiptItemId]?.[userId] ?? 1),
+              }
+            : {}),
         })),
     });
   }
@@ -830,11 +879,49 @@ export function ItemAssignment({
                     );
                   })}
                 </div>
+                {receipt?.isManual && assigned.size > 0 && (
+                  <div className="mt-3 space-y-2" data-testid={'portions-for-' + item.id}>
+                    <p className="text-xs text-muted-foreground">{t('partsHint')}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {members
+                        .filter((m) => assigned.has(m.id))
+                        .map((m) => (
+                          <div key={m.id} className="min-w-0 space-y-1">
+                            <Label htmlFor={'parts-' + item.id + '-' + m.id} className="text-xs">
+                              {t('partsFor', { name: m.name ?? t('unnamed') })}
+                            </Label>
+                            <Input
+                              id={'parts-' + item.id + '-' + m.id}
+                              data-testid={'item-parts-' + item.id + '-' + m.id}
+                              type="number"
+                              inputMode="numeric"
+                              min={1}
+                              max={10000}
+                              step={1}
+                              className="h-11 min-w-0"
+                              value={partsByItem[item.id]?.[m.id] ?? 1}
+                              onChange={(e) =>
+                                setPartsByItem((prev) => ({
+                                  ...prev,
+                                  [item.id]: {
+                                    ...prev[item.id],
+                                    [m.id]: e.target.value === '' ? 0 : Number(e.target.value),
+                                  },
+                                }))
+                              }
+                            />
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           );
         })}
       </div>
+
+      {receipt?.isManual && <p className="text-xs text-muted-foreground">{t('roundingCreator')}</p>}
 
       {/* Per-person summary */}
       {perPersonTotals.size > 0 && (
@@ -880,7 +967,7 @@ export function ItemAssignment({
           variant="outline"
           className="min-h-11 w-full"
           onClick={handleSaveForLater}
-          disabled={saveForLater.isPending}
+          disabled={saveForLater.isPending || (receipt?.isManual && !partsAreValid)}
           data-testid="save-for-later-btn"
         >
           <Bookmark className="mr-2 h-4 w-4" />
