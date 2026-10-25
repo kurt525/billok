@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { compareCoverage, coveragePercentage, METRICS, renderSummary } from './check-coverage-regression.mjs';
+import {
+  compareCoverage,
+  compareCommonSourceCoverage,
+  coveragePercentage,
+  METRICS,
+  renderSummary,
+} from './check-coverage-regression.mjs';
 
 const summary = (covered, total = 100) => ({
   total: Object.fromEntries(METRICS.map((name) => [name, { covered, total }])),
@@ -57,4 +63,43 @@ test('report interpolates actual percentages rather than raw template syntax', (
   assert.match(report, /-5\.00/);
   assert.match(report, /FAIL/);
   assert.doesNotMatch(report, /\$\{/);
+});
+
+test('removed AI-only files do not distort common-source coverage', () => {
+  const make = (covered, total) => Object.fromEntries(METRICS.map((name) => [name, { covered, total }]));
+  const current = {
+    total: make(50, 100),
+    '/tmp/billok/src/core.ts': make(40, 50),
+    '/tmp/billok/src/new-manual.ts': make(10, 50),
+  };
+  const baseline = {
+    total: make(100, 200),
+    '/tmp/main/src/core.ts': make(40, 50),
+    '/tmp/main/src/server/ai/provider.ts': make(60, 150),
+  };
+  const result = compareCommonSourceCoverage(current, baseline, 0.5);
+  assert.equal(result.sharedFiles, 1);
+  assert.equal(result.currentOnlyFiles, 1);
+  assert.equal(result.baselineOnlyFiles, 1);
+  assert.ok(result.rows.every((row) => row.passed && row.deltaPP === 0));
+});
+
+test('the same 0.5 point threshold still rejects a common-source regression', () => {
+  const make = (covered, total) => Object.fromEntries(METRICS.map((name) => [name, { covered, total }]));
+  const current = { total: make(39, 100), '/tmp/billok/src/core.ts': make(39, 100) };
+  const baseline = { total: make(40, 100), '/tmp/main/src/core.ts': make(40, 100) };
+  const result = compareCommonSourceCoverage(current, baseline, 0.5);
+  assert.ok(result.rows.every((row) => !row.passed && row.deltaPP === -1));
+});
+
+test('no common source files is a hard failure', () => {
+  const metrics = Object.fromEntries(METRICS.map((name) => [name, { covered: 10, total: 20 }]));
+  assert.throws(
+    () =>
+      compareCommonSourceCoverage(
+        { total: metrics, '/tmp/billok/src/a.ts': metrics },
+        { total: metrics, '/tmp/main/src/b.ts': metrics },
+      ),
+    /No shared source files/,
+  );
 });
