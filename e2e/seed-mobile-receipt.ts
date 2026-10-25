@@ -45,57 +45,6 @@ async function main() {
         },
       },
     });
-    const guestReceipt = await db.receipt.create({
-      data: {
-        isGuest: true,
-        imagePath: '',
-        originalName: 'anonymous-mobile-fixture.png',
-        mimeType: 'image/png',
-        fileSize: 0,
-        status: 'COMPLETED',
-        extractedData: {
-          merchantName: 'Гостевой тестовый чек',
-          subtotal: 9000,
-          tax: 0,
-          tip: 0,
-          total: 9000,
-          currency: 'RUB',
-        },
-        items: {
-          create: [
-            { name: 'Суп', quantity: 3, unitPrice: 2000, totalPrice: 6000, sortOrder: 0 },
-            { name: 'Чай', quantity: 1, unitPrice: 3000, totalPrice: 3000, sortOrder: 1 },
-          ],
-        },
-      },
-    });
-    process.stdout.write('BILLOK_MOBILE_GUEST_RECEIPT_ID=' + guestReceipt.id + '\n');
-    const rescannedGuestReceipt = await db.receipt.create({
-      data: {
-        isGuest: true,
-        imagePath: '',
-        originalName: 'corrected-anonymous-mobile-fixture.png',
-        mimeType: 'image/png',
-        fileSize: 0,
-        status: 'COMPLETED',
-        extractedData: {
-          merchantName: 'Повторно распознанный чек',
-          subtotal: 12000,
-          tax: 0,
-          tip: 0,
-          total: 12000,
-          currency: 'RUB',
-        },
-        items: {
-          create: [
-            { name: 'Каша', quantity: 2, unitPrice: 3500, totalPrice: 7000, sortOrder: 0 },
-            { name: 'Сок', quantity: 1, unitPrice: 5000, totalPrice: 5000, sortOrder: 1 },
-          ],
-        },
-      },
-    });
-    process.stdout.write('BILLOK_MOBILE_GUEST_RESCAN_ID=' + rescannedGuestReceipt.id + '\n');
-
     process.stdout.write('BILLOK_MOBILE_RECEIPT_ID=' + receipt.id + '\n');
     process.stdout.write('BILLOK_MOBILE_GROUP_ID=' + group.id + '\n');
   } finally {

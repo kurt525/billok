@@ -1,7 +1,7 @@
 {
   "name": "sharetab",
   "version": "0.8.0",
-  "description": "Self-hosted, open-source Splitwise alternative with AI-powered receipt scanning",
+  "description": "BillOK — ручное разделение общих чеков и расходов без OCR и AI",
   "author": "Carlos Cristobal",
   "license": "MIT",
   "homepage": "https://github.com/sw-carlos-cristobal/sharetab",

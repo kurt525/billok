@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
-import { Plus, Settings, UserPlus, ArrowRight, Receipt, Handshake, Camera, Tag, Archive, Trash2 } from 'lucide-react';
+import { Plus, Settings, UserPlus, ArrowRight, Receipt, Handshake, Tag, Archive, Trash2 } from 'lucide-react';
 import { Link } from '@/i18n/navigation';
 import { toast } from 'sonner';
 import { InviteDialog } from '@/components/groups/invite-dialog';
@@ -334,15 +334,6 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
           <h2 className="text-lg font-semibold">{t('detail.expenses')}</h2>
           {!g.archivedAt && (
             <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                nativeButton={false}
-                render={<Link href={`/groups/${groupId}/scan`} />}
-              >
-                <Camera className="mr-2 h-4 w-4" />
-                {t('detail.scanReceipt')}
-              </Button>
               <Button size="sm" nativeButton={false} render={<Link href={`/groups/${groupId}/expenses/new`} />}>
                 <Plus className="mr-2 h-4 w-4" />
                 {t('detail.addExpense')}

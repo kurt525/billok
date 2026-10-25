@@ -86,6 +86,8 @@ test('Russian mobile dashboard, groups, expenses and admin at all 4 phone widths
     await expect(page).toHaveURL(/\/groups\/[^/]+$/);
     await expect(page.getByText('Расходы', { exact: true }).first()).toBeVisible();
     await checkPhoneLayout(page, width);
+    await expect(page.locator('a[href$="/scan"]')).toHaveCount(0);
+    await expect(page.locator('a[href$="/expenses/new"]').first()).toBeVisible();
 
     await page.goto(new URL(page.url()).pathname + '/expenses/new', { waitUntil: 'networkidle' });
     await expect(page.getByRole('main')).toBeVisible();

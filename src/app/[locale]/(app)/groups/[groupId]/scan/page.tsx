@@ -36,6 +36,11 @@ function ScanReceiptContent({ params }: { params: Promise<{ groupId: string }> }
   const tc = useTranslations('common');
   const { data: authSession } = useSession();
   const resumeReceiptId = searchParams.get('receiptId');
+  // New expenses are entered manually. Only old bookmarked receipt drafts may
+  // use the legacy reader until data migration removes the historical route.
+  useEffect(() => {
+    if (!resumeReceiptId) router.replace(`/groups/${groupId}/expenses/new`);
+  }, [resumeReceiptId, router, groupId]);
   const group = trpc.groups.get.useQuery({ groupId });
 
   const [step, setStep] = useState<Step>(resumeReceiptId ? 'assign' : 'upload');
@@ -124,6 +129,7 @@ function ScanReceiptContent({ params }: { params: Promise<{ groupId: string }> }
   }
 
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!resumeReceiptId) return; // New OCR uploads are not a BillOK user flow.
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -210,6 +216,10 @@ function ScanReceiptContent({ params }: { params: Promise<{ groupId: string }> }
 
   // An archived group refuses new expenses, including finishing a saved receipt
   if (group.data?.archivedAt) return <ArchivedGroupNotice groupId={groupId} />;
+
+  // Never expose the old camera/AI form for new expenses while the redirect
+  // loads. Historic receipt drafts with an ID remain accessible for migration.
+  if (!resumeReceiptId) return <div role="status">Открываем ручной ввод расхода…</div>;
 
   return (
     <div className="mx-auto max-w-lg space-y-6">

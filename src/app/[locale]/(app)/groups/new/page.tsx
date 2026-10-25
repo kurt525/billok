@@ -17,7 +17,7 @@ export default function NewGroupPage() {
   const router = useRouter();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [currency, setCurrency] = useState('USD');
+  const [currency, setCurrency] = useState('RUB');
   const [emoji, setEmoji] = useState('💰');
 
   const createGroup = trpc.groups.create.useMutation({

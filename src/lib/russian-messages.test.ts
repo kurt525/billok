@@ -45,17 +45,20 @@ function richTags(value: string): string[] {
   return [...value.matchAll(/<\/?([a-z][a-zA-Z0-9_]*)>/g)].map((match) => match[1]!).sort();
 }
 
-describe('Russian translations (incremental staging)', () => {
+describe('BillOK Russian-only translations', () => {
   for (const namespace of namespaces) {
     it(`${namespace} has every source key and matching ICU arguments`, () => {
       const english = flatten(load('en', namespace));
       const russian = flatten(load('ru', namespace));
 
-      expect(Object.keys(russian).sort()).toEqual(Object.keys(english).sort());
-      for (const key of Object.keys(english)) {
+      // English is a historical compatibility floor, not a supported locale.
+      expect(Object.keys(russian)).toEqual(expect.arrayContaining(Object.keys(english)));
+      for (const key of Object.keys(russian)) {
         expect(russian[key]!.trim(), `Empty: ${namespace}.${key}`).not.toBe('');
-        expect(params(russian[key]!), `Variables: ${namespace}.${key}`).toEqual(params(english[key]!));
-        expect(richTags(russian[key]!), `Rich text: ${namespace}.${key}`).toEqual(richTags(english[key]!));
+        if (english[key]) {
+          expect(params(russian[key]!), `Variables: ${namespace}.${key}`).toEqual(params(english[key]!));
+          expect(richTags(russian[key]!), `Rich text: ${namespace}.${key}`).toEqual(richTags(english[key]!));
+        }
         if (
           ![
             'brand.name',

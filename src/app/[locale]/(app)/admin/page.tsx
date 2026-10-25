@@ -23,17 +23,11 @@ import { AuditLogSection } from '@/components/admin/audit-log-section';
 import { RegistrationControlSection } from '@/components/admin/registration-control-section';
 import { AnnouncementSection } from '@/components/admin/announcement-section';
 import { ActivityFeedSection } from '@/components/admin/activity-feed-section';
-import { AIStatsSection } from '@/components/admin/ai-stats-section';
-import { AIProviderTestSection } from '@/components/admin/ai-provider-test-section';
 import { ToolsSection } from '@/components/admin/tools-section';
 import { ServerLogsSection } from '@/components/admin/server-logs-section';
-import { AuthExpiryNotificationsSection } from '@/components/admin/auth-expiry-notifications-section';
-import { MeridianAuthSection } from '@/components/admin/meridian-auth-section';
-import { OpenAICodexAuthSection } from '@/components/admin/openai-codex-auth-section';
 import { UserManagementSection } from '@/components/admin/user-management-section';
 import { GroupOverviewSection } from '@/components/admin/group-overview-section';
 import { VenmoSettingsSection } from '@/components/admin/venmo-settings-section';
-import { GuestUploadSettingsSection } from '@/components/admin/guest-upload-settings-section';
 
 export default function AdminPage() {
   const { data: session } = useSession();
@@ -49,9 +43,6 @@ export default function AdminPage() {
 
       <div className="grid gap-6 [&>*]:min-w-0">
         <SystemHealthSection />
-        <MeridianAuthSection />
-        <OpenAICodexAuthSection />
-        <AuthExpiryNotificationsSection />
         <Separator />
         <UserManagementSection {...(currentUserEmail !== undefined ? { currentUserEmail } : {})} />
         <Separator />
@@ -60,13 +51,10 @@ export default function AdminPage() {
         <StorageStatsSection />
         <Separator />
         <RegistrationControlSection />
-        <GuestUploadSettingsSection />
         <Separator />
         <AnnouncementSection />
         <VenmoSettingsSection />
         <Separator />
-        <AIStatsSection />
-        <AIProviderTestSection />
         <Separator />
         <ActivityFeedSection />
         <Separator />

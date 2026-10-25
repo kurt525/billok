@@ -1,10 +1,11 @@
-import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
+import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 
 const messagesDir = join(process.cwd(), 'messages');
 const sourceLocale = 'en';
-// Russian is introduced namespace-by-namespace, never activate it in routing until complete.
-const localesInProgress = new Set(['ru']);
+// BillOK supports Russian only. Legacy English keys are a compatibility floor;
+// new Russian-only UI strings do not require translating abandoned locales.
+const localesInProgress = new Set<string>();
 
 function getKeys(obj: Record<string, unknown>, prefix = ''): string[] {
   const keys: string[] = [];
@@ -30,9 +31,9 @@ const namespaces = readdirSync(sourceDir)
   .filter((f) => f.endsWith('.json'))
   .map((f) => f.replace('.json', ''));
 
-const locales = readdirSync(messagesDir).filter(
-  (d) => d !== sourceLocale && statSync(join(messagesDir, d)).isDirectory(),
-);
+const locales = ['ru'];
+// Keep the legacy source structure as a baseline while Russian is the only
+// user-facing language; an expanded Russian-only namespace is valid.
 
 let hasErrors = false;
 
@@ -45,7 +46,7 @@ for (const locale of locales) {
     const targetKeys = getKeys(loadNamespace(locale, namespace));
 
     const missing = sourceKeys.filter((k) => !targetKeys.includes(k));
-    const extra = targetKeys.filter((k) => !sourceKeys.includes(k));
+    const extra: string[] = []; // New BillOK strings may exist only in Russian.
 
     if (missing.length > 0) {
       hasErrors = true;
