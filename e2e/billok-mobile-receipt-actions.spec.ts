@@ -159,6 +159,7 @@ test('manual group bill starts without upload and keeps its positions', async ({
   await form.getByRole('button', { name: 'Добавить', exact: true }).click();
   await expect(item(page, 'Пицца')).toHaveCount(1);
   await page.getByTestId('split-all-btn').click();
+  await page.getByTestId('save-for-later-btn').scrollIntoViewIfNeeded();
   await page.getByTestId('save-for-later-btn').click();
   await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'));
   await page.goto(savedUrl, { waitUntil: 'networkidle' });

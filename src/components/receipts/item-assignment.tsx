@@ -360,7 +360,7 @@ export function ItemAssignment({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4" data-testid="item-assignment-form">
+    <form onSubmit={handleSubmit} className="space-y-4 pb-28" data-testid="item-assignment-form">
       {/* Receipt image toggle */}
       {safeReceipt.imagePath && (
         <Button type="button" variant="outline" size="sm" onClick={toggleImage}>
