@@ -34,6 +34,14 @@ describe('BillOK Russian-only user-facing fallbacks', () => {
     expect(settings).not.toContain(' : e.message');
   });
 
+  it('does not show raw network errors in guest participant notifications', () => {
+    const claim = source('src/app/[locale]/split/[token]/claim/page.tsx');
+    expect(claim).toContain("localizedTrpcError(err, tc('errors.generic'))");
+    expect(claim).toContain("localizedTrpcError(error, tc('errors.generic'))");
+    expect(claim).not.toContain('toast.error(err.message)');
+    expect(claim).not.toContain('toast.error(error.message)');
+  });
+
   it('redirects the landing page to canonical locale-free destinations', () => {
     const root = source('src/app/[locale]/page.tsx');
     expect(root).toContain("'/dashboard'");

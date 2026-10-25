@@ -70,6 +70,7 @@ import { toast } from 'sonner';
 import { Link } from '@/i18n/navigation';
 import { buildVenmoPayUrl, isValidVenmoHandle } from '@/lib/venmo';
 import { getInitials, guestAvatarColor } from '@/lib/avatar';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 
 // How one claim save attempt ended: the answer's conflicts when stored, the server's message
@@ -230,7 +231,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       setEditingName('');
       toast.success(t('nameUpdated'));
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
 
   const removePerson = trpc.guest.removePerson.useMutation({
@@ -253,7 +254,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       }
       toast.success(t('personRemoved'));
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
 
   const finalizeSession = trpc.guest.finalizeSession.useMutation({
@@ -261,7 +262,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       session.refetch();
       toast.success(t('splitFinalized'));
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
 
   const splitClaimItem = trpc.guest.splitClaimItem.useMutation({
@@ -284,7 +285,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         return next;
       });
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
 
   const autoRejoinAttempted = useRef(false);
@@ -354,7 +355,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       adoptIdentity(data);
       toast.success(t('joinedSession'));
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
     onSettled: () => {
       joinInFlight.current = false;
     },
@@ -400,7 +401,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     },
     onError: (error, variables) => {
       if (variables.personToken !== linkedToken.current) return;
-      toast.error(error.message);
+      toast.error(localizedTrpcError(error, tc('errors.generic')));
       if (variables.personToken === confirmedLinkToken.current) {
         // Accepting failed: keep the card and the link, so the user can accept again (on a
         // fresh device nothing else would bring the link back)
