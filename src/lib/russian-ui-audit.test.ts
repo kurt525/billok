@@ -25,6 +25,15 @@ describe('BillOK Russian-only user-facing fallbacks', () => {
     expect(grouped).not.toContain("err instanceof Error ? err.message : t('createSessionFailed')");
   });
 
+  it('uses Russian fallback for settings mutations and inline errors', () => {
+    const settings = source('src/app/[locale]/(app)/groups/[groupId]/settings/page.tsx');
+    expect(settings).toContain("localizedTrpcError(e, tc('errors.generic'))");
+    expect(settings).toContain("localizedTrpcError(updateGroup.error, tc('errors.generic'))");
+    expect(settings).not.toContain('toast.error(e.message)');
+    expect(settings).not.toContain('{updateGroup.error.message}');
+    expect(settings).not.toContain(' : e.message');
+  });
+
   it('redirects the landing page to canonical locale-free destinations', () => {
     const root = source('src/app/[locale]/page.tsx');
     expect(root).toContain("'/dashboard'");

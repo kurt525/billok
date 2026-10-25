@@ -31,6 +31,7 @@ import { MergePlaceholderDialog } from '@/components/groups/merge-placeholder-di
 import { TransferOwnershipDialog } from '@/components/groups/transfer-ownership-dialog';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 // Details form is a separate component so its state is initialized exactly
 // once from the loaded group data. The page invalidates `groups.get` whenever
@@ -50,6 +51,7 @@ function GroupDetailsForm({
   readOnly: boolean;
 }) {
   const t = useTranslations('groups');
+  const tc = useTranslations('common');
   const utils = trpc.useUtils();
 
   const [name, setName] = useState(initialName);
@@ -109,7 +111,7 @@ function GroupDetailsForm({
                 </option>
               ))}
             </select>
-            {updateGroup.error && <p className="text-xs text-destructive">{updateGroup.error.message}</p>}
+            {updateGroup.error && <p className="text-xs text-destructive">{localizedTrpcError(updateGroup.error, tc('errors.generic'))}</p>}
           </div>
           {!readOnly && (
             <Button type="submit" disabled={updateGroup.isPending}>
@@ -127,6 +129,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
   const { groupId } = use(params);
   const router = useRouter();
   const t = useTranslations('groups');
+  const tc = useTranslations('common');
   const locale = useLocale();
   const group = trpc.groups.get.useQuery({ groupId });
   const utils = trpc.useUtils();
@@ -148,7 +151,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
     onSuccess: () => {
       router.push('/groups');
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   const archiveGroup = trpc.groups.archive.useMutation({
@@ -157,7 +160,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
       utils.groups.listArchived.invalidate();
       router.push('/groups');
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   const unarchiveGroup = trpc.groups.unarchive.useMutation({
@@ -166,7 +169,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
       utils.groups.list.invalidate();
       utils.groups.listArchived.invalidate();
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   const addPlaceholder = trpc.groups.addPlaceholder.useMutation({
@@ -188,7 +191,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
 
   const removeMember = trpc.groups.removeMember.useMutation({
     onSuccess: () => utils.groups.get.invalidate({ groupId }),
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   const leaveGroup = trpc.groups.removeMember.useMutation({
@@ -197,12 +200,14 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
       utils.groups.listArchived.invalidate();
       router.push('/groups');
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   // The server refuses a placeholder name someone in the group already has (#265)
   function placeholderError(e: { message: string; data?: { code?: string } | null | undefined }, name: string) {
-    return e.data?.code === 'CONFLICT' ? t('settings.placeholderNameTaken', { name }) : e.message;
+    return e.data?.code === 'CONFLICT'
+      ? t('settings.placeholderNameTaken', { name })
+      : localizedTrpcError(e, tc('errors.generic'));
   }
 
   function handleAddPlaceholder(e: React.FormEvent) {
