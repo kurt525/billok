@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dialog';
 import { ArrowRight, Handshake, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 type PendingDelete = { id: string; from: string; to: string; amount: string; date: string };
 
@@ -57,7 +58,7 @@ export function PaymentsList({
       void utils.balances.getSimplifiedDebts.invalidate({ groupId });
       void utils.balances.getDashboard.invalidate();
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
 
   const items = payments.data?.pages.flatMap((page) => page.items) ?? [];

@@ -55,6 +55,12 @@ describe('BillOK Russian-only user-facing fallbacks', () => {
     }
   });
 
+  it('does not expose raw network errors when removing a recorded payment', () => {
+    const payments = source('src/components/groups/payments-list.tsx');
+    expect(payments).toContain("toast.error(localizedTrpcError(err, tc('errors.generic')))");
+    expect(payments).not.toContain('toast.error(err.message)');
+  });
+
   it('redirects the landing page to canonical locale-free destinations', () => {
     const root = source('src/app/[locale]/page.tsx');
     expect(root).toContain("'/dashboard'");
