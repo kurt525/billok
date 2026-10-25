@@ -4,7 +4,6 @@ vi.mock('next/headers', () => ({
   cookies: vi.fn().mockResolvedValue({ get: vi.fn().mockReturnValue(null) }),
 }));
 vi.mock('@/server/auth', () => ({ auth: vi.fn() }));
-vi.mock('@/server/lib/receipt-processor', () => ({ processReceiptImage: vi.fn() }));
 const unlink = vi.fn();
 vi.mock('fs/promises', async (importOriginal) => ({ ...(await importOriginal<object>()), unlink }));
 
@@ -76,17 +75,10 @@ describe('manual group bill authorization and storage', () => {
     await expect((await caller()).createManual({ groupId: 'g1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mockDb.receipt.create).not.toHaveBeenCalled();
   });
-  test('does not send a manual bill into OCR even on direct API request', async () => {
-    mockDb.receipt.findUnique.mockResolvedValue({
-      id: 'r-manual',
-      originalName: 'billok-manual',
-      uploadedById: 'u1',
-      groupId: null,
-    });
-    await expect((await caller()).processReceipt({ receiptId: 'r-manual' })).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-    });
-    expect(mockDb.receipt.updateMany).not.toHaveBeenCalled();
+  test('does not expose OCR processing or retry APIs to any caller', async () => {
+    const { receiptsRouter } = await import('./receipts');
+    expect(Object.keys(receiptsRouter._def.procedures)).not.toContain('processReceipt');
+    expect(Object.keys(receiptsRouter._def.procedures)).not.toContain('retryProcessing');
   });
 });
 
@@ -429,75 +421,5 @@ describe('saving a receipt for later while it is deleted from the pending list (
       expect.objectContaining({ where: { groupId: 'g1', userId: { in: ['hal'] }, removedAt: null } }),
     );
     expect(mockDb.receipt.update).not.toHaveBeenCalled();
-  });
-});
-
-// Codex on #319: processing a receipt for a group also sets its group, so one queued behind a
-// delete from the pending list must not put the receipt back in the group
-// Codex on #322: a placeholder removed from a group keeps their row (#284), and an admin can
-// impersonate a placeholder, so the receipt checks must not take that row as membership
-describe('a caller whose membership was removed (#284)', () => {
-  test("can open none of the group's receipts", async () => {
-    mockDb.receipt.findUnique.mockResolvedValue({ id: 'r1', groupId: 'g1', group: { members: [] } });
-    const api = await caller();
-    await expect(api.processReceipt({ receiptId: 'r1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(mockDb.receipt.findUnique.mock.calls[0]![0].include.group).toEqual({
-      include: { members: { where: { removedAt: null } } },
-    });
-  });
-
-  test("can't scan a receipt into the group", async () => {
-    mockDb.receipt.findUnique.mockResolvedValue({ id: 'r1', groupId: null, uploadedById: 'u1', group: null });
-    mockDb.groupMember.findUnique.mockResolvedValue({
-      role: 'MEMBER',
-      userId: 'u1',
-      groupId: 'g1',
-      removedAt: new Date(),
-    });
-    const api = await caller();
-    await expect(api.processReceipt({ receiptId: 'r1', groupId: 'g1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(mockDb.receipt.updateMany).not.toHaveBeenCalled();
-  });
-});
-
-describe('processing a receipt while it is deleted from the pending list (#318)', () => {
-  const inGroup = {
-    id: 'r1',
-    status: 'COMPLETED',
-    groupId: 'g1',
-    uploadedById: 'u2',
-    group: { members: [{ userId: 'u1' }] },
-  };
-
-  beforeEach(() => {
-    mockDb.groupMember.findUnique.mockResolvedValue({ role: 'MEMBER', userId: 'u1', groupId: 'g1' });
-    mockDb.receipt.findUnique.mockResolvedValue(inGroup);
-  });
-
-  test('claims it only while it is still where the access check found it', async () => {
-    mockDb.receipt.updateMany.mockResolvedValue({ count: 0 });
-    const api = await caller();
-    await expect(api.processReceipt({ receiptId: 'r1', groupId: 'g1' })).rejects.toMatchObject({ code: 'CONFLICT' });
-
-    expect(mockDb.receipt.updateMany.mock.calls[0]![0].where).toMatchObject({ id: 'r1', groupId: 'g1' });
-  });
-
-  test('says it was removed from the group when that is why the claim failed', async () => {
-    mockDb.receipt.updateMany.mockResolvedValue({ count: 0 });
-    mockDb.receipt.findUnique.mockResolvedValueOnce(inGroup).mockResolvedValue({ groupId: null });
-    const api = await caller();
-    await expect(api.processReceipt({ receiptId: 'r1', groupId: 'g1' })).rejects.toMatchObject({
-      code: 'CONFLICT',
-      message: 'Receipt was removed from this group',
-    });
-  });
-
-  test('a receipt still in its group but being processed is reported as that', async () => {
-    mockDb.receipt.updateMany.mockResolvedValue({ count: 0 });
-    const api = await caller();
-    await expect(api.processReceipt({ receiptId: 'r1', groupId: 'g1' })).rejects.toMatchObject({
-      code: 'CONFLICT',
-      message: 'Receipt is already being processed',
-    });
   });
 });

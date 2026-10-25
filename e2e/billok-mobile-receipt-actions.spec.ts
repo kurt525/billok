@@ -37,6 +37,9 @@ test('group receipt: add, edit, cancel, split, assign, save, delete and finalize
 
   await page.goto(receiptUrl!, { waitUntil: 'networkidle' });
   await expect(page.getByTestId('item-assignment-form')).toBeVisible();
+  // Historical photo receipts remain readable, but OCR/upload/retry are no longer available.
+  await expect(page.getByTestId('scan-rescan-btn')).toHaveCount(0);
+  await expect(page.getByTestId('scan-file-input')).toHaveCount(0);
   await expect(item(page, 'Суп')).toHaveCount(1);
   await expect(item(page, 'Чай')).toHaveCount(1);
   await noDocumentOverflow(page);

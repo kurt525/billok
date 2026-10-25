@@ -3,8 +3,6 @@ import { AppError } from '@/server/lib/app-error';
 import { Prisma } from '@/generated/prisma/client';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { createTRPCRouter, protectedProcedure, groupMemberProcedure } from '../init';
-import { processReceiptImage } from '../../lib/receipt-processor';
-import { logger } from '../../lib/logger';
 import { parseExtractedData } from '../../lib/json-schemas';
 import { getExchangeRate, convertCents } from '../../lib/exchange-rates';
 import { stripUndefined } from '../../lib/strip-undefined';
@@ -63,98 +61,6 @@ export const receiptsRouter = createTRPCRouter({
       return { receiptId: receipt.id };
     });
   }),
-
-  processReceipt: protectedProcedure
-    .input(
-      z.object({
-        receiptId: z.string(),
-        groupId: z.string().optional(),
-        correctionHint: z.string().max(500).optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const receipt = await verifyReceiptAccess(ctx.db, input.receiptId, ctx.user.id);
-      if (!receipt) {
-        throw new AppError('NOT_FOUND', 'receiptNotFound');
-      }
-      if (receipt.originalName === 'billok-manual') {
-        throw new AppError('BAD_REQUEST', 'receiptNotReady');
-      }
-
-      if (input.groupId) {
-        const membership = await ctx.db.groupMember.findUnique({
-          where: {
-            userId_groupId: {
-              userId: ctx.user.id,
-              groupId: input.groupId,
-            },
-          },
-        });
-        if (!membership || membership.removedAt) {
-          throw new AppError('FORBIDDEN', 'notGroupMember');
-        }
-      }
-
-      // Note: old items are NOT deleted here — processReceiptImage handles
-      // delete + recreate atomically, so if the AI provider fails the old items remain.
-
-      // Conditional update doubles as a mutex: a receipt already PROCESSING
-      // is rejected so concurrent calls can't interleave delete/recreate.
-      // A PROCESSING receipt untouched for 15+ minutes is considered stale
-      // (crashed run) and may be re-claimed. The threshold deliberately
-      // exceeds the worst-case provider pipeline (2 passes x per-provider
-      // timeouts of 30-120s) so a slow-but-live run is never re-claimed.
-      // It also claims it only while it's still in the group the access check above found it
-      // in: deleting it from the pending list takes it off the group and keeps it while a
-      // claim session uses it (#318), and this update, queued behind that delete's row lock,
-      // would otherwise put it back
-      const claimed = await ctx.db.receipt.updateMany({
-        where: {
-          id: input.receiptId,
-          groupId: receipt.groupId,
-          OR: [{ status: { not: 'PROCESSING' } }, { updatedAt: { lt: new Date(Date.now() - 15 * 60 * 1000) } }],
-        },
-        data: {
-          status: 'PROCESSING',
-          ...(input.groupId ? { groupId: input.groupId, savedById: ctx.user.id } : {}),
-        },
-      });
-      if (claimed.count === 0) {
-        const now = await ctx.db.receipt.findUnique({ where: { id: input.receiptId }, select: { groupId: true } });
-        throw new AppError(
-          'CONFLICT',
-          now?.groupId === receipt.groupId ? 'receiptBeingProcessed' : 'receiptRemovedFromGroup',
-        );
-      }
-
-      try {
-        return await processReceiptImage({
-          db: ctx.db,
-          receiptId: input.receiptId,
-          receipt,
-          ...(input.correctionHint !== undefined ? { correctionHint: input.correctionHint } : {}),
-          logPrefix: 'receipt',
-        });
-      } catch (error) {
-        logger.error('receipt.failed', {
-          receiptId: input.receiptId,
-          error: error instanceof Error ? error.message : 'Unknown',
-        });
-        await ctx.db.receipt.update({
-          where: { id: input.receiptId },
-          data: {
-            status: 'FAILED',
-            rawResponse: {
-              error: error instanceof Error ? error.message : 'Unknown error',
-            } as unknown as Prisma.InputJsonValue,
-          },
-        });
-
-        // Details are logged and stored in rawResponse; don't echo raw
-        // provider/internal errors to the client.
-        throw new AppError('INTERNAL_SERVER_ERROR', 'receiptProcessingFailed');
-      }
-    }),
 
   getReceiptItems: protectedProcedure.input(z.object({ receiptId: z.string() })).query(async ({ ctx, input }) => {
     const receipt = await verifyReceiptAccess(ctx.db, input.receiptId, ctx.user.id, {
@@ -359,45 +265,6 @@ export const receiptsRouter = createTRPCRouter({
       });
       return { success: true };
     }),
-
-  retryProcessing: protectedProcedure.input(z.object({ receiptId: z.string() })).mutation(async ({ ctx, input }) => {
-    const receipt = await verifyReceiptAccess(ctx.db, input.receiptId, ctx.user.id);
-
-    // Reset status to PROCESSING and re-run extraction; conditional update
-    // rejects concurrent reprocessing of the same receipt. A PROCESSING
-    // receipt untouched for 15+ minutes is stale and may be re-claimed
-    // (threshold exceeds the worst-case provider pipeline duration).
-    const claimed = await ctx.db.receipt.updateMany({
-      where: {
-        id: input.receiptId,
-        OR: [{ status: { not: 'PROCESSING' } }, { updatedAt: { lt: new Date(Date.now() - 15 * 60 * 1000) } }],
-      },
-      data: { status: 'PROCESSING' },
-    });
-    if (claimed.count === 0) {
-      throw new AppError('CONFLICT', 'receiptBeingProcessed');
-    }
-
-    try {
-      return await processReceiptImage({
-        db: ctx.db,
-        receiptId: input.receiptId,
-        receipt: { imagePath: receipt.imagePath, mimeType: receipt.mimeType },
-        logPrefix: 'receipt.retry',
-      });
-    } catch (error) {
-      await ctx.db.receipt.update({
-        where: { id: input.receiptId },
-        data: {
-          status: 'FAILED',
-          rawResponse: {
-            error: error instanceof Error ? error.message : 'Unknown error',
-          } as unknown as Prisma.InputJsonValue,
-        },
-      });
-      throw new AppError('INTERNAL_SERVER_ERROR', 'reprocessingFailed');
-    }
-  }),
 
   assignItemsAndCreateExpense: groupMemberProcedure
     .input(

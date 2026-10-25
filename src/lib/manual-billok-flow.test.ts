@@ -37,7 +37,12 @@ describe('BillOK manual-only customer journey', () => {
     expect(group).toContain('/expenses/new');
     expect(read('src/app/[locale]/(app)/groups/new/page.tsx')).toContain("useState('RUB')");
     const legacy = read('src/app/[locale]/(app)/groups/[groupId]/scan/page.tsx');
-    expect(legacy).toContain('router.replace(`/groups/${groupId}/expenses/new`)');
-    expect(legacy).toContain('if (!resumeReceiptId) return;');
+    expect(legacy).toContain("router.replace('/groups/' + groupId + '/expenses/new')");
+    expect(legacy).toContain('receipts.getReceiptItems.useQuery');
+    expect(legacy).toContain('<ItemAssignment');
+    expect(legacy).not.toContain('processReceipt');
+    expect(legacy).not.toContain('/api/upload');
+    expect(legacy).not.toContain('scan-rescan-btn');
+    expect(legacy).not.toContain('type="file"');
   });
 });
