@@ -55,7 +55,7 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
   const [useManualRate, setUseManualRate] = useState(false);
 
   // Initialize currency from group when data loads
-  const groupCurrency = group.data?.currency ?? 'USD';
+  const groupCurrency = group.data?.currency ?? 'RUB';
   const effectiveCurrency = currency || groupCurrency;
   const isDifferentCurrency = effectiveCurrency.toUpperCase() !== groupCurrency.toUpperCase();
 

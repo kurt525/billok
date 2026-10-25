@@ -9,7 +9,7 @@ export const extractedDataSchema = z
     tax: z.number().int().min(0).default(0),
     tip: z.number().int().min(0).default(0),
     total: z.number().int().min(0).default(0),
-    currency: z.string().default('USD'),
+    currency: z.string().default('RUB'),
   })
   .passthrough();
 

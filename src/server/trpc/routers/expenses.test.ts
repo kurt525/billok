@@ -74,6 +74,7 @@ describe('a group archived while a change was on its way (#289)', () => {
   };
   const newExpense = {
     groupId: 'g1',
+    currency: 'USD', // This legacy scenario explicitly exercises a USD group.
     title: 'Dinner',
     amount: 1000,
     paidById: 'u1',

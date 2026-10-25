@@ -56,8 +56,8 @@ model User {
   emailVerified   DateTime?
   passwordHash    String?
   image           String?
-  defaultCurrency String    @default("USD")
-  locale          String    @default("en")
+  defaultCurrency String    @default("RUB")
+  locale          String    @default("ru")
   venmoUsername   String?
   suspendedAt     DateTime?
   isPlaceholder   Boolean   @default(false)
@@ -87,7 +87,7 @@ model Group {
   id            String  @id @default(cuid())
   name          String
   description   String? @db.Text
-  currency      String  @default("USD")
+  currency      String  @default("RUB")
   emoji         String? @default("💰")
   simplifyDebts Boolean @default(true)
   archivedAt    DateTime?
@@ -159,7 +159,7 @@ model Expense {
   title       String
   description String?   @db.Text
   amount      Int       // total in cents (in expense currency)
-  currency    String    @default("USD")
+  currency    String    @default("RUB")
   exchangeRate        Float   @default(1.0) // rate: 1 unit of expense currency = X units of group currency
   baseCurrencyAmount  Int?    // amount converted to group currency (cents); null = same currency
   category    String?
@@ -276,7 +276,7 @@ model Settlement {
   fromId   String
   toId     String
   amount   Int     // cents (in settlement currency)
-  currency String  @default("USD")
+  currency String  @default("RUB")
   exchangeRate        Float   @default(1.0) // rate: 1 unit of settlement currency = X units of group currency
   baseCurrencyAmount  Int?    // amount converted to group currency (cents); null = same currency
   note     String?

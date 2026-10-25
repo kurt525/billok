@@ -152,7 +152,7 @@ describe('a group archived while a payment was on its way (#289)', () => {
   test('create refuses, recording nothing', async () => {
     asRole('MEMBER', 'bob');
     const api = await caller('bob');
-    await expect(api.create({ groupId: 'g1', toId: 'alice', amount: 500 })).rejects.toMatchObject({
+    await expect(api.create({ groupId: 'g1', currency: 'USD', toId: 'alice', amount: 500 })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
       message: 'Cannot create settlements in an archived group',
     });
@@ -175,7 +175,7 @@ describe('a group archived while a payment was on its way (#289)', () => {
     mockDb.settlement.create.mockResolvedValue({ id: 's2' });
     asRole('MEMBER', 'bob');
     const api = await caller('bob');
-    await api.create({ groupId: 'g1', toId: 'alice', amount: 500 });
+    await api.create({ groupId: 'g1', currency: 'USD', toId: 'alice', amount: 500 });
 
     expect(rawSql()).toEqual([expect.stringMatching(/FROM "Group" WHERE "id" = \? FOR SHARE/)]);
     const [locked] = mockDb.$queryRaw.mock.invocationCallOrder;
@@ -189,7 +189,7 @@ describe('a group archived while a payment was on its way (#289)', () => {
     mockDb.settlement.create.mockResolvedValue({ id: 's2' });
     asRole('MEMBER', 'bob');
     const api = await caller('bob');
-    await api.create({ groupId: 'g1', toId: 'alice', amount: 500 });
+    await api.create({ groupId: 'g1', currency: 'USD', toId: 'alice', amount: 500 });
 
     const [locked] = mockDb.$queryRaw.mock.invocationCallOrder;
     expect(mockDb.groupMember.count.mock.invocationCallOrder[0]).toBeGreaterThan(locked!);
@@ -229,7 +229,7 @@ describe('a payment with someone removed from the group', () => {
   test('can settle what they are owed', async () => {
     asRole('MEMBER', 'alice');
     const api = await caller('alice');
-    await api.create({ groupId: 'g1', toId: 'hal', amount: 500 });
+    await api.create({ groupId: 'g1', currency: 'USD', toId: 'hal', amount: 500 });
     expect(mockDb.settlement.create).toHaveBeenCalled();
   });
 
@@ -239,7 +239,7 @@ describe('a payment with someone removed from the group', () => {
     ]);
     asRole('OWNER', 'alice');
     const api = await caller('alice');
-    await api.create({ groupId: 'g1', fromId: 'hal', toId: 'alice', amount: 500 });
+    await api.create({ groupId: 'g1', currency: 'USD', fromId: 'hal', toId: 'alice', amount: 500 });
     expect(mockDb.settlement.create).toHaveBeenCalled();
   });
 
@@ -249,7 +249,7 @@ describe('a payment with someone removed from the group', () => {
   ])('refuses %s', async (_, payment) => {
     asRole('OWNER', 'alice');
     const api = await caller('alice');
-    await expect(api.create({ groupId: 'g1', ...payment })).rejects.toMatchObject({
+    await expect(api.create({ groupId: 'g1', currency: 'USD', ...payment })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
       message: 'A payment with someone removed from this group can only settle what they still owe or are owed.',
     });
@@ -259,7 +259,7 @@ describe('a payment with someone removed from the group', () => {
   test('reads their balance inside the transaction, after the lock', async () => {
     asRole('MEMBER', 'alice');
     const api = await caller('alice');
-    await api.create({ groupId: 'g1', toId: 'hal', amount: 500 });
+    await api.create({ groupId: 'g1', currency: 'USD', toId: 'hal', amount: 500 });
     const [locked] = mockDb.$queryRaw.mock.invocationCallOrder;
     expect(mockDb.expense.findMany.mock.invocationCallOrder[0]).toBeGreaterThan(locked!);
   });
@@ -268,7 +268,7 @@ describe('a payment with someone removed from the group', () => {
     mockDb.groupMember.findMany.mockResolvedValue([]);
     asRole('MEMBER', 'alice');
     const api = await caller('alice');
-    await api.create({ groupId: 'g1', toId: 'bob', amount: 99999 });
+    await api.create({ groupId: 'g1', currency: 'USD', toId: 'bob', amount: 99999 });
     expect(mockDb.expense.findMany).not.toHaveBeenCalled();
     expect(mockDb.settlement.create).toHaveBeenCalled();
   });

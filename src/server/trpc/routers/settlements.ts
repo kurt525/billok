@@ -47,7 +47,7 @@ export const settlementsRouter = createTRPCRouter({
           .length(3)
           .regex(/^[a-zA-Z]{3}$/)
           .transform((c) => c.toUpperCase())
-          .default('USD'),
+          .default('RUB'),
         exchangeRate: z.number().positive().finite().max(1_000_000).optional(), // manual override
         note: z.string().max(500).optional(),
       }),
@@ -76,7 +76,7 @@ export const settlementsRouter = createTRPCRouter({
       }
 
       // Currency conversion: compute base currency amount if currencies differ
-      const groupCurrency = group?.currency ?? 'USD';
+      const groupCurrency = group?.currency ?? 'RUB';
       let exchangeRate: number | null = null;
       let baseCurrencyAmount: number | null = null;
 

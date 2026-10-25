@@ -133,7 +133,7 @@ export const groupsRouter = createTRPCRouter({
           .length(3)
           .regex(/^[a-zA-Z]{3}$/)
           .transform((c) => c.toUpperCase())
-          .default('USD'),
+          .default('RUB'),
         emoji: z.string().max(4).optional(),
       }),
     )

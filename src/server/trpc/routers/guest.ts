@@ -182,7 +182,7 @@ const receiptDataSchema = z.object({
   tax: z.number().int(),
   tip: z.number().int(),
   total: z.number().int(),
-  currency: z.string().default('USD'),
+  currency: z.string().default('RUB'),
 });
 
 const itemSchema = z.object({
@@ -282,7 +282,7 @@ export const guestRouter = createTRPCRouter({
             status: s.status,
             merchantName: receipt?.merchantName as string | undefined,
             total: receipt?.total as number | undefined,
-            currency: (receipt?.currency as string | undefined) ?? 'USD',
+            currency: (receipt?.currency as string | undefined) ?? 'RUB',
             peopleCount: people?.length ?? 0,
             itemCount: items?.length ?? 0,
             createdAt: s.createdAt,

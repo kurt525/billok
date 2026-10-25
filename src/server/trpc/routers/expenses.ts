@@ -86,7 +86,7 @@ export const expensesRouter = createTRPCRouter({
           .length(3)
           .regex(/^[a-zA-Z]{3}$/)
           .transform((c) => c.toUpperCase())
-          .default('USD'),
+          .default('RUB'),
         exchangeRate: exchangeRateSchema.optional(), // manual override
         category: z.string().max(50).optional(),
         expenseDate: z.string().datetime().optional(),
@@ -117,7 +117,7 @@ export const expensesRouter = createTRPCRouter({
       let exchangeRate: number | null = null;
       let baseCurrencyAmount: number | null = null;
 
-      const groupCurrency = group?.currency ?? 'USD';
+      const groupCurrency = group?.currency ?? 'RUB';
       if (input.currency.toUpperCase() !== groupCurrency.toUpperCase()) {
         if (input.exchangeRate) {
           // Manual override
@@ -268,7 +268,7 @@ export const expensesRouter = createTRPCRouter({
       // Recompute currency conversion if currency or amount changed
       const effectiveCurrency = inputCurrency ?? existing.currency;
       const effectiveAmount = data.amount ?? existing.amount;
-      const groupCurrency = groupCheck?.currency ?? 'USD';
+      const groupCurrency = groupCheck?.currency ?? 'RUB';
       let newExchangeRate: number | null = existing.exchangeRate;
       let newBaseCurrencyAmount: number | null = existing.baseCurrencyAmount;
 

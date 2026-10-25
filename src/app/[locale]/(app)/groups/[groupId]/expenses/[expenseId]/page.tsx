@@ -52,7 +52,7 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
     SHARES: t('new.splitShares'),
     ITEM: t('detail.splitByItem'),
   } satisfies Record<typeof e.splitMode, string>;
-  const groupCurrency = group.data?.currency ?? 'USD';
+  const groupCurrency = group.data?.currency ?? 'RUB';
   const isCurrencyConverted = e.baseCurrencyAmount != null && e.currency.toUpperCase() !== groupCurrency.toUpperCase();
 
   return (
