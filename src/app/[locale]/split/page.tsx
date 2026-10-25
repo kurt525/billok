@@ -66,6 +66,7 @@ export default function GuestSplitPage() {
   const locale = useLocale();
   const t = useTranslations('split');
   const tc = useTranslations('common');
+  const te = useTranslations('errors');
   const [step, setStep] = useState<Step>('upload');
   const [receiptId, setReceiptId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -151,12 +152,21 @@ export default function GuestSplitPage() {
     setErrorMessage(data?.allowed === false ? t('upload.guestDisabledTitle') : '');
   }
 
+  function scanFailureMessage(err: unknown) {
+    // Server-side AppError keys are translated; network/unknown errors must not
+    // surface raw English fetch failures in the Russian-only guest interface.
+    return err instanceof TRPCClientError && err.data?.messageKey ? err.message : te('receiptProcessingFailed');
+  }
+
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+    const file = e.currentTarget.files?.[0];
     if (!file) return;
+    // Allow retrying the same photo after a failed upload or OCR request.
+    e.currentTarget.value = '';
 
     setUploading(true);
     setErrorMessage('');
+    let uploaded = false;
 
     try {
       const formData = new FormData();
@@ -182,6 +192,7 @@ export default function GuestSplitPage() {
       const data = await res.json();
       setReceiptId(data.receiptId);
       setImagePath(data.imagePath);
+      uploaded = true;
       startProcessing();
       setUploading(false);
 
@@ -201,7 +212,10 @@ export default function GuestSplitPage() {
     } catch (err) {
       setUploading(false);
       if (isGuestUploadsRefusal(err)) await showGuestUploadsDisabled();
-      else setErrorMessage(err instanceof Error ? err.message : t('upload.uploadFailed'));
+      else
+        setErrorMessage(
+          uploaded ? scanFailureMessage(err) : err instanceof Error ? err.message : t('upload.uploadFailed'),
+        );
       setStep('upload');
     }
   }
@@ -490,7 +504,7 @@ export default function GuestSplitPage() {
   const labels = chipLabels(people);
 
   return (
-    <div className={step === 'assign' ? 'space-y-6 pb-56' : 'space-y-6 pb-24'}>
+    <div className={step === 'assign' ? 'space-y-6 pb-56' : step === 'people' ? 'space-y-6 pb-48' : 'space-y-6 pb-24'}>
       {/* Step: Upload */}
       {step === 'upload' && (
         <div className="space-y-6">
@@ -500,7 +514,13 @@ export default function GuestSplitPage() {
           </div>
 
           {errorMessage && !uploadsDisabled && (
-            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{errorMessage}</div>
+            <div
+              role="alert"
+              data-testid="guest-scan-error"
+              className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+            >
+              {errorMessage}
+            </div>
           )}
 
           {uploadsDisabled ? (
@@ -590,6 +610,15 @@ export default function GuestSplitPage() {
       {/* Step: People */}
       {step === 'people' && (
         <div className="space-y-6">
+          {errorMessage && !uploadsDisabled && (
+            <div
+              role="alert"
+              data-testid="guest-scan-error"
+              className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+            >
+              {errorMessage}
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="icon" aria-label={tc('actions.back')} onClick={() => setStep('upload')}>
               <ArrowLeft className="h-4 w-4" />
@@ -663,7 +692,7 @@ export default function GuestSplitPage() {
           </div>
 
           {/* Next button - sticky bottom */}
-          <div className="fixed bottom-0 left-0 right-0 p-4 bg-background border-t">
+          <div className="fixed right-0 bottom-0 left-0 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
             <div className="mx-auto max-w-lg space-y-3">
               <Button
                 className="w-full h-14 text-lg"
@@ -695,6 +724,7 @@ export default function GuestSplitPage() {
                         className="flex-1"
                         onClick={() => {
                           if (!correctionHint.trim() || !receiptId) return;
+                          setErrorMessage('');
                           startProcessing();
                           setShowRescan(false);
                           processReceipt.mutate(
@@ -712,6 +742,8 @@ export default function GuestSplitPage() {
                                 });
                                 try {
                                   await loadScannedItems(receiptId);
+                                  setErrorMessage('');
+                                  setCorrectionHint('');
                                   setStep('people');
                                 } catch (err) {
                                   // Shown on the upload step, as when a first scan's items fail to load
@@ -726,7 +758,7 @@ export default function GuestSplitPage() {
                                   });
                                   return;
                                 }
-                                setErrorMessage(err.message);
+                                setErrorMessage(scanFailureMessage(err));
                                 setStep('people');
                               },
                             },

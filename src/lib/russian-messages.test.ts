@@ -82,6 +82,14 @@ describe('Russian translations (incremental staging)', () => {
     }
   });
 
+  it('loads the Russian errors namespace for client-side OCR failures', () => {
+    const request = readFileSync(resolve(process.cwd(), 'src/i18n/request.ts'), 'utf8');
+    expect(request).toContain('const errors = (await import(');
+    expect(request).toContain('/errors.json');
+    expect(request).toMatch(/\berrors,\s*\}/);
+    expect(load('ru', 'errors').receiptProcessingFailed as string).toMatch(/Не удалось обработать чек/);
+  });
+
   it('keeps the error detail placeholder available without adding unsafe text', () => {
     const errors = load('ru', 'errors');
     expect(errors.detail).toBe('{detail}');
