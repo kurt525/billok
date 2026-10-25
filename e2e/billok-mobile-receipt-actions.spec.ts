@@ -129,3 +129,39 @@ test('group receipt: add, edit, cancel, split, assign, save, delete and finalize
   await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'));
   await expect(page.getByText('Тестовый чек', { exact: true }).first()).toBeVisible();
 });
+
+test('manual group bill starts without upload and keeps its positions', async ({ page }) => {
+  test.skip(!groupId, 'Requires disposable group fixture');
+  test.setTimeout(110_000);
+  const uploads: string[] = [];
+  page.on('request', (r) => {
+    if (/\/api\/upload|receipts\.processReceipt|api\.openai/.test(r.url())) uploads.push(r.url());
+  });
+  await page.goto('/login', { waitUntil: 'networkidle' });
+  await page.locator('input[type=email]').fill('bob@example.com');
+  await page.locator('input[type=password]').fill('password123');
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard/);
+  await page.goto('/groups/' + groupId + '/expenses/new', { waitUntil: 'networkidle' });
+  await expect(page.getByTestId('manual-group-receipt-entry')).toBeVisible();
+  await page.getByTestId('create-manual-group-receipt').click();
+  await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '/scan\\?receiptId=[^/]+$'));
+  await expect(page.getByRole('heading', { name: 'Ручной групповой чек' })).toBeVisible();
+  await expect(page.getByTestId('item-assignment-form')).toBeVisible();
+  await expect(page.getByTestId('scan-file-input')).toHaveCount(0);
+  await expect(page.getByTestId('scan-rescan-btn')).toHaveCount(0);
+  const savedUrl = page.url();
+  await page.getByTestId('add-item-btn').click();
+  const form = page.getByTestId('add-item-form');
+  await form.locator('input').nth(0).fill('Пицца');
+  await form.locator('input').nth(1).fill('2');
+  await form.locator('input').nth(2).fill('330,40');
+  await form.getByRole('button', { name: 'Добавить', exact: true }).click();
+  await expect(item(page, 'Пицца')).toHaveCount(1);
+  await page.getByTestId('split-all-btn').click();
+  await page.getByTestId('save-for-later-btn').click();
+  await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'));
+  await page.goto(savedUrl, { waitUntil: 'networkidle' });
+  await expect(item(page, 'Пицца')).toHaveCount(1);
+  expect(uploads).toEqual([]);
+});

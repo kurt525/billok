@@ -13,6 +13,7 @@ const mockDb = {
   group: { findUnique: vi.fn() },
   groupMember: { findUnique: vi.fn(), findMany: vi.fn() },
   receipt: {
+    create: vi.fn(),
     findUnique: vi.fn(),
     findMany: vi.fn(),
     update: vi.fn(),
@@ -42,6 +43,51 @@ async function caller() {
 beforeEach(() => {
   vi.clearAllMocks();
   mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+});
+
+describe('manual group bill authorization and storage', () => {
+  beforeEach(() => {
+    mockDb.groupMember.findUnique.mockResolvedValue({ role: 'MEMBER', userId: 'u1', groupId: 'g1' });
+    mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => unknown) => fn(mockDb));
+    mockDb.$queryRaw.mockResolvedValue([{ archivedAt: null }]);
+    mockDb.receipt.create.mockResolvedValue({ id: 'r-manual' });
+  });
+  test('creates a resumable RUB bill with no file and no AI', async () => {
+    expect(await (await caller()).createManual({ groupId: 'g1' })).toEqual({ receiptId: 'r-manual' });
+    expect(mockDb.receipt.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        groupId: 'g1',
+        uploadedById: 'u1',
+        originalName: 'billok-manual',
+        imagePath: '',
+        fileSize: 0,
+        status: 'COMPLETED',
+        extractedData: expect.objectContaining({ currency: 'RUB', total: 0 }),
+      }),
+    });
+  });
+  test('rejects archived groups without creating any bill', async () => {
+    mockDb.$queryRaw.mockResolvedValue([{ archivedAt: new Date() }]);
+    await expect((await caller()).createManual({ groupId: 'g1' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.receipt.create).not.toHaveBeenCalled();
+  });
+  test('rejects callers who are not active group members', async () => {
+    mockDb.groupMember.findUnique.mockResolvedValue(null);
+    await expect((await caller()).createManual({ groupId: 'g1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.receipt.create).not.toHaveBeenCalled();
+  });
+  test('does not send a manual bill into OCR even on direct API request', async () => {
+    mockDb.receipt.findUnique.mockResolvedValue({
+      id: 'r-manual',
+      originalName: 'billok-manual',
+      uploadedById: 'u1',
+      groupId: null,
+    });
+    await expect((await caller()).processReceipt({ receiptId: 'r-manual' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.receipt.updateMany).not.toHaveBeenCalled();
+  });
 });
 
 describe('AI provider setup (#280)', () => {

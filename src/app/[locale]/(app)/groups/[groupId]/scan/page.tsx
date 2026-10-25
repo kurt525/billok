@@ -79,6 +79,7 @@ function ScanReceiptContent({ params }: { params: Promise<{ groupId: string }> }
     { receiptId: receiptId! },
     { enabled: step === 'assign' && !!receiptId },
   );
+  const manualReceipt = receiptData.data?.receipt.isManual ?? false;
 
   async function handleShareForClaiming() {
     if (!receiptId || !receiptData.data) return;
@@ -99,10 +100,12 @@ function ScanReceiptContent({ params }: { params: Promise<{ groupId: string }> }
         receiptData: {
           merchantName: extracted.merchantName,
           date: extracted.date,
-          subtotal: extracted.subtotal,
+          subtotal: manualReceipt ? items.reduce((sum, item) => sum + item.totalPrice, 0) : extracted.subtotal,
           tax: extracted.tax,
           tip: extracted.tip ?? 0,
-          total: extracted.total ?? extracted.subtotal + extracted.tax + (extracted.tip ?? 0),
+          total: manualReceipt
+            ? items.reduce((sum, item) => sum + item.totalPrice, 0) + extracted.tax + (extracted.tip ?? 0)
+            : (extracted.total ?? extracted.subtotal + extracted.tax + (extracted.tip ?? 0)),
           currency: extracted.currency ?? 'USD',
         },
         items: items.map((i) => ({
@@ -233,7 +236,7 @@ function ScanReceiptContent({ params }: { params: Promise<{ groupId: string }> }
         >
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <h1 className="text-2xl font-bold">{t('title')}</h1>
+        <h1 className="text-2xl font-bold">{manualReceipt ? t('manualTitle') : t('title')}</h1>
       </div>
 
       {step === 'upload' && (
@@ -315,51 +318,53 @@ function ScanReceiptContent({ params }: { params: Promise<{ groupId: string }> }
             <Users className="mr-2 h-4 w-4" />
             {shareForClaiming.isPending ? t('creatingSession') : t('shareForClaiming')}
           </Button>
-          <div className="space-y-2">
-            {!showRescan ? (
-              <Button variant="outline" onClick={() => setShowRescan(true)} data-testid="scan-rescan-btn">
-                <RefreshCw className="mr-2 h-4 w-4" />
-                {t('rescanCorrections')}
-              </Button>
-            ) : (
-              <Card>
-                <CardContent className="space-y-3 pt-4">
-                  <p className="text-sm text-muted-foreground">{t('rescanDescription')}</p>
-                  <textarea
-                    placeholder={t('rescanPlaceholder')}
-                    value={correctionHint}
-                    onChange={(e) => setCorrectionHint(e.target.value)}
-                    rows={3}
-                    className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  />
-                  <div className="flex gap-2">
-                    <Button
-                      className="flex-1"
-                      onClick={() => {
-                        if (!correctionHint.trim()) return;
-                        startProcessing();
-                        setShowRescan(false);
-                        processReceipt.mutate({ receiptId, groupId, correctionHint: correctionHint.trim() });
-                      }}
-                      disabled={!correctionHint.trim()}
-                    >
-                      <RefreshCw className="mr-2 h-4 w-4" />
-                      {t('rescan')}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setShowRescan(false);
-                        setCorrectionHint('');
-                      }}
-                    >
-                      {t('cancel')}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </div>
+          {!manualReceipt && (
+            <div className="space-y-2">
+              {!showRescan ? (
+                <Button variant="outline" onClick={() => setShowRescan(true)} data-testid="scan-rescan-btn">
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  {t('rescanCorrections')}
+                </Button>
+              ) : (
+                <Card>
+                  <CardContent className="space-y-3 pt-4">
+                    <p className="text-sm text-muted-foreground">{t('rescanDescription')}</p>
+                    <textarea
+                      placeholder={t('rescanPlaceholder')}
+                      value={correctionHint}
+                      onChange={(e) => setCorrectionHint(e.target.value)}
+                      rows={3}
+                      className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    />
+                    <div className="flex gap-2">
+                      <Button
+                        className="flex-1"
+                        onClick={() => {
+                          if (!correctionHint.trim()) return;
+                          startProcessing();
+                          setShowRescan(false);
+                          processReceipt.mutate({ receiptId, groupId, correctionHint: correctionHint.trim() });
+                        }}
+                        disabled={!correctionHint.trim()}
+                      >
+                        <RefreshCw className="mr-2 h-4 w-4" />
+                        {t('rescan')}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setShowRescan(false);
+                          setCorrectionHint('');
+                        }}
+                      >
+                        {t('cancel')}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          )}
         </>
       )}
 

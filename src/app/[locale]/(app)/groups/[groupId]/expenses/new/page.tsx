@@ -71,6 +71,9 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
     [t],
   );
 
+  const createManualReceipt = trpc.receipts.createManual.useMutation({
+    onSuccess: ({ receiptId }) => router.push('/groups/' + groupId + '/scan?receiptId=' + receiptId),
+  });
   const createExpense = trpc.expenses.create.useMutation({
     onSuccess: () => {
       router.push(`/groups/${groupId}`);
@@ -130,6 +133,29 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
         </Button>
         <h1 className="text-2xl font-bold">{t('new.title')}</h1>
       </div>
+
+      <Card data-testid="manual-group-receipt-entry">
+        <CardHeader>
+          <CardTitle>{t('new.manualReceiptTitle')}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">{t('new.manualReceiptDescription')}</p>
+          <Button
+            type="button"
+            className="min-h-12 w-full"
+            onClick={() => createManualReceipt.mutate({ groupId })}
+            disabled={createManualReceipt.isPending}
+            data-testid="create-manual-group-receipt"
+          >
+            {createManualReceipt.isPending ? t('new.creatingManualReceipt') : t('new.createManualReceipt')}
+          </Button>
+          {createManualReceipt.error && (
+            <p role="alert" className="text-sm text-destructive">
+              {createManualReceipt.error.message}
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

@@ -42,6 +42,27 @@ async function verifyReceiptAccess(
 }
 
 export const receiptsRouter = createTRPCRouter({
+  // Manual group receipts reuse ReceiptItem and ReceiptItemAssignment; never require OCR.
+  createManual: groupMemberProcedure.input(z.object({ groupId: z.string() })).mutation(async ({ ctx, input }) => {
+    return ctx.db.$transaction(async (tx) => {
+      await lockActiveGroup(tx, input.groupId, 'archivedAddExpense');
+      const receipt = await tx.receipt.create({
+        data: {
+          groupId: input.groupId,
+          uploadedById: ctx.user.id,
+          savedById: ctx.user.id,
+          imagePath: '',
+          originalName: 'billok-manual',
+          mimeType: 'application/x-billok-manual',
+          fileSize: 0,
+          status: 'COMPLETED',
+          extractedData: { merchantName: '', subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' },
+        },
+      });
+      return { receiptId: receipt.id };
+    });
+  }),
+
   processReceipt: protectedProcedure
     .input(
       z.object({
@@ -54,6 +75,9 @@ export const receiptsRouter = createTRPCRouter({
       const receipt = await verifyReceiptAccess(ctx.db, input.receiptId, ctx.user.id);
       if (!receipt) {
         throw new AppError('NOT_FOUND', 'receiptNotFound');
+      }
+      if (receipt.originalName === 'billok-manual') {
+        throw new AppError('BAD_REQUEST', 'receiptNotReady');
       }
 
       if (input.groupId) {
@@ -156,6 +180,7 @@ export const receiptsRouter = createTRPCRouter({
         id: receiptWithItems.id,
         status: receiptWithItems.status,
         imagePath: receiptWithItems.imagePath,
+        isManual: receiptWithItems.originalName === 'billok-manual',
         paidById: receiptWithItems.paidById,
         extractedData: receiptWithItems.extractedData as {
           merchantName?: string;
@@ -418,6 +443,19 @@ export const receiptsRouter = createTRPCRouter({
       }
 
       const extractedData = parseExtractedData(receipt.extractedData);
+      if (receipt.originalName === 'billok-manual') {
+        const itemIds = new Set(receipt.items.map((item) => item.id));
+        const assigned = input.assignments.map((assignment) => assignment.receiptItemId);
+        if (
+          !itemIds.size ||
+          input.assignments.length !== itemIds.size ||
+          new Set(assigned).size !== itemIds.size ||
+          assigned.some((id) => !itemIds.has(id)) ||
+          input.assignments.some((a) => new Set(a.userIds).size !== a.userIds.length)
+        ) {
+          throw new AppError('BAD_REQUEST', 'receiptNotReady');
+        }
+      }
 
       const tax = extractedData.tax;
       const tip = input.tipOverride ?? extractedData.tip;

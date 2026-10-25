@@ -322,6 +322,9 @@ export function ItemAssignment({
   // After early returns, these are guaranteed non-null
   const safeReceipt = receipt!;
   const safeExtracted = extracted;
+  const subtotal = safeReceipt.isManual
+    ? items.reduce((sum, item) => sum + item.totalPrice, 0)
+    : safeExtracted.subtotal;
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -492,7 +495,7 @@ export function ItemAssignment({
           )}
           <div className="flex justify-between">
             <span className="text-muted-foreground">{t('subtotal')}</span>
-            <span>{formatCents(safeExtracted.subtotal, safeExtracted.currency, locale)}</span>
+            <span>{formatCents(subtotal, safeExtracted.currency, locale)}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">{t('tax')}</span>
@@ -505,7 +508,7 @@ export function ItemAssignment({
           <Separator />
           <div className="flex justify-between font-semibold">
             <span>{t('total')}</span>
-            <span>{formatCents(safeExtracted.subtotal + safeExtracted.tax + tip, safeExtracted.currency, locale)}</span>
+            <span>{formatCents(subtotal + safeExtracted.tax + tip, safeExtracted.currency, locale)}</span>
           </div>
         </CardContent>
       </Card>
