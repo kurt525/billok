@@ -221,6 +221,10 @@ jobs:
           # missing OpenAI/Anthropic imports instead of measuring coverage.
           # Ignore lifecycle scripts to avoid unnecessary provider bootstraps.
           ( cd "$baseline_dir" && npm ci --legacy-peer-deps --ignore-scripts --prefer-offline --no-audit --no-fund )
+          # Main pre-dates the coverage plugin; the current Vitest config
+          # requires it, so install the matching test-only plugin in the
+          # temporary baseline, not in BillOK's production dependencies.
+          ( cd "$baseline_dir" && npm install --no-save --legacy-peer-deps --ignore-scripts --prefer-offline --no-audit --no-fund @vitest/coverage-v8@4.1.11 )
           # Same coverage scope/config for both branches, even if main has older config.
           cp "$GITHUB_WORKSPACE/vitest.config.ts" "$baseline_dir/vitest.config.ts"
           echo "COVERAGE_BASE_SHA=$(git rev-parse origin/main)" >> "$GITHUB_ENV"
