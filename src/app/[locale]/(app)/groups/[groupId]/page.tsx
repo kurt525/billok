@@ -1,0 +1,464 @@
+'use client';
+
+import { use, useState, useRef, useEffect } from 'react';
+import { useLocale, useTranslations } from 'next-intl';
+import { trpc } from '@/lib/trpc';
+import { formatCents } from '@/lib/money';
+import { buildVenmoPayUrl, isValidVenmoHandle } from '@/lib/venmo';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { LoadingSpinner } from '@/components/ui/loading-spinner';
+import { Plus, Settings, UserPlus, ArrowRight, Receipt, Handshake, Tag, Archive, Trash2 } from 'lucide-react';
+import { Link } from '@/i18n/navigation';
+import { toast } from 'sonner';
+import { InviteDialog } from '@/components/groups/invite-dialog';
+import { SettleDialog } from '@/components/groups/settle-dialog';
+import { PaymentsList } from '@/components/groups/payments-list';
+import { ConfirmDialog } from '@/components/confirm-dialog';
+import { getInitials, avatarColor } from '@/lib/avatar';
+
+export default function GroupDetailPage({ params }: { params: Promise<{ groupId: string }> }) {
+  const { groupId } = use(params);
+  const locale = useLocale();
+  const [showInvite, setShowInvite] = useState(false);
+  const [settleState, setSettleState] = useState<{
+    open: boolean;
+    from?: string;
+    to?: string;
+    amount?: number;
+  }>({ open: false });
+  // The Venmo payment to ask about once the payer is back from Venmo
+  const [venmoPaid, setVenmoPaid] = useState<{ from: string; to: string; amount: number; toName: string } | null>(null);
+  const [deleteReceiptId, setDeleteReceiptId] = useState<string | null>(null);
+
+  const t = useTranslations('groups');
+  const tc = useTranslations('common');
+  // Who tRPC acts as: the impersonated user while an admin impersonates, where
+  // useSession() would still report the admin.
+  const profile = trpc.auth.getProfile.useQuery();
+  const myId = profile.data?.id;
+  const group = trpc.groups.get.useQuery({ groupId });
+  const expenses = trpc.expenses.list.useQuery({ groupId, limit: 10 });
+  const debts = trpc.balances.getSimplifiedDebts.useQuery({ groupId });
+  const pendingReceipts = trpc.receipts.listPending.useQuery({ groupId });
+  const venmoSetting = trpc.admin.getVenmoEnabled.useQuery();
+  const deletePending = trpc.receipts.deletePending.useMutation({
+    onSuccess: () => pendingReceipts.refetch(),
+  });
+
+  const utils = trpc.useUtils();
+  const settleVenmo = trpc.settlements.create.useMutation({
+    onSuccess: () => {
+      utils.balances.getGroupBalances.invalidate({ groupId });
+      utils.balances.getSimplifiedDebts.invalidate({ groupId });
+      utils.balances.getDashboard.invalidate();
+      utils.settlements.list.invalidate({ groupId });
+    },
+    onError: (err) => {
+      toast.error(err.message);
+    },
+  });
+
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    },
+    [],
+  );
+
+  if (group.isLoading && !group.isError) {
+    return <LoadingSpinner />;
+  }
+
+  if (!group.data) {
+    return (
+      <div className="mx-auto max-w-md py-16 text-center">
+        <Receipt className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
+        <h2 className="mb-2 text-lg font-semibold">{t('detail.notFound')}</h2>
+        <p className="mb-4 text-sm text-muted-foreground">{t('detail.notFoundDescription')}</p>
+        <Button nativeButton={false} render={<Link href="/groups" />}>
+          {t('detail.backToGroups')}
+        </Button>
+      </div>
+    );
+  }
+
+  const g = group.data;
+  // A placeholder removed from the group still has their name in the balances: one that
+  // comes back (an old expense changed) shows under it, and can be settled with them (#284)
+  const memberMap = new Map([...g.members, ...g.removedMembers].map((m) => [m.user.id, m.user]));
+  const inDebts = new Set(debts.data?.debts.flatMap((d) => [d.from, d.to]) ?? []);
+  const settleParties = [...g.members, ...g.removedMembers.filter((m) => inDebts.has(m.user.id))];
+  const myRole = g.members.find((m) => m.user.id === myId)?.role;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-4">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-accent">
+            <span className="text-4xl leading-none">{g.emoji}</span>
+          </div>
+          <div className="min-w-0">
+            <h1 className="truncate text-2xl font-bold leading-tight">{g.name}</h1>
+            {g.description && <p className="mt-0.5 truncate text-sm text-muted-foreground">{g.description}</p>}
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setShowInvite(true)}>
+            <UserPlus className="mr-2 h-4 w-4" />
+            {t('detail.invite')}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label={t('settings.title')}
+            title={t('settings.title')}
+            nativeButton={false}
+            render={<Link href={`/groups/${groupId}/settings`} />}
+          >
+            <Settings className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Members */}
+      <div className="flex flex-wrap gap-2">
+        {g.members.map((m) => (
+          <div
+            key={m.user.id}
+            className={`flex items-center gap-2 rounded-full py-1 pr-3 pl-1 ${
+              m.user.isPlaceholder ? 'border border-dashed border-muted-foreground/40 bg-muted/50' : 'bg-muted'
+            }`}
+          >
+            {m.user.image ? (
+              <Avatar className="h-6 w-6">
+                <AvatarImage src={m.user.image} />
+                <AvatarFallback className="text-[10px]">
+                  {getInitials(m.user.placeholderName ?? m.user.name, m.user.email)}
+                </AvatarFallback>
+              </Avatar>
+            ) : (
+              <div
+                className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-medium text-white ${avatarColor(m.user.id)}`}
+              >
+                {getInitials(m.user.placeholderName ?? m.user.name, m.user.email)}
+              </div>
+            )}
+            <span className="text-sm font-medium">{m.user.placeholderName ?? m.user.name ?? m.user.email}</span>
+            {m.role === 'OWNER' && (
+              <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                {t('detail.owner')}
+              </span>
+            )}
+            {m.user.isPlaceholder && (
+              <Badge variant="outline" className="ml-0.5 text-[10px]">
+                {t('detail.pending')}
+              </Badge>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {g.archivedAt && (
+        <div className="flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200">
+          <Archive className="h-4 w-4 shrink-0" />
+          {/* Only owners and admins can unarchive, so a plain member is told whom to ask */}
+          <span>
+            {t('detail.archivedMessage')}
+            {myRole === 'MEMBER' && <> {t('detail.askToUnarchive')}</>}
+          </span>
+          {(myRole === 'OWNER' || myRole === 'ADMIN') && (
+            <Button
+              variant="link"
+              size="sm"
+              className="ml-auto h-auto p-0 text-amber-800 dark:text-amber-200"
+              nativeButton={false}
+              render={<Link href={`/groups/${groupId}/settings`} />}
+            >
+              {t('detail.manage')}
+            </Button>
+          )}
+        </div>
+      )}
+
+      <Separator />
+
+      {/* Simplified Debts */}
+      {debts.data && debts.data.debts.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base" data-testid="balances-title">
+                {t('detail.balances')}
+              </CardTitle>
+              {/* An archived group refuses payments (see the banner above) */}
+              {!g.archivedAt && (
+                <Button variant="outline" size="sm" onClick={() => setSettleState({ open: true })}>
+                  <Handshake className="mr-2 h-4 w-4" />
+                  {t('detail.settle')}
+                </Button>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            {debts.data.debts.map((debt, i) => {
+              const from = memberMap.get(debt.from);
+              const to = memberMap.get(debt.to);
+              const toName = to?.name ?? to?.email ?? t('detail.unknown');
+              const isMyDebt = debt.from === myId;
+              const showVenmo =
+                !g.archivedAt &&
+                venmoSetting.data?.enabled &&
+                g.currency === 'USD' &&
+                isMyDebt &&
+                to?.venmoUsername &&
+                isValidVenmoHandle(to.venmoUsername);
+              const venmoUrl = showVenmo ? buildVenmoPayUrl(to.venmoUsername!, debt.amount, `BillOK: ${g.name}`) : null;
+              return (
+                <div key={i} className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={!!g.archivedAt}
+                    className="flex flex-1 items-center gap-2 rounded-lg p-2.5 text-sm transition-all enabled:hover:bg-muted/70 enabled:hover:shadow-sm"
+                    onClick={() =>
+                      setSettleState({
+                        open: true,
+                        from: debt.from,
+                        to: debt.to,
+                        amount: debt.amount,
+                      })
+                    }
+                  >
+                    <span className="truncate text-xs font-medium text-red-600 sm:text-sm dark:text-red-400">
+                      {from?.name ?? from?.email ?? t('detail.unknown')}
+                    </span>
+                    <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate text-xs font-medium text-emerald-600 sm:text-sm dark:text-emerald-400">
+                      {toName}
+                    </span>
+                    <span className="ml-auto shrink-0 font-semibold tabular-nums text-red-600 dark:text-red-400">
+                      {formatCents(debt.amount, g.currency, locale)}
+                    </span>
+                  </button>
+                  {venmoUrl && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0 text-[#008CFF] hover:text-[#0070CC]"
+                      disabled={settleVenmo.isPending}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (settleTimerRef.current) return;
+                        window.open(venmoUrl, '_blank', 'noopener,noreferrer');
+                        settleTimerRef.current = setTimeout(() => {
+                          settleTimerRef.current = null;
+                          setVenmoPaid({ from: debt.from, to: debt.to, amount: debt.amount, toName });
+                        }, 2000);
+                      }}
+                      data-testid={`venmo-settle-${i}`}
+                    >
+                      {t('detail.payViaVenmo')}
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      {debts.data && debts.data.debts.length === 0 && (
+        <Card>
+          <CardContent className="py-4 text-center text-sm text-muted-foreground">
+            {t('detail.allSettledUp')}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Pending Receipts */}
+      {pendingReceipts.data && pendingReceipts.data.length > 0 && (
+        <div>
+          <h2 className="mb-3 text-lg font-semibold">{t('detail.pendingReceipts')}</h2>
+          <div className="space-y-2">
+            {pendingReceipts.data.map((r) => {
+              const summary = (
+                <>
+                  <p className="font-medium">{r.extractedData?.merchantName ?? t('detail.receipt')}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {r.extractedData?.date ?? new Date(r.createdAt).toLocaleDateString(locale)}
+                    {' · '}
+                    {t('detail.savedForLater')}
+                  </p>
+                </>
+              );
+              return (
+                <Card key={r.id} className={g.archivedAt ? undefined : 'transition-colors hover:bg-muted/50'}>
+                  <CardContent className="flex items-center justify-between py-3">
+                    {/* An archived group refuses the expense finishing a saved receipt makes; deleting one still works */}
+                    {g.archivedAt ? (
+                      <div className="flex-1 min-w-0">{summary}</div>
+                    ) : (
+                      <Link href={`/groups/${groupId}/scan?receiptId=${r.id}`} className="flex-1 min-w-0">
+                        {summary}
+                      </Link>
+                    )}
+                    <div className="flex items-center gap-3 ml-3">
+                      <p className="text-lg font-semibold">
+                        {r.extractedData ? formatCents(r.extractedData.total, g.currency, locale) : '—'}
+                      </p>
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                        aria-label={t('detail.deleteReceipt')}
+                        title={t('detail.deleteReceipt')}
+                        onClick={() => setDeleteReceiptId(r.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Expenses */}
+      <div>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">{t('detail.expenses')}</h2>
+          {!g.archivedAt && (
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" nativeButton={false} render={<Link href={`/groups/${groupId}/expenses/new`} />}>
+                <Plus className="mr-2 h-4 w-4" />
+                {t('detail.addExpense')}
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {expenses.isLoading && <LoadingSpinner />}
+
+        {expenses.data?.expenses.length === 0 && (
+          <Card>
+            <CardContent className="py-8 text-center">
+              <Receipt className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+              <p className="text-muted-foreground">{t('detail.noExpenses')}</p>
+              {!g.archivedAt && (
+                <Button
+                  className="mt-4"
+                  size="sm"
+                  nativeButton={false}
+                  render={<Link href={`/groups/${groupId}/expenses/new`} />}
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  {t('detail.addFirstExpense')}
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {expenses.data && expenses.data.expenses.length > 0 && (
+          <Card className="divide-y divide-border overflow-hidden">
+            {expenses.data.expenses.map((expense, index) => (
+              <Link key={expense.id} href={`/groups/${groupId}/expenses/${expense.id}`} className="block">
+                <div
+                  className={`flex items-center justify-between px-4 py-3 transition-colors hover:bg-muted/50 ${
+                    index % 2 === 1 ? 'bg-muted/20' : ''
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent">
+                      <Tag className="h-3.5 w-3.5 text-accent-foreground" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{expense.title}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {t('detail.paidBy', {
+                          name: expense.paidBy.name ?? expense.paidBy.email ?? t('detail.unknown'),
+                        })}
+                        {' · '}
+                        {new Date(expense.expenseDate).toLocaleDateString(locale)}
+                        {expense.category && (
+                          <span className="ml-1 text-muted-foreground/70">
+                            {' · '}
+                            {expense.category}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  <p className="ml-4 shrink-0 text-lg font-semibold tabular-nums">
+                    {formatCents(
+                      expense.amount,
+                      expense.baseCurrencyAmount != null ? expense.currency : g.currency,
+                      locale,
+                    )}
+                  </p>
+                </div>
+              </Link>
+            ))}
+          </Card>
+        )}
+      </div>
+
+      <PaymentsList
+        groupId={groupId}
+        groupCurrency={g.currency}
+        currentUserId={myId}
+        isOwnerOrAdmin={myRole === 'OWNER' || myRole === 'ADMIN'}
+        archived={!!g.archivedAt}
+      />
+
+      <InviteDialog groupId={groupId} open={showInvite} onOpenChange={setShowInvite} />
+
+      <SettleDialog
+        groupId={groupId}
+        members={settleParties.map((m) => ({ id: m.user.id, name: m.user.name ?? m.user.email }))}
+        {...(settleState.from !== undefined ? { suggestedFrom: settleState.from } : {})}
+        {...(settleState.to !== undefined ? { suggestedTo: settleState.to } : {})}
+        {...(settleState.amount !== undefined ? { suggestedAmount: settleState.amount } : {})}
+        currency={g.currency}
+        open={settleState.open}
+        onOpenChange={(open) => setSettleState((s) => ({ ...s, open }))}
+      />
+      <ConfirmDialog
+        open={venmoPaid !== null}
+        onOpenChange={(open) => !open && setVenmoPaid(null)}
+        title={t('detail.venmoPaidTitle')}
+        description={t('detail.venmoPaidDescription', {
+          amount: venmoPaid ? formatCents(venmoPaid.amount, g.currency, locale) : '',
+          name: venmoPaid?.toName ?? '',
+        })}
+        confirmLabel={t('detail.venmoPaidConfirm')}
+        cancelLabel={t('detail.venmoPaidCancel')}
+        destructive={false}
+        onConfirm={() =>
+          venmoPaid &&
+          settleVenmo.mutate({
+            groupId,
+            fromId: venmoPaid.from,
+            toId: venmoPaid.to,
+            amount: venmoPaid.amount,
+            currency: g.currency,
+            note: t('detail.settledViaVenmo'),
+          })
+        }
+      />
+      <ConfirmDialog
+        open={deleteReceiptId !== null}
+        onOpenChange={(open) => !open && setDeleteReceiptId(null)}
+        title={t('detail.deleteReceiptTitle')}
+        description={t('detail.deleteReceiptDescription')}
+        confirmLabel={tc('actions.delete')}
+        onConfirm={() => deleteReceiptId && deletePending.mutate({ receiptId: deleteReceiptId })}
+      />
+    </div>
+  );
+}

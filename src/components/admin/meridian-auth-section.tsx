@@ -1,0 +1,400 @@
+'use client';
+
+import { useRef, useState } from 'react';
+import { useTranslations } from 'next-intl';
+import { trpc } from '@/lib/trpc';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import {
+  Bot,
+  KeyRound,
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  ExternalLink,
+  Copy,
+  FlaskConical,
+  Upload,
+  AlertCircle,
+  X,
+} from 'lucide-react';
+
+const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+
+export function MeridianAuthSection() {
+  const t = useTranslations('admin');
+  const utils = trpc.useUtils();
+
+  const authStatus = trpc.admin.getMeridianAuthStatus.useQuery(undefined, {
+    refetchInterval: 15_000,
+  });
+
+  const startLogin = trpc.admin.startMeridianLogin.useMutation({
+    onSuccess: (data) => {
+      setLoginUrl(data.url);
+      setLoginState('waiting_for_code');
+    },
+    onError: (err) => {
+      setLoginState('error');
+      setLoginError(err.message);
+    },
+  });
+
+  const completeLogin = trpc.admin.completeMeridianLogin.useMutation({
+    onSuccess: (data) => {
+      if (data.success) {
+        setLoginState('success');
+        utils.admin.getMeridianAuthStatus.invalidate();
+        utils.admin.getSystemHealth.invalidate();
+      } else {
+        setLoginState('error');
+        setLoginError(data.error ?? 'Не удалось войти');
+      }
+    },
+    onError: (err) => {
+      setLoginState('error');
+      setLoginError(err.message);
+    },
+  });
+
+  const cancelMutation = trpc.admin.cancelMeridianLogin.useMutation({
+    onSuccess: () => {
+      resetLoginState();
+    },
+  });
+
+  const logoutMutation = trpc.admin.logoutMeridian.useMutation({
+    onSuccess: () => {
+      resetLoginState();
+      utils.admin.getMeridianAuthStatus.invalidate();
+      utils.admin.getSystemHealth.invalidate();
+    },
+  });
+
+  const testProvider = trpc.admin.testAIProvider.useMutation({
+    onSettled: () => utils.admin.getAuditLog.invalidate(),
+  });
+
+  const [loginState, setLoginState] = useState<
+    'idle' | 'starting' | 'waiting_for_code' | 'submitting' | 'success' | 'error'
+  >('idle');
+  const [loginUrl, setLoginUrl] = useState<string | null>(null);
+  const [loginCode, setLoginCode] = useState('');
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [testFile, setTestFile] = useState<{
+    name: string;
+    base64: string;
+    mimeType: string;
+  } | null>(null);
+
+  function resetLoginState() {
+    setLoginState('idle');
+    setLoginUrl(null);
+    setLoginCode('');
+    setLoginError(null);
+  }
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = e.target.files?.[0];
+    if (!selected) return;
+    if (!ACCEPTED_TYPES.includes(selected.type)) return;
+    if (selected.size > 5 * 1024 * 1024) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const base64 = dataUrl.split(',')[1];
+      if (!base64) return;
+      setTestFile({ name: selected.name, base64, mimeType: selected.type });
+      testProvider.reset();
+    };
+    reader.readAsDataURL(selected);
+  };
+
+  const clearFile = () => {
+    setTestFile(null);
+    testProvider.reset();
+    if (fileRef.current) fileRef.current.value = '';
+  };
+
+  const handleTest = () => {
+    if (!testFile) return;
+    testProvider.mutate({
+      providerName: 'meridian',
+      imageBase64: testFile.base64,
+      mimeType: testFile.mimeType as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif',
+    });
+  };
+
+  // Don't render if not using meridian
+  const status = authStatus.data;
+  if (!status || ('status' in status && status.status === 'not_applicable')) {
+    return null;
+  }
+
+  const normalizedStatusError = status.error
+    ?.replace(
+      /Run ['"`]?claude login['"`]? in your terminal to re-authenticate\.?/gi,
+      'Use "Authenticate with Claude" below.',
+    )
+    .replace(/Run:\s*claude login/gi, 'Use "Authenticate with Claude" below');
+
+  const isHealthy = status.status === 'healthy';
+  const statusColor = isHealthy ? 'bg-green-500' : status.status === 'not_running' ? 'bg-gray-400' : 'bg-red-500';
+
+  const statusLabel = isHealthy
+    ? t('meridianAuth.authenticated')
+    : status.status === 'not_running'
+      ? t('meridianAuth.proxyNotRunning')
+      : t('meridianAuth.authExpired');
+
+  return (
+    <section>
+      <div className="mb-4 flex items-center gap-2">
+        <KeyRound className="h-5 w-5 text-muted-foreground" />
+        <h2 className="text-lg font-semibold">{t('meridianAuth.title')}</h2>
+      </div>
+
+      <div className="grid gap-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <Bot className="h-4 w-4" />
+              {t('meridianAuth.cardTitle')}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center gap-2">
+              <span className={`h-2.5 w-2.5 rounded-full ${statusColor}`} />
+              <span className="text-sm font-medium">{statusLabel}</span>
+              {isHealthy && status.email && (
+                <Badge variant="outline" className="text-xs">
+                  {status.email}
+                </Badge>
+              )}
+            </div>
+
+            {normalizedStatusError && <p className="text-sm text-red-600 dark:text-red-400">{normalizedStatusError}</p>}
+
+            {/* Login Flow */}
+            {!isHealthy && loginState === 'idle' && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setLoginState('starting');
+                  startLogin.mutate();
+                }}
+                disabled={status.loginInProgress}
+              >
+                {status.loginInProgress ? (
+                  <>
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                    {t('meridianAuth.loginInProgress')}
+                  </>
+                ) : (
+                  t('meridianAuth.authenticate')
+                )}
+              </Button>
+            )}
+
+            {isHealthy && loginState === 'idle' && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => logoutMutation.mutate()}
+                disabled={logoutMutation.isPending}
+              >
+                {logoutMutation.isPending ? (
+                  <>
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                    {t('meridianAuth.loggingOut')}
+                  </>
+                ) : (
+                  t('meridianAuth.logOut')
+                )}
+              </Button>
+            )}
+
+            {loginState === 'starting' && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                {t('meridianAuth.startingLogin')}
+              </div>
+            )}
+
+            {loginState === 'waiting_for_code' && loginUrl && (
+              <div className="space-y-3 rounded-md border p-3">
+                <p className="text-sm">
+                  <span className="font-semibold">{t('meridianAuth.step1Label')}</span>{' '}
+                  {t('meridianAuth.step1Instruction')}
+                </p>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={loginUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-sm text-primary underline break-all"
+                  >
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                    {t('meridianAuth.openAuthPage')}
+                  </a>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0 shrink-0"
+                    onClick={() => {
+                      navigator.clipboard.writeText(loginUrl);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }}
+                  >
+                    {copied ? <CheckCircle2 className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
+                  </Button>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm">
+                    <span className="font-semibold">{t('meridianAuth.step2Label')}</span>{' '}
+                    {t.rich('meridianAuth.step2Instruction', {
+                      emphasis: (chunks) => <span className="font-semibold text-primary">{chunks}</span>,
+                    })}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{t('meridianAuth.step2Hint')}</p>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    className="flex-1 rounded-md border px-3 py-1.5 text-sm bg-background"
+                    placeholder="https://platform.claude.com/oauth/code/callback?code=..."
+                    value={loginCode}
+                    onChange={(e) => setLoginCode(e.target.value)}
+                  />
+                  <Button
+                    size="sm"
+                    disabled={!loginCode.trim() || completeLogin.isPending}
+                    onClick={() => {
+                      setLoginState('submitting');
+                      completeLogin.mutate({ code: loginCode.trim() });
+                    }}
+                  >
+                    {completeLogin.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : t('meridianAuth.submit')}
+                  </Button>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground"
+                  onClick={() => {
+                    cancelMutation.mutate();
+                  }}
+                >
+                  {t('meridianAuth.cancel')}
+                </Button>
+              </div>
+            )}
+
+            {loginState === 'submitting' && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                {t('meridianAuth.completingLogin')}
+              </div>
+            )}
+
+            {loginState === 'success' && (
+              <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+                <CheckCircle2 className="h-4 w-4" />
+                {t('meridianAuth.loginSuccess')}
+                <Button variant="ghost" size="sm" onClick={resetLoginState}>
+                  {t('meridianAuth.dismiss')}
+                </Button>
+              </div>
+            )}
+
+            {loginState === 'error' && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400">
+                  <XCircle className="h-4 w-4" />
+                  {loginError}
+                </div>
+                <Button variant="outline" size="sm" onClick={resetLoginState}>
+                  {t('meridianAuth.tryAgain')}
+                </Button>
+              </div>
+            )}
+
+            {/* Test Receipt Extraction */}
+            {isHealthy && loginState === 'idle' && (
+              <>
+                <div className="border-t pt-3">
+                  <p className="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    {t('meridianAuth.testExtraction')}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      accept={ACCEPTED_TYPES.join(',')}
+                      onChange={handleFileChange}
+                      className="hidden"
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => fileRef.current?.click()}
+                      disabled={testProvider.isPending}
+                    >
+                      <Upload className="mr-1 h-3 w-3" />
+                      {testFile ? t('meridianAuth.changeFile') : t('meridianAuth.uploadFile')}
+                    </Button>
+                    {testFile && (
+                      <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <span className="max-w-32 truncate">{testFile.name}</span>
+                        <button
+                          onClick={clearFile}
+                          className="text-muted-foreground hover:text-foreground"
+                          aria-label={t('meridianAuth.removeFile')}
+                          title={t('meridianAuth.removeFile')}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    )}
+                    <Button size="sm" disabled={!testFile || testProvider.isPending} onClick={handleTest}>
+                      {testProvider.isPending ? (
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      ) : (
+                        <FlaskConical className="mr-1 h-3 w-3" />
+                      )}
+                      {t('meridianAuth.test')}
+                    </Button>
+                  </div>
+                </div>
+
+                {testProvider.isSuccess && (
+                  <div className="space-y-1">
+                    <p className="flex items-center gap-1 text-xs text-green-600">
+                      <CheckCircle2 className="h-3 w-3" />
+                      {t('meridianAuth.testSuccess', { duration: testProvider.data.durationMs })}
+                    </p>
+                    <pre className="max-h-64 overflow-auto rounded-md bg-muted p-2 text-xs">
+                      {JSON.stringify(testProvider.data.result, null, 2)}
+                    </pre>
+                  </div>
+                )}
+
+                {testProvider.isError && (
+                  <p className="flex items-center gap-1 text-xs text-destructive">
+                    <AlertCircle className="h-3 w-3" />
+                    {testProvider.error.message}
+                  </p>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </section>
+  );
+}

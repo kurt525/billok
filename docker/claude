@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+
+# Native Claude Code binary (the agent SDK no longer ships a cli.js)
+CLI_PATH="/app/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+CLAUDE_HOME="${CLAUDE_HOME:-/home/nextjs}"
+
+if [ ! -x "$CLI_PATH" ]; then
+  echo "Claude CLI not found or not executable at $CLI_PATH" >&2
+  exit 1
+fi
+
+if [ "$(id -u)" = "0" ]; then
+  exec su-exec nextjs env HOME="$CLAUDE_HOME" "$CLI_PATH" "$@"
+fi
+
+if [ -z "$HOME" ] || [ "$HOME" = "/root" ]; then
+  export HOME="$CLAUDE_HOME"
+fi
+
+exec "$CLI_PATH" "$@"

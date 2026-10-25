@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="112" fill="#059669"/>
+  <!-- BillOK brand: receipt and ruble sign. -->
+  <path d="M151 108H361V405L338 388L314 405L291 388L267 405L244 388L220 405L197 388L174 405L151 388V108Z"
+        fill="white" fill-opacity=".14" stroke="white" stroke-width="19"
+        stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M231 193H279C316 193 327 212 327 235C327 261 307 276 278 276H231M231 191V338M207 302H300"
+        stroke="white" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

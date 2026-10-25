@@ -1,0 +1,314 @@
+'use client';
+
+import { use, useState } from 'react';
+import { useSession } from 'next-auth/react';
+import { useFormatter, useLocale, useTranslations } from 'next-intl';
+import { trpc } from '@/lib/trpc';
+import { formatCents } from '@/lib/money';
+import { copyToClipboard } from '@/lib/clipboard';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Separator } from '@/components/ui/separator';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Copy, Share2, Receipt, ArrowRight, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
+import { Link } from '@/i18n/navigation';
+import { getInitials, guestAvatarColor } from '@/lib/avatar';
+import { buildVenmoPayUrl, isValidVenmoHandle } from '@/lib/venmo';
+import { groupSizeWeights, personItemShares } from '@/lib/split-calculator';
+
+export default function SharedSplitPage({ params }: { params: Promise<{ token: string }> }) {
+  const { token } = use(params);
+  const locale = useLocale();
+  const t = useTranslations('split.result');
+  const tv = useTranslations('split.venmo');
+  const tc = useTranslations('common');
+  const format = useFormatter();
+  const { data: authSession } = useSession();
+  const split = trpc.guest.getSplit.useQuery({ token });
+  const venmoSetting = trpc.admin.getVenmoEnabled.useQuery();
+  const profile = trpc.auth.getProfile.useQuery(undefined, {
+    enabled: !!authSession?.user && !!venmoSetting.data?.enabled,
+  });
+  const utils = trpc.useUtils();
+  const setPayerVenmoHandle = trpc.guest.setPayerVenmoHandle.useMutation({
+    onSuccess: () => {
+      utils.guest.getSplit.invalidate({ token });
+    },
+  });
+
+  // The venmo handle is derived from the split record (falling back to the
+  // creator's profile) until the user edits it, at which point the edited
+  // value takes over. No state-syncing effect needed.
+  const [venmoHandleEdit, setVenmoHandleEdit] = useState<string | null>(null);
+  const venmoHandle =
+    venmoHandleEdit ??
+    split.data?.payerVenmoHandle ??
+    (split.data?.isCreator ? (profile.data?.venmoUsername ?? '') : '');
+
+  if (split.isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 py-20">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="text-muted-foreground">{t('loading')}</p>
+      </div>
+    );
+  }
+
+  if (split.error) {
+    return (
+      <div className="text-center space-y-6 py-20">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-muted">
+          <Receipt className="h-8 w-8 text-muted-foreground" />
+        </div>
+        <div className="space-y-2">
+          <h2 className="text-xl font-bold">{t('notFound')}</h2>
+          <p className="text-muted-foreground">
+            {/* The server's key for an expired split (guest.getSplit); its message is in the page's language */}
+            {split.error.data?.messageKey === 'splitExpired' ? t('expiredMessage') : t('invalidMessage')}
+          </p>
+        </div>
+        <Button nativeButton={false} render={<Link href="/split" />}>
+          <ArrowRight className="mr-2 h-4 w-4" />
+          {t('splitYourOwn')}
+        </Button>
+      </div>
+    );
+  }
+
+  const data = split.data!;
+  const currency = data.receiptData.currency;
+  const paidBy = data.people[data.paidByIndex]?.name ?? t('someone');
+  // Weighted the way the totals were, so each person's lines add up to their total
+  const weights = groupSizeWeights(data.people);
+
+  async function handleShare() {
+    const url = window.location.href;
+    const text = t('shareText', {
+      merchant: data.receiptData.merchantName ?? t('aReceipt'),
+      total: formatCents(data.receiptData.total, currency, locale),
+    });
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: t('billSplit'), text, url });
+      } catch {
+        // User cancelled
+      }
+    } else if (await copyToClipboard(url)) {
+      toast.success(t('linkCopied'));
+    } else {
+      toast.error(tc('actions.copyFailed'));
+    }
+  }
+
+  async function handleCopy() {
+    if (await copyToClipboard(window.location.href)) {
+      toast.success(t('linkCopied'));
+    } else {
+      toast.error(tc('actions.copyFailed'));
+    }
+  }
+
+  const initials = getInitials;
+
+  return (
+    <div className="space-y-6 pb-24" data-testid="split-result">
+      {/* Header */}
+      <div className="text-center space-y-1 pt-4">
+        <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
+        {data.receiptData.date && <p className="text-sm text-muted-foreground">{data.receiptData.date}</p>}
+        <p className="text-sm text-muted-foreground">
+          {t.rich('paidBy', {
+            payer: paidBy,
+            name: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
+          })}
+        </p>
+        {venmoSetting.data?.enabled &&
+          currency === 'USD' &&
+          (split.data?.isCreator ? (
+            <div className="flex items-center justify-center gap-2 mt-2">
+              <Input
+                placeholder={tv('handlePlaceholder')}
+                aria-label={tv('handle')}
+                value={venmoHandle}
+                onChange={(e) => setVenmoHandleEdit(e.target.value)}
+                onBlur={() => {
+                  const trimmed = venmoHandle.trim() || null;
+                  if (trimmed !== (split.data?.payerVenmoHandle ?? null)) {
+                    setPayerVenmoHandle.mutate({ token, handle: trimmed });
+                  }
+                }}
+                className="h-8 text-sm max-w-48"
+                data-testid="venmo-handle-input"
+              />
+            </div>
+          ) : venmoHandle ? (
+            <p className="text-sm text-muted-foreground mt-1" data-testid="venmo-handle-display">
+              {t('venmoHandle', { handle: venmoHandle.replace(/^@/, '') })}
+            </p>
+          ) : null)}
+      </div>
+
+      {/* Total */}
+      <Card className="bg-primary/5 border-primary/20">
+        <CardContent className="py-4">
+          <div className="flex justify-between items-center">
+            <span className="font-semibold text-lg">{t('totalBill')}</span>
+            <span className="text-2xl font-bold text-primary">
+              {formatCents(data.receiptData.total, currency, locale)}
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Per-person breakdown */}
+      <div className="space-y-3">
+        <h3 className="font-semibold text-base">{t('eachPersonOwes')}</h3>
+        {data.summary.map((person, idx) => {
+          // The items this person is on, each at their share of its price
+          const personItems = personItemShares(person.personIndex, {
+            items: data.items,
+            assignments: data.assignments,
+            ...weights,
+          });
+
+          return (
+            <Card key={idx} data-testid={`person-card-${idx}`}>
+              <CardContent className="py-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                    <Avatar className="h-10 w-10">
+                      <AvatarFallback className={`text-sm font-semibold ${guestAvatarColor(idx)}`}>
+                        {initials(person.name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <span className="font-semibold">{person.name}</span>
+                  </div>
+                  <span className="text-xl font-bold text-primary" data-testid={`person-total-${idx}`}>
+                    {formatCents(person.total, currency, locale)}
+                  </span>
+                </div>
+
+                {/* Item details */}
+                <div className="space-y-1 text-sm text-muted-foreground">
+                  {personItems.map(({ itemIndex, amount, share }, i) => {
+                    const item = data.items[itemIndex]!;
+                    return (
+                      <div key={i} className="flex justify-between gap-2">
+                        <span>
+                          {item.name}
+                          {share.numerator < share.denominator && (
+                            <span className="text-xs">
+                              {' '}
+                              {t('shareOf', {
+                                fraction: `${share.numerator}/${share.denominator}`,
+                                price: formatCents(item.totalPrice, currency, locale),
+                              })}
+                            </span>
+                          )}
+                        </span>
+                        <span data-testid="line-amount">{formatCents(amount, currency, locale)}</span>
+                      </div>
+                    );
+                  })}
+                  {person.tax > 0 && (
+                    <div className="flex justify-between">
+                      <span>{t('tax')}</span>
+                      <span data-testid="line-amount">{formatCents(person.tax, currency, locale)}</span>
+                    </div>
+                  )}
+                  {person.tip > 0 && (
+                    <div className="flex justify-between">
+                      <span>{t('tip')}</span>
+                      <span data-testid="line-amount">{formatCents(person.tip, currency, locale)}</span>
+                    </div>
+                  )}
+                </div>
+
+                {venmoSetting.data?.enabled &&
+                  currency === 'USD' &&
+                  isValidVenmoHandle(venmoHandle) &&
+                  !split.data?.isPayer &&
+                  person.personIndex !== data.paidByIndex && (
+                    <a
+                      href={buildVenmoPayUrl(
+                        venmoHandle,
+                        person.total,
+                        `BillOK: ${data.receiptData.merchantName ?? t('billSplit')}`,
+                      )!}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-3 flex items-center justify-center gap-2 rounded-lg bg-[#008CFF] px-4 py-2 text-sm font-medium text-white hover:bg-[#0070CC] transition-colors"
+                      data-testid={`venmo-pay-${idx}`}
+                    >
+                      {tv('payVia', { amount: formatCents(person.total, currency, locale) })}
+                    </a>
+                  )}
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      {/* Receipt breakdown */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">{t('receiptDetails')}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-1 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">{t('subtotal')}</span>
+            <span>{formatCents(data.receiptData.subtotal, currency, locale)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">{t('tax')}</span>
+            <span>{formatCents(data.receiptData.tax, currency, locale)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">{t('tip')}</span>
+            <span>{formatCents(data.receiptData.tip, currency, locale)}</span>
+          </div>
+          <Separator />
+          <div className="flex justify-between font-semibold">
+            <span>{t('total')}</span>
+            <span>{formatCents(data.receiptData.total, currency, locale)}</span>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Expiry notice */}
+      <p className="text-xs text-center text-muted-foreground">
+        {t('expiresOn', {
+          date: format.dateTime(new Date(data.expiresAt), { dateStyle: 'long' }),
+        })}
+      </p>
+
+      {/* CTA */}
+      <div className="text-center">
+        <Link href="/split" className="text-sm font-medium text-primary hover:underline">
+          {t('splitYourOwn')}
+        </Link>
+        <span className="text-muted-foreground mx-2">{t('or')}</span>
+        <Link href="/register" className="text-sm font-medium text-primary hover:underline">
+          {t('createAccount')}
+        </Link>
+      </div>
+
+      {/* Share buttons - sticky bottom */}
+      <div className="fixed bottom-0 left-0 right-0 p-4 bg-background border-t">
+        <div className="mx-auto max-w-lg flex gap-2">
+          <Button variant="outline" className="flex-1 h-14" onClick={handleCopy} data-testid="copy-link-btn">
+            <Copy className="mr-2 h-5 w-5" />
+            {t('copyLink')}
+          </Button>
+          <Button className="flex-1 h-14" onClick={handleShare} data-testid="share-btn">
+            <Share2 className="mr-2 h-5 w-5" />
+            {t('share')}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}

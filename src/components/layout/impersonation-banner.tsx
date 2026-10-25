@@ -1,0 +1,59 @@
+'use client';
+
+import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useTranslations } from 'next-intl';
+import { useRouter } from '@/i18n/navigation';
+import { trpc } from '@/lib/trpc';
+import { UserCheck } from 'lucide-react';
+
+export function ImpersonationBanner() {
+  const t = useTranslations('admin.impersonation');
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const { data } = trpc.admin.getImpersonationStatus.useQuery(undefined, {
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+  });
+  const [stopping, setStopping] = useState(false);
+
+  if (!data?.isImpersonating) return null;
+
+  const handleStop = async () => {
+    setStopping(true);
+    try {
+      const res = await fetch('/api/admin/impersonate', { method: 'DELETE' });
+      if (!res.ok) return;
+      queryClient.clear();
+      router.push('/admin');
+      router.refresh();
+    } catch {
+      // network error — button re-enables via finally
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  return (
+    <div className="sticky top-0 z-40 bg-red-600 dark:bg-red-700 border-b border-red-700 dark:border-red-600 px-4 py-2.5 text-sm text-white">
+      <div className="mx-auto flex max-w-5xl items-center gap-3">
+        <UserCheck className="h-4 w-4 shrink-0" />
+        <span className="flex-1">
+          {t.rich('impersonating', {
+            name: data.targetName ?? data.targetEmail ?? '',
+            strong: (chunks) => <strong>{chunks}</strong>,
+          })}
+          {data.targetName && <span className="text-red-100"> ({data.targetEmail})</span>}
+        </span>
+        <button
+          type="button"
+          onClick={handleStop}
+          disabled={stopping}
+          className="shrink-0 rounded bg-white/20 px-3 py-1 text-xs font-medium text-white hover:bg-white/30 disabled:opacity-50 transition-colors"
+        >
+          {stopping ? t('stopping') : t('stop')}
+        </button>
+      </div>
+    </div>
+  );
+}

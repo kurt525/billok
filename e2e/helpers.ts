@@ -1,0 +1,309 @@
+import { type BrowserContext, type Page, request } from '@playwright/test';
+import { claimStorageKey } from '../src/lib/guest-session';
+
+const BASE = process.env.BASE_URL || 'http://localhost:3001';
+
+// Demo users from seed.ts
+export const users = {
+  alice: { email: 'alice@example.com', password: 'password123', name: 'Alice Johnson' },
+  bob: { email: 'bob@example.com', password: 'password123', name: 'Bob Smith' },
+  charlie: { email: 'charlie@example.com', password: 'password123', name: 'Charlie Brown' },
+};
+
+// Dedicated test users from seed.ts — use these instead of creating throwaway accounts
+export const testUsers = {
+  suspend: { email: 'suspend-test@example.com', password: 'password123', name: 'Suspend Test User' },
+  delete: { email: 'delete-test@example.com', password: 'password123', name: 'Delete Test User' },
+  password: { email: 'pwtest@example.com', password: 'password123', name: 'Password Test User' },
+};
+
+/**
+ * Login as a user via the UI.
+ */
+export async function login(page: Page, email: string, password: string) {
+  await page.goto('/en/login');
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.waitForURL(/\/en\/dashboard$/, { timeout: 15000 });
+}
+
+/**
+ * Register a new user via the UI.
+ */
+export async function register(page: Page, name: string, email: string, password: string) {
+  await page.goto('/en/register');
+  await page.getByLabel('Name').fill(name);
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await page.waitForURL(/\/en\/dashboard$/, { timeout: 15000 });
+}
+
+/**
+ * Generate a unique email for test isolation.
+ */
+export function uniqueEmail(prefix = 'test') {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@test.com`;
+}
+
+/**
+ * Get an authenticated API request context for a user.
+ */
+export async function authedContext(email: string, password: string) {
+  const ctx = await request.newContext({ baseURL: BASE });
+  const csrfRes = await ctx.get('/api/auth/csrf');
+  const { csrfToken } = await csrfRes.json();
+  await ctx.post('/api/auth/callback/credentials', {
+    form: { email, password, csrfToken },
+    maxRedirects: 0,
+  });
+  return ctx;
+}
+
+/**
+ * Call a tRPC mutation.
+ */
+export async function trpcMutation(
+  ctx: Awaited<ReturnType<typeof request.newContext>>,
+  proc: string,
+  input: unknown,
+  timeoutMs?: number,
+) {
+  return ctx.post(`/api/trpc/${proc}`, {
+    data: { json: input },
+    ...(timeoutMs ? { timeout: timeoutMs } : {}),
+  });
+}
+
+/**
+ * Join a guest claim session via the API. Fails with the server's response when the
+ * join doesn't succeed or returns no result, instead of handing back undefined for the
+ * caller to trip over.
+ */
+export async function joinGuestSession(
+  ctx: Awaited<ReturnType<typeof request.newContext>>,
+  input: { token: string; name: string; groupSize?: number; personToken?: string; joinKey?: string },
+) {
+  const res = await trpcMutation(ctx, 'guest.joinSession', input);
+  const body = await res.text();
+  let joined: { personIndex?: unknown; personId?: unknown; personToken?: unknown; name?: unknown } | undefined;
+  try {
+    joined = res.ok() ? JSON.parse(body)?.result?.data?.json : undefined;
+  } catch {
+    // Not JSON (e.g. an HTML error page from a proxy): reported with the body below.
+  }
+  if (
+    typeof joined?.personIndex !== 'number' ||
+    typeof joined.personId !== 'string' ||
+    typeof joined.personToken !== 'string' ||
+    typeof joined.name !== 'string'
+  ) {
+    throw new Error(`guest.joinSession failed (${res.status()}): ${body}`);
+  }
+  return joined as { personIndex: number; personId: string; personToken: string; name: string };
+}
+
+/**
+ * The id of the person listed under `name` in a claim session: the claim-session mutations name
+ * people by id (#225), and a person who joined on a page has no join result to read it from.
+ */
+export async function personIdByName(
+  ctx: Awaited<ReturnType<typeof request.newContext>>,
+  token: string,
+  name: string,
+): Promise<string> {
+  const session = await trpcResult(await trpcQuery(ctx, 'guest.getSession', { token }));
+  const person = (session?.people as { id: string; name: string }[] | undefined)?.find((p) => p.name === name);
+  if (!person) throw new Error(`Nobody named ${name} in claim session ${token}`);
+  return person.id;
+}
+
+/**
+ * Give a browser context the stored identity of the device that joined a claim session as
+ * this person: the claim page keeps { name, personToken } in localStorage and resumes with
+ * the token on load. Joining as someone who already joined requires their token, so a
+ * fresh context can't take over a person by typing their name.
+ * addInitScript re-plants the identity on every navigation in this context, even after the
+ * page clears it; use a new context for anything that tests the identity being removed.
+ */
+export async function rememberClaimIdentity(
+  browserCtx: BrowserContext,
+  shareToken: string,
+  identity: { name: string; personToken: string },
+) {
+  await browserCtx.addInitScript(({ key, value }) => window.localStorage.setItem(key, value), {
+    key: claimStorageKey(shareToken),
+    value: JSON.stringify(identity),
+  });
+}
+
+/**
+ * Call a tRPC query (batched format).
+ */
+export async function trpcQuery(ctx: Awaited<ReturnType<typeof request.newContext>>, proc: string, input?: unknown) {
+  const inputStr = input
+    ? encodeURIComponent(JSON.stringify({ '0': { json: input } }))
+    : encodeURIComponent(JSON.stringify({ '0': { json: null, meta: { values: ['undefined'], v: 1 } } }));
+  return ctx.get(`/api/trpc/${proc}?batch=1&input=${inputStr}`);
+}
+
+/**
+ * Extract the first result from a tRPC batch response.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function trpcResult(res: { json: () => Promise<any> }): Promise<any> {
+  const body = await res.json();
+  return body[0]?.result?.data?.json;
+}
+
+/**
+ * Extract the error from a tRPC response (mutation or batch query).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function trpcError(res: { json: () => Promise<any> }): Promise<any> {
+  const body = await res.json();
+  // Mutation format
+  if (body.error) return body.error.json;
+  // Batch query format
+  if (body[0]?.error) return body[0].error.json;
+  return null;
+}
+
+/**
+ * Navigate to a group by name via the groups page search.
+ * Handles pagination by using the search filter.
+ */
+export async function navigateToGroup(page: Page, groupName: string) {
+  await page.goto('/en/groups');
+  await page.getByPlaceholder('Search groups...').fill(groupName);
+  await page.getByText(groupName).first().click();
+  await page.waitForURL(/\/en\/groups\/\w+$/, { timeout: 15000 });
+}
+
+/**
+ * Create an isolated group with specified members and return IDs.
+ */
+export async function createTestGroup(
+  ownerEmail: string,
+  ownerPassword: string,
+  memberEmails: { email: string; password: string }[],
+  groupName?: string,
+) {
+  const owner = await authedContext(ownerEmail, ownerPassword);
+  const createRes = await trpcMutation(owner, 'groups.create', {
+    name: groupName ?? `Test-${Date.now()}`,
+  });
+  const group = (await createRes.json()).result?.data?.json;
+  const groupId = group.id;
+
+  const memberContexts: Awaited<ReturnType<typeof authedContext>>[] = [];
+  for (const m of memberEmails) {
+    const invRes = await trpcMutation(owner, 'groups.createInvite', { groupId });
+    const token = (await invRes.json()).result?.data?.json?.token;
+    const mCtx = await authedContext(m.email, m.password);
+    await trpcMutation(mCtx, 'groups.joinByInvite', { token });
+    memberContexts.push(mCtx);
+  }
+
+  // Get member IDs
+  const detailRes = await trpcQuery(owner, 'groups.get', { groupId });
+  const detail = await trpcResult(detailRes);
+  const memberIds: Record<string, string> = {};
+  for (const m of detail.members) {
+    memberIds[m.user.email] = m.user.id;
+  }
+
+  return {
+    owner,
+    memberContexts,
+    groupId,
+    memberIds,
+    dispose: async () => {
+      // Clean up: delete the test group to avoid polluting the database
+      try {
+        await trpcMutation(owner, 'groups.delete', { groupId });
+      } catch {
+        // Ignore — group may already be deleted by the test
+      }
+      await owner.dispose();
+      for (const c of memberContexts) await c.dispose();
+    },
+  };
+}
+
+/**
+ * Delete a test-created user via the admin API. Silently ignores errors.
+ */
+export async function deleteTestUser(adminCtx: Awaited<ReturnType<typeof authedContext>>, email: string) {
+  try {
+    const listRes = await trpcQuery(adminCtx, 'admin.listUsers', { search: email, limit: 1 });
+    const listData = await trpcResult(listRes);
+    const user = listData?.users?.[0];
+    if (user && user.email === email) {
+      await trpcMutation(adminCtx, 'admin.deleteUser', { userId: user.id });
+    }
+  } catch {
+    // Ignore — user may not exist or already deleted
+  }
+}
+
+/**
+ * Delete a test-created group via the API. Silently ignores errors.
+ */
+export async function deleteTestGroup(ctx: Awaited<ReturnType<typeof authedContext>>, groupId: string) {
+  try {
+    await trpcMutation(ctx, 'groups.delete', { groupId });
+  } catch {
+    // Ignore — group may not exist or already deleted
+  }
+}
+
+/**
+ * Minimal valid JPEG buffer for upload tests.
+ * Contains proper magic bytes (FF D8 FF) so magic-byte validation passes.
+ */
+export const FAKE_JPEG = Buffer.from([
+  0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+  0x00, 0xff, 0xd9,
+]);
+
+/**
+ * Minimal valid PNG buffer for upload tests.
+ * Contains the 8-byte PNG signature plus a minimal IHDR chunk.
+ */
+export const FAKE_PNG = Buffer.from([
+  0x89,
+  0x50,
+  0x4e,
+  0x47,
+  0x0d,
+  0x0a,
+  0x1a,
+  0x0a, // PNG signature
+  0x00,
+  0x00,
+  0x00,
+  0x0d,
+  0x49,
+  0x48,
+  0x44,
+  0x52, // IHDR chunk
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x01, // 1x1 pixel
+  0x08,
+  0x02,
+  0x00,
+  0x00,
+  0x00,
+  0x90,
+  0x77,
+  0x53,
+  0xde, // bit depth, color type, CRC
+]);

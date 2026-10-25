@@ -1,0 +1,435 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── AUTH (NextAuth managed) ───────────────────────────────
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── CORE MODELS ───────────────────────────────────────────
+
+model User {
+  id              String    @id @default(cuid())
+  name            String?
+  email           String    @unique
+  emailVerified   DateTime?
+  passwordHash    String?
+  image           String?
+  defaultCurrency String    @default("USD")
+  locale          String    @default("en")
+  venmoUsername   String?
+  suspendedAt     DateTime?
+  isPlaceholder   Boolean   @default(false)
+  placeholderName String?
+  createdByUserId String?
+
+  accounts        Account[]
+  sessions        Session[]
+  groupMembers    GroupMember[]
+  expensesPaid    Expense[]          @relation("PaidBy")
+  expensesAdded   Expense[]          @relation("AddedBy")
+  expenseShares   ExpenseShare[]
+  settlementsPaid Settlement[]       @relation("SettledBy")
+  settlementsFor  Settlement[]       @relation("SettledFor")
+  activityLogs    ActivityLog[]
+  adminAuditLogs  AdminAuditLog[] @relation("AdminAuditLogs")
+  systemInvitesUsed SystemInvite[] @relation("SystemInviteUsedBy")
+  uploadedReceipts Receipt[] @relation("UploadedReceipts")
+  guestSplits      GuestSplit[] @relation("GuestSplits")
+  groupInvitesCreated GroupInvite[] @relation("GroupInvitesCreated")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Group {
+  id            String  @id @default(cuid())
+  name          String
+  description   String? @db.Text
+  currency      String  @default("USD")
+  emoji         String? @default("💰")
+  simplifyDebts Boolean @default(true)
+  archivedAt    DateTime?
+
+  members      GroupMember[]
+  expenses     Expense[]
+  settlements  Settlement[]
+  invites      GroupInvite[]
+  activityLogs ActivityLog[]
+  receipts     Receipt[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model GroupMember {
+  id      String    @id @default(cuid())
+  userId  String
+  groupId String
+  role    GroupRole @default(MEMBER)
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  joinedAt DateTime @default(now())
+  // Set when a placeholder who is in the group's expenses or payments is removed
+  // at a zero balance (#284): they're no longer a member, but their history stays
+  // theirs, so their name still shows and a balance that comes back can be
+  // settled with them. Only a placeholder's membership is ever marked; a real
+  // user who leaves loses the row.
+  removedAt DateTime?
+
+  @@unique([userId, groupId])
+  @@index([groupId])
+}
+
+model GroupInvite {
+  id        String    @id @default(cuid())
+  groupId   String
+  email     String?
+  token     String    @unique @default(cuid())
+  expiresAt DateTime
+  usedAt    DateTime?
+  usedById  String?
+
+  placeholderUserId String?  // if set, auto-merge this placeholder when invite is used
+  createdById       String?  // who made the invite (null for invites made before this was recorded, or once that user row is deleted)
+
+  group     Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdBy User? @relation("GroupInvitesCreated", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([groupId])
+  @@index([createdById])
+}
+
+enum GroupRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+// ─── EXPENSES ──────────────────────────────────────────────
+
+model Expense {
+  id          String    @id @default(cuid())
+  groupId     String
+  title       String
+  description String?   @db.Text
+  amount      Int       // total in cents (in expense currency)
+  currency    String    @default("USD")
+  exchangeRate        Float   @default(1.0) // rate: 1 unit of expense currency = X units of group currency
+  baseCurrencyAmount  Int?    // amount converted to group currency (cents); null = same currency
+  category    String?
+  expenseDate DateTime  @default(now())
+  splitMode   SplitMode @default(EQUAL)
+  paidById    String
+  addedById   String
+  receiptId   String?   @unique
+
+  group  Group          @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  paidBy User           @relation("PaidBy", fields: [paidById], references: [id])
+  addedBy User          @relation("AddedBy", fields: [addedById], references: [id])
+  shares ExpenseShare[]
+  receipt Receipt?      @relation(fields: [receiptId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([groupId])
+  @@index([groupId, expenseDate(sort: Desc)])
+  @@index([paidById])
+  @@index([addedById])
+}
+
+model ExpenseShare {
+  id         String @id @default(cuid())
+  expenseId  String
+  userId     String
+  amount     Int    // this user's share in cents (always the final calculated amount)
+  shares     Int    @default(1)  // raw share units (for SHARES mode)
+  percentage Int?   // basis points, e.g., 5000 = 50.00% (for PERCENTAGE mode)
+
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([expenseId, userId])
+  @@index([userId])
+}
+
+enum SplitMode {
+  EQUAL
+  EXACT
+  PERCENTAGE
+  SHARES
+  ITEM
+}
+
+// ─── RECEIPTS & AI ─────────────────────────────────────────
+
+model Receipt {
+  id            String        @id @default(cuid())
+  imagePath     String
+  originalName  String
+  mimeType      String
+  fileSize      Int
+  status        ReceiptStatus @default(PENDING)
+  aiProvider    String?
+  rawResponse   Json?
+  extractedData Json?
+  groupId       String?
+  savedById     String?
+  paidById      String?
+  uploadedById  String?
+  isGuest       Boolean       @default(false)
+
+  items   ReceiptItem[]
+  expense Expense?
+  group   Group?  @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  uploadedBy    User?         @relation("UploadedReceipts", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([groupId])
+  @@index([uploadedById])
+}
+
+model ReceiptItem {
+  id         String @id @default(cuid())
+  receiptId  String
+  name       String
+  quantity   Int    @default(1)
+  unitPrice  Int    // cents
+  totalPrice Int    // cents
+  sortOrder  Int    @default(0)
+
+  assignments ReceiptItemAssignment[]
+  receipt     Receipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+
+  @@index([receiptId])
+}
+
+model ReceiptItemAssignment {
+  id            String @id @default(cuid())
+  receiptItemId String
+  userId        String
+  shareOfItem   Int    @default(1)
+
+  receiptItem ReceiptItem @relation(fields: [receiptItemId], references: [id], onDelete: Cascade)
+
+  @@unique([receiptItemId, userId])
+}
+
+enum ReceiptStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ─── SETTLEMENTS ───────────────────────────────────────────
+
+model Settlement {
+  id       String  @id @default(cuid())
+  groupId  String
+  fromId   String
+  toId     String
+  amount   Int     // cents (in settlement currency)
+  currency String  @default("USD")
+  exchangeRate        Float   @default(1.0) // rate: 1 unit of settlement currency = X units of group currency
+  baseCurrencyAmount  Int?    // amount converted to group currency (cents); null = same currency
+  note     String?
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  from  User  @relation("SettledBy", fields: [fromId], references: [id])
+  to    User  @relation("SettledFor", fields: [toId], references: [id])
+
+  settledAt DateTime @default(now())
+
+  @@index([groupId])
+  @@index([groupId, settledAt(sort: Desc)])
+  @@index([fromId])
+  @@index([toId])
+}
+
+// ─── ACTIVITY LOG ──────────────────────────────────────────
+
+model ActivityLog {
+  id       String       @id @default(cuid())
+  groupId  String
+  userId   String?
+  type     ActivityType
+  // Polymorphic reference: entityId may point to an Expense, Settlement, or other entity
+  // depending on the ActivityType. No Prisma relation is defined because a single FK
+  // cannot represent multiple target tables.
+  entityId String?
+  metadata Json?
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([groupId, createdAt])
+  @@index([userId])
+}
+
+enum ActivityType {
+  EXPENSE_CREATED
+  EXPENSE_UPDATED
+  EXPENSE_DELETED
+  SETTLEMENT_CREATED
+  SETTLEMENT_DELETED
+  MEMBER_JOINED
+  MEMBER_LEFT
+  GROUP_UPDATED
+  PLACEHOLDER_CREATED
+  PLACEHOLDER_MERGED
+  GROUP_ARCHIVED
+  GROUP_UNARCHIVED
+  OWNERSHIP_TRANSFERRED
+}
+
+// ─── ADMIN ─────────────────────────────────────────────────
+
+model AdminAuditLog {
+  id        String      @id @default(cuid())
+  adminId   String
+  action    AdminAction
+  targetId  String?     // user/group/invite ID affected
+  metadata  Json?       // additional context (e.g., old/new values)
+
+  admin User @relation("AdminAuditLogs", fields: [adminId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([adminId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+enum AdminAction {
+  USER_DELETED
+  USER_SUSPENDED
+  USER_UNSUSPENDED
+  GROUP_DELETED
+  ORPHANS_CLEANED
+  IMPERSONATION_STARTED
+  IMPERSONATION_ENDED
+  INVITE_CREATED
+  INVITE_REVOKED
+  ANNOUNCEMENT_SET
+  REGISTRATION_MODE_CHANGED
+  EXPORT_CREATED
+  TEST_EMAIL_SENT
+  EXPIRED_SPLITS_CLEANED
+  MERIDIAN_LOGIN_STARTED
+  MERIDIAN_LOGIN_COMPLETED
+  MERIDIAN_LOGIN_FAILED
+  MERIDIAN_LOGOUT
+  MERIDIAN_NOTIFY_PREFERENCE_CHANGED
+  AI_PROVIDER_TESTED
+  VENMO_SETTING_CHANGED
+  GUEST_UPLOADS_SETTING_CHANGED
+  UNUSED_RECEIPTS_CLEANED
+}
+
+model SystemSetting {
+  key   String @id
+  value String @db.Text
+
+  updatedAt DateTime @updatedAt
+}
+
+model SystemInvite {
+  id        String    @id @default(cuid())
+  code      String    @unique @default(cuid())
+  label     String?   // optional friendly name
+  usedById  String?
+  usedAt    DateTime?
+  expiresAt DateTime?
+  revokedAt DateTime?
+
+  usedBy User? @relation("SystemInviteUsedBy", fields: [usedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+}
+
+enum GuestSplitStatus {
+  CLAIMING
+  FINALIZED
+}
+
+// ─── GUEST SPLITS (no auth required) ──────────────────────
+
+model GuestSplit {
+  id          String   @id @default(cuid())
+  shareToken  String   @unique @default(cuid())
+  receiptId   String?
+  // Its creator could see the receipt when it was made (lockReceiptForSplit), so /api/uploads
+  // serves the receipt's image to anyone while it's open (#318). Splits made before that
+  // check existed stay false
+  receiptShared Boolean @default(false)
+  receiptData Json     // {merchantName, date, subtotal, tax, tip, total, currency}
+  items       Json     // [{name, quantity, unitPrice, totalPrice}]
+  people      Json     // [{id?, name, personToken?, groupSize?, join?, saves?}] (see src/server/lib/guest-people.ts)
+  assignments Json     // [{itemIndex, personIndices}]
+  summary     Json?    // [{name, itemTotal, tax, tip, total}]
+  paidByIndex      Int              @default(0)
+  payerVenmoHandle String?
+  status           GuestSplitStatus @default(FINALIZED)
+  userId           String?
+  createdBy   User?    @relation("GuestSplits", fields: [userId], references: [id], onDelete: SetNull)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@index([expiresAt])
+  // /api/uploads looks up a receipt's splits on every non-guest image load (#318), and the
+  // receipt cleanups check whether a split uses a receipt
+  @@index([receiptId])
+}

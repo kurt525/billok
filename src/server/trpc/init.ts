@@ -1,0 +1,142 @@
+import { initTRPC } from '@trpc/server';
+import superjson from 'superjson';
+import { z } from 'zod';
+import { cookies } from 'next/headers';
+import { auth } from '../auth';
+import { db } from '../db';
+import { logger } from '../lib/logger';
+import { verifyAndParse } from '../lib/signed-cookie';
+import { AppError, errorShape } from '../lib/app-error';
+import { LOCALE_HEADER, localeFromHeader } from '@/lib/locale-header';
+import { defaultLocale } from '@/i18n/routing';
+
+const IMPERSONATE_COOKIE = 'sharetab-impersonate';
+
+export const createTRPCContext = async (opts?: { req?: Request }) => {
+  const session = await auth();
+  const headers = opts?.req?.headers ?? new Headers();
+
+  // Check for impersonation cookie
+  interface ImpersonationData {
+    adminId: string;
+    adminEmail: string;
+    targetId: string;
+    targetName: string | null;
+    targetEmail: string;
+    startedAt?: string;
+  }
+  let impersonating: ImpersonationData | null = null;
+
+  try {
+    const cookieStore = await cookies();
+    const impCookie = cookieStore.get(IMPERSONATE_COOKIE);
+    if (impCookie?.value && session?.user) {
+      const data = verifyAndParse<ImpersonationData>(impCookie.value);
+      // Enforce expiry server-side: a replayed cookie value must not outlive
+      // the 1h browser maxAge. Cookies without startedAt are rejected.
+      const startedAtMs = data?.startedAt ? Date.parse(data.startedAt) : NaN;
+      const expired = !Number.isFinite(startedAtMs) || Date.now() - startedAtMs > 60 * 60 * 1000;
+      if (data && !expired && data.adminId === session.user.id) {
+        impersonating = data;
+        // Swap session user to the impersonated user
+        if (session.user) {
+          session.user.id = data.targetId;
+          session.user.name = data.targetName;
+          session.user.email = data.targetEmail;
+        }
+      }
+    }
+  } catch {
+    // Ignore malformed cookie
+  }
+
+  return { session, db, headers, impersonating, locale: localeFromHeader(headers.get(LOCALE_HEADER)) };
+};
+
+export type TRPCContext = Awaited<ReturnType<typeof createTRPCContext>>;
+
+const t = initTRPC.context<TRPCContext>().create({
+  transformer: superjson,
+  // Errors reach the person in the language of the page that called (#266)
+  errorFormatter: ({ shape, error, ctx }) => errorShape(shape, error, ctx?.locale ?? defaultLocale),
+});
+
+// Procedures that poll frequently and would spam the log buffer
+const QUIET_PATHS = new Set(['admin.getLogs', 'admin.getImpersonationStatus']);
+
+const loggingMiddleware = t.middleware(async ({ path, type, next, ctx }) => {
+  const start = Date.now();
+  const userId = ctx.session?.user?.id;
+  // Attribute impersonated requests to the real admin, not just the target
+  const impersonatedBy = ctx.impersonating?.adminId;
+
+  const result = await next();
+
+  if (QUIET_PATHS.has(path)) return result;
+
+  const durationMs = Date.now() - start;
+  const ok = result.ok;
+
+  if (ok) {
+    logger.info('trpc.ok', { path, type, userId, durationMs, ...(impersonatedBy ? { impersonatedBy } : {}) });
+  } else {
+    logger.warn('trpc.error', {
+      path,
+      type,
+      userId,
+      durationMs,
+      code: result.error.code,
+      ...(impersonatedBy ? { impersonatedBy } : {}),
+    });
+  }
+
+  return result;
+});
+
+export const createTRPCRouter = t.router;
+export const publicProcedure = t.procedure.use(loggingMiddleware);
+
+export const protectedProcedure = t.procedure.use(loggingMiddleware).use(async ({ ctx, next }) => {
+  if (!ctx.session?.user?.id) {
+    throw new AppError('UNAUTHORIZED');
+  }
+
+  const user = await ctx.db.user.findUnique({
+    where: { id: ctx.session.user.id },
+    select: { suspendedAt: true },
+  });
+
+  if (!user) {
+    throw new AppError('UNAUTHORIZED');
+  }
+
+  if (user.suspendedAt) {
+    throw new AppError('FORBIDDEN', 'accountSuspended');
+  }
+
+  return next({
+    ctx: {
+      ...ctx,
+      user: ctx.session.user,
+    },
+  });
+});
+
+export const groupMemberProcedure = protectedProcedure
+  .input(z.object({ groupId: z.string() }))
+  .use(async ({ ctx, input, next }) => {
+    const membership = await ctx.db.groupMember.findUnique({
+      where: {
+        userId_groupId: {
+          userId: ctx.user.id,
+          groupId: input.groupId,
+        },
+      },
+    });
+    // A placeholder removed from the group keeps their row (#284). Only an admin
+    // impersonating one could get here with it.
+    if (!membership || membership.removedAt) {
+      throw new AppError('FORBIDDEN', 'notGroupMember');
+    }
+    return next({ ctx: { ...ctx, membership } });
+  });

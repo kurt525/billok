@@ -1,0 +1,296 @@
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Prisma } from '@/generated/prisma/client';
+
+vi.mock('next/headers', () => ({
+  cookies: vi.fn().mockResolvedValue({ get: vi.fn().mockReturnValue(null) }),
+}));
+vi.mock('@/server/auth', () => ({ auth: vi.fn() }));
+vi.mock('bcryptjs', () => ({
+  default: { hash: vi.fn().mockResolvedValue('hashed'), compare: vi.fn() },
+}));
+
+const mockDb = {
+  systemSetting: { findUnique: vi.fn() },
+  systemInvite: { findUnique: vi.fn() },
+  user: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+  $transaction: vi.fn(),
+  $queryRaw: vi.fn(),
+};
+vi.mock('@/server/db', () => ({ db: mockDb }));
+vi.mock('@/server/lib/logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
+const OIDC_ENV = {
+  OIDC_ISSUER: 'https://auth.example.com/application/o/sharetab/',
+  OIDC_CLIENT_ID: 'sharetab',
+  OIDC_CLIENT_SECRET: 's3cret',
+  OIDC_DISPLAY_NAME: 'Authentik',
+};
+
+async function caller(session: { user: { id: string } } | null = null) {
+  const { authRouter } = await import('./auth');
+  const ctx = { session, db: mockDb, headers: new Headers(), impersonating: null };
+  return authRouter.createCaller(ctx as unknown as Parameters<typeof authRouter.createCaller>[0]);
+}
+
+function stubEnv(env: Record<string, string>) {
+  for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  // Start from a clean auth env regardless of the developer's .env
+  for (const key of [
+    ...Object.keys(OIDC_ENV),
+    'DISABLE_PASSWORD_LOGIN',
+    'EMAIL_SERVER_HOST',
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_CLIENT_SECRET',
+  ]) {
+    vi.stubEnv(key, '');
+  }
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe('auth.getLoginOptions', () => {
+  test('defaults to password login only', async () => {
+    const api = await caller();
+    expect(await api.getLoginOptions()).toEqual({ passwordLogin: true, magicLink: false, oidc: null, google: false });
+  });
+
+  test('exposes the OIDC button name but never the issuer or secret', async () => {
+    stubEnv({ ...OIDC_ENV, EMAIL_SERVER_HOST: 'smtp.example.com', DISABLE_PASSWORD_LOGIN: 'true' });
+    const api = await caller();
+    const options = await api.getLoginOptions();
+    expect(options).toEqual({ passwordLogin: false, magicLink: true, oidc: { name: 'Authentik' }, google: false });
+    expect(JSON.stringify(options)).not.toContain('s3cret');
+    expect(JSON.stringify(options)).not.toContain('auth.example.com');
+  });
+
+  test('reports Google when configured, without its client id or secret', async () => {
+    stubEnv({ GOOGLE_CLIENT_ID: 'id.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'g-secret' });
+    const api = await caller();
+    const options = await api.getLoginOptions();
+    expect(options).toEqual({ passwordLogin: true, magicLink: false, oidc: null, google: true });
+    expect(JSON.stringify(options)).not.toContain('g-secret');
+    expect(JSON.stringify(options)).not.toContain('googleusercontent');
+  });
+
+  test('a partial Google config shows no Google button', async () => {
+    stubEnv({ GOOGLE_CLIENT_ID: 'id.apps.googleusercontent.com' });
+    const api = await caller();
+    expect((await api.getLoginOptions()).google).toBe(false);
+  });
+});
+
+describe('password login disabled', () => {
+  beforeEach(() => {
+    stubEnv({ ...OIDC_ENV, DISABLE_PASSWORD_LOGIN: 'true' });
+  });
+
+  test('register is refused before touching the database', async () => {
+    const api = await caller();
+    await expect(
+      api.register({ name: 'Alice', email: 'alice@example.com', password: 'password123' }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Registration is currently closed.' });
+    expect(mockDb.systemSetting.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.user.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('getRegistrationMode reports closed regardless of the admin setting', async () => {
+    mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'open' });
+    const api = await caller();
+    expect(await api.getRegistrationMode()).toEqual({ mode: 'closed' });
+  });
+});
+
+describe('auth.register duplicate check', () => {
+  test('refuses an email that differs from an existing one only by case', async () => {
+    mockDb.systemSetting.findUnique.mockResolvedValue(null);
+    mockDb.$queryRaw.mockResolvedValue([{ id: 'bob' }]);
+    mockDb.user.findMany.mockResolvedValue([{ id: 'bob', email: 'Bob@example.com' }]);
+    const api = await caller();
+    await expect(
+      api.register({ name: 'Mallory', email: 'bob@example.com', password: 'password123' }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  // Two sign-ups for case variants of one address can both pass the check
+  // above; the database's unique index on lower(email) stops the second.
+  function signUpRace(createError: unknown) {
+    mockDb.systemSetting.findUnique.mockResolvedValue(null);
+    mockDb.$queryRaw.mockResolvedValue([]);
+    const tx = { user: { create: vi.fn().mockRejectedValue(createError) } };
+    mockDb.$transaction.mockImplementation(async (fn: (client: typeof tx) => unknown) => fn(tx));
+  }
+
+  test('a sign-up that loses the race to a case variant gets the same conflict error', async () => {
+    signUpRace(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the constraint: `User_email_lower_key`', {
+        code: 'P2002',
+        clientVersion: 'test',
+      }),
+    );
+    const api = await caller();
+    await expect(
+      api.register({ name: 'Mallory', email: 'bob@example.com', password: 'password123' }),
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'Unable to create account. Please try a different email or sign in.',
+    });
+  });
+
+  test('other database errors from creating the user are not reported as a duplicate', async () => {
+    signUpRace(
+      new Prisma.PrismaClientKnownRequestError('Foreign key constraint violated', {
+        code: 'P2003',
+        clientVersion: 'test',
+      }),
+    );
+    const api = await caller();
+    await expect(
+      api.register({ name: 'Mallory', email: 'bob@example.com', password: 'password123' }),
+    ).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+  });
+
+  test('an invite that is claimed concurrently is still reported as an invite error', async () => {
+    mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'invite-only' });
+    mockDb.systemInvite.findUnique.mockResolvedValue({ code: 'inv', revokedAt: null, usedAt: null, expiresAt: null });
+    mockDb.$queryRaw.mockResolvedValue([]);
+    const tx = {
+      user: { create: vi.fn().mockResolvedValue({ id: 'new', name: 'Mallory', email: 'bob@example.com' }) },
+      systemInvite: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
+    };
+    mockDb.$transaction.mockImplementation(async (fn: (client: typeof tx) => unknown) => fn(tx));
+    const api = await caller();
+    await expect(
+      api.register({ name: 'Mallory', email: 'bob@example.com', password: 'password123', inviteCode: 'inv' }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Invalid or expired invite code.' });
+  });
+});
+
+describe('names are trimmed', () => {
+  test('register refuses a name that is only whitespace', async () => {
+    mockDb.systemSetting.findUnique.mockResolvedValue(null);
+    mockDb.$queryRaw.mockResolvedValue([]);
+    const api = await caller();
+    await expect(api.register({ name: '   ', email: 'ws@example.com', password: 'password123' })).rejects.toMatchObject(
+      {
+        code: 'BAD_REQUEST',
+      },
+    );
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('register stores the name without surrounding whitespace', async () => {
+    mockDb.systemSetting.findUnique.mockResolvedValue(null);
+    mockDb.$queryRaw.mockResolvedValue([]);
+    const tx = { user: { create: vi.fn().mockResolvedValue({ id: 'new', name: 'Ada', email: 'ada@example.com' }) } };
+    mockDb.$transaction.mockImplementation(async (fn: (client: typeof tx) => unknown) => fn(tx));
+    const api = await caller();
+    await api.register({ name: '  Ada  ', email: 'ada@example.com', password: 'password123' });
+    expect(tx.user.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ name: 'Ada' }) }),
+    );
+  });
+
+  test('updateProfile refuses a name that is only whitespace', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    const api = await caller({ user: { id: 'u1' } });
+    await expect(api.updateProfile({ name: '   ' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.user.update).not.toHaveBeenCalled();
+  });
+
+  test('updateProfile stores the name without surrounding whitespace', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.update.mockResolvedValue({ id: 'u1', name: 'Ada', email: 'ada@example.com' });
+    const api = await caller({ user: { id: 'u1' } });
+    await api.updateProfile({ name: '  Ada  ' });
+    expect(mockDb.user.update).toHaveBeenCalledWith(expect.objectContaining({ data: { name: 'Ada' } }));
+  });
+});
+
+describe('password login enabled', () => {
+  test('getRegistrationMode returns the admin setting', async () => {
+    mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'invite-only' });
+    const api = await caller();
+    expect(await api.getRegistrationMode()).toEqual({ mode: 'invite-only' });
+  });
+
+  test('getRegistrationMode reads an unrecognised setting as open, as register does', async () => {
+    mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'something-else' });
+    const api = await caller();
+    expect(await api.getRegistrationMode()).toEqual({ mode: 'open' });
+  });
+
+  test('register is refused while the setting is closed', async () => {
+    stubEnv({ REGISTER_RATE_LIMIT_MAX: '9999' });
+    mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'closed' });
+    const api = await caller();
+    await expect(
+      api.register({ name: 'Ada', email: 'ada@example.com', password: 'password123' }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('register goes ahead with an unrecognised setting, read as open', async () => {
+    stubEnv({ REGISTER_RATE_LIMIT_MAX: '9999' });
+    mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'something-else' });
+    mockDb.$queryRaw.mockResolvedValue([]);
+    const tx = { user: { create: vi.fn().mockResolvedValue({ id: 'new', name: 'Ada', email: 'ada@example.com' }) } };
+    mockDb.$transaction.mockImplementation(async (fn: (client: typeof tx) => unknown) => fn(tx));
+    const api = await caller();
+    await api.register({ name: 'Ada', email: 'ada@example.com', password: 'password123' });
+    expect(tx.user.create).toHaveBeenCalled();
+  });
+});
+
+describe('auth.getProfile', () => {
+  test('reports whether the user has a password without returning the hash', async () => {
+    mockDb.user.findUnique.mockResolvedValue({
+      name: 'Alice',
+      email: 'alice@example.com',
+      venmoUsername: null,
+      locale: 'en',
+      defaultCurrency: 'USD',
+      passwordHash: 'hashed',
+    });
+    const api = await caller({ user: { id: 'user-1' } });
+    const profile = await api.getProfile();
+    expect(profile.hasPassword).toBe(true);
+    expect(profile).not.toHaveProperty('passwordHash');
+  });
+
+  test("returns the caller's id, so the client can tell who tRPC acts as while impersonating", async () => {
+    mockDb.user.findUnique.mockResolvedValue({
+      id: 'user-1',
+      name: 'Alice',
+      email: 'alice@example.com',
+      passwordHash: null,
+    });
+    const api = await caller({ user: { id: 'user-1' } });
+    await api.getProfile();
+    expect(mockDb.user.findUnique).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: { id: 'user-1' }, select: expect.objectContaining({ id: true }) }),
+    );
+  });
+
+  test('hasPassword is false for OIDC-only users', async () => {
+    mockDb.user.findUnique.mockResolvedValue({
+      name: 'Alice',
+      email: 'alice@example.com',
+      venmoUsername: null,
+      locale: 'en',
+      defaultCurrency: 'USD',
+      passwordHash: null,
+    });
+    const api = await caller({ user: { id: 'user-1' } });
+    expect((await api.getProfile()).hasPassword).toBe(false);
+  });
+});

@@ -1,0 +1,240 @@
+name: BillOK CI
+
+on:
+  push:
+    branches: [main, 'billok/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: billok-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Trusted branches only: never run public pull_request code on the self-hosted VPS.
+jobs:
+  code-quality:
+    name: Code quality and types
+    runs-on: [self-hosted, Linux, X64, billok]
+    timeout-minutes: 35
+    steps:
+      - name: Checkout BillOK
+        uses: actions/checkout@v4
+      - name: Use preinstalled Node.js 22.23.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_bin="${RUNNER_TOOL_CACHE}/node/22.23.4/x64/bin"
+          test -x "$node_bin/node"
+          echo "$node_bin" >> "$GITHUB_PATH"
+          "$node_bin/node" --version
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Verify translation keys
+        run: npm run lint:i18n
+      - name: Check formatting
+        run: npm run format:check
+      - name: Lint
+        run: npm run lint
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+  unit-tests:
+    name: Unit tests (Vitest)
+    runs-on: [self-hosted, Linux, X64, billok]
+    timeout-minutes: 35
+    steps:
+      - name: Checkout BillOK
+        uses: actions/checkout@v4
+      - name: Use preinstalled Node.js 22.23.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_bin="${RUNNER_TOOL_CACHE}/node/22.23.4/x64/bin"
+          test -x "$node_bin/node"
+          echo "$node_bin" >> "$GITHUB_PATH"
+          "$node_bin/node" --version
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Unit tests
+        run: npm test
+
+  mobile-pwa-tests:
+    name: BillOK mobile PWA tests
+    runs-on: [self-hosted, Linux, X64, billok]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout BillOK
+        uses: actions/checkout@v4
+      - name: Test mobile PWA contract
+        run: python3 scripts/test_billok_pwa.py
+
+  mobile-browser-smoke:
+    name: Mobile Chromium (320–412 px)
+    runs-on: [self-hosted, Linux, X64, billok]
+    timeout-minutes: 35
+    steps:
+      - name: Checkout trusted BillOK branch
+        uses: actions/checkout@v4
+      - name: Use preinstalled Node.js 22.23.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_bin="${RUNNER_TOOL_CACHE}/node/22.23.4/x64/bin"
+          test -x "$node_bin/node"
+          echo "$node_bin" >> "$GITHUB_PATH"
+      - name: Install application dependencies
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Start isolated temporary PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          qa_db="billok-mobile-qa-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "BILLOK_QA_DB_CONTAINER=$qa_db" >> "$GITHUB_ENV"
+          docker run -d --rm --name "$qa_db" \
+            -e POSTGRES_USER=billokqa -e POSTGRES_PASSWORD=billokqa_local_only \
+            -e POSTGRES_DB=billokqa -p 127.0.0.1::5432 \
+            postgres:16-alpine
+          db_port="$(docker port "$qa_db" 5432/tcp | sed -n 's/.*://p')"
+          test -n "$db_port"
+          echo "DATABASE_URL=postgresql://billokqa:billokqa_local_only@127.0.0.1:$db_port/billokqa" >> "$GITHUB_ENV"
+      - name: Prepare isolated test schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 45); do
+            if docker exec "$BILLOK_QA_DB_CONTAINER" pg_isready -U billokqa -d billokqa >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          npx prisma db push
+          # Create only disposable fixtures for authenticated mobile flows.
+          npm run db:seed
+          BILLOK_QA_FIXTURES=1 npx tsx e2e/seed-mobile-receipt.ts > "$RUNNER_TEMP/billok-mobile-receipt.env"
+          cat "$RUNNER_TEMP/billok-mobile-receipt.env" >> "$GITHUB_ENV"
+      - name: Start local BillOK for real browser checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          qa_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+          echo "BILLOK_QA_PORT=$qa_port" >> "$GITHUB_ENV"
+          export NEXTAUTH_URL="http://127.0.0.1:$qa_port"
+          export AUTH_URL="$NEXTAUTH_URL"
+          export AUTH_SECRET="$(openssl rand -hex 32)"
+          export UPLOAD_DIR="$RUNNER_TEMP/billok-mobile-upload-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          echo "UPLOAD_DIR=$UPLOAD_DIR" >> "$GITHUB_ENV"
+          export ADMIN_EMAIL="alice@example.com"
+          echo "ADMIN_EMAIL=$ADMIN_EMAIL" >> "$GITHUB_ENV"
+          echo "NEXTAUTH_URL=$NEXTAUTH_URL" >> "$GITHUB_ENV"
+          echo "AUTH_URL=$AUTH_URL" >> "$GITHUB_ENV"
+          echo "AUTH_SECRET=$AUTH_SECRET" >> "$GITHUB_ENV"
+          # setsid gives the development server a separate process group for cleanup.
+          setsid npm run dev -- -H 127.0.0.1 -p "$qa_port" \
+            > "$RUNNER_TEMP/billok-mobile-next.log" 2>&1 < /dev/null &
+          qa_pid=$!
+          echo "BILLOK_QA_PID=$qa_pid" >> "$GITHUB_ENV"
+          status=""
+          for attempt in $(seq 1 90); do
+            status="$(curl --silent --output /dev/null --max-time 5 --write-out '%{http_code}' "http://127.0.0.1:$qa_port/login" || true)"
+            if [[ "$status" == "200" ]]; then break; fi
+            sleep 1
+          done
+          if [[ "$status" != "200" ]]; then
+            cat "$RUNNER_TEMP/billok-mobile-next.log"
+            exit 1
+          fi
+      - name: Chromium smoke on 320, 360, 393 and 412 px
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Trusted-branch-only runner; Playwright container has its own browser libraries.
+          docker run --rm --network host --ipc=host \
+            -e "BASE_URL=http://127.0.0.1:$BILLOK_QA_PORT" -e CI=1 \
+            -e "BILLOK_MOBILE_RECEIPT_ID=$BILLOK_MOBILE_RECEIPT_ID" \
+            -e "BILLOK_MOBILE_GROUP_ID=$BILLOK_MOBILE_GROUP_ID" \
+            -v "$GITHUB_WORKSPACE:/work:ro" -w /work \
+            mcr.microsoft.com/playwright:v1.64.1-noble \
+            node /work/node_modules/@playwright/test/cli.js test \
+              e2e/billok-mobile-public.spec.ts \
+              e2e/billok-mobile-authenticated.spec.ts \
+              e2e/billok-mobile-receipt-actions.spec.ts \
+              e2e/billok-mobile-guest-split.spec.ts \
+              --project=parallel --no-deps --workers=2 --retries=0 \
+              --reporter=line --output=/tmp/billok-mobile-playwright-results
+      - name: Clean up isolated browser test resources
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${BILLOK_QA_PID:-}" ]]; then
+            kill -- "-$BILLOK_QA_PID" 2>/dev/null || true
+          fi
+          if [[ -n "${BILLOK_QA_DB_CONTAINER:-}" ]]; then
+            docker rm -f "$BILLOK_QA_DB_CONTAINER" >/dev/null 2>&1 || true
+          fi
+          if [[ -n "${UPLOAD_DIR:-}" && "$UPLOAD_DIR" == "$RUNNER_TEMP"/billok-mobile-upload-* ]]; then
+            rm -rf -- "$UPLOAD_DIR"
+          fi
+
+  coverage-regression:
+    name: Coverage regression (%)
+    runs-on: [self-hosted, Linux, X64, billok]
+    timeout-minutes: 35
+    steps:
+      - name: Checkout BillOK (including main for baseline)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Use preinstalled Node.js 22.23.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_bin="${RUNNER_TOOL_CACHE}/node/22.23.4/x64/bin"
+          test -x "$node_bin/node"
+          echo "$node_bin" >> "$GITHUB_PATH"
+          "$node_bin/node" --version
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Test coverage comparison logic
+        run: node --test scripts/check-coverage-regression.test.mjs
+      - name: Measure current branch coverage
+        run: npm run test:coverage -- --coverage.reportsDirectory="$RUNNER_TEMP/billok-current-coverage"
+      - name: Measure main baseline coverage
+        if: github.ref != 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline_dir="$(mktemp -d "$RUNNER_TEMP/billok-main-XXXXXX")"
+          trap 'rm -rf "$baseline_dir"' EXIT
+          git fetch origin 'refs/heads/main:refs/remotes/origin/main' --no-tags
+          git archive origin/main | tar -x -C "$baseline_dir"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$baseline_dir/node_modules"
+          # Same coverage scope/config for both branches, even if main has older config.
+          cp "$GITHUB_WORKSPACE/vitest.config.ts" "$baseline_dir/vitest.config.ts"
+          echo "COVERAGE_BASE_SHA=$(git rev-parse origin/main)" >> "$GITHUB_ENV"
+          ( cd "$baseline_dir" && "$GITHUB_WORKSPACE/node_modules/.bin/prisma" generate )
+          (
+            cd "$baseline_dir"
+            "$GITHUB_WORKSPACE/node_modules/.bin/vitest" run --coverage \
+              --coverage.reportsDirectory="$RUNNER_TEMP/billok-main-coverage"
+          )
+      - name: Check regression percentage and publish report
+        shell: bash
+        env:
+          MAX_COVERAGE_DROP_PP: '0.5'
+        run: |
+          set -euo pipefail
+          current="$RUNNER_TEMP/billok-current-coverage/coverage-summary.json"
+          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            node scripts/check-coverage-regression.mjs "$current"
+          else
+            node scripts/check-coverage-regression.mjs "$current" \
+              "$RUNNER_TEMP/billok-main-coverage/coverage-summary.json"
+          fi

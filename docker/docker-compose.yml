@@ -1,0 +1,74 @@
+services:
+  sharetab:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        COMMIT_SHA: ${COMMIT_SHA:-unknown}
+    image: sharetab:latest
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - DB_USER=${DB_USER:-sharetab}
+      - DB_PASSWORD=${DB_PASSWORD:-sharetab}
+      - DB_NAME=${DB_NAME:-sharetab}
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-}
+      - AUTH_SECRET=${AUTH_SECRET:-}
+      - AUTH_TRUST_HOST=${AUTH_TRUST_HOST:-false}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - OIDC_ISSUER=${OIDC_ISSUER:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_DISPLAY_NAME=${OIDC_DISPLAY_NAME:-SSO}
+      - OIDC_AUTO_REGISTER=${OIDC_AUTO_REGISTER:-true}
+      - OIDC_ALLOW_EMAIL_LINKING=${OIDC_ALLOW_EMAIL_LINKING:-false}
+      - OIDC_TOKEN_AUTH_METHOD=${OIDC_TOKEN_AUTH_METHOD:-client_secret_basic}
+      - DISABLE_PASSWORD_LOGIN=${DISABLE_PASSWORD_LOGIN:-false}
+      - AI_PROVIDER_PRIORITY=${AI_PROVIDER_PRIORITY:-openai}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - OPENAI_CODEX_MODEL=${OPENAI_CODEX_MODEL:-gpt-5.5}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-5}
+      - ANTHROPIC_HEALTH_MODEL=${ANTHROPIC_HEALTH_MODEL:-claude-haiku-4-5-20251001}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llava}
+      - EMAIL_SERVER_HOST=${EMAIL_SERVER_HOST:-}
+      - EMAIL_SERVER_PORT=${EMAIL_SERVER_PORT:-587}
+      - EMAIL_SERVER_USER=${EMAIL_SERVER_USER:-}
+      - EMAIL_SERVER_PASSWORD=${EMAIL_SERVER_PASSWORD:-}
+      - EMAIL_FROM=${EMAIL_FROM:-}
+      - MERIDIAN_PORT=${MERIDIAN_PORT:-3457}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
+      - UPLOAD_DIR=/app/uploads
+      - MAX_UPLOAD_SIZE_MB=${MAX_UPLOAD_SIZE_MB:-10}
+      - AUTH_RATE_LIMIT_MAX=${AUTH_RATE_LIMIT_MAX:-5}
+      - AUTH_IP_RATE_LIMIT_MAX=${AUTH_IP_RATE_LIMIT_MAX:-30}
+      - REGISTER_RATE_LIMIT_MAX=${REGISTER_RATE_LIMIT_MAX:-10}
+      - GUEST_RATE_LIMIT_MAX=${GUEST_RATE_LIMIT_MAX:-10}
+      - GUEST_UPLOAD_GLOBAL_LIMIT=${GUEST_UPLOAD_GLOBAL_LIMIT:-100}
+      - GUEST_AI_GLOBAL_LIMIT=${GUEST_AI_GLOBAL_LIMIT:-100}
+      - DISABLE_GUEST_UPLOADS=${DISABLE_GUEST_UPLOADS:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - uploads:/app/uploads
+      - claude:/app/claude
+      - chatgpt:/app/chatgpt
+    restart: unless-stopped
+    # Give the entrypoint time to stop Node and shut PostgreSQL down cleanly
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  pgdata:
+  uploads:
+  claude:
+  chatgpt:
