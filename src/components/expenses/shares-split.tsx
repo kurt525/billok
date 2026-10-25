@@ -74,10 +74,11 @@ export function SharesSplit({
             <span className="min-w-0 flex-1 break-words text-sm">{m.name ?? 'Без имени'}</span>
             <Input
               type="number"
+              inputMode="numeric"
               step="1"
               min="0"
               placeholder="1"
-              className="w-20"
+              className="h-11 w-20 min-w-0 text-base"
               value={shareUnits[m.id] ?? ''}
               onChange={(e) => setUnits(m.id, e.target.value)}
             />

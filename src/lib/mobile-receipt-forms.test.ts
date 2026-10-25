@@ -31,3 +31,29 @@ describe('Mobile receipt item forms, guest and group', () => {
     });
   }
 });
+
+describe('Phone input and minimum touch targets for all group expense modes', () => {
+  it('percentage and share fields use Russian-friendly keyboards and touch-size inputs', () => {
+    const pct = read('src/components/expenses/percentage-split.tsx');
+    expect(pct).toContain('parseRussianPercentage');
+    expect(pct).toContain('inputMode="decimal"');
+    expect(pct).toContain('h-11 w-24');
+    expect(pct).not.toContain('parseFloat(percentages[');
+
+    const shares = read('src/components/expenses/shares-split.tsx');
+    expect(shares).toContain('inputMode="numeric"');
+    expect(shares).toContain('h-11 w-20');
+  });
+
+  it('currency and payer selectors are at least 44px tall on create and edit forms', () => {
+    for (const file of [
+      'src/app/[locale]/(app)/groups/[groupId]/expenses/new/page.tsx',
+      'src/app/[locale]/(app)/groups/[groupId]/expenses/[expenseId]/edit/page.tsx',
+    ]) {
+      const ui = read(file);
+      expect(ui).not.toContain('flex h-9 w-full rounded-md border');
+      expect(ui).toContain('flex h-11 min-w-0 w-full rounded-md border');
+      expect(ui).toContain('inputMode="decimal"');
+    }
+  });
+});

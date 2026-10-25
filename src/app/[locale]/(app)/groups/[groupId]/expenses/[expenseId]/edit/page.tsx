@@ -311,7 +311,7 @@ function EditExpenseForm({
                     setManualRate('');
                     setUseManualRate(false);
                   }}
-                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="flex h-11 min-w-0 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   {COMMON_CURRENCIES.map((c) => (
                     <option key={c.code} value={c.code}>
@@ -345,6 +345,7 @@ function EditExpenseForm({
                   <div className="mt-2">
                     <Input
                       type="number"
+                      inputMode="decimal"
                       step="any"
                       min="0.000001"
                       placeholder={t('new.exchangeRatePlaceholder', {
@@ -386,7 +387,7 @@ function EditExpenseForm({
                 value={paidById}
                 onChange={(e) => setPaidById(e.target.value)}
                 required
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex h-11 min-w-0 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <option value="">{t('new.selectMember')}</option>
                 {payers.map((m) => (

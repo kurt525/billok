@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { formatCents } from '@/lib/money';
+import { parseRussianPercentage } from '@/lib/russian-percentage';
 import { Input } from '@/components/ui/input';
 
 type Member = { id: string; name: string | null };
@@ -52,9 +53,14 @@ export function PercentageSplit({
     const entries = members
       .map((m) => ({
         userId: m.id,
-        pct: parseFloat(percentages[m.id] ?? '0') || 0,
+        pct: parseRussianPercentage(percentages[m.id] ?? '0') ?? 0,
       }))
       .filter((e) => e.pct > 0);
+
+    if (members.some((m) => parseRussianPercentage(percentages[m.id] ?? '0') === null)) {
+      onChange([]);
+      return;
+    }
 
     // Only emit shares when percentages sum to ~100%. Otherwise the
     // last-person remainder would silently absorb the entire shortfall
@@ -97,26 +103,25 @@ export function PercentageSplit({
     setPercentages((prev) => ({ ...prev, [id]: value }));
   }
 
-  const totalPct = members.reduce((sum, m) => sum + (parseFloat(percentages[m.id] ?? '0') || 0), 0);
+  const totalPct = members.reduce((sum, m) => sum + (parseRussianPercentage(percentages[m.id] ?? '0') ?? 0), 0);
   // Mirror the emit logic: only non-zero entries carry rounding drift.
-  const participatingCount = members.filter((m) => (parseFloat(percentages[m.id] ?? '0') || 0) > 0).length;
+  const participatingCount = members.filter((m) => (parseRussianPercentage(percentages[m.id] ?? '0') ?? 0) > 0).length;
 
   return (
     <div className="space-y-2">
       {members.map((m) => {
-        const pct = parseFloat(percentages[m.id] ?? '0') || 0;
+        const pct = parseRussianPercentage(percentages[m.id] ?? '0') ?? 0;
         const share = Math.round((totalCents * pct) / 100);
         return (
           <div key={m.id} className="flex items-center gap-3 rounded-md border p-3">
             <span className="min-w-0 flex-1 break-words text-sm">{m.name ?? 'Без имени'}</span>
             <div className="flex items-center gap-1">
               <Input
-                type="number"
-                step="0.01"
-                min="0"
-                max="100"
-                placeholder="0"
-                className="w-20"
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder="0,00"
+                className="h-11 w-24 min-w-0 text-base"
                 value={percentages[m.id] ?? ''}
                 onChange={(e) => setPct(m.id, e.target.value)}
               />
