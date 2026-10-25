@@ -23,11 +23,10 @@ describe('BillOK Russian-only user-facing fallbacks', () => {
   });
 
   it('localizes administrator login errors and uses unprefixed redirects', () => {
-    for (const section of ['meridian-auth-section', 'openai-codex-auth-section']) {
-      const code = source(`src/components/admin/${section}.tsx`);
-      expect(code).not.toContain("'Login failed'");
-      expect(code).toContain("'Не удалось войти'");
-    }
+    const admin = source('src/app/[locale]/(app)/admin/page.tsx');
+    expect(admin).not.toContain('MeridianAuthSection');
+    expect(admin).not.toContain('OpenAICodexAuthSection');
+    expect(admin).not.toContain('AIProviderTestSection');
     const users = source('src/components/admin/user-management-section.tsx');
     expect(users).not.toContain('Impersonation failed');
     expect(users).toContain("window.location.assign(new URL('/dashboard', window.location.origin).href)");

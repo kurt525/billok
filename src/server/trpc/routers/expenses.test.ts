@@ -29,8 +29,6 @@ async function caller() {
 const scannedReceipt = {
   id: 'r1',
   imagePath: '/app/uploads/u1/receipt.jpg',
-  aiProvider: 'openai-codex',
-  rawResponse: { error: 'upstream provider error text' },
 };
 
 beforeEach(() => {
@@ -49,7 +47,7 @@ beforeEach(() => {
 });
 
 describe('expenses.get (#280)', () => {
-  test("doesn't return the receipt row (its provider, raw response and image path)", async () => {
+  test("doesn't return private receipt metadata or image path", async () => {
     const api = await caller();
     const expense = await api.get({ groupId: 'g1', expenseId: 'e1' });
     expect(expense).not.toHaveProperty('receipt');

@@ -207,7 +207,7 @@ enum SplitMode {
   ITEM
 }
 
-// ─── RECEIPTS & AI ─────────────────────────────────────────
+// ─── MANUAL RECEIPTS ─────────────────────────────────────────
 
 model Receipt {
   id            String        @id @default(cuid())
@@ -216,8 +216,6 @@ model Receipt {
   mimeType      String
   fileSize      Int
   status        ReceiptStatus @default(PENDING)
-  aiProvider    String?
-  rawResponse   Json?
   extractedData Json?
   groupId       String?
   savedById     String?

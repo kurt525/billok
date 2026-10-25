@@ -60,13 +60,11 @@ export async function GET() {
           mimeType: true,
           fileSize: true,
           status: true,
-          aiProvider: true,
           extractedData: true,
           groupId: true,
           savedById: true,
           createdAt: true,
           updatedAt: true,
-          // Exclude rawResponse (can be very large)
         },
       }),
       db.receiptItem.findMany(),

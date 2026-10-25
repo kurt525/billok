@@ -20,11 +20,7 @@ describe('BillOK brand foundation', () => {
 
   test('mail sender defaults and templates are branded BillOK', () => {
     expect(source('.env.example')).toContain('BillOK <noreply@billok.ru>');
-    for (const file of [
-      'src/server/auth.ts',
-      'src/server/trpc/routers/admin.ts',
-      'src/server/lib/auth-health-poller.ts',
-    ]) {
+    for (const file of ['src/server/auth.ts', 'src/server/trpc/routers/admin.ts']) {
       expect(source(file)).toContain('BillOK <noreply@billok.ru>');
       expect(source(file)).not.toContain('ShareTab <noreply@sharetab.local>');
       expect(source(file)).not.toContain('ShareTab Test Email');

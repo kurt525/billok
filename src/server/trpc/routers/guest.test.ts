@@ -36,12 +36,10 @@ vi.mock('@/server/lib/receipt-cleanup', async (importOriginal) => ({
   deleteExpiredSplits,
 }));
 
-const { processReceiptImage, checkRateLimit, peekRateLimit } = vi.hoisted(() => ({
-  processReceiptImage: vi.fn(),
+const { checkRateLimit, peekRateLimit } = vi.hoisted(() => ({
   checkRateLimit: vi.fn(),
   peekRateLimit: vi.fn(),
 }));
-vi.mock('@/server/lib/receipt-processor', () => ({ processReceiptImage }));
 // The token store's functions share the main ones' mocks: these tests check which key and limit a
 // procedure uses, not which store it lands in (rate-limit.test.ts covers that)
 vi.mock('@/server/lib/rate-limit', () => ({
@@ -62,14 +60,8 @@ async function caller(session: Session = null) {
 
 const signedIn: Session = { user: { id: 'user-1' } };
 
-function guestUploadsSetting(value: 'true' | 'false' | null) {
-  mockDb.systemSetting.findUnique.mockResolvedValue(value === null ? null : { key: 'guestUploadsEnabled', value });
-}
-
 beforeEach(async () => {
   vi.clearAllMocks();
-  const { _resetGuestUploadsCache } = await import('@/server/lib/guest-uploads');
-  _resetGuestUploadsCache();
   checkRateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
   peekRateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
   mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
@@ -81,7 +73,7 @@ describe('AI provider setup (#280)', () => {
   test('no guest procedure exposes the AI provider setup', async () => {
     const { guestRouter } = await import('./guest');
     const names = Object.keys(guestRouter._def.procedures).filter((name) => /provider/i.test(name));
-    expect(names, 'the AI provider setup is admin-only, in admin.getSystemHealth').toEqual([]);
+    expect(names, 'OCR and AI providers must not be exposed').toEqual([]);
   });
 });
 
@@ -135,70 +127,6 @@ describe('BillOK creation permissions', () => {
   );
 });
 
-describe('guest.getUploadStatus', () => {
-  test('allows anonymous uploads by default', async () => {
-    guestUploadsSetting(null);
-    expect(await (await caller()).getUploadStatus()).toEqual({ allowed: true });
-  });
-
-  test('refuses anonymous uploads when an admin disabled them', async () => {
-    guestUploadsSetting('false');
-    expect(await (await caller()).getUploadStatus()).toEqual({ allowed: false });
-  });
-
-  test('still allows signed-in users when guest uploads are disabled', async () => {
-    guestUploadsSetting('false');
-    expect(await (await caller(signedIn)).getUploadStatus()).toEqual({ allowed: true });
-  });
-
-  test('refuses suspended users when guest uploads are disabled', async () => {
-    guestUploadsSetting('false');
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: new Date() });
-    expect(await (await caller(signedIn)).getUploadStatus()).toEqual({ allowed: false });
-  });
-});
-
-describe('guest.processReceipt with guest uploads disabled', () => {
-  beforeEach(() => {
-    guestUploadsSetting('false');
-  });
-
-  test('refuses anonymous callers before touching the receipt or AI quotas', async () => {
-    const api = await caller();
-    await expect(api.processReceipt({ receiptId: 'r1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(mockDb.receipt.findUnique).not.toHaveBeenCalled();
-    expect(checkRateLimit).not.toHaveBeenCalled();
-    expect(processReceiptImage).not.toHaveBeenCalled();
-  });
-
-  test('refuses suspended users the same way', async () => {
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: new Date() });
-    const api = await caller(signedIn);
-    await expect(api.processReceipt({ receiptId: 'r1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(processReceiptImage).not.toHaveBeenCalled();
-  });
-
-  test('lets signed-in users scan a Quick Split receipt', async () => {
-    const receipt = { id: 'r1', isGuest: true };
-    mockDb.receipt.findUnique.mockResolvedValue(receipt);
-    mockDb.receipt.updateMany.mockResolvedValue({ count: 1 });
-    processReceiptImage.mockResolvedValue({ subtotal: 100 });
-
-    const api = await caller(signedIn);
-    expect(await api.processReceipt({ receiptId: 'r1' })).toEqual({ subtotal: 100 });
-    expect(processReceiptImage).toHaveBeenCalledWith(expect.objectContaining({ receiptId: 'r1', receipt }));
-  });
-});
-
-describe('guest.processReceipt with guest uploads enabled', () => {
-  test('anonymous callers reach the receipt lookup as before', async () => {
-    guestUploadsSetting(null);
-    mockDb.receipt.findUnique.mockResolvedValue(null);
-    const api = await caller();
-    await expect(api.processReceipt({ receiptId: 'missing' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
-  });
-});
-
 describe('share tokens longer than any real one (#208)', () => {
   // Share tokens are 25-character cuids; 64 leaves room and bounds the limiter keys built from them
   const long = 'x'.repeat(65);
@@ -221,10 +149,9 @@ describe('share tokens longer than any real one (#208)', () => {
     expect(mockDb.guestSplit.findUnique).not.toHaveBeenCalled();
   });
 
-  test('getReceiptItems and processReceipt refuse an oversized receipt id the same way', async () => {
+  test('getReceiptItems refuses an oversized receipt id', async () => {
     const api = await caller(signedIn);
     await expect(api.getReceiptItems({ receiptId: long })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    await expect(api.processReceipt({ receiptId: long })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(checkRateLimit).not.toHaveBeenCalled();
     expect(mockDb.receipt.findUnique).not.toHaveBeenCalled();
   });

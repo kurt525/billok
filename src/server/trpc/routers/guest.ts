@@ -3,9 +3,8 @@ import { z } from 'zod';
 import { AppError } from '@/server/lib/app-error';
 import { Prisma, GuestSplitStatus } from '@/generated/prisma/client';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
-import { processReceiptImage } from '../../lib/receipt-processor';
 import { logger } from '../../lib/logger';
-import { checkRateLimit, checkTokenRateLimit, refundRateLimit } from '../../lib/rate-limit';
+import { checkRateLimit, checkTokenRateLimit } from '../../lib/rate-limit';
 import { checkClaimWriteRateLimit, checkSessionReadRateLimit } from '../../lib/guest-session-limits';
 import { getClientIp } from '../../lib/client-ip';
 import { guestTransaction } from '../../lib/guest-transaction';
@@ -24,7 +23,6 @@ import {
 } from '../../lib/json-schemas';
 import { calculateSplitTotals, groupSizeWeights } from '@/lib/split-calculator';
 import { normalizeGuestName } from '@/lib/guest-session';
-import { canUseGuestUploads } from '../../lib/guest-uploads';
 import { checkJoinRateLimit } from '../../lib/guest-join-limit';
 import {
   assignPersonIds,
@@ -292,108 +290,6 @@ export const guestRouter = createTRPCRouter({
         }),
         nextCursor,
       };
-    }),
-
-  getUploadStatus: publicProcedure.query(async ({ ctx }) => {
-    return { allowed: await canUseGuestUploads(ctx.db, () => ctx.session?.user?.id) };
-  }),
-
-  processReceipt: publicProcedure
-    .input(z.object({ receiptId: receiptIdSchema, correctionHint: z.string().max(500).optional() }))
-    .mutation(async ({ ctx, input }) => {
-      // Kill switch for unauthenticated AI spend. Checked first so an
-      // anonymous caller on a disabled install does no receipt lookup and
-      // burns no quota.
-      if (!(await canUseGuestUploads(ctx.db, () => ctx.session?.user?.id))) {
-        throw new AppError('FORBIDDEN', 'guestUploadsDisabled');
-      }
-
-      const receipt = await ctx.db.receipt.findUnique({
-        where: { id: input.receiptId },
-      });
-      if (!receipt) {
-        throw new AppError('NOT_FOUND', 'receiptNotFound');
-      }
-      if (!receipt.isGuest) {
-        throw new AppError('NOT_FOUND', 'receiptNotFound');
-      }
-
-      // Quotas, checked only AFTER the receipt is validated as a real guest
-      // receipt so bad receipt ids can't burn budget:
-      //  - per receipt (3/h): bounds reprocessing of a single receipt
-      //  - per IP (20/h): bounds one client across receipts (spoofable headers)
-      //  - global: hard cap on total unauthenticated AI spend regardless
-      // Consumption is atomic (synchronous, single event-loop turn) BEFORE
-      // the processing claim, so concurrent requests cannot all slip past a
-      // non-consuming check; if the claim then fails with CONFLICT, the
-      // consumed attempts are refunded so retries against an in-flight
-      // receipt don't drain any bucket.
-      const ip = getClientIp(ctx.headers);
-      const globalMax = parseInt(process.env.GUEST_AI_GLOBAL_LIMIT ?? '100', 10) || 100;
-      const quotaWindow = 60 * 60 * 1000;
-      const quotas: Array<{ key: string; max: number }> = [
-        { key: `guest-process:${input.receiptId}`, max: 3 },
-        { key: `guest-process-ip:${ip}`, max: 20 },
-        { key: 'guest-process-global', max: globalMax },
-      ];
-      const consumed: string[] = [];
-      const refundConsumed = () => {
-        for (const key of consumed) refundRateLimit(key);
-      };
-      for (const quota of quotas) {
-        if (checkRateLimit(quota.key, quota.max, quotaWindow).allowed) {
-          consumed.push(quota.key);
-        } else {
-          refundConsumed();
-          throw new AppError('TOO_MANY_REQUESTS', 'processingRateLimited');
-        }
-      }
-
-      // Conditional update doubles as a mutex against concurrent processing.
-      // A PROCESSING receipt untouched for 15+ minutes is considered stale
-      // (crashed run) and may be re-claimed. The threshold deliberately
-      // exceeds the worst-case provider pipeline (2 passes x per-provider
-      // timeouts of 30-120s) so a slow-but-live run is never re-claimed.
-      // Old items are replaced atomically inside processReceiptImage.
-      const claimed = await ctx.db.receipt.updateMany({
-        where: {
-          id: input.receiptId,
-          OR: [{ status: { not: 'PROCESSING' } }, { updatedAt: { lt: new Date(Date.now() - 15 * 60 * 1000) } }],
-        },
-        data: { status: 'PROCESSING' },
-      });
-      if (claimed.count === 0) {
-        refundConsumed();
-        throw new AppError('CONFLICT', 'receiptBeingProcessed');
-      }
-
-      try {
-        return await processReceiptImage({
-          db: ctx.db,
-          receiptId: input.receiptId,
-          receipt,
-          ...(input.correctionHint !== undefined ? { correctionHint: input.correctionHint } : {}),
-          logPrefix: 'guest.receipt',
-        });
-      } catch (error) {
-        logger.error('guest.receipt.failed', {
-          receiptId: input.receiptId,
-          error: error instanceof Error ? error.message : 'Unknown',
-        });
-        await ctx.db.receipt.update({
-          where: { id: input.receiptId },
-          data: {
-            status: 'FAILED',
-            rawResponse: {
-              error: error instanceof Error ? error.message : 'Unknown error',
-            } as unknown as Prisma.InputJsonValue,
-          },
-        });
-
-        // Details are logged server-side; never echo raw provider errors
-        // (model output, internal URLs) to unauthenticated guests.
-        throw new AppError('INTERNAL_SERVER_ERROR', 'receiptProcessingFailed');
-      }
     }),
 
   getReceiptItems: publicProcedure.input(z.object({ receiptId: receiptIdSchema })).query(async ({ ctx, input }) => {
