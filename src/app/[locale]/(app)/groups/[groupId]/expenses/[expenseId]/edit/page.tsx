@@ -20,6 +20,7 @@ import { PercentageSplit } from '@/components/expenses/percentage-split';
 import { SharesSplit } from '@/components/expenses/shares-split';
 import { ArchivedGroupNotice } from '@/components/groups/archived-group-notice';
 import { splitEditorSeed, type EditableSplitMode as SplitMode } from '@/lib/split-editor-seed';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type ExpenseData = RouterOutputs['expenses']['get'];
@@ -79,6 +80,7 @@ function EditExpenseForm({
   const router = useRouter();
   const locale = useLocale();
   const t = useTranslations('expenses');
+  const tc = useTranslations('common');
 
   const splitModes = useMemo(
     () => [
@@ -460,7 +462,7 @@ function EditExpenseForm({
 
             {updateExpense.error && (
               <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                {updateExpense.error.message}
+                {localizedTrpcError(updateExpense.error, tc('errors.generic'))}
               </div>
             )}
 

@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 type Member = { id: string; name: string | null };
 
@@ -77,6 +78,7 @@ function SettleForm({
 }) {
   const locale = useLocale();
   const t = useTranslations('groups');
+  const tc = useTranslations('common');
   const [fromId, setFromId] = useState(suggestedFrom ?? '');
   const [toId, setToId] = useState(suggestedTo ?? '');
   const [amountStr, setAmountStr] = useState(suggestedAmount ? (suggestedAmount / 100).toFixed(2) : '');
@@ -179,7 +181,9 @@ function SettleForm({
       </div>
 
       {settle.error && (
-        <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{settle.error.message}</div>
+        <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          {localizedTrpcError(settle.error, tc('errors.generic'))}
+        </div>
       )}
 
       <Button

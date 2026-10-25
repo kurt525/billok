@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 // Rendered only once the profile has loaded, so all fields can be
 // initialized directly from the data (no sync-from-query effects that
@@ -23,6 +24,7 @@ function ProfileForm({
   initialVenmoUsername: string;
 }) {
   const t = useTranslations('settings');
+  const tc = useTranslations('common');
   const { update } = useSession();
   const router = useRouter();
   const [name, setName] = useState(initialName);
@@ -68,13 +70,16 @@ function ProfileForm({
         {updateProfile.isPending ? t('profile.saving') : t('profile.save')}
       </Button>
       {updateProfile.isSuccess && <p className="text-sm text-green-600">{t('profile.saved')}</p>}
-      {updateProfile.error && <p className="text-sm text-red-600">{updateProfile.error.message}</p>}
+      {updateProfile.error && (
+        <p className="text-sm text-red-600">{localizedTrpcError(updateProfile.error, tc('errors.generic'))}</p>
+      )}
     </form>
   );
 }
 
 export default function SettingsPage() {
   const t = useTranslations('settings');
+  const tc = useTranslations('common');
   const { data: session } = useSession();
 
   const profile = trpc.auth.getProfile.useQuery();
@@ -184,7 +189,9 @@ export default function SettingsPage() {
                 {changePassword.isPending ? t('password.submitting') : t('password.submit')}
               </Button>
               {changePassword.isSuccess && <p className="text-sm text-green-600">{t('password.success')}</p>}
-              {changePassword.error && <p className="text-sm text-red-600">{changePassword.error.message}</p>}
+              {changePassword.error && (
+                <p className="text-sm text-red-600">{localizedTrpcError(changePassword.error, tc('errors.generic'))}</p>
+              )}
             </form>
           </CardContent>
         </Card>

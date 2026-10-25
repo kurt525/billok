@@ -17,6 +17,7 @@ import { chipLabels } from '@/lib/avatar';
 import { Check, Users, Pencil, Trash2, Plus, Image as ImageIcon, Scissors, Bookmark } from 'lucide-react';
 import { toast } from 'sonner';
 import { ConfirmDialog } from '@/components/confirm-dialog';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 type Member = { id: string; name: string | null };
 
@@ -37,6 +38,7 @@ export function ItemAssignment({
 }) {
   const locale = useLocale();
   const t = useTranslations('expenses.receipt');
+  const tc = useTranslations('common');
   const receiptData = trpc.receipts.getReceiptItems.useQuery({ receiptId });
   // Who tRPC acts as: the impersonated user while an admin impersonates, where
   // useSession() would still report the admin
@@ -75,11 +77,11 @@ export function ItemAssignment({
       setEditingItem(null);
       utils.receipts.getReceiptItems.invalidate({ receiptId });
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const deleteItem = trpc.receipts.deleteItem.useMutation({
     onSuccess: () => utils.receipts.getReceiptItems.invalidate({ receiptId }),
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const addItem = trpc.receipts.addItem.useMutation({
     onSuccess: () => {
@@ -87,15 +89,15 @@ export function ItemAssignment({
       setNewItem({ name: '', quantity: '1', totalPrice: '' });
       utils.receipts.getReceiptItems.invalidate({ receiptId });
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const splitItem = trpc.receipts.splitItem.useMutation({
     onSuccess: () => utils.receipts.getReceiptItems.invalidate({ receiptId }),
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const saveForLater = trpc.receipts.saveForLater.useMutation({
     onSuccess: () => onSaveForLater?.(),
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   // Toggle the image. Zoom/pan reset on every toggle (fresh view when
@@ -945,7 +947,9 @@ export function ItemAssignment({
       )}
 
       {createExpense.error && (
-        <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{createExpense.error.message}</div>
+        <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          {localizedTrpcError(createExpense.error, tc('errors.generic'))}
+        </div>
       )}
 
       <Button

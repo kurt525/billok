@@ -17,6 +17,7 @@ import { ExactSplit } from '@/components/expenses/exact-split';
 import { PercentageSplit } from '@/components/expenses/percentage-split';
 import { SharesSplit } from '@/components/expenses/shares-split';
 import { ArchivedGroupNotice } from '@/components/groups/archived-group-notice';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 type SplitMode = 'EQUAL' | 'EXACT' | 'PERCENTAGE' | 'SHARES';
 
@@ -37,6 +38,7 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
   const router = useRouter();
   const locale = useLocale();
   const t = useTranslations('expenses');
+  const tc = useTranslations('common');
   const group = trpc.groups.get.useQuery({ groupId });
   // Who tRPC acts as: the impersonated user while an admin impersonates, where
   // useSession() would still report the admin.
@@ -151,7 +153,7 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
           </Button>
           {createManualReceipt.error && (
             <p role="alert" className="text-sm text-destructive">
-              {createManualReceipt.error.message}
+              {localizedTrpcError(createManualReceipt.error, tc('errors.generic'))}
             </p>
           )}
         </CardContent>
@@ -342,7 +344,7 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
 
             {createExpense.error && (
               <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                {createExpense.error.message}
+                {localizedTrpcError(createExpense.error, tc('errors.generic'))}
               </div>
             )}
 

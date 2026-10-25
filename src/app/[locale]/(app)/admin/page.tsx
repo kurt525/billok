@@ -28,6 +28,7 @@ import { ServerLogsSection } from '@/components/admin/server-logs-section';
 import { UserManagementSection } from '@/components/admin/user-management-section';
 import { GroupOverviewSection } from '@/components/admin/group-overview-section';
 import { VenmoSettingsSection } from '@/components/admin/venmo-settings-section';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 export default function AdminPage() {
   const { data: session } = useSession();
@@ -142,6 +143,7 @@ function SystemHealthSection() {
 
 function StorageStatsSection() {
   const t = useTranslations('admin');
+  const tc = useTranslations('common');
   const storage = trpc.admin.getStorageStats.useQuery();
   const utils = trpc.useUtils();
   const cleanup = trpc.admin.cleanupOrphans.useMutation({
@@ -255,7 +257,11 @@ function StorageStatsSection() {
                 {t('storage.unusedCleanedUp', { count: cleanupUnused.data.deletedCount })}
               </p>
             )}
-            {cleanupUnused.isError && <p className="mt-2 text-sm text-destructive">{cleanupUnused.error.message}</p>}
+            {cleanupUnused.isError && (
+              <p className="mt-2 text-sm text-destructive">
+                {localizedTrpcError(cleanupUnused.error, tc('errors.generic'))}
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>

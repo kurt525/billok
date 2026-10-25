@@ -6,9 +6,11 @@ import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Loader2, Download, Mail, Wrench, CheckCircle2, AlertCircle, Trash2 } from 'lucide-react';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 export function ToolsSection() {
   const t = useTranslations('admin');
+  const tc = useTranslations('common');
   const sendTestEmail = trpc.admin.sendTestEmail.useMutation();
   const expiredSplits = trpc.admin.getExpiredSplitCount.useQuery();
   const cleanupSplits = trpc.admin.cleanupExpiredSplits.useMutation({
@@ -23,7 +25,7 @@ export function ToolsSection() {
     try {
       const res = await fetch('/api/admin/export');
       if (!res.ok) {
-        setExportResult({ message: t('tools.exportFailed', { error: res.statusText }), isError: true });
+        setExportResult({ message: t('tools.exportFailed', { error: 'Код ответа ' + res.status }), isError: true });
         return;
       }
       const blob = await res.blob();
@@ -38,9 +40,9 @@ export function ToolsSection() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       setExportResult({ message: t('tools.exportSuccess'), isError: false });
-    } catch (err) {
+    } catch {
       setExportResult({
-        message: t('tools.exportFailed', { error: err instanceof Error ? err.message : t('tools.unknownError') }),
+        message: t('tools.exportFailed', { error: t('tools.unknownError') }),
         isError: true,
       });
     } finally {
@@ -108,7 +110,7 @@ export function ToolsSection() {
             {sendTestEmail.isError && (
               <p className="flex items-center gap-1 text-sm text-destructive">
                 <AlertCircle className="h-4 w-4" />
-                {sendTestEmail.error.message}
+                {localizedTrpcError(sendTestEmail.error, tc('errors.generic'))}
               </p>
             )}
           </CardContent>
@@ -151,7 +153,7 @@ export function ToolsSection() {
             {cleanupSplits.isError && (
               <p className="flex items-center gap-1 text-sm text-destructive">
                 <AlertCircle className="h-4 w-4" />
-                {cleanupSplits.error.message}
+                {localizedTrpcError(cleanupSplits.error, tc('errors.generic'))}
               </p>
             )}
           </CardContent>

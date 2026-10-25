@@ -9,11 +9,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { COMMON_CURRENCIES } from '@/lib/currencies';
 import { trpc } from '@/lib/trpc';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 const EMOJI_OPTIONS = ['💰', '🏠', '✈️', '🍽️', '🎉', '🛒', '🚗', '💼'];
 
 export default function NewGroupPage() {
   const t = useTranslations('groups.new');
+  const tc = useTranslations('common');
   const router = useRouter();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -105,7 +107,7 @@ export default function NewGroupPage() {
 
             {createGroup.error && (
               <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                {createGroup.error.message}
+                {localizedTrpcError(createGroup.error, tc('errors.generic'))}
               </div>
             )}
 
