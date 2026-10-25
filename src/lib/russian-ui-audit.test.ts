@@ -79,6 +79,15 @@ describe('BillOK Russian-only user-facing fallbacks', () => {
     expect(users).not.toContain("window.location.pathname.split('/')");
   });
 
+  it('localizes administrator user-management and impersonation network errors', () => {
+    const users = source('src/components/admin/user-management-section.tsx');
+    expect(users).toContain("localizedTrpcError(e, tc('errors.generic'))");
+    expect(users).not.toContain('toast.error(e.message)');
+    expect(users).not.toContain('toast.error(data?.error');
+    expect(users).not.toContain('err instanceof Error ? err.message');
+    expect(users).toContain('Не удалось войти от имени пользователя (код ');
+  });
+
   it('localizes announcement accessibility labels and default dialog close', () => {
     const banner = source('src/components/layout/announcement-banner.tsx');
     const dialog = source('src/components/ui/dialog.tsx');
