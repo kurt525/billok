@@ -437,7 +437,8 @@ export const guestRouter = createTRPCRouter({
     };
   }),
 
-  createSplit: publicProcedure
+  // Only an active signed-in user may create a bill; existing guest links stay public.
+  createSplit: protectedProcedure
     .input(
       z.object({
         receiptId: receiptIdSchema.optional(),
@@ -540,7 +541,7 @@ export const guestRouter = createTRPCRouter({
             summary: summaryWithNames as unknown as Prisma.InputJsonValue,
             paidByIndex: remappedPaidBy,
             payerVenmoHandle,
-            userId: ctx.session?.user?.id ?? null,
+            userId: ctx.user.id,
             expiresAt: createExpiryDate(),
           },
         });
@@ -611,7 +612,7 @@ export const guestRouter = createTRPCRouter({
 
   // ─── CLAIMING SESSION ENDPOINTS ────────────────────────────
 
-  createClaimSession: publicProcedure
+  createClaimSession: protectedProcedure
     .input(
       z.object({
         receiptId: receiptIdSchema.optional(),
@@ -705,7 +706,7 @@ export const guestRouter = createTRPCRouter({
             paidByIndex,
             payerVenmoHandle: claimPayerVenmoHandle,
             status: GuestSplitStatus.CLAIMING,
-            userId: ctx.session?.user?.id ?? null,
+            userId: ctx.user.id,
             expiresAt: createExpiryDate(),
           },
         });

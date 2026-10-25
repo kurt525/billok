@@ -1,14 +1,16 @@
 'use client';
 
 import { useState, useRef } from 'react';
+import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
-import { useRouter } from '@/i18n/navigation';
+import { Link, useRouter } from '@/i18n/navigation';
 import { trpc } from '@/lib/trpc';
 import { formatCents, centsToDecimal, parseToCents, isValidMoneyInput } from '@/lib/money';
 import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
 import { canStoreClaimIdentity, setStoredClaimIdentity } from '@/lib/guest-session';
 import { Button } from '@/components/ui/button';
+import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -38,6 +40,28 @@ type ExtractedData = {
 };
 
 export default function GuestSplitPage() {
+  const { status } = useSession();
+  const t = useTranslations('split');
+
+  if (status === 'loading') return <LoadingSpinner />;
+  if (status !== 'authenticated') {
+    return (
+      <div className="space-y-4 text-center" data-testid="manual-split-sign-in-required">
+        <h1 className="text-2xl font-bold">{t('upload.title')}</h1>
+        <p className="text-sm text-muted-foreground">{t('manual.signInRequired')}</p>
+        <Link
+          href="/login?callbackUrl=%2Fsplit"
+          className="inline-flex min-h-12 items-center justify-center rounded-md bg-primary px-6 text-base font-medium text-primary-foreground"
+        >
+          {t('manual.signInButton')}
+        </Link>
+      </div>
+    );
+  }
+  return <AuthenticatedGuestSplitPage />;
+}
+
+function AuthenticatedGuestSplitPage() {
   const router = useRouter();
   const locale = useLocale();
   const t = useTranslations('split');

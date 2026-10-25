@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-/** Anonymous manual bill: real API persistence, no photo, OCR, or AI. */
+/** Signed-in creator, anonymous recipient: real persistence, no photo, OCR, or AI. */
 async function fitsPhone(page: Page) {
   const { width, scrollWidth } = await page.evaluate(() => ({
     width: innerWidth,
@@ -11,7 +11,10 @@ async function fitsPhone(page: Page) {
 
 test.use({ viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
 
-test('manual guest receipt: add, edit, allocate, share with a second anonymous device', async ({ page, browser }) => {
+test('authenticated manual receipt: add, edit, allocate, share with a second anonymous device', async ({
+  page,
+  browser,
+}) => {
   test.setTimeout(110_000);
   const remoteCalls: string[] = [];
   page.on('request', (request) => {
@@ -19,6 +22,12 @@ test('manual guest receipt: add, edit, allocate, share with a second anonymous d
       remoteCalls.push(request.url());
     }
   });
+
+  await page.goto('/login', { waitUntil: 'networkidle' });
+  await page.locator('input[type=email]').fill('alice@example.com');
+  await page.locator('input[type=password]').fill('password123');
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard(?:\?.*)?$/);
 
   await page.goto('/split', { waitUntil: 'networkidle' });
   await expect(page.getByTestId('manual-split-title')).toContainText('Разделить чек');

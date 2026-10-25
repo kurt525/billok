@@ -76,8 +76,6 @@ function LoginForm() {
   const [redirecting, setRedirecting] = useState(false);
   const [signOutFailed, setSignOutFailed] = useState(false);
   const loginOptions = trpc.auth.getLoginOptions.useQuery();
-  // Quick Split needs uploads; hide its link only once we know guests are refused.
-  const guestUploadStatus = trpc.guest.getUploadStatus.useQuery();
   // Back from the provider's page (e.g. Google's account chooser) can restore
   // this page from the back/forward cache with the buttons still disabled.
   useEffect(() => {
@@ -361,14 +359,6 @@ function LoginForm() {
               {t('noAccount')}{' '}
               <Link href={registerHref} className="font-medium text-primary hover:underline">
                 {t('createAccount')}
-              </Link>
-            </p>
-          )}
-          {guestUploadStatus.data?.allowed !== false && (
-            <p className="text-xs text-muted-foreground/80">
-              {t('quickSplit')}{' '}
-              <Link href="/split" className="font-medium text-primary hover:underline">
-                {t('quickSplitLink')}
               </Link>
             </p>
           )}

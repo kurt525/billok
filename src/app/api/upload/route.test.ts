@@ -58,13 +58,13 @@ afterEach(() => {
 });
 
 describe('POST /api/upload?guest=true', () => {
-  test('refuses anonymous uploads with 403 when guest uploads are disabled, writing nothing', async () => {
+  test('refuses anonymous uploads with 401 when guest uploads are disabled, writing nothing', async () => {
     guestUploadsSetting('false');
     const { POST } = await import('./route');
 
     const res = await POST(uploadRequest('203.0.113.1'));
 
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
     expect(writeFile).not.toHaveBeenCalled();
     expect(mockDb.receipt.create).not.toHaveBeenCalled();
   });
@@ -78,7 +78,7 @@ describe('POST /api/upload?guest=true', () => {
 
     expect(res.status).toBe(200);
     expect(mockDb.receipt.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ isGuest: true }) as unknown,
+      data: expect.objectContaining({ isGuest: true, uploadedById: 'user-1' }) as unknown,
     });
   });
 
@@ -101,19 +101,19 @@ describe('POST /api/upload?guest=true', () => {
 
     const res = await POST(uploadRequest('203.0.113.5'));
 
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
     expect(mockDb.systemSetting.findUnique).not.toHaveBeenCalled();
   });
 
-  test('accepts anonymous uploads while guest uploads are enabled (default)', async () => {
+  test('refuses anonymous uploads while guest uploads are enabled (default)', async () => {
     guestUploadsSetting(null);
     const { POST } = await import('./route');
 
     const res = await POST(uploadRequest('203.0.113.3'));
 
-    expect(res.status).toBe(200);
-    expect(writeFile).toHaveBeenCalledOnce();
-    expect(auth).not.toHaveBeenCalled();
+    expect(res.status).toBe(401);
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(mockDb.receipt.create).not.toHaveBeenCalled();
   });
 });
 
@@ -124,15 +124,16 @@ describe('POST /api/upload errors', () => {
     const { POST } = await import('./route');
 
     const german = await POST(uploadRequest('203.0.113.6', { 'x-locale': 'de' }));
-    expect(german.status).toBe(403);
-    expect(await german.json()).toEqual({ error: ru.guestUploadsDisabled });
+    expect(german.status).toBe(401);
+    expect(await german.json()).toEqual({ error: ru.signInRequired });
 
     const english = await POST(uploadRequest('203.0.113.7'));
-    expect(await english.json()).toEqual({ error: ru.guestUploadsDisabled });
+    expect(await english.json()).toEqual({ error: ru.signInRequired });
   });
 
   test('fill in their details', async () => {
     guestUploadsSetting(null);
+    auth.mockResolvedValue({ user: { id: 'user-1' } });
     const { POST } = await import('./route');
 
     const res = await POST(

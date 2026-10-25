@@ -139,31 +139,27 @@ function errorResponse(req: NextRequest, status: number, key: ErrorKey, values?:
 
 export async function POST(req: NextRequest) {
   const isGuest = req.nextUrl.searchParams.get('guest') === 'true';
-  let userId: string | undefined;
-  let guestIp: string | null = null;
+  // The historical upload endpoint also creates a Receipt record: no anonymous bypass.
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) return errorResponse(req, 401, 'signInRequired');
 
+  const account = await db.user.findUnique({
+    where: { id: userId },
+    select: { suspendedAt: true },
+  });
+  if (!account) return errorResponse(req, 401, 'signInRequired');
+  if (account.suspendedAt) return errorResponse(req, 403, 'accountSuspended');
+
+  let guestIp: string | null = null;
   if (isGuest) {
-    // Kill switch for unauthenticated storage + AI spend (admin toggle or
-    // DISABLE_GUEST_UPLOADS). Signed-in users with an active account share this
-    // Quick Split path and keep access; the session is only resolved when the
-    // switch is off.
-    if (!(await canUseGuestUploads(db, async () => (await auth())?.user?.id))) {
+    if (!(await canUseGuestUploads(db, () => userId))) {
       return errorResponse(req, 403, 'guestUploadsDisabled');
     }
-
-    // Guest upload: rate limit by IP. Peek only — budget is consumed after
-    // the upload passes validation so invalid requests can't burn it.
     guestIp = getClientIp(req.headers);
     if (!hasGuestUploadBudget(guestIp)) {
       return errorResponse(req, 429, 'uploadsRateLimited');
     }
-  } else {
-    // Authenticated upload
-    const session = await auth();
-    if (!session?.user?.id) {
-      return errorResponse(req, 401, 'signInRequired');
-    }
-    userId = session.user.id;
   }
 
   const formData = await req.formData();
@@ -219,7 +215,7 @@ export async function POST(req: NextRequest) {
         mimeType: file.type,
         fileSize: file.size,
         status: 'PENDING',
-        uploadedById: userId ?? null,
+        uploadedById: userId,
         isGuest,
       },
     });

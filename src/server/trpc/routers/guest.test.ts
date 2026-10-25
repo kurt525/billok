@@ -85,6 +85,56 @@ describe('AI provider setup (#280)', () => {
   });
 });
 
+describe('BillOK creation permissions', () => {
+  const receiptData = { subtotal: 100, tax: 0, tip: 0, total: 100, currency: 'RUB' };
+  const items = [{ name: 'Tea', quantity: 1, unitPrice: 100, totalPrice: 100 }];
+  type Api = Awaited<ReturnType<typeof caller>>;
+  const operations = {
+    createSplit: (api: Api) =>
+      api.createSplit({
+        receiptData,
+        items,
+        people: [{ name: 'Pat' }],
+        assignments: [{ itemIndex: 0, personIndices: [0] }],
+      }),
+    createClaimSession: (api: Api) =>
+      api.createClaimSession({ receiptData, items, creatorName: 'Pat', paidByName: 'Pat' }),
+  };
+
+  test.each(Object.keys(operations) as (keyof typeof operations)[])(
+    '%s denies anonymous creation before writes and quotas',
+    async (name) => {
+      await expect(operations[name](await caller())).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+      expect(mockDb.$transaction).not.toHaveBeenCalled();
+      expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+      expect(checkRateLimit).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(Object.keys(operations) as (keyof typeof operations)[])(
+    '%s denies suspended and deleted accounts',
+    async (name) => {
+      mockDb.user.findUnique.mockResolvedValueOnce({ suspendedAt: new Date() });
+      await expect(operations[name](await caller(signedIn))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      mockDb.user.findUnique.mockResolvedValueOnce(null);
+      await expect(operations[name](await caller(signedIn))).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+      expect(mockDb.$transaction).not.toHaveBeenCalled();
+      expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(Object.keys(operations) as (keyof typeof operations)[])(
+    '%s assigns the split to the signed-in creator',
+    async (name) => {
+      mockDb.guestSplit.create.mockResolvedValue({ id: 's1', shareToken: 'tok' });
+      await operations[name](await caller(signedIn));
+      expect(mockDb.guestSplit.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ userId: 'user-1' }),
+      });
+    },
+  );
+});
+
 describe('guest.getUploadStatus', () => {
   test('allows anonymous uploads by default', async () => {
     guestUploadsSetting(null);
@@ -631,7 +681,9 @@ describe('guest.createClaimSession', () => {
   });
 
   test('gives the creator and the payer ids', async () => {
-    const result = await (await caller()).createClaimSession({ ...session, creatorName: 'Host', paidByName: 'Payer' });
+    const result = await (
+      await caller(signedIn)
+    ).createClaimSession({ ...session, creatorName: 'Host', paidByName: 'Payer' });
     const { people } = created();
     expect(people).toEqual([
       { id: expect.stringMatching(UUID), name: 'Host' },
@@ -645,7 +697,7 @@ describe('guest.createClaimSession', () => {
   // #263: Share Link dropped everyone typed on "Who's splitting?" except the payer
   test('lists everyone typed, in order, with the payer where they were typed', async () => {
     await (
-      await caller()
+      await caller(signedIn)
     ).createClaimSession({ ...session, people: ['Dana', 'Pat', 'Lee'], creatorName: 'Pat', paidByName: 'Pat' });
     const { people, paidByIndex } = created();
     expect(people.map((p) => p.name)).toEqual(['Dana', 'Pat', 'Lee']);
@@ -655,7 +707,7 @@ describe('guest.createClaimSession', () => {
 
   test('lists a name typed twice once, as first typed, since people join by name', async () => {
     await (
-      await caller()
+      await caller(signedIn)
     ).createClaimSession({ ...session, people: ['Pat', 'dana', ' Dana '], creatorName: 'pat', paidByName: 'PAT' });
     const { people, paidByIndex } = created();
     expect(people.map((p) => p.name)).toEqual(['Pat', 'dana']);
@@ -663,7 +715,9 @@ describe('guest.createClaimSession', () => {
   });
 
   test('adds the creator and the payer when the list leaves them out', async () => {
-    await (await caller()).createClaimSession({ ...session, people: ['Dana'], creatorName: 'Host', paidByName: 'Pat' });
+    await (
+      await caller(signedIn)
+    ).createClaimSession({ ...session, people: ['Dana'], creatorName: 'Host', paidByName: 'Pat' });
     const { people, paidByIndex } = created();
     expect(people.map((p) => p.name)).toEqual(['Dana', 'Host', 'Pat']);
     expect(paidByIndex).toBe(2);
@@ -672,7 +726,12 @@ describe('guest.createClaimSession', () => {
   test('refuses more than 100 people, the most a session can hold', async () => {
     const hundred = Array.from({ length: 100 }, (_, i) => `Person ${i}`);
     await expect(
-      (await caller()).createClaimSession({ ...session, people: hundred, creatorName: 'Host', paidByName: 'Host' }),
+      (await caller(signedIn)).createClaimSession({
+        ...session,
+        people: hundred,
+        creatorName: 'Host',
+        paidByName: 'Host',
+      }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
   });
@@ -680,7 +739,7 @@ describe('guest.createClaimSession', () => {
   // #263: the creator landed on the join form, and whoever opened the link first could take the payer's place
   test('joins the creator when asked, returning the identity their device stores', async () => {
     const result = await (
-      await caller()
+      await caller(signedIn)
     ).createClaimSession({
       ...session,
       people: ['Dana', 'Pat'],
@@ -1404,7 +1463,7 @@ describe('deleting a split', () => {
 describe('creating a split', () => {
   test('clears a batch of expired splits with their receipts', async () => {
     mockDb.guestSplit.create.mockResolvedValue({ id: 's1', shareToken: 'tok' });
-    const api = await caller();
+    const api = await caller(signedIn);
     await api.createSplit({
       receiptData: { subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'USD' },
       items: [{ name: 'Pizza', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
@@ -1449,7 +1508,7 @@ describe('making a split from a receipt', () => {
     "%s refuses a group's receipt to someone outside the group",
     async (name) => {
       mockDb.$queryRaw.mockResolvedValue([groupReceipt]);
-      await expect(makeSplit[name](await caller())).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      await expect(makeSplit[name](await caller())).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
       await expect(makeSplit[name](await caller(signedIn))).rejects.toMatchObject({ code: 'NOT_FOUND' });
       expect(mockDb.groupMember.findUnique).toHaveBeenCalledWith({
         where: { userId_groupId: { userId: 'user-1', groupId: 'g1' } },
@@ -1488,16 +1547,19 @@ describe('making a split from a receipt', () => {
     },
   );
 
-  // Codex on #319: these procedures are public, so the session (a JWT, valid until it expires)
-  // hasn't been checked against the account
+  // The active account is checked before existing receipt authorization.
   test.each(Object.keys(makeSplit) as (keyof typeof makeSplit)[])(
     "%s refuses a group's receipt to a member whose account is suspended or was deleted",
     async (name) => {
       mockDb.$queryRaw.mockResolvedValue([groupReceipt]);
       mockDb.groupMember.findUnique.mockResolvedValue({ userId: 'user-1', groupId: 'g1' });
-      for (const account of [{ suspendedAt: new Date() }, { suspendedAt: null, isPlaceholder: true }, null]) {
+      for (const [account, code] of [
+        [{ suspendedAt: new Date() }, 'FORBIDDEN'],
+        [{ suspendedAt: null, isPlaceholder: true }, 'NOT_FOUND'],
+        [null, 'UNAUTHORIZED'],
+      ] as const) {
         mockDb.user.findUnique.mockResolvedValue(account);
-        await expect(makeSplit[name](await caller(signedIn))).rejects.toMatchObject({ code: 'NOT_FOUND' });
+        await expect(makeSplit[name](await caller(signedIn))).rejects.toMatchObject({ code });
       }
       expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
     },
@@ -1507,7 +1569,7 @@ describe('making a split from a receipt', () => {
     '%s locks the receipt before saving the split',
     async (name) => {
       mockDb.$queryRaw.mockResolvedValue([guestUpload]);
-      await makeSplit[name](await caller());
+      await makeSplit[name](await caller(signedIn));
 
       const lockCall = mockDb.$queryRaw.mock.calls.findIndex(([strings]) =>
         /FROM "Receipt" WHERE "id" = .* FOR KEY SHARE/.test((strings as string[]).join('?')),
@@ -1525,7 +1587,7 @@ describe('making a split from a receipt', () => {
     '%s from a receipt deleted meanwhile is saved without it',
     async (name) => {
       mockDb.$queryRaw.mockResolvedValue([]);
-      await makeSplit[name](await caller());
+      await makeSplit[name](await caller(signedIn));
 
       expect(mockDb.guestSplit.create).toHaveBeenCalledTimes(1);
       expect(mockDb.guestSplit.create.mock.calls[0]![0].data).not.toHaveProperty('receiptId');

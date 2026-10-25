@@ -18,6 +18,14 @@ for (const width of widths) {
         expect(response?.status()).toBe(200);
         await expect(page.locator('html')).toHaveAttribute('lang', 'ru');
         await expect(page.getByText(item.heading, { exact: true }).first()).toBeVisible();
+        if (item.path === '/split') {
+          await expect(page.getByTestId('manual-split-sign-in-required')).toBeVisible();
+          await expect(page.getByTestId('guest-people-step')).toHaveCount(0);
+          await expect(page.getByRole('link', { name: 'Войти и создать чек' })).toHaveAttribute(
+            'href',
+            /\/login\?callbackUrl=/,
+          );
+        }
 
         const checkWidth = async () => {
           const bounds = await page.evaluate(() => ({
