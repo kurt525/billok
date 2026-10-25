@@ -111,7 +111,9 @@ function GroupDetailsForm({
                 </option>
               ))}
             </select>
-            {updateGroup.error && <p className="text-xs text-destructive">{localizedTrpcError(updateGroup.error, tc('errors.generic'))}</p>}
+            {updateGroup.error && (
+              <p className="text-xs text-destructive">{localizedTrpcError(updateGroup.error, tc('errors.generic'))}</p>
+            )}
           </div>
           {!readOnly && (
             <Button type="submit" disabled={updateGroup.isPending}>
