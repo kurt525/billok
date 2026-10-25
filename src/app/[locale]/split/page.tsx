@@ -347,8 +347,8 @@ function AuthenticatedGuestSplitPage() {
         tipOverride: tipOverride !== '' && isValidMoneyInput(tipOverride) && parsedTip >= 0 ? parsedTip : undefined,
       });
       router.push(`/split/${result.shareToken}`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t('assign.createSplitFailed'));
+    } catch {
+      toast.error(t('assign.createSplitFailed'));
     }
   }
 
@@ -377,8 +377,8 @@ function AuthenticatedGuestSplitPage() {
         });
       }
       router.push(`/split/${result.shareToken}/claim`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t('assign.createSessionFailed'));
+    } catch {
+      toast.error(t('assign.createSessionFailed'));
     }
   }
 

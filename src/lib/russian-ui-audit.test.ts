@@ -15,6 +15,16 @@ describe('BillOK Russian-only user-facing fallbacks', () => {
     expect(claim).toContain("'Разделение чека'");
   });
 
+  it('shows Russian notifications rather than raw network exceptions when creating bills', () => {
+    const guest = source('src/app/[locale]/split/page.tsx');
+    const grouped = source('src/app/[locale]/(app)/groups/[groupId]/scan/page.tsx');
+    expect(guest).toContain("toast.error(t('assign.createSplitFailed'))");
+    expect(guest).toContain("toast.error(t('assign.createSessionFailed'))");
+    expect(grouped).toContain("toast.error(t('createSessionFailed'))");
+    expect(guest).not.toContain("err instanceof Error ? err.message : t('assign.create");
+    expect(grouped).not.toContain("err instanceof Error ? err.message : t('createSessionFailed')");
+  });
+
   it('redirects the landing page to canonical locale-free destinations', () => {
     const root = source('src/app/[locale]/page.tsx');
     expect(root).toContain("'/dashboard'");

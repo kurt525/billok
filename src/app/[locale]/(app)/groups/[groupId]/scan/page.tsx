@@ -89,8 +89,8 @@ function ReceiptContent({ params }: { params: Promise<{ groupId: string }> }) {
         });
       }
       router.push('/split/' + result.shareToken + '/claim');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t('createSessionFailed'));
+    } catch {
+      toast.error(t('createSessionFailed'));
     }
   }
 
