@@ -14,6 +14,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 /**
  * Hand the group to another member who has an account. The owner becomes a
@@ -43,7 +44,7 @@ export function TransferOwnershipDialog({
       void utils.groups.get.invalidate({ groupId });
       void utils.groups.list.invalidate();
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   return (

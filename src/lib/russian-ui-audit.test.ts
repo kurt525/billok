@@ -42,6 +42,19 @@ describe('BillOK Russian-only user-facing fallbacks', () => {
     expect(claim).not.toContain('toast.error(error.message)');
   });
 
+  it('does not expose network failures in group invitation and member dialogs', () => {
+    const files = [
+      'src/components/groups/invite-dialog.tsx',
+      'src/components/groups/merge-placeholder-dialog.tsx',
+      'src/components/groups/transfer-ownership-dialog.tsx',
+    ];
+    for (const file of files) {
+      const dialog = source(file);
+      expect(dialog).toContain("toast.error(localizedTrpcError(e, tc('errors.generic')))");
+      expect(dialog).not.toContain('toast.error(e.message)');
+    }
+  });
+
   it('redirects the landing page to canonical locale-free destinations', () => {
     const root = source('src/app/[locale]/page.tsx');
     expect(root).toContain("'/dashboard'");

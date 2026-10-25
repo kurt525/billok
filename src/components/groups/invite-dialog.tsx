@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Check, Copy, Link } from 'lucide-react';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { copyToClipboard } from '@/lib/clipboard';
 
 /**
@@ -30,7 +31,7 @@ export function InviteDialog({
   const tc = useTranslations('common');
 
   const createInvite = trpc.groups.createInvite.useMutation({
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   function handleGenerate() {

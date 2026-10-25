@@ -14,6 +14,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 /**
  * Merge a placeholder into a member who has joined with an account: their
@@ -46,7 +47,7 @@ export function MergePlaceholderDialog({
       void utils.balances.invalidate();
       void utils.expenses.invalidate();
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   return (
