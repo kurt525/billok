@@ -17,13 +17,13 @@ describe('parseExtractedData', () => {
     expect(result.currency).toBe('USD');
   });
 
-  it('defaults missing numeric fields to 0', () => {
+  it('defaults missing numeric fields to 0 and currency to RUB', () => {
     const result = parseExtractedData({});
     expect(result.subtotal).toBe(0);
     expect(result.tax).toBe(0);
     expect(result.tip).toBe(0);
     expect(result.total).toBe(0);
-    expect(result.currency).toBe('USD');
+    expect(result.currency).toBe('RUB');
   });
 
   it('handles null input', () => {
