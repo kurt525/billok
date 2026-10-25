@@ -215,14 +215,19 @@ jobs:
           trap 'rm -rf "$baseline_dir"' EXIT
           git fetch origin 'refs/heads/main:refs/remotes/origin/main' --no-tags
           git archive origin/main | tar -x -C "$baseline_dir"
-          ln -s "$GITHUB_WORKSPACE/node_modules" "$baseline_dir/node_modules"
+          # The main branch still depends on upstream AI packages removed from
+          # BillOK. Give main its own temporary dependency tree: using the
+          # current branch's node_modules makes the baseline tests fail with
+          # missing OpenAI/Anthropic imports instead of measuring coverage.
+          # Ignore lifecycle scripts to avoid unnecessary provider bootstraps.
+          ( cd "$baseline_dir" && npm ci --legacy-peer-deps --ignore-scripts --prefer-offline --no-audit --no-fund )
           # Same coverage scope/config for both branches, even if main has older config.
           cp "$GITHUB_WORKSPACE/vitest.config.ts" "$baseline_dir/vitest.config.ts"
           echo "COVERAGE_BASE_SHA=$(git rev-parse origin/main)" >> "$GITHUB_ENV"
-          ( cd "$baseline_dir" && "$GITHUB_WORKSPACE/node_modules/.bin/prisma" generate )
+          ( cd "$baseline_dir" && ./node_modules/.bin/prisma generate )
           (
             cd "$baseline_dir"
-            "$GITHUB_WORKSPACE/node_modules/.bin/vitest" run --coverage \
+            ./node_modules/.bin/vitest run --coverage \
               --coverage.reportsDirectory="$RUNNER_TEMP/billok-main-coverage"
           )
       - name: Check regression percentage and publish report
