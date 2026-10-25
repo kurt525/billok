@@ -17,6 +17,7 @@ import {
 } from '@/server/lib/receipt-cleanup';
 import { getBuildInfo } from '@/server/lib/build-info';
 import { REGISTRATION_MODES, readRegistrationMode } from '@/server/lib/registration-mode';
+import { totalsInGroupCurrency } from '@/server/lib/group-expense-totals';
 
 const serverStartTime = new Date();
 const { version: cachedVersion, commitSha: cachedCommitSha } = getBuildInfo();
@@ -417,6 +418,7 @@ export const adminRouter = createTRPCRouter({
           select: {
             id: true,
             name: true,
+            currency: true,
             archivedAt: true,
             createdAt: true,
             _count: {
@@ -453,19 +455,21 @@ export const adminRouter = createTRPCRouter({
       const expenseSums =
         groupIds.length > 0
           ? await ctx.db.expense.groupBy({
-              by: ['groupId'],
+              by: ['groupId', 'currency'],
               where: { groupId: { in: groupIds } },
-              _sum: { amount: true },
+              _sum: { amount: true, baseCurrencyAmount: true },
+              _count: { id: true, baseCurrencyAmount: true },
             })
           : [];
-      const sumByGroup = new Map(expenseSums.map((e) => [e.groupId, e._sum.amount ?? 0]));
+      const totals = totalsInGroupCurrency(groups, expenseSums);
 
       const result = groups.map((g) => ({
         id: g.id,
         name: g.name,
         memberCount: g._count.members,
         expenseCount: g._count.expenses,
-        totalAmount: sumByGroup.get(g.id) ?? 0,
+        currency: g.currency,
+        totalAmount: totals.get(g.id) ?? null,
         lastActivity: g.activityLogs[0]?.createdAt ?? g.createdAt,
         isArchived: g.archivedAt !== null,
         createdAt: g.createdAt,

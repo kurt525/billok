@@ -346,6 +346,72 @@ async function callerAs(session: { user: { id: string; email: string } }) {
   return adminRouter.createCaller(ctx as unknown as Parameters<typeof adminRouter.createCaller>[0]);
 }
 
+describe('admin group totals in group currency', () => {
+  beforeEach(() => {
+    vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
+    vi.clearAllMocks();
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.group.findMany.mockResolvedValue([
+      {
+        id: 'g-rub',
+        name: 'Ужин',
+        currency: 'RUB',
+        archivedAt: null,
+        createdAt: new Date('2026-10-01T00:00:00Z'),
+        _count: { members: 2, expenses: 2, settlements: 0 },
+        activityLogs: [],
+      },
+    ]);
+    mockDb.group.count.mockResolvedValue(1);
+    mockDb.expense.count.mockResolvedValue(2);
+    mockDb.settlement.count.mockResolvedValue(0);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test('returns group currency and sums stored converted amounts in kopecks', async () => {
+    mockDb.expense.groupBy.mockResolvedValue([
+      {
+        groupId: 'g-rub',
+        currency: 'RUB',
+        _sum: { amount: 10001, baseCurrencyAmount: null },
+        _count: { id: 1, baseCurrencyAmount: 0 },
+      },
+      {
+        groupId: 'g-rub',
+        currency: 'EUR',
+        _sum: { amount: 1000, baseCurrencyAmount: 10725 },
+        _count: { id: 1, baseCurrencyAmount: 1 },
+      },
+    ]);
+    const api = await callerAs(adminSession);
+    const result = await api.listGroups({ limit: 20 });
+    expect(result.groups[0]).toMatchObject({ currency: 'RUB', totalAmount: 20726 });
+    expect(mockDb.expense.groupBy).toHaveBeenCalledWith({
+      by: ['groupId', 'currency'],
+      where: { groupId: { in: ['g-rub'] } },
+      _sum: { amount: true, baseCurrencyAmount: true },
+      _count: { id: true, baseCurrencyAmount: true },
+    });
+  });
+
+  test('reports unavailable total for expenses without a conversion', async () => {
+    mockDb.expense.groupBy.mockResolvedValue([
+      {
+        groupId: 'g-rub',
+        currency: 'EUR',
+        _sum: { amount: 1000, baseCurrencyAmount: null },
+        _count: { id: 1, baseCurrencyAmount: 0 },
+      },
+    ]);
+    const api = await callerAs(adminSession);
+    const result = await api.listGroups({ limit: 20 });
+    expect(result.groups[0]).toMatchObject({ currency: 'RUB', totalAmount: null });
+  });
+});
+
 describe('registration mode', () => {
   beforeEach(() => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');

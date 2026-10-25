@@ -45,6 +45,10 @@ describe('BillOK RUB and ru-RU defaults', () => {
       expect(read(filename), filename).not.toContain("?? 'USD'");
     }
 
+    const admin = read('src/components/admin/group-overview-section.tsx');
+    expect(admin).toContain('formatCents(group.totalAmount, group.currency, locale)');
+    expect(admin).not.toContain("formatCents(group.totalAmount, 'USD', locale)");
+
     const schema = read('prisma/schema.prisma');
     expect(schema).not.toContain('@default("USD")');
     expect((schema.match(/@default\("RUB"\)/g) ?? []).length).toBe(4);

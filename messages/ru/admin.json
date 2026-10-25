@@ -67,6 +67,7 @@
     "colMembers": "Участники",
     "colExpenses": "Расходы",
     "colTotal": "Итого",
+    "totalUnavailable": "Нельзя рассчитать итог: у одного или нескольких расходов отсутствует пересчёт в валюту группы.",
     "colLastActivity": "Последняя активность",
     "colStatus": "Статус",
     "statusArchived": "В архиве",

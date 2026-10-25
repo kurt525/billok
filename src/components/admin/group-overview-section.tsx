@@ -213,7 +213,13 @@ export function GroupOverviewSection() {
                         <td className="px-4 py-3 font-medium">{group.name}</td>
                         <td className="px-4 py-3 text-right">{group.memberCount}</td>
                         <td className="px-4 py-3 text-right">{group.expenseCount}</td>
-                        <td className="px-4 py-3 text-right">{formatCents(group.totalAmount, 'USD', locale)}</td>
+                        <td className="px-4 py-3 text-right">
+                          {group.totalAmount == null ? (
+                            <span title={t('groups.totalUnavailable')}>—</span>
+                          ) : (
+                            formatCents(group.totalAmount, group.currency, locale)
+                          )}
+                        </td>
                         <td className="px-4 py-3 text-muted-foreground">
                           {new Date(group.lastActivity).toLocaleDateString(locale)}
                         </td>
