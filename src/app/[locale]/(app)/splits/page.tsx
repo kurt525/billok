@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Scissors, Receipt, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { useTranslations, useLocale } from 'next-intl';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 
@@ -32,7 +33,7 @@ export default function SplitsPage() {
       utils.guest.mySplits.invalidate();
       toast.success(t('deleted'));
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
 
   const splits = data?.pages.flatMap((page) => page.splits) ?? [];

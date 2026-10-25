@@ -14,6 +14,7 @@ import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { Plus, Settings, UserPlus, ArrowRight, Receipt, Handshake, Tag, Archive, Trash2 } from 'lucide-react';
 import { Link } from '@/i18n/navigation';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { InviteDialog } from '@/components/groups/invite-dialog';
 import { SettleDialog } from '@/components/groups/settle-dialog';
 import { PaymentsList } from '@/components/groups/payments-list';
@@ -58,7 +59,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
       utils.settlements.list.invalidate({ groupId });
     },
     onError: (err) => {
-      toast.error(err.message);
+      toast.error(localizedTrpcError(err, tc('errors.generic')));
     },
   });
 

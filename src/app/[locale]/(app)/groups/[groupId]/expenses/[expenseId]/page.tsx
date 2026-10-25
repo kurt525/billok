@@ -12,6 +12,7 @@ import { Separator } from '@/components/ui/separator';
 import { ArrowLeft, Trash2, Pencil } from 'lucide-react';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 
 export default function ExpenseDetailPage({ params }: { params: Promise<{ groupId: string; expenseId: string }> }) {
@@ -19,13 +20,14 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
   const locale = useLocale();
   const router = useRouter();
   const t = useTranslations('expenses');
+  const tc = useTranslations('common');
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const expense = trpc.expenses.get.useQuery({ groupId, expenseId });
   const group = trpc.groups.get.useQuery({ groupId });
   const deleteExpense = trpc.expenses.delete.useMutation({
     onSuccess: () => router.push(`/groups/${groupId}`),
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
 
   if (expense.isLoading) return <LoadingSpinner />;
