@@ -1518,3 +1518,54 @@ describe('archiving a group', () => {
     expect(mockDb.activityLog.create).not.toHaveBeenCalled();
   });
 });
+
+describe('RUB-only group API', () => {
+  test('creates a group in RUB when the currency is omitted', async () => {
+    mockDb.group.create.mockResolvedValue({ id: 'g2', currency: 'RUB' });
+    const api = await caller();
+    await api.create({ name: 'Поездка' });
+    expect(mockDb.group.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        name: 'Поездка',
+        currency: 'RUB',
+        members: { create: { userId: 'owner', role: 'OWNER' } },
+      }),
+    });
+  });
+
+  test('accepts an explicit lowercase rub and stores RUB', async () => {
+    mockDb.group.create.mockResolvedValue({ id: 'g2', currency: 'RUB' });
+    const api = await caller();
+    await api.create({ name: 'Поездка', currency: 'rub' });
+    expect(mockDb.group.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ name: 'Поездка', currency: 'RUB' }),
+    });
+  });
+
+  test.each(['USD', 'eur', 'GBP'])('refuses currency %s when creating a group', async (currency) => {
+    const api = await caller();
+    await expect(api.create({ name: 'Поездка', currency })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.group.create).not.toHaveBeenCalled();
+  });
+
+  test.each(['USD', 'RUB'])('refuses any currency argument %s when updating a group', async (currency) => {
+    const api = await caller();
+    const invalidPayload = { groupId: 'g1', currency } as unknown as Parameters<typeof api.update>[0];
+    await expect(api.update(invalidPayload)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.group.update).not.toHaveBeenCalled();
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('updates allowed fields without modifying currency or querying conversion-related tables', async () => {
+    mockDb.group.update.mockResolvedValue({ id: 'g1', currency: 'RUB', name: 'Новое название' });
+    const api = await caller();
+    await api.update({ groupId: 'g1', name: 'Новое название', description: 'Общие покупки', simplifyDebts: true });
+    expect(mockDb.group.update).toHaveBeenCalledWith({
+      where: { id: 'g1' },
+      data: { name: 'Новое название', description: 'Общие покупки', simplifyDebts: true },
+    });
+    expect(mockDb.expense.count).not.toHaveBeenCalled();
+    expect(mockDb.settlement.count).not.toHaveBeenCalled();
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+  });
+});

@@ -133,6 +133,7 @@ export const groupsRouter = createTRPCRouter({
           .length(3)
           .regex(/^[a-zA-Z]{3}$/)
           .transform((c) => c.toUpperCase())
+          .pipe(z.literal('RUB'))
           .default('RUB'),
         emoji: z.string().max(4).optional(),
       }),
@@ -141,6 +142,7 @@ export const groupsRouter = createTRPCRouter({
       const group = await ctx.db.group.create({
         data: {
           ...stripUndefined(input),
+          currency: 'RUB',
           members: {
             create: {
               userId: ctx.user.id,
@@ -158,12 +160,8 @@ export const groupsRouter = createTRPCRouter({
         groupId: z.string(),
         name: z.string().trim().min(1).max(100).optional(),
         description: z.string().max(500).optional(),
-        currency: z
-          .string()
-          .length(3)
-          .regex(/^[a-zA-Z]{3}$/)
-          .transform((c) => c.toUpperCase())
-          .optional(),
+        // A group's currency is immutable in RUB-only BillOK.
+        currency: z.never().optional(),
         emoji: z.string().max(4).optional(),
         simplifyDebts: z.boolean().optional(),
       }),
@@ -173,22 +171,6 @@ export const groupsRouter = createTRPCRouter({
         throw new AppError('FORBIDDEN', 'onlyAdminsUpdateGroup');
       }
       const { groupId, ...data } = input;
-
-      if (data.currency) {
-        const existing = await ctx.db.group.findUnique({
-          where: { id: groupId },
-          select: { currency: true },
-        });
-        if (existing && data.currency.toUpperCase() !== existing.currency.toUpperCase()) {
-          const [expenseCount, settlementCount] = await Promise.all([
-            ctx.db.expense.count({ where: { groupId }, take: 1 }),
-            ctx.db.settlement.count({ where: { groupId }, take: 1 }),
-          ]);
-          if (expenseCount > 0 || settlementCount > 0) {
-            throw new AppError('BAD_REQUEST', 'currencyLocked');
-          }
-        }
-      }
 
       const group = await ctx.db.group.update({
         where: { id: groupId },
