@@ -156,6 +156,93 @@ describe('manual receipt: consumed portions and creator rounding', () => {
   });
 });
 
+describe('RUB-only finalization of a group receipt', () => {
+  const finish = {
+    groupId: 'g1',
+    receiptId: 'r1',
+    title: 'Чек',
+    paidById: 'u1',
+    assignments: [{ receiptItemId: 'i1', userIds: ['u1', 'u2'] }],
+  };
+  const receipt = {
+    id: 'r1',
+    originalName: 'receipt.jpg',
+    status: 'COMPLETED',
+    groupId: 'g1',
+    uploadedById: 'u1',
+    extractedData: { subtotal: 505, tax: 0, tip: 0, total: 505, currency: 'RUB' },
+    items: [{ id: 'i1', totalPrice: 505 }],
+  };
+
+  beforeEach(() => {
+    mockDb.groupMember.findUnique.mockResolvedValue({ role: 'MEMBER', userId: 'u1', groupId: 'g1' });
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'RUB' });
+    mockDb.receipt.findUnique.mockResolvedValue(receipt);
+    mockDb.groupMember.findMany.mockResolvedValue([{ userId: 'u1' }, { userId: 'u2' }]);
+    mockDb.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) =>
+      strings.join('?').includes('FROM "Receipt"') ? [{ groupId: 'g1' }] : [{ archivedAt: null }],
+    );
+    mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => unknown) => fn(mockDb));
+    mockDb.expense.create.mockResolvedValue({ id: 'e-rub' });
+  });
+
+  test('rejects finalizing a receipt in a non-RUB group before any transaction', async () => {
+    mockDb.group.findUnique.mockResolvedValueOnce({ archivedAt: null, currency: 'USD' });
+    await expect((await caller()).assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Expenses from receipts are allowed only for RUB receipts in RUB groups.',
+    });
+    expect(mockDb.receipt.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test.each(['USD', 'eur'])('rejects a receipt with currency %s without converting or writing', async (currency) => {
+    mockDb.receipt.findUnique.mockResolvedValueOnce({
+      ...receipt,
+      extractedData: { ...receipt.extractedData, currency },
+    });
+    await expect((await caller()).assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+    expect(mockDb.receiptItemAssignment.createMany).not.toHaveBeenCalled();
+  });
+
+  test('rejects a group whose currency changed before finalization acquired the group row lock', async () => {
+    mockDb.group.findUnique
+      .mockResolvedValueOnce({ archivedAt: null, currency: 'RUB' })
+      .mockResolvedValueOnce({ currency: 'USD' });
+    await expect((await caller()).assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.$queryRaw).toHaveBeenCalledOnce();
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+
+  test('stores 505 kopecks exactly in RUB with rate 1 and no converted amount', async () => {
+    await (await caller()).assignItemsAndCreateExpense(finish);
+    expect(mockDb.expense.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        groupId: 'g1',
+        amount: 505,
+        currency: 'RUB',
+        exchangeRate: 1,
+        baseCurrencyAmount: null,
+        splitMode: 'ITEM',
+        shares: {
+          create: [
+            { userId: 'u1', amount: 253 },
+            { userId: 'u2', amount: 252 },
+          ],
+        },
+      }),
+    });
+    expect(mockDb.receiptItemAssignment.createMany).toHaveBeenCalledOnce();
+    expect(mockDb.activityLog.create).toHaveBeenCalledOnce();
+  });
+});
+
 describe('AI provider setup (#280)', () => {
   test('no receipts procedure exposes the AI provider setup', async () => {
     const { receiptsRouter } = await import('./receipts');
@@ -206,12 +293,12 @@ describe('a group archived while a receipt was being finished (#289)', () => {
       status: 'COMPLETED',
       groupId: 'g1',
       uploadedById: 'u1',
-      extractedData: { subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'USD' },
+      extractedData: { subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'RUB' },
       items: [{ id: 'i1', totalPrice: 1000 }],
     });
     // The early check still sees the group active, but by the time the
     // transaction locks its row, it's archived
-    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'USD' });
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'RUB' });
     locksRead({ archivedAt: new Date() });
     mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => unknown) => fn(mockDb));
   });

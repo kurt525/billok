@@ -4,7 +4,6 @@ import { Prisma } from '@/generated/prisma/client';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { createTRPCRouter, protectedProcedure, groupMemberProcedure } from '../init';
 import { parseExtractedData } from '../../lib/json-schemas';
-import { getExchangeRate, convertCents } from '../../lib/exchange-rates';
 import { stripUndefined } from '../../lib/strip-undefined';
 import { lockActiveGroup } from '../../lib/group-balances';
 import { calculateManualReceiptTotals } from '@/lib/manual-receipt-split';
@@ -284,11 +283,14 @@ export const receiptsRouter = createTRPCRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      // Refuse an archived group before the checks and rate lookup below;
+      // Refuse an archived group before receipt checks;
       // lockActiveGroup in the transaction is the check that holds (#289)
       const group = await ctx.db.group.findUnique({ where: { id: input.groupId } });
       if (group?.archivedAt) {
         throw new AppError('BAD_REQUEST', 'archivedCreateExpense');
+      }
+      if (!group || group.currency.toUpperCase() !== 'RUB') {
+        throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
       }
 
       const receipt = await ctx.db.receipt.findUnique({
@@ -313,6 +315,9 @@ export const receiptsRouter = createTRPCRouter({
       }
 
       const extractedData = parseExtractedData(receipt.extractedData);
+      if (extractedData.currency.toUpperCase() !== 'RUB') {
+        throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+      }
       if (receipt.originalName === 'billok-manual') {
         const itemIds = new Set(receipt.items.map((item) => item.id));
         const assigned = input.assignments.map((assignment) => assignment.receiptItemId);
@@ -415,26 +420,17 @@ export const receiptsRouter = createTRPCRouter({
         })),
       );
 
-      // Currency conversion for receipt expenses
-      const rawCurrency = extractedData.currency;
-      const isValidIso = rawCurrency && /^[a-zA-Z]{3}$/.test(rawCurrency);
-      const receiptCurrency = (isValidIso ? rawCurrency : group!.currency).toUpperCase();
-      const groupCurrency = group!.currency.toUpperCase();
-      let exchangeRate: number | null = null;
-      let baseCurrencyAmount: number | null = null;
-
-      if (receiptCurrency !== groupCurrency) {
-        const receiptDate = extractedData.date?.slice(0, 10);
-        exchangeRate = await getExchangeRate(receiptCurrency, groupCurrency, receiptDate);
-        if (exchangeRate === null) {
-          throw new AppError('BAD_REQUEST', 'receiptExchangeRateUnavailable');
-        }
-        baseCurrencyAmount = convertCents(totalAmount, exchangeRate);
-      }
-
       // All writes in a single transaction for atomicity
       const expense = await ctx.db.$transaction(async (tx) => {
         await lockActiveGroup(tx, input.groupId, 'archivedCreateExpense');
+        // Recheck the RUB-only invariant under the group row lock.
+        const lockedGroup = await tx.group.findUnique({
+          where: { id: input.groupId },
+          select: { currency: true },
+        });
+        if (!lockedGroup || lockedGroup.currency.toUpperCase() !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+        }
 
         // Deleting the receipt from the pending list takes it off the group, and keeps it while
         // a claim session uses it (#318). Under its lock, that either waits for this expense
@@ -476,9 +472,9 @@ export const receiptsRouter = createTRPCRouter({
             groupId: input.groupId,
             title: input.title,
             amount: totalAmount,
-            currency: receiptCurrency,
-            exchangeRate: exchangeRate ?? 1.0,
-            baseCurrencyAmount,
+            currency: 'RUB',
+            exchangeRate: 1.0,
+            baseCurrencyAmount: null,
             splitMode: 'ITEM',
             paidById: input.paidById,
             addedById: ctx.user.id,
