@@ -4,7 +4,6 @@ import { use, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Link, useRouter } from '@/i18n/navigation';
 import { trpc } from '@/lib/trpc';
-import { COMMON_CURRENCIES } from '@/lib/currencies';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -56,7 +55,6 @@ function GroupDetailsForm({
 
   const [name, setName] = useState(initialName);
   const [description, setDescription] = useState(initialDescription);
-  const [currency, setCurrency] = useState(initialCurrency);
 
   const updateGroup = trpc.groups.update.useMutation({
     onSuccess: () => {
@@ -72,7 +70,6 @@ function GroupDetailsForm({
       groupId,
       name: name.trim(),
       description: description || undefined,
-      currency: currency || undefined,
     });
   }
 
@@ -97,20 +94,13 @@ function GroupDetailsForm({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="currency">{t('settings.currency')}</Label>
-            <select
-              id="currency"
-              value={currency}
-              onChange={(e) => setCurrency(e.target.value)}
-              disabled={readOnly}
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            <Label>{t('settings.currency')}</Label>
+            <p
+              className="rounded-lg border border-input px-3 py-2 text-sm text-muted-foreground"
+              data-testid="group-currency-readonly"
             >
-              {COMMON_CURRENCIES.map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.code} - {c.name}
-                </option>
-              ))}
-            </select>
+              {initialCurrency === 'RUB' ? 'Российский рубль (₽)' : initialCurrency}
+            </p>
             {updateGroup.error && (
               <p className="text-xs text-destructive">{localizedTrpcError(updateGroup.error, tc('errors.generic'))}</p>
             )}

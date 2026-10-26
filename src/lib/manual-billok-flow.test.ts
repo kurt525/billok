@@ -35,7 +35,7 @@ describe('BillOK manual-only customer journey', () => {
     expect(group).not.toContain('detail.scanReceipt');
     expect(group).not.toContain('<Camera');
     expect(group).toContain('/expenses/new');
-    expect(read('src/app/[locale]/(app)/groups/new/page.tsx')).toContain("useState('RUB')");
+    expect(read('src/app/[locale]/(app)/groups/new/page.tsx')).toContain("currency: 'RUB'");
     const legacy = read('src/app/[locale]/(app)/groups/[groupId]/scan/page.tsx');
     expect(legacy).toContain("router.replace('/groups/' + groupId + '/expenses/new')");
     expect(legacy).toContain('receipts.getReceiptItems.useQuery');

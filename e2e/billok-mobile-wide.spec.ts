@@ -97,7 +97,6 @@ test('mobile app stays centered and scroll-free horizontally at 430–720px with
   await page.goto('/groups/new', { waitUntil: 'networkidle' });
   const nameInput = page.locator('input#name');
   const descriptionInput = page.locator('input#description');
-  const currency = page.locator('select#currency');
   const create = page.getByRole('button', { name: 'Создать группу', exact: true });
   const cafe = page.getByRole('button', { name: '🍽️', exact: true });
   await expect(nameInput).toBeVisible();
@@ -106,7 +105,7 @@ test('mobile app stays centered and scroll-free horizontally at 430–720px with
   for (const width of [360, ...widths]) {
     await page.setViewportSize({ width, height: 800 });
     await noHorizontalOverflow(page, width);
-    for (const control of [nameInput, descriptionInput, currency, create, cafe]) {
+    for (const control of [nameInput, descriptionInput, create, cafe]) {
       const rect = await control.boundingBox();
       expect(rect, 'Group create control at ' + width + 'px').not.toBeNull();
       expect(rect!.height).toBeGreaterThanOrEqual(44);
@@ -127,18 +126,18 @@ test('mobile app stays centered and scroll-free horizontally at 430–720px with
   await page.setViewportSize({ width: 480, height: 800 });
   await nameInput.fill('Поездка — тест широкого экрана');
   await descriptionInput.fill('Тест мобильного интерфейса BillOK');
-  await expect(currency.locator('option[value="RUB"]')).toHaveText('RUB - Российский рубль');
-  await expect(currency).toHaveValue('RUB');
-  await currency.selectOption('EUR');
-  await expect(currency).toHaveValue('EUR');
-  await currency.selectOption('RUB');
-  await expect(currency).toHaveValue('RUB');
+  await expect(page.locator('select#currency')).toHaveCount(0);
   await cafe.click();
   await expect(cafe).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: '💰', exact: true })).toHaveAttribute('aria-pressed', 'false');
   await create.click();
   await expect(page).toHaveURL(/\/groups\/[^/]+$/, { timeout: 20000 });
   await expect(page.getByText('Поездка — тест широкого экрана').first()).toBeVisible();
+  const groupUrl = new URL(page.url()).pathname;
+  await page.goto(groupUrl + '/settings', { waitUntil: 'networkidle' });
+  await expect(page.getByTestId('group-currency-readonly')).toHaveText('Российский рубль (₽)');
+  await expect(page.locator('select#currency')).toHaveCount(0);
+  await noHorizontalOverflow(page, 480);
   await page.goto('/groups', { waitUntil: 'networkidle' });
   await expect(page.getByText('Поездка — тест широкого экрана').first()).toBeVisible();
   await noHorizontalOverflow(page, 480);

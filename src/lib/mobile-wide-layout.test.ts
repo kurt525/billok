@@ -26,8 +26,20 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
     expect(form).toContain('flex size-11 shrink-0 items-center justify-center');
     expect(form).toContain('aria-pressed={emoji === e}');
     expect(form).toContain('aria-label={e}');
-    expect(form).toContain('flex h-11 min-w-0 w-full rounded-md');
+    expect(form).toContain("currency: 'RUB'");
+    expect(form).not.toContain('select');
+    expect(form).not.toContain('COMMON_CURRENCIES');
     expect(form).toContain('className="min-h-11 w-full text-base"');
+  });
+
+  it('disables group currency editing without changing currencies in existing records', () => {
+    const settings = source('src/app/[locale]/(app)/groups/[groupId]/settings/page.tsx');
+    expect(settings).not.toContain('COMMON_CURRENCIES');
+    expect(settings).not.toContain('select');
+    expect(settings).toContain('data-testid="group-currency-readonly"');
+    expect(settings).toContain("initialCurrency === 'RUB'");
+    expect(settings).not.toContain('currency: currency || undefined');
+    expect(settings).toContain('description: description || undefined');
   });
 
   it('keeps authentication and guest receipts one column regardless of wide phone viewport', () => {
