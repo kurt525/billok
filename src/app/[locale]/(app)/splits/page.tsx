@@ -40,12 +40,12 @@ export default function SplitsPage() {
 
   return (
     <div className="space-y-6" data-testid="splits-page">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold">{t('title')}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{t('description')}</p>
         </div>
-        <Button nativeButton={false} render={<Link href="/split" />}>
+        <Button className="min-h-11" nativeButton={false} render={<Link href="/split" />}>
           <Receipt className="mr-2 h-4 w-4" />
           {t('goToSplit')}
         </Button>
@@ -59,7 +59,7 @@ export default function SplitsPage() {
             <Scissors className="mx-auto h-10 w-10 text-muted-foreground/50" />
             <p className="mt-3 text-muted-foreground">{t('empty')}</p>
             <p className="mt-1 text-sm text-muted-foreground">{t('emptyDescription')}</p>
-            <Button nativeButton={false} className="mt-4" render={<Link href="/split" />}>
+            <Button nativeButton={false} className="mt-4 min-h-11" render={<Link href="/split" />}>
               <Receipt className="mr-2 h-4 w-4" />
               {t('goToSplit')}
             </Button>
@@ -67,7 +67,7 @@ export default function SplitsPage() {
         </Card>
       )}
 
-      <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(280px,1fr))]">
+      <div className="grid min-w-0 grid-cols-1 gap-4">
         {splits.map((split) => (
           <Card
             key={split.id}
@@ -78,10 +78,10 @@ export default function SplitsPage() {
               href={split.status === 'FINALIZED' ? `/split/${split.shareToken}` : `/split/${split.shareToken}/claim`}
               className="block"
             >
-              <CardHeader className="pb-2 pr-10">
-                <CardTitle className="flex items-center gap-2.5 text-base">
+              <CardHeader className="min-w-0 pb-2 pr-12">
+                <CardTitle className="flex min-w-0 items-start gap-2.5 text-base">
                   <Scissors className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="flex-1 truncate">{split.merchantName ?? t('untitled')}</span>
+                  <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{split.merchantName ?? t('untitled')}</span>
                   <Badge
                     variant={split.status === 'FINALIZED' ? 'default' : 'outline'}
                     className="shrink-0 text-[10px]"
@@ -92,9 +92,11 @@ export default function SplitsPage() {
               </CardHeader>
               <CardContent>
                 {split.total != null && (
-                  <p className="mb-1.5 text-lg font-semibold">{formatCents(split.total, split.currency, locale)}</p>
+                  <p className="mb-1.5 text-lg font-semibold tabular-nums [overflow-wrap:anywhere]">
+                    {formatCents(split.total, split.currency, locale)}
+                  </p>
                 )}
-                <div className="flex items-center justify-between text-sm text-muted-foreground">
+                <div className="flex min-w-0 flex-wrap items-center justify-between gap-1 text-sm text-muted-foreground">
                   <span>
                     {t('people', { count: split.peopleCount })}
                     {' · '}
@@ -107,7 +109,7 @@ export default function SplitsPage() {
             <button
               type="button"
               onClick={() => setDeleteId(split.id)}
-              className="absolute top-3 right-3 rounded-md p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+              className="absolute right-2 top-2 flex size-11 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
               aria-label={t('delete')}
               data-testid={`delete-split-${split.id}`}
             >
@@ -119,7 +121,13 @@ export default function SplitsPage() {
 
       {hasNextPage && (
         <div className="text-center">
-          <Button variant="outline" size="sm" onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="min-h-11"
+            onClick={() => fetchNextPage()}
+            disabled={isFetchingNextPage}
+          >
             {t('loadMore')}
           </Button>
         </div>

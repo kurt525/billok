@@ -108,6 +108,34 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
   }
   await page.setViewportSize({ width: 412, height: 460 });
 
+  // The creator's own history must fit small phones, and the delete action
+  // must be reachable without relying on a mouse or accidentally deleting.
+  const receiptToken = new URL(shareUrl).pathname.split('/').at(-1);
+  for (const width of [320, 412]) {
+    await page.setViewportSize({ width, height: 460 });
+    await page.goto('/splits', { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('splits-page')).toBeVisible();
+    const historyCard = page.locator('[data-testid^="split-card-"]').filter({
+      has: page.locator('a[href$="/split/' + receiptToken + '"]'),
+    });
+    await expect(historyCard).toBeVisible();
+    await expect(historyCard).toContainText('Ужин в кафе');
+    await fitsPhone(page);
+    const cardRect = await historyCard.boundingBox();
+    expect(cardRect!.x).toBeGreaterThanOrEqual(0);
+    expect(cardRect!.x + cardRect!.width).toBeLessThanOrEqual(width);
+    const remove = historyCard.locator('button[aria-label]');
+    expect((await remove.boundingBox())!.width).toBeGreaterThanOrEqual(44);
+    expect((await remove.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    if (width === 320) {
+      await remove.click();
+      const dialog = page.getByRole('alertdialog');
+      await expect(dialog).toBeVisible();
+      await dialog.getByRole('button', { name: 'Отмена' }).click();
+      await expect(historyCard).toBeVisible();
+    }
+  }
+
   const otherDevice = await browser.newContext({
     viewport: { width: 320, height: 800 },
     isMobile: true,
