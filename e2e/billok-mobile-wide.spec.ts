@@ -138,6 +138,34 @@ test('mobile app stays centered and scroll-free horizontally at 430–720px with
   await expect(page.getByTestId('group-currency-readonly')).toHaveText('Российский рубль (₽)');
   await expect(page.locator('select#currency')).toHaveCount(0);
   await noHorizontalOverflow(page, 480);
+
+  // No forex selectors or exchange-rate forms for new group expenses.
+  await page.goto(groupUrl + '/expenses/new', { waitUntil: 'networkidle' });
+  await expect(page.getByLabel('Сумма (₽)')).toBeVisible();
+  await expect(page.locator('select#currency')).toHaveCount(0);
+  await expect(page.getByTestId('create-manual-group-receipt')).toBeEnabled();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  for (const width of [360, 480, 720]) {
+    await page.setViewportSize({ width, height: 800 });
+    await noHorizontalOverflow(page, width);
+    const amount = page.getByLabel('Сумма (₽)');
+    expect((await amount.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  }
+
+  // The original seed's USD group is preserved for viewing historical amounts.
+  // New RUB expenses must be blocked instead of silently converting currencies.
+  await page.goto('/groups', { waitUntil: 'networkidle' });
+  const oldGroup = page.locator('a[href^="/groups/"]').filter({ hasText: 'Apartment' }).first();
+  await expect(oldGroup).toBeVisible();
+  const oldGroupUrl = await oldGroup.getAttribute('href');
+  await page.goto(oldGroupUrl + '/expenses/new', { waitUntil: 'networkidle' });
+  await expect(page.getByRole('alert')).toContainText('прежнюю валюту USD');
+  await expect(page.getByTestId('create-manual-group-receipt')).toBeDisabled();
+  await expect(page.locator('form button[type="submit"]')).toBeDisabled();
+  await expect(page.locator('select#currency')).toHaveCount(0);
+  await noHorizontalOverflow(page, 720);
+
+  await page.setViewportSize({ width: 480, height: 800 });
   await page.goto('/groups', { waitUntil: 'networkidle' });
   await expect(page.getByText('Поездка — тест широкого экрана').first()).toBeVisible();
   await noHorizontalOverflow(page, 480);

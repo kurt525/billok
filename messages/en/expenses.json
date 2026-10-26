@@ -22,6 +22,7 @@
     "selectMember": "Select member",
     "backToGroup": "Back to group",
     "expenseDetails": "Expense details",
+    "rubOnlyLegacyGroup": "This group uses the previous currency {currency}. New expenses and receipts are temporarily unavailable; existing amounts have not changed.",
     "currency": "Currency",
     "differentCurrencyNote": "This expense is in {expenseCurrency}, but the group uses {groupCurrency}. The amount will be auto-converted.",
     "manualRateOverride": "Set exchange rate manually",
