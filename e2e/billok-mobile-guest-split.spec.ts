@@ -89,6 +89,21 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
   await expect(page.getByTestId('person-card-0')).not.toContainText('Чай');
   const shareUrl = page.url();
 
+  // Simulate the shorter visual height left above an Android soft keyboard:
+  // both sharing actions must stay inside the visible viewport and remain tappable.
+  await page.setViewportSize({ width: 320, height: 360 });
+  const actions = page.getByTestId('split-result-actions');
+  await expect(actions).toBeVisible();
+  await fitsPhone(page);
+  for (const button of [page.getByTestId('copy-link-btn'), page.getByTestId('share-btn')]) {
+    const rect = await button.boundingBox();
+    expect(rect).not.toBeNull();
+    expect(rect!.height).toBeGreaterThanOrEqual(44);
+    expect(rect!.y).toBeGreaterThanOrEqual(0);
+    expect(rect!.y + rect!.height).toBeLessThanOrEqual(360);
+  }
+  await page.setViewportSize({ width: 412, height: 460 });
+
   const otherDevice = await browser.newContext({
     viewport: { width: 320, height: 800 },
     isMobile: true,

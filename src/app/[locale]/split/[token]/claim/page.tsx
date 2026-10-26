@@ -1300,7 +1300,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       ? new Set<number>()
       : withEdits(baseClaimsMap.get(personIndex) ?? new Set<number>(), localEdits.get(personIndex));
   return (
-    <div className="space-y-6 pb-24">
+    <div className="space-y-6 pb-[calc(10rem+env(safe-area-inset-bottom))]">
       {/* Header */}
       <div className="text-center space-y-1 pt-4">
         <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
@@ -1787,7 +1787,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       </div>
 
       {/* Save button - sticky bottom */}
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-background border-t">
+      <div
+        className="fixed inset-x-0 bottom-0 z-10 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
+        data-testid="claim-actions"
+      >
         <div className="mx-auto max-w-lg">
           {/* Finalize button -- only when no unsaved changes and all items claimed */}
           {!hasAnyUnsavedChanges &&
