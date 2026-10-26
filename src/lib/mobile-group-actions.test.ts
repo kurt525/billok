@@ -31,16 +31,17 @@ describe('Android group actions and account forms', () => {
     expect(invite).toContain('min-h-11 w-full');
   });
 
-  it('makes profile and password fields touch-size with Android autofill attributes', () => {
+  it('keeps profile name manual and password fields touch-size with Android autofill attributes', () => {
     const profile = source('src/app/[locale]/(app)/settings/page.tsx');
     for (const value of [
       'autoComplete="email"',
-      'autoComplete="name"',
+      'autoComplete="off"',
       'autoComplete="current-password"',
       'autoComplete="new-password"',
     ]) {
       expect(profile).toContain(value);
     }
+    expect(profile).not.toContain('autoComplete="name"');
     expect(profile.match(/h-11 min-w-0 text-base/g)?.length).toBeGreaterThanOrEqual(6);
     expect(profile).toContain('data-testid="save-profile-btn"');
     expect(profile).toContain('className="min-h-11 w-full"');

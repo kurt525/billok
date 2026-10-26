@@ -36,7 +36,9 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
   await page.getByTestId('manual-receipt-name').fill('Ужин в кафе');
   await page.getByTestId('person-input-0').fill('Анна');
   await page.getByTestId('add-person-btn').click();
-  await page.getByTestId('person-input-1').fill('Борис');
+  // A full 40-character name without spaces must not widen the 320px screen.
+  const longGuestName = 'Борис'.repeat(8);
+  await page.getByTestId('person-input-1').fill(longGuestName);
   await page.locator('#who-paid').selectOption('0');
   await page.getByTestId('next-assign-btn').click();
   await expect(page.getByTestId('guest-assign-step')).toBeVisible();
@@ -74,7 +76,7 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
   // The second participant alone owes the tea.
   await tea.getByRole('button', { name: /Анна/ }).click();
   await expect(tea.getByRole('button', { name: /Анна/ })).not.toHaveClass(/bg-primary/);
-  await expect(tea.getByRole('button', { name: /Борис/ })).toHaveClass(/bg-primary/);
+  await expect(tea.getByRole('button', { name: /БорисБорис/ })).toHaveClass(/bg-primary/);
 
   await page.setViewportSize({ width: 412, height: 460 });
   await fitsPhone(page);
@@ -86,6 +88,7 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
   await expect(page.getByTestId('split-result')).toBeVisible();
   await expect(page.getByText('Ужин в кафе').first()).toBeVisible();
   await expect(page.getByTestId('person-card-1')).toContainText('Чай');
+  await expect(page.getByTestId('person-card-1')).toContainText(longGuestName);
   await expect(page.getByTestId('person-card-0')).not.toContainText('Чай');
   const shareUrl = page.url();
 
@@ -114,6 +117,7 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
     await otherPage.goto(shareUrl, { waitUntil: 'networkidle' });
     await expect(otherPage.getByTestId('split-result')).toBeVisible();
     await expect(otherPage.getByTestId('person-card-1')).toContainText('Чай');
+    await expect(otherPage.getByTestId('person-card-1')).toContainText(longGuestName);
     await fitsPhone(otherPage);
   } finally {
     await otherDevice.close();

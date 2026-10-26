@@ -177,16 +177,19 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
           return (
             <Card key={idx} data-testid={`person-card-${idx}`}>
               <CardContent className="py-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-3">
+                <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
                     <Avatar className="h-10 w-10">
                       <AvatarFallback className={`text-sm font-semibold ${guestAvatarColor(idx)}`}>
                         {initials(person.name)}
                       </AvatarFallback>
                     </Avatar>
-                    <span className="font-semibold">{person.name}</span>
+                    <span className="min-w-0 font-semibold [overflow-wrap:anywhere]">{person.name}</span>
                   </div>
-                  <span className="text-xl font-bold text-primary" data-testid={`person-total-${idx}`}>
+                  <span
+                    className="min-w-0 text-xl font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
+                    data-testid={`person-total-${idx}`}
+                  >
                     {formatCents(person.total, currency, locale)}
                   </span>
                 </div>

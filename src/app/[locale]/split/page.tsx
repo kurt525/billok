@@ -415,7 +415,7 @@ function AuthenticatedGuestSplitPage() {
           {/* Person list */}
           <div className="space-y-3">
             {people.map((name, idx) => (
-              <div key={personKeys[idx] ?? idx} className="flex items-center gap-2">
+              <div key={personKeys[idx] ?? idx} className="flex min-w-0 items-center gap-2">
                 <Avatar className="h-10 w-10 shrink-0">
                   <AvatarFallback className="text-sm bg-primary/10 text-primary">
                     {name.trim() ? initials(name) : `P${idx + 1}`}
@@ -426,7 +426,8 @@ function AuthenticatedGuestSplitPage() {
                   maxLength={MAX_GUEST_NAME_LENGTH}
                   onChange={(e) => updatePersonName(idx, e.target.value)}
                   placeholder={t('people.personPlaceholder', { index: idx + 1 })}
-                  className="h-12 text-base"
+                  className="h-12 min-w-0 flex-1 text-base"
+                  autoComplete="off"
                   data-testid={`person-input-${idx}`}
                 />
                 {people.length > 1 && (

@@ -56,7 +56,7 @@ function ProfileForm({
         <Label htmlFor="name">{t('profile.name')}</Label>
         <Input
           id="name"
-          autoComplete="name"
+          autoComplete="off"
           className="h-11 min-w-0 text-base"
           value={name}
           onChange={(e) => setName(e.target.value)}

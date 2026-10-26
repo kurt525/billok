@@ -1053,8 +1053,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             {data.summary.map((person: { name: string; total: number; personIndex: number }) => (
               <Card key={person.personIndex}>
                 <CardContent className="py-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
+                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
                       <Avatar className="h-8 w-8">
                         <AvatarFallback className={`text-xs font-semibold ${guestAvatarColor(person.personIndex)}`}>
                           {getInitials(person.name)}
@@ -1062,7 +1062,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       </Avatar>
                       <span className="font-medium">{person.name}</span>
                     </div>
-                    <span className="text-lg font-bold text-primary">
+                    <span className="min-w-0 text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]">
                       {formatCents(person.total, currency, locale)}
                     </span>
                   </div>
@@ -1180,13 +1180,16 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             <CardContent>
               <div className="flex flex-wrap gap-2">
                 {data.people.map((person, idx) => (
-                  <div key={person.id} className="flex items-center gap-2 rounded-full bg-muted px-3 py-1.5">
+                  <div
+                    key={person.id}
+                    className="flex min-w-0 max-w-full items-center gap-2 rounded-2xl bg-muted px-3 py-1.5"
+                  >
                     <Avatar className="h-6 w-6">
                       <AvatarFallback className={`text-[10px] font-semibold ${guestAvatarColor(idx)}`}>
                         {getInitials(person.name)}
                       </AvatarFallback>
                     </Avatar>
-                    <span className="text-sm font-medium">
+                    <span className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">
                       {person.name}
                       {person.groupSize > 1 && ` (×${person.groupSize})`}
                     </span>
@@ -1377,7 +1380,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             {data.people.map((person, idx) => (
               <div
                 key={person.id}
-                className={`flex items-center gap-2 rounded-lg px-3 py-2 ${
+                className={`flex min-w-0 flex-wrap items-center gap-2 rounded-lg px-3 py-2 ${
                   idx === myPersonIndex ? 'bg-primary/10 ring-1 ring-primary' : 'bg-muted'
                 }`}
               >
@@ -1388,7 +1391,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 </Avatar>
                 {editingPersonId === person.id ? (
                   <form
-                    className="flex flex-1 items-center gap-1"
+                    className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
                     onSubmit={(e) => {
                       e.preventDefault();
                       if (!editingName.trim() || !personToken) return;
@@ -1406,7 +1409,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       maxLength={MAX_GUEST_NAME_LENGTH}
                       autoComplete="off"
                       onChange={(e) => setEditingName(e.target.value)}
-                      className="h-7 text-sm flex-1"
+                      className="h-11 min-w-[7rem] flex-1 text-base"
                       autoFocus
                       aria-label={t('editName')}
                       data-testid={`edit-name-input-${idx}`}
@@ -1417,7 +1420,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       max={20}
                       value={editingGroupSize}
                       onChange={(e) => setEditingGroupSize(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-                      className="h-7 w-14 text-sm"
+                      className="h-11 w-16 min-w-0 text-base"
                       aria-label={t('groupSize')}
                       data-testid={`edit-group-size-${idx}`}
                     />
@@ -1425,7 +1428,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       type="submit"
                       size="sm"
                       variant="ghost"
-                      className="h-7 px-2"
+                      className="size-11 shrink-0 p-0"
                       disabled={editPersonName.isPending}
                       aria-label={t('saveName')}
                       title={t('saveName')}
@@ -1436,7 +1439,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       type="button"
                       size="sm"
                       variant="ghost"
-                      className="h-7 px-2"
+                      className="size-11 shrink-0 p-0"
                       onClick={() => setEditingPersonId(null)}
                       aria-label={t('cancelButton')}
                       title={t('cancelButton')}
@@ -1446,7 +1449,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                   </form>
                 ) : (
                   <>
-                    <span className="flex-1 text-sm font-medium">
+                    <span className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">
                       {person.name}
                       {person.groupSize > 1 && (
                         <span data-testid={`group-badge-${idx}`}>{` (×${person.groupSize})`}</span>
@@ -1460,7 +1463,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         setEditingName(person.name);
                         setEditingGroupSize(person.groupSize ?? 1);
                       }}
-                      className="text-muted-foreground hover:text-foreground p-1"
+                      className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
                       aria-label={t('editName')}
                       data-testid={`edit-person-${idx}`}
                     >
@@ -1470,7 +1473,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       <button
                         type="button"
                         onClick={() => setRemoveFor({ id: person.id, name: person.name })}
-                        className="text-muted-foreground hover:text-destructive p-1"
+                        className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-destructive"
                         aria-label={t('removePerson')}
                         data-testid={`remove-person-${idx}`}
                       >
@@ -1495,7 +1498,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               type="button"
               onClick={() => setActivePersonId(person.id)}
               data-testid={`switch-person-${idx}`}
-              className={`flex items-center gap-2 rounded-full px-3 py-1.5 transition-colors ${
+              className={`flex min-h-11 min-w-0 max-w-full items-center gap-2 rounded-2xl px-3 py-1.5 transition-colors ${
                 idx === personIndex
                   ? 'bg-primary text-primary-foreground ring-2 ring-primary'
                   : 'bg-muted hover:bg-muted/80'
@@ -1508,7 +1511,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                   {getInitials(person.name)}
                 </AvatarFallback>
               </Avatar>
-              <span className="text-sm font-medium">
+              <span className="min-w-0 text-left text-sm font-medium [overflow-wrap:anywhere]">
                 {person.name}
                 {person.groupSize > 1 && ` (×${person.groupSize})`}
                 {idx === myPersonIndex && ` ${t('you')}`}
@@ -1593,7 +1596,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                                 setSplittingItemIdx(idx);
                                 setSplitQty('1');
                               }}
-                              className="text-muted-foreground hover:text-foreground p-1"
+                              className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
                               aria-label={t('splitItem')}
                               data-testid={`split-claim-item-${idx}`}
                             >
@@ -1710,19 +1713,19 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 data-testid={`person-total-${person.personIndex}`}
               >
                 <CardContent className="py-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
+                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
                       <Avatar className="h-8 w-8">
                         <AvatarFallback className={`text-xs font-semibold ${guestAvatarColor(person.personIndex)}`}>
                           {getInitials(personName)}
                         </AvatarFallback>
                       </Avatar>
-                      <span className="font-medium">
+                      <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
                         {personName}
                         {isMe && ` ${t('you')}`}
                       </span>
                     </div>
-                    <span className="text-lg font-bold text-primary">
+                    <span className="min-w-0 text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]">
                       {formatCents(person.total, currency, locale)}
                     </span>
                   </div>

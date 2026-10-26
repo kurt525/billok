@@ -95,3 +95,24 @@ describe('Guest participant name inputs stay within 40 characters', () => {
     expect(claim).toContain("import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit'");
   });
 });
+
+describe('Long participant names on mobile guest receipts', () => {
+  it('keeps 40-character guest names and total amounts inside the screen', () => {
+    const split = read('src/app/[locale]/split/page.tsx');
+    const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
+    const result = read('src/app/[locale]/split/[token]/page.tsx');
+    expect(split).toContain('h-12 min-w-0 flex-1 text-base');
+    expect(result).toContain('min-w-0 font-semibold [overflow-wrap:anywhere]');
+    expect(claim).toContain('min-w-0 flex-wrap items-center gap-2 rounded-lg');
+    expect(claim).toContain('min-w-0 font-medium [overflow-wrap:anywhere]');
+    expect(claim).toContain('max-w-full items-center gap-2 rounded-2xl');
+    expect(claim).toContain('h-11 min-w-[7rem] flex-1 text-base');
+    expect(claim).toContain('size-11 shrink-0 p-0');
+  });
+
+  it('does not request full browser autofill identity for editable profile display name', () => {
+    const profile = read('src/app/[locale]/(app)/settings/page.tsx');
+    expect(profile).not.toContain('autoComplete="name"');
+    expect(profile).toContain('autoComplete="off"');
+  });
+});
