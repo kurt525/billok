@@ -3,6 +3,7 @@
  * Ordered by global usage / relevance.
  */
 export const COMMON_CURRENCIES = [
+  { code: 'RUB', name: 'Российский рубль', symbol: '₽' },
   { code: 'USD', name: 'US Dollar', symbol: '$' },
   { code: 'EUR', name: 'Euro', symbol: '€' },
   { code: 'GBP', name: 'British Pound', symbol: '£' },

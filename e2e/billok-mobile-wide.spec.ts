@@ -127,7 +127,12 @@ test('mobile app stays centered and scroll-free horizontally at 430–720px with
   await page.setViewportSize({ width: 480, height: 800 });
   await nameInput.fill('Поездка — тест широкого экрана');
   await descriptionInput.fill('Тест мобильного интерфейса BillOK');
+  await expect(currency.locator('option[value="RUB"]')).toHaveText('RUB - Российский рубль');
+  await expect(currency).toHaveValue('RUB');
+  await currency.selectOption('EUR');
+  await expect(currency).toHaveValue('EUR');
   await currency.selectOption('RUB');
+  await expect(currency).toHaveValue('RUB');
   await cafe.click();
   await expect(cafe).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: '💰', exact: true })).toHaveAttribute('aria-pressed', 'false');
