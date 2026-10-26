@@ -144,7 +144,7 @@ test('mobile app stays centered and scroll-free horizontally at 430–720px with
   await expect(page.getByLabel('Сумма (₽)')).toBeVisible();
   await expect(page.locator('select#currency')).toHaveCount(0);
   await expect(page.getByTestId('create-manual-group-receipt')).toBeEnabled();
-  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByTestId('rub-only-legacy-warning')).toHaveCount(0);
   for (const width of [360, 480, 720]) {
     await page.setViewportSize({ width, height: 800 });
     await noHorizontalOverflow(page, width);
@@ -159,7 +159,7 @@ test('mobile app stays centered and scroll-free horizontally at 430–720px with
   await expect(oldGroup).toBeVisible();
   const oldGroupUrl = await oldGroup.getAttribute('href');
   await page.goto(oldGroupUrl + '/expenses/new', { waitUntil: 'networkidle' });
-  await expect(page.getByRole('alert')).toContainText('прежнюю валюту USD');
+  await expect(page.getByTestId('rub-only-legacy-warning')).toContainText('прежнюю валюту USD');
   await expect(page.getByTestId('create-manual-group-receipt')).toBeDisabled();
   await expect(page.locator('form button[type="submit"]')).toBeDisabled();
   await expect(page.locator('select#currency')).toHaveCount(0);

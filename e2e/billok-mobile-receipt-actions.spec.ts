@@ -5,6 +5,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
  * Runs only with receipts generated in a disposable CI PostgreSQL database.
  */
 const groupId = process.env.BILLOK_MOBILE_GROUP_ID;
+const rubGroupId = process.env.BILLOK_MOBILE_RUB_GROUP_ID;
 const receiptId = process.env.BILLOK_MOBILE_RECEIPT_ID;
 const receiptUrl = groupId && receiptId ? `/groups/${groupId}/scan?receiptId=${receiptId}` : null;
 
@@ -134,7 +135,7 @@ test('group receipt: add, edit, cancel, split, assign, save, delete and finalize
 });
 
 test('manual group bill starts without upload and keeps its positions', async ({ page }) => {
-  test.skip(!groupId, 'Requires disposable group fixture');
+  test.skip(!rubGroupId, 'Requires disposable RUB group fixture');
   test.setTimeout(110_000);
   const uploads: string[] = [];
   page.on('request', (r) => {
@@ -145,10 +146,10 @@ test('manual group bill starts without upload and keeps its positions', async ({
   await page.locator('input[type=password]').fill('password123');
   await page.getByRole('button', { name: 'Войти', exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard/);
-  await page.goto('/groups/' + groupId + '/expenses/new', { waitUntil: 'networkidle' });
+  await page.goto('/groups/' + rubGroupId + '/expenses/new', { waitUntil: 'networkidle' });
   await expect(page.getByTestId('manual-group-receipt-entry')).toBeVisible();
   await page.getByTestId('create-manual-group-receipt').click();
-  await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '/scan\\?receiptId=[^/]+$'));
+  await expect(page).toHaveURL(new RegExp('/groups/' + rubGroupId + '/scan\\?receiptId=[^/]+$'));
   await expect(page.getByRole('heading', { name: 'Ручной групповой чек' })).toBeVisible();
   await expect(page.getByTestId('item-assignment-form')).toBeVisible();
   await expect(page.getByTestId('scan-file-input')).toHaveCount(0);
@@ -171,7 +172,7 @@ test('manual group bill starts without upload and keeps its positions', async ({
   await portions.nth(1).fill('5');
   await page.getByTestId('save-for-later-btn').scrollIntoViewIfNeeded();
   await page.getByTestId('save-for-later-btn').click();
-  await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'));
+  await expect(page).toHaveURL(new RegExp('/groups/' + rubGroupId + '$'));
   await page.goto(savedUrl, { waitUntil: 'networkidle' });
   await expect(item(page, 'Пицца')).toHaveCount(1);
   const restored = item(page, 'Пицца').locator('[data-testid^="item-parts-"]');

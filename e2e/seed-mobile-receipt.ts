@@ -45,6 +45,23 @@ async function main() {
         },
       },
     });
+    // Separate disposable RUB group for creating new manual bills. The
+    // historical Apartment fixture intentionally remains USD and read-only
+    // for new entries, so we don't alter old amounts to make tests pass.
+    const alice = await db.user.findUniqueOrThrow({ where: { email: 'alice@example.com' } });
+    const rubGroup = await db.group.create({
+      data: {
+        name: 'Мобильный RUB тест',
+        currency: 'RUB',
+        members: {
+          create: [
+            { userId: bob.id, role: 'OWNER' },
+            { userId: alice.id, role: 'MEMBER' },
+          ],
+        },
+      },
+    });
+    process.stdout.write('BILLOK_MOBILE_RUB_GROUP_ID=' + rubGroup.id + '\n');
     process.stdout.write('BILLOK_MOBILE_RECEIPT_ID=' + receipt.id + '\n');
     process.stdout.write('BILLOK_MOBILE_GROUP_ID=' + group.id + '\n');
   } finally {

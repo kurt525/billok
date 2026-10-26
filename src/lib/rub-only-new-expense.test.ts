@@ -23,6 +23,7 @@ describe('RUB-only creation of new group expenses', () => {
   it('prevents changing balances of historical non-RUB groups via new expense and receipt forms', () => {
     expect(source).toContain("group.data?.currency?.toUpperCase() === 'RUB'");
     expect(source).toContain("t('new.rubOnlyLegacyGroup', { currency: groupCurrency })");
+    expect(source).toContain('data-testid="rub-only-legacy-warning"');
     expect(source).toContain('disabled={createManualReceipt.isPending || !isRubGroup}');
     expect(source).toContain('if (!isRubGroup || !effectivePaidById');
     expect(source).toContain('disabled={!isRubGroup || createExpense.isPending');

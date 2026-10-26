@@ -130,6 +130,7 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
       {!isRubGroup && group.data && (
         <p
           role="alert"
+          data-testid="rub-only-legacy-warning"
           className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100"
         >
           {t('new.rubOnlyLegacyGroup', { currency: groupCurrency })}
