@@ -57,3 +57,30 @@ describe('Phone input and minimum touch targets for all group expense modes', ()
     }
   });
 });
+
+describe('Expense split modes at narrow Android widths', () => {
+  it('keeps all four participant rows and their amount fields in the mobile column', () => {
+    for (const component of ['equal-split', 'exact-split', 'percentage-split', 'shares-split']) {
+      const ui = read('src/components/expenses/' + component + '.tsx');
+      expect(ui, component).toContain('data-testid="split-member-row"');
+      expect(ui, component).toContain('min-w-0');
+      expect(ui, component).toContain('break-words');
+    }
+    for (const component of ['exact-split', 'percentage-split', 'shares-split']) {
+      const ui = read('src/components/expenses/' + component + '.tsx');
+      expect(ui, component).toContain('flex-col gap-2 rounded-md border p-3 sm:flex-row');
+    }
+  });
+
+  it('makes split mode selectors and save actions touch-size', () => {
+    for (const path of [
+      'src/app/[locale]/(app)/groups/[groupId]/expenses/new/page.tsx',
+      'src/app/[locale]/(app)/groups/[groupId]/expenses/[expenseId]/edit/page.tsx',
+    ]) {
+      const ui = read(path);
+      expect(ui).toContain('expense-split-mode-');
+      expect(ui).toContain('min-h-11 min-w-0 rounded-md border');
+      expect(ui).toContain('className="min-h-11 w-full text-base"');
+    }
+  });
+});

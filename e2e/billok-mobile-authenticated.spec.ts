@@ -92,6 +92,33 @@ test('Russian mobile dashboard, groups, expenses and admin at all 4 phone widths
     await page.goto(new URL(page.url()).pathname + '/expenses/new', { waitUntil: 'networkidle' });
     await expect(page.getByRole('main')).toBeVisible();
     await checkPhoneLayout(page, width);
+
+    // Real share-entry forms are where long participant names + monetary values
+    // used to push input fields past the edge of narrow Android screens.
+    if (width === 320 || width === 412) {
+      for (const mode of ['EXACT', 'PERCENTAGE', 'SHARES'] as const) {
+        const choice = page.getByTestId('expense-split-mode-' + mode);
+        await expect(choice).toBeVisible();
+        const choiceBounds = await choice.boundingBox();
+        expect(choiceBounds!.height).toBeGreaterThanOrEqual(44);
+        await choice.click();
+        const rows = page.getByTestId('split-member-row');
+        await expect(rows.first()).toBeVisible();
+        await checkPhoneLayout(page, width);
+        const amount = rows.first().locator('input');
+        const rect = await amount.boundingBox();
+        expect(rect, mode + ' amount at ' + width + 'px').toBeTruthy();
+        expect(rect!.x).toBeGreaterThanOrEqual(0);
+        expect(rect!.x + rect!.width).toBeLessThanOrEqual(width);
+        expect(rect!.height).toBeGreaterThanOrEqual(44);
+      }
+      const submit = page.locator('form button[type=submit]').last();
+      await expect(submit).toBeVisible();
+      const submitBounds = await submit.boundingBox();
+      expect(submitBounds!.height).toBeGreaterThanOrEqual(44);
+      await checkPhoneLayout(page, width);
+    }
+
     const input = page.locator('input:visible').first();
     await expect(input).toBeVisible();
     await page.setViewportSize({ width, height: 460 });

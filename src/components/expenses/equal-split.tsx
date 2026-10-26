@@ -62,14 +62,15 @@ export function EqualSplit({
       {members.map((m) => (
         <label
           key={m.id}
-          className="flex flex-wrap cursor-pointer items-center justify-between gap-2 rounded-md border p-3 hover:bg-muted/50"
+          className="flex min-h-11 min-w-0 flex-wrap cursor-pointer items-center justify-between gap-2 rounded-md border p-3 hover:bg-muted/50"
+          data-testid="split-member-row"
         >
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             <input
               type="checkbox"
               checked={selected.has(m.id)}
               onChange={() => toggle(m.id)}
-              className="h-4 w-4 rounded border-gray-300"
+              className="h-5 w-5 shrink-0 rounded border-gray-300"
             />
             <span className="min-w-0 break-words text-sm">{m.name ?? 'Без имени'}</span>
           </div>

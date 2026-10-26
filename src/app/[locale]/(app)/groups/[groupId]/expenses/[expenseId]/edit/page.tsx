@@ -406,7 +406,8 @@ function EditExpenseForm({
                     key={mode.value}
                     type="button"
                     onClick={() => setSplitMode(mode.value)}
-                    className={`rounded-md border p-2 text-left text-sm transition-colors ${
+                    data-testid={`expense-split-mode-${mode.value}`}
+                    className={`min-h-11 min-w-0 rounded-md border p-2 text-left text-sm transition-colors ${
                       splitMode === mode.value ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted'
                     }`}
                   >
@@ -469,7 +470,7 @@ function EditExpenseForm({
 
             <Button
               type="submit"
-              className="w-full"
+              className="min-h-11 w-full text-base"
               disabled={updateExpense.isPending || amountCents <= 0 || shares.length === 0}
             >
               {updateExpense.isPending ? t('edit.submitting') : t('edit.submit')}

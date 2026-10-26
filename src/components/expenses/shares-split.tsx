@@ -70,7 +70,11 @@ export function SharesSplit({
         const units = parseInt(shareUnits[m.id] ?? '0') || 0;
         const share = totalUnits > 0 ? Math.round((totalCents * units) / totalUnits) : 0;
         return (
-          <div key={m.id} className="flex items-center gap-3 rounded-md border p-3">
+          <div
+            key={m.id}
+            className="flex min-w-0 flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center"
+            data-testid="split-member-row"
+          >
             <span className="min-w-0 flex-1 break-words text-sm">{m.name ?? 'Без имени'}</span>
             <Input
               type="number"
@@ -84,7 +88,7 @@ export function SharesSplit({
             />
             <span className="text-xs text-muted-foreground">долей</span>
             {units > 0 && totalCents > 0 && (
-              <span className="w-20 text-right text-xs text-muted-foreground">
+              <span className="max-w-full break-words text-right text-xs text-muted-foreground sm:ml-auto">
                 {formatCents(share, currency, locale)}
               </span>
             )}
