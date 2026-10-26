@@ -67,14 +67,14 @@ describe('a group archived while a change was on its way (#289)', () => {
     paidById: 'u1',
     addedById: 'u1',
     amount: 1000,
-    currency: 'USD',
+    currency: 'RUB',
     exchangeRate: 1,
     baseCurrencyAmount: null,
     expenseDate: new Date('2026-10-01T00:00:00Z'),
   };
   const newExpense = {
     groupId: 'g1',
-    currency: 'USD', // This legacy scenario explicitly exercises a USD group.
+    currency: 'RUB', // Creation now accepts only rubles.
     title: 'Dinner',
     amount: 1000,
     paidById: 'u1',
@@ -84,7 +84,7 @@ describe('a group archived while a change was on its way (#289)', () => {
 
   beforeEach(() => {
     // The early check still sees the group active...
-    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'USD' });
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'RUB' });
     // ...but by the time the transaction locks its row, it's archived
     mockDb.$queryRaw.mockResolvedValue([{ archivedAt: new Date() }]);
     mockDb.expense.findUnique.mockResolvedValue(ownExpense);
@@ -92,6 +92,69 @@ describe('a group archived while a change was on its way (#289)', () => {
     mockDb.groupMember.count.mockResolvedValue(1);
     mockDb.expenseShare.findMany.mockResolvedValue([]);
     mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => unknown) => fn(mockDb));
+  });
+
+  test('rejects other currencies before writing or looking up any exchange rate', async () => {
+    const api = await caller();
+    await expect(api.create({ ...newExpense, currency: 'USD' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(api.create({ ...newExpense, currency: 'eur' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('rejects a manual exchange rate even when the currency is RUB', async () => {
+    const api = await caller();
+    // Cast only in this negative test: TypeScript already rejects this legacy
+    // field, but the server must also reject a malformed HTTP payload.
+    const invalidRequest = { ...newExpense, exchangeRate: 2 } as unknown as Parameters<typeof api.create>[0];
+    await expect(api.create(invalidRequest)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects adding a RUB expense into a legacy non-RUB group', async () => {
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'USD' });
+    const api = await caller();
+    await expect(api.create(newExpense)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'New expenses are allowed only in groups using RUB.',
+    });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('does not create if the currency changes before the group row lock', async () => {
+    mockDb.group.findUnique
+      .mockResolvedValueOnce({ archivedAt: null, currency: 'RUB' })
+      .mockResolvedValueOnce({ currency: 'USD' });
+    mockDb.$queryRaw.mockResolvedValue([{ archivedAt: null }]);
+    const api = await caller();
+    await expect(api.create(newExpense)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.$queryRaw).toHaveBeenCalledOnce();
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+
+  test('creates a normal RUB expense without any conversion and defaults omitted currency', async () => {
+    mockDb.$queryRaw.mockResolvedValue([{ archivedAt: null }]);
+    mockDb.expense.create.mockResolvedValue({ id: 'e2', shares: [] });
+    const api = await caller();
+    await api.create({
+      groupId: newExpense.groupId,
+      title: newExpense.title,
+      amount: newExpense.amount,
+      paidById: newExpense.paidById,
+      splitMode: newExpense.splitMode,
+      shares: newExpense.shares,
+    });
+    expect(mockDb.expense.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          amount: 1000,
+          currency: 'RUB',
+          exchangeRate: 1,
+          baseCurrencyAmount: null,
+        }),
+      }),
+    );
   });
 
   test('create refuses, writing nothing', async () => {

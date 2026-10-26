@@ -86,8 +86,10 @@ export const expensesRouter = createTRPCRouter({
           .length(3)
           .regex(/^[a-zA-Z]{3}$/)
           .transform((c) => c.toUpperCase())
+          .pipe(z.literal('RUB'))
           .default('RUB'),
-        exchangeRate: exchangeRateSchema.optional(), // manual override
+        // Reject rather than silently ignore a legacy manual-rate override.
+        exchangeRate: z.never().optional(),
         category: z.string().max(50).optional(),
         expenseDate: z.string().datetime().optional(),
         paidById: z.string(),
@@ -107,38 +109,28 @@ export const expensesRouter = createTRPCRouter({
         throw new AppError('BAD_REQUEST', 'archivedAddExpense');
       }
 
-      // Validate shares sum equals total (in expense's original currency)
+      if (group && group.currency.toUpperCase() !== 'RUB') {
+        throw new AppError('BAD_REQUEST', 'rubOnlyGroup');
+      }
+
+      // Validate shares sum equals total in kopecks.
       const sharesSum = input.shares.reduce((sum, s) => sum + s.amount, 0);
       if (sharesSum !== input.amount) {
         throw new AppError('BAD_REQUEST', 'sharesSumMismatch', { sum: sharesSum, amount: input.amount });
       }
 
-      // Currency conversion: compute base currency amount if currencies differ
-      let exchangeRate: number | null = null;
-      let baseCurrencyAmount: number | null = null;
-
-      const groupCurrency = group?.currency ?? 'RUB';
-      if (input.currency.toUpperCase() !== groupCurrency.toUpperCase()) {
-        if (input.exchangeRate) {
-          // Manual override
-          exchangeRate = input.exchangeRate;
-        } else {
-          // Auto-fetch from frankfurter.app
-          const dateStr = input.expenseDate
-            ? input.expenseDate.slice(0, 10) // YYYY-MM-DD from ISO string
-            : undefined;
-          exchangeRate = await getExchangeRate(input.currency, groupCurrency, dateStr);
-        }
-
-        if (exchangeRate === null) {
-          throw new AppError('BAD_REQUEST', 'exchangeRateUnavailable');
-        }
-
-        baseCurrencyAmount = convertCents(input.amount, exchangeRate);
-      }
-
       const expense = await ctx.db.$transaction(async (tx) => {
         await lockActiveGroup(tx, input.groupId, 'archivedAddExpense');
+
+        // Re-check under the group row lock so a concurrent change cannot
+        // insert a RUB expense into a group whose currency has changed.
+        const lockedGroup = await tx.group.findUnique({
+          where: { id: input.groupId },
+          select: { currency: true },
+        });
+        if (!lockedGroup || lockedGroup.currency.toUpperCase() !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'rubOnlyGroup');
+        }
 
         // Validate paidById is a member of the group (after the lock, so someone
         // leaving meanwhile is either gone or waits for this, #279). A placeholder
@@ -165,9 +157,9 @@ export const expensesRouter = createTRPCRouter({
             title: input.title,
             ...(input.description !== undefined ? { description: input.description } : {}),
             amount: input.amount,
-            currency: input.currency,
-            exchangeRate: exchangeRate ?? 1.0,
-            baseCurrencyAmount,
+            currency: 'RUB',
+            exchangeRate: 1.0,
+            baseCurrencyAmount: null,
             ...(input.category !== undefined ? { category: input.category } : {}),
             expenseDate: input.expenseDate ? new Date(input.expenseDate) : new Date(),
             paidById: input.paidById,
