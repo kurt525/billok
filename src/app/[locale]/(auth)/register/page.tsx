@@ -139,6 +139,9 @@ function RegisterForm() {
               <Input
                 id="name"
                 type="text"
+                maxLength={100}
+                autoComplete="off"
+                className="h-11 min-w-0 text-base"
                 placeholder={t('namePlaceholder')}
                 value={name}
                 onChange={(e) => {
@@ -160,6 +163,10 @@ function RegisterForm() {
               <Input
                 id="email"
                 type="email"
+                autoComplete="email"
+                autoCapitalize="none"
+                spellCheck={false}
+                className="h-11 min-w-0 text-base"
                 placeholder={t('emailPlaceholder')}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -171,6 +178,8 @@ function RegisterForm() {
               <Input
                 id="password"
                 type="password"
+                autoComplete="new-password"
+                className="h-11 min-w-0 text-base"
                 placeholder={t('passwordPlaceholder')}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -184,6 +193,10 @@ function RegisterForm() {
                 <Input
                   id="inviteCode"
                   type="text"
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  className="h-11 min-w-0 text-base"
                   placeholder={t('inviteCodePlaceholder')}
                   value={inviteCode}
                   onChange={(e) => setInviteCode(e.target.value)}
@@ -192,7 +205,11 @@ function RegisterForm() {
                 <p className="text-xs text-muted-foreground">{t('error.inviteRequired')}</p>
               </div>
             )}
-            <Button type="submit" className="w-full rounded-full h-10 text-sm font-medium mt-2" disabled={loading}>
+            <Button
+              type="submit"
+              className="mt-2 min-h-11 w-full whitespace-normal rounded-full text-base font-medium"
+              disabled={loading}
+            >
               {loading ? t('submitting') : t('submit')}
             </Button>
           </form>

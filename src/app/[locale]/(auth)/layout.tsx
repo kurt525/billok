@@ -1,6 +1,6 @@
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-muted/50 p-4 overflow-hidden">
+    <div className="relative flex min-h-dvh min-w-0 items-start justify-center overflow-x-clip bg-muted/50 px-4 py-6 sm:items-center">
       {/* Radial gradient glow behind the card */}
       <div
         className="pointer-events-none absolute inset-0"

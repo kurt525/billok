@@ -5,6 +5,7 @@ const widths = [320, 360, 393, 412] as const;
 const pages = [
   { path: '/login', heading: 'С возвращением!', hasInput: true },
   { path: '/register', heading: 'Создать аккаунт', hasInput: true },
+  { path: '/verify-request', heading: 'Проверьте почту', hasInput: false },
   { path: '/split', heading: 'Разделить чек', hasInput: false },
 ] as const;
 
@@ -45,13 +46,32 @@ for (const width of widths) {
         await checkWidth();
 
         if (item.hasInput) {
-          const input = page.locator('input:visible').first();
-          await expect(input).toBeVisible();
-          await page.setViewportSize({ width, height: 460 });
-          await input.focus();
-          await input.scrollIntoViewIfNeeded();
-          await expect(input).toBeInViewport();
+          const inputs = page.locator('input:visible');
+          const first = inputs.first();
+          await expect(first).toBeVisible();
+          for (const input of await inputs.all()) {
+            expect((await input.boundingBox())!.height, item.path + ' input height').toBeGreaterThanOrEqual(44);
+          }
+          const submit = page.locator('form button[type="submit"]:visible').first();
+          await expect(submit).toBeVisible();
+          expect((await submit.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+          if (item.path === '/register') {
+            await expect(page.locator('input#name')).toHaveAttribute('autocomplete', 'off');
+          }
+
+          // Simulates the remaining height after Android's software keyboard opens.
+          // Focus the *last* field and reach the primary action by vertical scrolling.
+          await page.setViewportSize({ width, height: 360 });
+          const last = inputs.last();
+          await last.focus();
+          await last.scrollIntoViewIfNeeded();
+          await expect(last).toBeInViewport();
+          await submit.scrollIntoViewIfNeeded();
+          await expect(submit).toBeInViewport();
           await checkWidth();
+        } else if (item.path === '/verify-request') {
+          const back = page.getByRole('link', { name: 'Вернуться ко входу' });
+          expect((await back.boundingBox())!.height).toBeGreaterThanOrEqual(44);
         }
       });
     }

@@ -18,7 +18,10 @@ export default async function VerifyRequestPage() {
       <CardContent className="text-center space-y-4">
         <p className="text-sm text-muted-foreground">{t('instructions')}</p>
         <p className="text-sm text-muted-foreground">{t('spamHint')}</p>
-        <Link href="/login" className="text-sm font-medium text-primary hover:underline">
+        <Link
+          href="/login"
+          className="inline-flex min-h-11 items-center justify-center text-base font-medium text-primary hover:underline"
+        >
           {t('backToLogin')}
         </Link>
       </CardContent>
