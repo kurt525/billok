@@ -77,6 +77,57 @@ describe('AI provider setup (#280)', () => {
   });
 });
 
+describe('BillOK participant display names: 1–40 chars per receipt', () => {
+  const receiptData = { subtotal: 100, tax: 0, tip: 0, total: 100, currency: 'RUB' };
+  const items = [{ name: 'Чай', quantity: 1, unitPrice: 100, totalPrice: 100 }];
+  const base = {
+    createSplit: {
+      receiptData,
+      items,
+      people: [{ name: 'Илья' }],
+      assignments: [{ itemIndex: 0, personIndices: [0] }],
+    },
+    createClaimSession: { receiptData, items, people: ['Илья'], creatorName: 'Илья', paidByName: 'Илья' },
+    joinSession: { token: 'session', name: 'Илья' },
+    editPersonName: {
+      token: 'session',
+      personToken: 'af5e8384-57ab-4e31-84b3-7bd8ff96fd1a',
+      targetId: '12345678-1234-4123-8123-123456789abc',
+      newName: 'Илья',
+    },
+  };
+  type NameInput = (typeof base)[keyof typeof base];
+  test.each([
+    ['createSplit', 'people'],
+    ['createClaimSession', 'creatorName'],
+    ['createClaimSession', 'paidByName'],
+    ['createClaimSession', 'people'],
+    ['joinSession', 'name'],
+    ['editPersonName', 'newName'],
+  ] as const)('%s enforces the guest name limit on %s', async (operation, field) => {
+    const { guestRouter } = await import('./guest');
+    const procedure = guestRouter._def.procedures[operation] as {
+      _def: { inputs: { parse: (input: unknown) => unknown }[] };
+    };
+    const schema = procedure._def.inputs[0]!;
+    const makeInput = (name: string): NameInput => {
+      const nameField = field === 'people' ? (operation === 'createSplit' ? [{ name }] : [name]) : name;
+      return { ...base[operation], [field]: nameField } as NameInput;
+    };
+    expect(() => schema.parse(makeInput('Я'.repeat(40)))).not.toThrow();
+    expect(() => schema.parse(makeInput('Я'.repeat(41)))).toThrow();
+  });
+
+  test('profile-name limit remains separate from the receipt participant limit', async () => {
+    const { MAX_GUEST_NAME_LENGTH } = await import('@/lib/guest-name-limit');
+    const { readFileSync } = await import('node:fs');
+    expect(MAX_GUEST_NAME_LENGTH).toBe(40);
+    expect(readFileSync('src/server/trpc/routers/auth.ts', 'utf8')).toContain(
+      'name: z.string().trim().min(1).max(100).optional()',
+    );
+  });
+});
+
 describe('BillOK creation permissions', () => {
   const receiptData = { subtotal: 100, tax: 0, tip: 0, total: 100, currency: 'RUB' };
   const items = [{ name: 'Tea', quantity: 1, unitPrice: 100, totalPrice: 100 }];

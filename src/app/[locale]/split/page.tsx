@@ -9,6 +9,7 @@ import { formatCents, centsToDecimal, parseToCents, isValidMoneyInput } from '@/
 import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
 import { canStoreClaimIdentity, setStoredClaimIdentity } from '@/lib/guest-session';
+import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { Button } from '@/components/ui/button';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -422,6 +423,7 @@ function AuthenticatedGuestSplitPage() {
                 </Avatar>
                 <Input
                   value={name}
+                  maxLength={MAX_GUEST_NAME_LENGTH}
                   onChange={(e) => updatePersonName(idx, e.target.value)}
                   placeholder={t('people.personPlaceholder', { index: idx + 1 })}
                   className="h-12 text-base"

@@ -5,6 +5,7 @@ import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
+import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { formatCents } from '@/lib/money';
 import { copyToClipboard } from '@/lib/clipboard';
 import {
@@ -1210,6 +1211,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               </label>
               <Input
                 id="name-input"
+                maxLength={MAX_GUEST_NAME_LENGTH}
+                autoComplete="off"
                 placeholder={t('enterName')}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -1400,6 +1403,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                   >
                     <Input
                       value={editingName}
+                      maxLength={MAX_GUEST_NAME_LENGTH}
+                      autoComplete="off"
                       onChange={(e) => setEditingName(e.target.value)}
                       className="h-7 text-sm flex-1"
                       autoFocus

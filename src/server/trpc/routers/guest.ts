@@ -23,6 +23,7 @@ import {
 } from '../../lib/json-schemas';
 import { calculateSplitTotals, groupSizeWeights } from '@/lib/split-calculator';
 import { normalizeGuestName } from '@/lib/guest-session';
+import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { checkJoinRateLimit } from '../../lib/guest-join-limit';
 import {
   assignPersonIds,
@@ -341,7 +342,7 @@ export const guestRouter = createTRPCRouter({
         receiptData: receiptDataSchema,
         items: z.array(itemSchema).min(1).max(100),
         people: z
-          .array(z.object({ name: z.string() }))
+          .array(z.object({ name: z.string().trim().max(MAX_GUEST_NAME_LENGTH) }))
           .min(1)
           .max(100),
         assignments: z
@@ -514,12 +515,12 @@ export const guestRouter = createTRPCRouter({
         receiptId: receiptIdSchema.optional(),
         receiptData: receiptDataSchema,
         items: z.array(itemSchema).min(1).max(100),
-        creatorName: z.string().trim().min(1).max(100),
-        paidByName: z.string().trim().min(1).max(100),
+        creatorName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
+        paidByName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
         // Everyone typed on "Who's splitting?", listed in this order (#263). The creator and the
         // payer are added when it leaves them out, and a name typed twice is listed once, since
         // people join by name.
-        people: z.array(z.string().trim().min(1).max(100)).max(MAX_SESSION_PEOPLE).optional(),
+        people: z.array(z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH)).max(MAX_SESSION_PEOPLE).optional(),
         // Join the creator now and return their identity, so the creator's device already is them
         // when the link is shared (#263). Opt-in because older clients join the creator by name
         // afterwards, which is refused once someone holds the creator's token.
@@ -623,7 +624,7 @@ export const guestRouter = createTRPCRouter({
     .input(
       z.object({
         token: shareTokenSchema,
-        name: z.string().trim().min(1).max(100),
+        name: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
         groupSize: z.number().int().min(1).max(20).optional(),
         // The token this device stored when it joined: whoever holds it is the caller. Only ever
         // used to find its holder, never given to anyone, so a removed person's old token
@@ -781,7 +782,7 @@ export const guestRouter = createTRPCRouter({
         personToken: z.string().uuid(),
         // Who to rename, by id (see targetIndexOrThrow)
         targetId: personIdSchema,
-        newName: z.string().trim().min(1).max(100),
+        newName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
         groupSize: z.number().int().min(1).max(20).optional(),
       }),
     )

@@ -84,3 +84,14 @@ describe('Expense split modes at narrow Android widths', () => {
     }
   });
 });
+
+describe('Guest participant name inputs stay within 40 characters', () => {
+  it('limits creator-provided names, join name and own renamed name in all forms', () => {
+    const create = read('src/app/[locale]/split/page.tsx');
+    const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
+    expect(create).toContain('maxLength={MAX_GUEST_NAME_LENGTH}');
+    expect(claim.match(/maxLength=\{MAX_GUEST_NAME_LENGTH\}/g)).toHaveLength(2);
+    expect(create).toContain("import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit'");
+    expect(claim).toContain("import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit'");
+  });
+});
