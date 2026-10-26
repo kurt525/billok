@@ -116,3 +116,15 @@ describe('Long participant names on mobile guest receipts', () => {
     expect(profile).toContain('autoComplete="off"');
   });
 });
+
+describe('Guest claiming join screen Android keyboard and listed names', () => {
+  it('offers numeric keyboard, 44px controls and wraps long free participant names', () => {
+    const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
+    expect(claim).toContain('id="group-size"\n                  type="number"\n                  inputMode="numeric"');
+    expect(claim).toContain('className="h-11 w-20 shrink-0 text-base"');
+    expect(claim).toContain('className="h-11 min-w-0 text-base"');
+    expect(claim).toContain('min-h-11 min-w-0 max-w-full items-center gap-2 rounded-2xl');
+    expect(claim).toContain('min-w-0 text-sm font-medium [overflow-wrap:anywhere]');
+    expect(claim).toContain('className="min-h-11 w-full text-base"');
+  });
+});

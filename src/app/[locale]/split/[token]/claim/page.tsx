@@ -1216,6 +1216,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 id="name-input"
                 maxLength={MAX_GUEST_NAME_LENGTH}
                 autoComplete="off"
+                className="h-11 min-w-0 text-base"
                 placeholder={t('enterName')}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -1230,15 +1231,16 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               <label htmlFor="group-size" className="text-sm font-medium">
                 {t('groupSize')}
               </label>
-              <div className="flex items-center gap-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <Input
                   id="group-size"
                   type="number"
+                  inputMode="numeric"
                   min={1}
                   max={20}
                   value={groupSize}
                   onChange={(e) => setGroupSize(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-                  className="w-20"
+                  className="h-11 w-20 shrink-0 text-base"
                   data-testid="group-size-input"
                 />
                 <span className="text-xs text-muted-foreground">{t('groupSizeHint')}</span>
@@ -1260,15 +1262,15 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           setName(person.name);
                           startJoin({ name: person.name });
                         }}
-                        className="flex items-center gap-2 rounded-full bg-muted px-3 py-1.5 hover:bg-muted/80 transition-colors disabled:opacity-50"
+                        className="flex min-h-11 min-w-0 max-w-full items-center gap-2 rounded-2xl bg-muted px-3 py-2 text-left transition-colors hover:bg-muted/80 disabled:opacity-50"
                         data-testid={`rejoin-person-${idx}`}
                       >
-                        <Avatar className="h-6 w-6">
+                        <Avatar className="h-6 w-6 shrink-0">
                           <AvatarFallback className={`text-[10px] font-semibold ${guestAvatarColor(idx)}`}>
                             {getInitials(person.name)}
                           </AvatarFallback>
                         </Avatar>
-                        <span className="text-sm font-medium">{person.name}</span>
+                        <span className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">{person.name}</span>
                       </button>
                     ),
                   )}
@@ -1276,7 +1278,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               </div>
             )}
             <Button
-              className="w-full"
+              className="min-h-11 w-full text-base"
               onClick={handleJoin}
               disabled={!name.trim() || joining}
               data-testid="claim-join-btn"

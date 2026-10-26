@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { authedContext, trpcMutation, users } from './helpers';
 
 /** Signed-in creator, anonymous recipient: real persistence, no photo, OCR, or AI. */
 async function fitsPhone(page: Page) {
@@ -124,4 +125,57 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
   }
 
   expect(remoteCalls).toEqual([]);
+});
+
+test('anonymous mobile participant can join a long-name slot and edit it with touch controls', async ({ page }) => {
+  test.setTimeout(90_000);
+  const longName = 'Алексей'.repeat(5) + '12345';
+  expect(longName).toHaveLength(40);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  let token: string | undefined;
+  try {
+    const created = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Мобильный чек', subtotal: 1500, tax: 0, tip: 0, total: 1500, currency: 'RUB' },
+      items: [{ name: 'Кофе', quantity: 1, unitPrice: 1500, totalPrice: 1500 }],
+      creatorName: 'Илья',
+      paidByName: 'Илья',
+      people: [longName, 'Илья'],
+    });
+    const response = await created.json();
+    expect(created.ok(), JSON.stringify(response)).toBe(true);
+    token = response.result.data.json.shareToken;
+
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('claim-join-form')).toBeVisible();
+    await page.setViewportSize({ width: 320, height: 460 });
+    await fitsPhone(page);
+    const nameInput = page.getByTestId('claim-name-input');
+    expect(await nameInput.getAttribute('maxlength')).toBe('40');
+    expect((await nameInput.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    const groupCount = page.getByTestId('group-size-input');
+    expect(await groupCount.getAttribute('inputmode')).toBe('numeric');
+    expect((await groupCount.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    const joinButton = page.getByTestId('claim-join-btn');
+    expect((await joinButton.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    const freePerson = page.getByTestId('rejoin-person-0');
+    await expect(freePerson).toContainText(longName);
+    const freeBox = await freePerson.boundingBox();
+    expect(freeBox!.height).toBeGreaterThanOrEqual(44);
+    expect(freeBox!.x + freeBox!.width).toBeLessThanOrEqual(320);
+    await fitsPhone(page);
+
+    await freePerson.click();
+    await expect(page.locator('[data-testid^="claim-item-"]').first()).toBeVisible({ timeout: 15_000 });
+    const edit = page.getByTestId('edit-person-0');
+    await edit.scrollIntoViewIfNeeded();
+    expect((await edit.boundingBox())!.width).toBeGreaterThanOrEqual(44);
+    await edit.click();
+    const nameEdit = page.getByTestId('edit-name-input-0');
+    await expect(nameEdit).toHaveValue(longName);
+    expect((await nameEdit.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await fitsPhone(page);
+  } finally {
+    if (token) await trpcMutation(owner, 'guest.expireSession', { token });
+    await owner.dispose();
+  }
 });
