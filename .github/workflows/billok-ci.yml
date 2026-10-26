@@ -158,7 +158,6 @@ jobs:
             -e "BASE_URL=http://127.0.0.1:$BILLOK_QA_PORT" -e CI=1 \
             -e "BILLOK_MOBILE_RECEIPT_ID=$BILLOK_MOBILE_RECEIPT_ID" \
             -e "BILLOK_MOBILE_GROUP_ID=$BILLOK_MOBILE_GROUP_ID" \
-            -e "BILLOK_MOBILE_RUB_GROUP_ID=$BILLOK_MOBILE_RUB_GROUP_ID" \
             -v "$GITHUB_WORKSPACE:/work:ro" -w /work \
             mcr.microsoft.com/playwright:v1.64.1-noble \
             node /work/node_modules/@playwright/test/cli.js test \

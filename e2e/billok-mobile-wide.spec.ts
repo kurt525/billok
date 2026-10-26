@@ -152,16 +152,15 @@ test('mobile app stays centered and scroll-free horizontally at 430–720px with
     expect((await amount.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   }
 
-  // The original seed's USD group is preserved for viewing historical amounts.
-  // New RUB expenses must be blocked instead of silently converting currencies.
+  // Existing disposable seed groups are now RUB too; they need no conversion
+  // warning or separate legacy-group path to create a manual receipt.
   await page.goto('/groups', { waitUntil: 'networkidle' });
-  const oldGroup = page.locator('a[href^="/groups/"]').filter({ hasText: 'Apartment' }).first();
-  await expect(oldGroup).toBeVisible();
-  const oldGroupUrl = await oldGroup.getAttribute('href');
-  await page.goto(oldGroupUrl + '/expenses/new', { waitUntil: 'networkidle' });
-  await expect(page.getByTestId('rub-only-legacy-warning')).toContainText('прежнюю валюту USD');
-  await expect(page.getByTestId('create-manual-group-receipt')).toBeDisabled();
-  await expect(page.locator('form button[type="submit"]')).toBeDisabled();
+  const seededGroup = page.locator('a[href^="/groups/"]').filter({ hasText: 'Apartment' }).first();
+  await expect(seededGroup).toBeVisible();
+  const seededGroupUrl = await seededGroup.getAttribute('href');
+  await page.goto(seededGroupUrl + '/expenses/new', { waitUntil: 'networkidle' });
+  await expect(page.getByTestId('rub-only-legacy-warning')).toHaveCount(0);
+  await expect(page.getByTestId('create-manual-group-receipt')).toBeEnabled();
   await expect(page.locator('select#currency')).toHaveCount(0);
   await noHorizontalOverflow(page, 720);
 

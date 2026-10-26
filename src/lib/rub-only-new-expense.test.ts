@@ -20,6 +20,20 @@ describe('RUB-only creation of new group expenses', () => {
     expect(source).not.toContain('manualRate');
   });
 
+  it('seeds only RUB groups and uses the existing seed group for manual receipt QA', () => {
+    const read = (path: string) => readFileSync(resolve(process.cwd(), path), 'utf8');
+    const seed = read('prisma/seed.ts');
+    const fixture = read('e2e/seed-mobile-receipt.ts');
+    const mobile = read('e2e/billok-mobile-receipt-actions.spec.ts');
+    const workflow = read('.github/workflows/billok-ci.yml');
+    expect(seed.match(/currency: 'RUB'/g)).toHaveLength(3);
+    expect(seed).not.toContain("currency: 'USD'");
+    expect(fixture).toContain("group.currency !== 'RUB'");
+    expect(fixture).not.toContain('db.group.create(');
+    expect(mobile).not.toContain('BILLOK_MOBILE_RUB_GROUP_ID');
+    expect(workflow).not.toContain('BILLOK_MOBILE_RUB_GROUP_ID');
+  });
+
   it('prevents changing balances of historical non-RUB groups via new expense and receipt forms', () => {
     expect(source).toContain("group.data?.currency?.toUpperCase() === 'RUB'");
     expect(source).toContain("t('new.rubOnlyLegacyGroup', { currency: groupCurrency })");
