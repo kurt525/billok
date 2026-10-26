@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { AppError } from '@/server/lib/app-error';
 import { createTRPCRouter, groupMemberProcedure } from '../init';
-import { getExchangeRate, convertCents } from '../../lib/exchange-rates';
 import { MAX_MONEY_CENTS } from '@/lib/money';
 import { loadGroupBalances, lockActiveGroup } from '../../lib/group-balances';
 
@@ -47,15 +46,16 @@ export const settlementsRouter = createTRPCRouter({
           .length(3)
           .regex(/^[a-zA-Z]{3}$/)
           .transform((c) => c.toUpperCase())
+          .pipe(z.literal('RUB'))
           .default('RUB'),
-        exchangeRate: z.number().positive().finite().max(1_000_000).optional(), // manual override
+        exchangeRate: z.never().optional(), // no manual FX override
         note: z.string().max(500).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const effectiveFromId = input.fromId ?? ctx.user.id;
 
-      // Refuse an archived group before the checks and rate lookup below;
+      // Refuse an archived group before checking participants;
       // lockActiveGroup in the transaction is the check that holds (#289)
       const group = await ctx.db.group.findUnique({
         where: { id: input.groupId },
@@ -63,6 +63,9 @@ export const settlementsRouter = createTRPCRouter({
       });
       if (group?.archivedAt) {
         throw new AppError('BAD_REQUEST', 'archivedCreateSettlement');
+      }
+      if (group && group.currency.toUpperCase() !== 'RUB') {
+        throw new AppError('BAD_REQUEST', 'rubOnlySettlement');
       }
 
       // Cannot settle with yourself
@@ -75,27 +78,17 @@ export const settlementsRouter = createTRPCRouter({
         throw new AppError('FORBIDDEN', 'paymentsFromYourselfOnly');
       }
 
-      // Currency conversion: compute base currency amount if currencies differ
-      const groupCurrency = group?.currency ?? 'RUB';
-      let exchangeRate: number | null = null;
-      let baseCurrencyAmount: number | null = null;
-
-      if (input.currency.toUpperCase() !== groupCurrency.toUpperCase()) {
-        if (input.exchangeRate) {
-          exchangeRate = input.exchangeRate;
-        } else {
-          exchangeRate = await getExchangeRate(input.currency, groupCurrency);
-        }
-
-        if (exchangeRate === null) {
-          throw new AppError('BAD_REQUEST', 'exchangeRateUnavailable');
-        }
-
-        baseCurrencyAmount = convertCents(input.amount, exchangeRate);
-      }
-
       const settlement = await ctx.db.$transaction(async (tx) => {
         await lockActiveGroup(tx, input.groupId, 'archivedCreateSettlement');
+
+        // Currency must still be RUB after acquiring the group row lock.
+        const lockedGroup = await tx.group.findUnique({
+          where: { id: input.groupId },
+          select: { currency: true },
+        });
+        if (!lockedGroup || lockedGroup.currency.toUpperCase() !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'rubOnlySettlement');
+        }
 
         // Validate both fromId and toId are members of the group (after the lock,
         // so someone leaving meanwhile is either gone or waits for this, #279)
@@ -122,7 +115,7 @@ export const settlementsRouter = createTRPCRouter({
           const balances = await loadGroupBalances(tx, input.groupId);
           const net = (userId: string) => balances.find((b) => b.userId === userId)?.net ?? 0;
           // Balances are in the group's currency
-          const paid = baseCurrencyAmount ?? input.amount;
+          const paid = input.amount;
           // A positive net is owed to them: paying them settles it, and they pay what they owe
           const settles = removed.every(({ userId }) =>
             userId === input.toId ? paid <= net(userId) : paid <= -net(userId),
@@ -138,9 +131,9 @@ export const settlementsRouter = createTRPCRouter({
             fromId: effectiveFromId,
             toId: input.toId,
             amount: input.amount,
-            currency: input.currency,
-            exchangeRate: exchangeRate ?? 1.0,
-            baseCurrencyAmount,
+            currency: 'RUB',
+            exchangeRate: 1.0,
+            baseCurrencyAmount: null,
             ...(input.note !== undefined ? { note: input.note } : {}),
           },
         });
