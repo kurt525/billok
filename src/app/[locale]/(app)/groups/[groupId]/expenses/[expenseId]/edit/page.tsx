@@ -6,8 +6,7 @@ import { Link, useRouter } from '@/i18n/navigation';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/trpc/router';
 import { trpc } from '@/lib/trpc';
-import { parseToCents, centsToDecimal, formatCents } from '@/lib/money';
-import { COMMON_CURRENCIES } from '@/lib/currencies';
+import { parseToCents, centsToDecimal } from '@/lib/money';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -97,7 +96,8 @@ function EditExpenseForm({
   );
 
   const isItemSplit = expense.splitMode === 'ITEM';
-  const initiallyDifferentCurrency = expense.currency.toUpperCase() !== group.currency.toUpperCase();
+  // Existing foreign-currency records should not be silently converted.
+  const isRubExpense = expense.currency.toUpperCase() === 'RUB' && group.currency.toUpperCase() === 'RUB';
 
   const [title, setTitle] = useState(expense.title);
   const [amountStr, setAmountStr] = useState(() => centsToDecimal(expense.amount));
@@ -121,12 +121,6 @@ function EditExpenseForm({
     payerChoices.some((m) => m.user.id === expense.paidById) ? expense.paidById : '',
   );
   const [shares, setShares] = useState<ShareEntry[]>([]);
-  const [currency, setCurrency] = useState<string>(expense.currency);
-  const [manualRate, setManualRate] = useState<string>(
-    initiallyDifferentCurrency && expense.exchangeRate ? String(expense.exchangeRate) : '',
-  );
-  const [useManualRate, setUseManualRate] = useState(initiallyDifferentCurrency && !!expense.exchangeRate);
-
   // Seed the split editors with the saved shares (splitEditorSeed) so editing
   // doesn't silently rewrite the split.
   // Saved shares can reference users who have since left the group (member
@@ -218,24 +212,15 @@ function EditExpenseForm({
   const payers = payerChoices.map(toMemberInfo);
 
   const amountCents = parseToCents(amountStr);
-  const groupCurrency = group.currency;
-  const effectiveCurrency = currency || groupCurrency;
-  const isDifferentCurrency = effectiveCurrency.toUpperCase() !== groupCurrency.toUpperCase();
-  const parsedManualRate = parseFloat(manualRate);
-  const manualRateValid = useManualRate && !isNaN(parsedManualRate) && parsedManualRate > 0;
-  const currencyChanged = effectiveCurrency.toUpperCase() !== expense.currency.toUpperCase();
-
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!paidById || amountCents <= 0 || shares.length === 0) return;
+    if (!isRubExpense || !paidById || amountCents <= 0 || shares.length === 0) return;
 
     updateExpense.mutate({
       groupId,
       expenseId,
       title,
       amount: amountCents,
-      ...(currencyChanged ? { currency: effectiveCurrency } : {}),
-      ...(isDifferentCurrency && manualRateValid ? { exchangeRate: parsedManualRate } : {}),
       category: category || undefined,
       paidById,
       splitMode,
@@ -257,6 +242,16 @@ function EditExpenseForm({
         </Button>
         <h1 className="text-2xl font-bold">{t('edit.title')}</h1>
       </div>
+
+      {!isRubExpense && (
+        <p
+          role="alert"
+          data-testid="rub-only-legacy-edit-warning"
+          className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100"
+        >
+          {t('edit.rubOnlyLegacyExpense', { expenseCurrency: expense.currency, groupCurrency: group.currency })}
+        </p>
+      )}
 
       {isItemSplit && (
         <Card className="border-amber-300">
@@ -287,88 +282,23 @@ function EditExpenseForm({
               />
             </div>
 
-            <div className="grid grid-cols-[1fr_auto] gap-2">
-              <div className="space-y-2">
-                <Label htmlFor="amount">{t('new.amount')}</Label>
-                <Input
-                  id="amount"
-                  type="text"
-                  inputMode="decimal"
-                  min="0.01"
-                  placeholder={t('new.amountPlaceholder')}
-                  value={amountStr}
-                  onChange={(e) => setAmountStr(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="currency">{t('new.currency')}</Label>
-                <select
-                  id="currency"
-                  value={effectiveCurrency}
-                  onChange={(e) => {
-                    setCurrency(e.target.value);
-                    setManualRate('');
-                    setUseManualRate(false);
-                  }}
-                  className="flex h-11 min-w-0 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  {COMMON_CURRENCIES.map((c) => (
-                    <option key={c.code} value={c.code}>
-                      {c.code}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div className="space-y-2">
+              <Label htmlFor="amount">
+                {t('new.amount')} ({isRubExpense ? '₽' : expense.currency})
+              </Label>
+              <Input
+                id="amount"
+                type="text"
+                inputMode="decimal"
+                min="0.01"
+                placeholder={t('new.amountPlaceholder')}
+                value={amountStr}
+                onChange={(e) => setAmountStr(e.target.value)}
+                required
+                disabled={!isRubExpense}
+                className="h-11 min-w-0 text-base"
+              />
             </div>
-
-            {isDifferentCurrency && (
-              <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm dark:border-blue-800 dark:bg-blue-950/50">
-                <p className="text-blue-800 dark:text-blue-200">
-                  {t('new.differentCurrencyNote', {
-                    expenseCurrency: effectiveCurrency,
-                    groupCurrency,
-                  })}
-                </p>
-                <div className="mt-2 flex items-center gap-2">
-                  <label className="flex items-center gap-1.5 text-xs text-blue-700 dark:text-blue-300">
-                    <input
-                      type="checkbox"
-                      checked={useManualRate}
-                      onChange={(e) => setUseManualRate(e.target.checked)}
-                      className="rounded"
-                    />
-                    {t('new.manualRateOverride')}
-                  </label>
-                </div>
-                {useManualRate && (
-                  <div className="mt-2">
-                    <Input
-                      type="number"
-                      inputMode="decimal"
-                      step="any"
-                      min="0.000001"
-                      placeholder={t('new.exchangeRatePlaceholder', {
-                        from: effectiveCurrency,
-                        to: groupCurrency,
-                      })}
-                      value={manualRate}
-                      onChange={(e) => setManualRate(e.target.value)}
-                    />
-                    {manualRateValid && amountCents > 0 && (
-                      <p className="mt-1 text-xs text-blue-700 dark:text-blue-300">
-                        {t('new.convertedAmount', {
-                          amount: formatCents(Math.round(amountCents * parsedManualRate), groupCurrency, locale),
-                        })}
-                      </p>
-                    )}
-                  </div>
-                )}
-                {!useManualRate && (
-                  <p className="mt-1 text-xs text-blue-600 dark:text-blue-400">{t('new.autoRateNote')}</p>
-                )}
-              </div>
-            )}
 
             <div className="space-y-2">
               <Label htmlFor="category">{t('new.category')}</Label>
@@ -426,7 +356,7 @@ function EditExpenseForm({
                   totalCents={amountCents}
                   onChange={setShares}
                   locale={locale}
-                  currency={effectiveCurrency}
+                  currency={expense.currency}
                   {...(initialSelected !== undefined ? { initialSelected } : {})}
                 />
               )}
@@ -436,7 +366,7 @@ function EditExpenseForm({
                   totalCents={amountCents}
                   onChange={setShares}
                   locale={locale}
-                  currency={effectiveCurrency}
+                  currency={expense.currency}
                   {...(initialAmounts !== undefined ? { initialAmounts } : {})}
                 />
               )}
@@ -446,7 +376,7 @@ function EditExpenseForm({
                   totalCents={amountCents}
                   onChange={setShares}
                   locale={locale}
-                  currency={effectiveCurrency}
+                  currency={expense.currency}
                   {...(initialPercentages !== undefined ? { initialPercentages } : {})}
                 />
               )}
@@ -456,7 +386,7 @@ function EditExpenseForm({
                   totalCents={amountCents}
                   onChange={setShares}
                   locale={locale}
-                  currency={effectiveCurrency}
+                  currency={expense.currency}
                   {...(initialShareUnits !== undefined ? { initialShareUnits } : {})}
                 />
               )}
@@ -471,7 +401,7 @@ function EditExpenseForm({
             <Button
               type="submit"
               className="min-h-11 w-full text-base"
-              disabled={updateExpense.isPending || amountCents <= 0 || shares.length === 0}
+              disabled={!isRubExpense || updateExpense.isPending || amountCents <= 0 || shares.length === 0}
             >
               {updateExpense.isPending ? t('edit.submitting') : t('edit.submit')}
             </Button>

@@ -36,6 +36,7 @@
   "edit": {
     "title": "Edit Expense",
     "backToExpense": "Back to expense",
+    "rubOnlyLegacyExpense": "This expense ({expenseCurrency}) or its group ({groupCurrency}) uses a previous currency. Editing is temporarily unavailable; stored amounts remain unchanged.",
     "itemSplitWarning": "This expense was created from a receipt scan (ITEM split). Editing will convert it to a standard split mode.",
     "submit": "Save Changes",
     "submitting": "Saving...",

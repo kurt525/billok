@@ -164,6 +164,23 @@ test('mobile app stays centered and scroll-free horizontally at 430–720px with
   await expect(page.locator('select#currency')).toHaveCount(0);
   await noHorizontalOverflow(page, 720);
 
+  // Existing RUB expense remains editable without a currency selector or rate.
+  await page.goto(seededGroupUrl!, { waitUntil: 'networkidle' });
+  const expenseLink = page.locator('a[href*="/expenses/"]').filter({ hasText: 'Groceries' }).first();
+  await expect(expenseLink).toBeVisible();
+  const expenseUrl = await expenseLink.getAttribute('href');
+  await page.goto(expenseUrl + '/edit', { waitUntil: 'networkidle' });
+  await expect(page.getByLabel('Сумма (₽)')).toBeVisible();
+  await expect(page.locator('select#currency')).toHaveCount(0);
+  await expect(page.getByTestId('rub-only-legacy-edit-warning')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Сохранить изменения' })).toBeEnabled();
+  for (const width of [360, 480, 720]) {
+    await page.setViewportSize({ width, height: 800 });
+    await noHorizontalOverflow(page, width);
+    const amount = await page.getByLabel('Сумма (₽)').boundingBox();
+    expect(amount!.height).toBeGreaterThanOrEqual(44);
+  }
+
   await page.setViewportSize({ width: 480, height: 800 });
   await page.goto('/groups', { waitUntil: 'networkidle' });
   await expect(page.getByText('Поездка — тест широкого экрана').first()).toBeVisible();
