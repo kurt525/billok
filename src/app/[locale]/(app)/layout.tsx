@@ -27,7 +27,9 @@ export default async function AppLayout({
       <main className="@container flex-1 min-w-0 lg:overflow-auto">
         <ImpersonationBanner />
         <AnnouncementBanner />
-        <div className="w-full py-4 px-4 md:py-6 md:px-8 2xl:mx-auto 2xl:max-w-5xl">{children}</div>
+        <div className="w-full px-4 py-4 max-lg:mx-auto max-lg:max-w-xl md:px-8 md:py-6 2xl:mx-auto 2xl:max-w-5xl">
+          {children}
+        </div>
       </main>
     </div>
   );

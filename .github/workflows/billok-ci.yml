@@ -75,7 +75,7 @@ jobs:
         run: python3 scripts/test_billok_pwa.py
 
   mobile-browser-smoke:
-    name: Mobile Chromium (320–412 px)
+    name: Mobile Chromium (320–720 px)
     runs-on: [self-hosted, Linux, X64, billok]
     timeout-minutes: 35
     steps:
@@ -149,7 +149,7 @@ jobs:
             cat "$RUNNER_TEMP/billok-mobile-next.log"
             exit 1
           fi
-      - name: Chromium smoke on 320, 360, 393 and 412 px
+      - name: Chromium smoke on 320–720 px (large Android / Galaxy S23)
         shell: bash
         run: |
           set -euo pipefail
@@ -163,6 +163,7 @@ jobs:
             node /work/node_modules/@playwright/test/cli.js test \
               e2e/billok-mobile-public.spec.ts \
               e2e/billok-mobile-authenticated.spec.ts \
+              e2e/billok-mobile-wide.spec.ts \
               e2e/billok-mobile-receipt-actions.spec.ts \
               e2e/billok-mobile-guest-split.spec.ts \
               --project=parallel --no-deps --workers=2 --retries=0 \
