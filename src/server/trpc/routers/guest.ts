@@ -183,7 +183,7 @@ const receiptDataSchema = z.object({
   tax: z.number().int(),
   tip: z.number().int(),
   total: z.number().int(),
-  currency: z.string().default('RUB'),
+  currency: z.string().trim().toUpperCase().pipe(z.literal('RUB')).default('RUB'),
 });
 
 const itemSchema = z.object({

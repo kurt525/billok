@@ -178,6 +178,80 @@ describe('BillOK creation permissions', () => {
   );
 });
 
+describe('new shared receipts use RUB exclusively', () => {
+  const rubData = { merchantName: 'Ужин', subtotal: 505, tax: 0, tip: 0, total: 505 };
+  const items = [{ name: 'Чай', quantity: 1, unitPrice: 505, totalPrice: 505 }];
+  const create = {
+    createSplit: (api: Awaited<ReturnType<typeof caller>>, receiptData: typeof rubData & { currency?: string }) =>
+      api.createSplit({
+        receiptData,
+        items,
+        people: [{ name: 'Анна' }],
+        assignments: [{ itemIndex: 0, personIndices: [0] }],
+      }),
+    createClaimSession: (
+      api: Awaited<ReturnType<typeof caller>>,
+      receiptData: typeof rubData & { currency?: string },
+    ) => api.createClaimSession({ receiptData, items, creatorName: 'Анна', paidByName: 'Анна' }),
+  };
+
+  beforeEach(() => {
+    mockDb.guestSplit.create.mockResolvedValue({ id: 's1', shareToken: 'share-1' });
+  });
+
+  test.each(Object.keys(create) as (keyof typeof create)[])(
+    '%s defaults to RUB and preserves kopecks',
+    async (name) => {
+      await create[name](await caller(signedIn), rubData);
+      expect(mockDb.guestSplit.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          receiptData: expect.objectContaining({ total: 505, currency: 'RUB' }),
+          items: expect.arrayContaining([expect.objectContaining({ totalPrice: 505 })]),
+        }),
+      });
+    },
+  );
+
+  test.each(Object.keys(create) as (keyof typeof create)[])('%s normalizes rub to RUB', async (name) => {
+    await create[name](await caller(signedIn), { ...rubData, currency: 'rub' });
+    expect(mockDb.guestSplit.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ receiptData: expect.objectContaining({ currency: 'RUB' }) }),
+    });
+  });
+
+  test.each(Object.keys(create) as (keyof typeof create)[])('%s rejects USD and EUR before writing', async (name) => {
+    const api = await caller(signedIn);
+    for (const currency of ['USD', 'eur']) {
+      await expect(create[name](api, { ...rubData, currency })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+    expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+    expect(checkRateLimit).not.toHaveBeenCalled();
+  });
+
+  test('public links still read an already stored USD receipt without rewriting it', async () => {
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      id: 'old-split',
+      shareToken: 'old-link',
+      expiresAt: new Date(Date.now() + 60_000),
+      createdAt: new Date('2026-10-01T00:00:00Z'),
+      status: 'FINALIZED',
+      receiptData: { ...rubData, currency: 'USD' },
+      items,
+      people: [{ name: 'Анна' }],
+      assignments: [{ itemIndex: 0, personIndices: [0] }],
+      summary: [{ personIndex: 0, name: 'Анна', itemTotal: 505, tax: 0, tip: 0, total: 505 }],
+      paidByIndex: 0,
+      payerVenmoHandle: null,
+      userId: null,
+    });
+    const result = await (await caller()).getSplit({ token: 'old-link' });
+    expect(result.receiptData.currency).toBe('USD');
+    expect(result.receiptData.total).toBe(505);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('share tokens longer than any real one (#208)', () => {
   // Share tokens are 25-character cuids; 64 leaves room and bounds the limiter keys built from them
   const long = 'x'.repeat(65);
@@ -642,7 +716,7 @@ describe('guest.getSession people', () => {
 
 describe('guest.createClaimSession', () => {
   const session = {
-    receiptData: { subtotal: 100, tax: 0, tip: 0, total: 100, currency: 'USD' },
+    receiptData: { subtotal: 100, tax: 0, tip: 0, total: 100, currency: 'RUB' },
     items: [{ name: 'Tea', quantity: 1, unitPrice: 100, totalPrice: 100 }],
   };
 
@@ -1443,7 +1517,7 @@ describe('creating a split', () => {
     mockDb.guestSplit.create.mockResolvedValue({ id: 's1', shareToken: 'tok' });
     const api = await caller(signedIn);
     await api.createSplit({
-      receiptData: { subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'USD' },
+      receiptData: { subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'RUB' },
       items: [{ name: 'Pizza', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
       people: [{ name: 'Pat' }],
       assignments: [{ itemIndex: 0, personIndices: [0] }],
@@ -1456,7 +1530,7 @@ describe('creating a split', () => {
 // #265: a split made from a receipt while the receipt's last split or its group was being
 // deleted could be saved pointing at the receipt deleted a moment later
 describe('making a split from a receipt', () => {
-  const receiptData = { subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'USD' };
+  const receiptData = { subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'RUB' };
   const items = [{ name: 'Pizza', quantity: 1, unitPrice: 1000, totalPrice: 1000 }];
   type Api = Awaited<ReturnType<typeof caller>>;
   const makeSplit = {
