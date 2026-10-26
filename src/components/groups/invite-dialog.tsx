@@ -71,7 +71,7 @@ export function InviteDialog({
 
         {!createInvite.data ? (
           <Button
-            className="min-h-11 w-full whitespace-normal"
+            className="min-h-12 w-full whitespace-normal"
             onClick={handleGenerate}
             disabled={createInvite.isPending}
           >
@@ -90,7 +90,7 @@ export function InviteDialog({
               <Button
                 variant="outline"
                 size="icon"
-                className="size-11 shrink-0"
+                className="size-12 shrink-0"
                 aria-label={t('invite.copyLink')}
                 data-testid="mobile-copy-invite"
                 onClick={handleCopy}

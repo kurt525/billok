@@ -26,9 +26,9 @@ describe('Android group actions and account forms', () => {
     expect(settle).toContain('className="min-h-11 w-full text-base"');
     const invite = source('src/components/groups/invite-dialog.tsx');
     expect(invite).toContain('data-testid="mobile-copy-invite"');
-    expect(invite).toContain('className="size-11 shrink-0"');
+    expect(invite).toContain('className="size-12 shrink-0"');
     expect(invite).toContain('h-11 min-w-0 flex-1');
-    expect(invite).toContain('min-h-11 w-full');
+    expect(invite).toContain('min-h-12 w-full');
   });
 
   it('keeps profile name manual and password fields touch-size with Android autofill attributes', () => {
