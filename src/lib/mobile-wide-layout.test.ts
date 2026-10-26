@@ -19,6 +19,17 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
     expect(header).toContain('lg:hidden');
   });
 
+  it('keeps group creation one-handed with 44px controls and an accessible selected emoji', () => {
+    const form = source('src/app/[locale]/(app)/groups/new/page.tsx');
+    expect(form).toContain('mx-auto min-w-0 max-w-lg');
+    expect(form.match(/className="h-11 min-w-0 text-base"/g)).toHaveLength(2);
+    expect(form).toContain('flex size-11 shrink-0 items-center justify-center');
+    expect(form).toContain('aria-pressed={emoji === e}');
+    expect(form).toContain('aria-label={e}');
+    expect(form).toContain('flex h-11 min-w-0 w-full rounded-md');
+    expect(form).toContain('className="min-h-11 w-full text-base"');
+  });
+
   it('keeps authentication and guest receipts one column regardless of wide phone viewport', () => {
     const auth = source('src/app/[locale]/(auth)/layout.tsx');
     const split = source('src/app/[locale]/split/layout.tsx');

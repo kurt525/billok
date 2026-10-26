@@ -54,7 +54,7 @@ test('login and registration keep fields and actions reachable on large Android 
 });
 
 test('mobile app stays centered and scroll-free horizontally at 430–720px with enlarged text', async ({ page }) => {
-  test.setTimeout(140_000);
+  test.setTimeout(180_000);
   await page.goto('/login', { waitUntil: 'networkidle' });
   await page.locator('input[type=email]').fill('alice@example.com');
   await page.locator('input[type=password]').fill('password123');
@@ -92,4 +92,49 @@ test('mobile app stays centered and scroll-free horizontally at 430–720px with
       expect((await hamburger.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     }
   }
+  // An actual group is created in the disposable CI database after validating
+  // both the Galaxy S23 CSS viewport and unfolded-screen tap targets.
+  await page.goto('/groups/new', { waitUntil: 'networkidle' });
+  const nameInput = page.locator('input#name');
+  const descriptionInput = page.locator('input#description');
+  const currency = page.locator('select#currency');
+  const create = page.getByRole('button', { name: 'Создать группу', exact: true });
+  const cafe = page.getByRole('button', { name: '🍽️', exact: true });
+  await expect(nameInput).toBeVisible();
+  await expect(create).toBeVisible();
+
+  for (const width of [360, ...widths]) {
+    await page.setViewportSize({ width, height: 800 });
+    await noHorizontalOverflow(page, width);
+    for (const control of [nameInput, descriptionInput, currency, create, cafe]) {
+      const rect = await control.boundingBox();
+      expect(rect, 'Group create control at ' + width + 'px').not.toBeNull();
+      expect(rect!.height).toBeGreaterThanOrEqual(44);
+      expect(rect!.x).toBeGreaterThanOrEqual(0);
+      expect(rect!.x + rect!.width).toBeLessThanOrEqual(width);
+    }
+    if (width === 360 || width === 720) {
+      await page.setViewportSize({ width, height: 380 });
+      await descriptionInput.focus();
+      await descriptionInput.scrollIntoViewIfNeeded();
+      await expect(descriptionInput).toBeInViewport();
+      await create.scrollIntoViewIfNeeded();
+      await expect(create).toBeInViewport();
+      await noHorizontalOverflow(page, width);
+    }
+  }
+
+  await page.setViewportSize({ width: 480, height: 800 });
+  await nameInput.fill('Поездка — тест широкого экрана');
+  await descriptionInput.fill('Тест мобильного интерфейса BillOK');
+  await currency.selectOption('RUB');
+  await cafe.click();
+  await expect(cafe).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: '💰', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await create.click();
+  await expect(page).toHaveURL(/\/groups\/[^/]+$/, { timeout: 20000 });
+  await expect(page.getByText('Поездка — тест широкого экрана').first()).toBeVisible();
+  await page.goto('/groups', { waitUntil: 'networkidle' });
+  await expect(page.getByText('Поездка — тест широкого экрана').first()).toBeVisible();
+  await noHorizontalOverflow(page, 480);
 });
