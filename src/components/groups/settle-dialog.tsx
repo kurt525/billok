@@ -35,7 +35,10 @@ export function SettleDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent
+        className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-y-auto overscroll-contain pb-[calc(1rem+env(safe-area-inset-bottom))]"
+        data-testid="mobile-settle-dialog"
+      >
         <DialogHeader>
           <DialogTitle>{t('settle.title')}</DialogTitle>
           <DialogDescription>{t('settle.description')}</DialogDescription>
@@ -114,7 +117,7 @@ function SettleForm({
           value={fromId}
           onChange={(e) => setFromId(e.target.value)}
           required
-          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="flex h-11 min-w-0 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <option value="">{t('settle.selectMember')}</option>
           {members.map((m) => (
@@ -132,7 +135,7 @@ function SettleForm({
           value={toId}
           onChange={(e) => setToId(e.target.value)}
           required
-          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="flex h-11 min-w-0 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <option value="">{t('settle.selectMember')}</option>
           {members.map((m) => (
@@ -154,6 +157,8 @@ function SettleForm({
           id="settle-amount"
           type="text"
           inputMode="decimal"
+          autoComplete="off"
+          className="h-11 text-base"
           placeholder="0,00"
           value={amountStr}
           onChange={(e) => setAmountStr(e.target.value)}
@@ -163,7 +168,7 @@ function SettleForm({
           <button
             type="button"
             onClick={() => setAmountStr((suggestedAmount / 100).toFixed(2))}
-            className="text-xs text-primary hover:underline"
+            className="inline-flex min-h-11 max-w-full items-center whitespace-normal break-words text-left text-sm text-primary hover:underline"
           >
             {t('settle.useSuggested', { amount: formatCents(suggestedAmount, currency, locale) })}
           </button>
@@ -174,6 +179,7 @@ function SettleForm({
         <Label htmlFor="note">{t('settle.note')}</Label>
         <Input
           id="note"
+          className="h-11 text-base"
           placeholder={t('settle.notePlaceholder')}
           value={note}
           onChange={(e) => setNote(e.target.value)}
@@ -188,7 +194,7 @@ function SettleForm({
 
       <Button
         type="submit"
-        className="w-full"
+        className="min-h-11 w-full text-base"
         disabled={settle.isPending || samePerson}
         data-testid="record-payment-btn"
       >

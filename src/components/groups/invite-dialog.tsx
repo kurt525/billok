@@ -56,7 +56,10 @@ export function InviteDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent
+        className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-y-auto overscroll-contain pb-[calc(1rem+env(safe-area-inset-bottom))]"
+        data-testid="mobile-invite-dialog"
+      >
         <DialogHeader>
           <DialogTitle>
             {placeholder ? t('invite.claimTitle', { name: placeholder.name }) : t('invite.title')}
@@ -67,15 +70,31 @@ export function InviteDialog({
         </DialogHeader>
 
         {!createInvite.data ? (
-          <Button onClick={handleGenerate} disabled={createInvite.isPending}>
+          <Button
+            className="min-h-11 w-full whitespace-normal"
+            onClick={handleGenerate}
+            disabled={createInvite.isPending}
+          >
             <Link className="mr-2 h-4 w-4" />
             {createInvite.isPending ? t('invite.generating') : t('invite.generateLink')}
           </Button>
         ) : (
           <div className="space-y-3">
-            <div className="flex gap-2">
-              <Input readOnly value={getInviteUrl(createInvite.data.token)} className="font-mono text-xs" />
-              <Button variant="outline" size="icon" aria-label={t('invite.copyLink')} onClick={handleCopy}>
+            <div className="flex min-w-0 gap-2">
+              <Input
+                readOnly
+                aria-label={t('invite.copyLink')}
+                value={getInviteUrl(createInvite.data.token)}
+                className="h-11 min-w-0 flex-1 font-mono text-xs"
+              />
+              <Button
+                variant="outline"
+                size="icon"
+                className="size-11 shrink-0"
+                aria-label={t('invite.copyLink')}
+                data-testid="mobile-copy-invite"
+                onClick={handleCopy}
+              >
                 {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
               </Button>
             </div>

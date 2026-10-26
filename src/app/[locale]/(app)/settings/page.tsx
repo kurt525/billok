@@ -50,23 +50,37 @@ function ProfileForm({
     <form onSubmit={handleSave} className="space-y-4">
       <div className="space-y-2">
         <Label htmlFor="email">{t('profile.email')}</Label>
-        <Input id="email" value={email} disabled />
+        <Input id="email" type="email" autoComplete="email" className="h-11 min-w-0 text-base" value={email} disabled />
       </div>
       <div className="space-y-2">
         <Label htmlFor="name">{t('profile.name')}</Label>
-        <Input id="name" value={name} onChange={(e) => setName(e.target.value)} required />
+        <Input
+          id="name"
+          autoComplete="name"
+          className="h-11 min-w-0 text-base"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+        />
       </div>
       <div className="space-y-2">
         <Label htmlFor="venmo">{t('profile.venmo')}</Label>
         <Input
           id="venmo"
+          className="h-11 min-w-0 text-base"
+          autoCapitalize="none"
           value={venmoUsername}
           onChange={(e) => setVenmoUsername(e.target.value)}
           placeholder={t('profile.venmoPlaceholder')}
           data-testid="venmo-username-input"
         />
       </div>
-      <Button type="submit" disabled={updateProfile.isPending} data-testid="save-profile-btn">
+      <Button
+        type="submit"
+        className="min-h-11 w-full"
+        disabled={updateProfile.isPending}
+        data-testid="save-profile-btn"
+      >
         {updateProfile.isPending ? t('profile.saving') : t('profile.save')}
       </Button>
       {updateProfile.isSuccess && <p className="text-sm text-green-600">{t('profile.saved')}</p>}
@@ -149,6 +163,8 @@ export default function SettingsPage() {
                 <Input
                   id="currentPassword"
                   type="password"
+                  autoComplete="current-password"
+                  className="h-11 min-w-0 text-base"
                   value={currentPassword}
                   onChange={(e) => setCurrentPassword(e.target.value)}
                   required
@@ -160,6 +176,8 @@ export default function SettingsPage() {
                 <Input
                   id="newPassword"
                   type="password"
+                  autoComplete="new-password"
+                  className="h-11 min-w-0 text-base"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   required
@@ -171,6 +189,8 @@ export default function SettingsPage() {
                 <Input
                   id="confirmPassword"
                   type="password"
+                  autoComplete="new-password"
+                  className="h-11 min-w-0 text-base"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   required
@@ -182,6 +202,7 @@ export default function SettingsPage() {
               </div>
               <Button
                 type="submit"
+                className="min-h-11 w-full"
                 disabled={
                   changePassword.isPending || newPassword !== confirmPassword || !currentPassword || !newPassword
                 }

@@ -89,6 +89,31 @@ test('Russian mobile dashboard, groups, expenses and admin at all 4 phone widths
     await expect(page.locator('a[href$="/scan"]')).toHaveCount(0);
     await expect(page.locator('a[href$="/expenses/new"]').first()).toBeVisible();
 
+    // Invitation works within a small Android visual viewport. It must not
+    // push the copy action off-screen or cause horizontal page scrolling.
+    if (width === 320 || width === 412) {
+      await page.setViewportSize({ width, height: 460 });
+      await page.getByRole('button', { name: 'Пригласить', exact: true }).click();
+      const inviteDialog = page.getByTestId('mobile-invite-dialog');
+      await expect(inviteDialog).toBeVisible();
+      const inviteBounds = await inviteDialog.boundingBox();
+      expect(inviteBounds!.y).toBeGreaterThanOrEqual(0);
+      expect(inviteBounds!.y + inviteBounds!.height).toBeLessThanOrEqual(460);
+      const generate = inviteDialog.getByRole('button', { name: 'Создать ссылку-приглашение' });
+      await expect(generate).toBeVisible();
+      expect((await generate.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await generate.click();
+      const copy = page.getByTestId('mobile-copy-invite');
+      await expect(copy).toBeVisible();
+      const copyBox = await copy.boundingBox();
+      expect(copyBox!.width).toBeGreaterThanOrEqual(44);
+      expect(copyBox!.height).toBeGreaterThanOrEqual(44);
+      await checkPhoneLayout(page, width);
+      await inviteDialog.getByRole('button', { name: 'Закрыть' }).click();
+      await expect(inviteDialog).toHaveCount(0);
+      await page.setViewportSize({ width, height: 800 });
+    }
+
     await page.goto(new URL(page.url()).pathname + '/expenses/new', { waitUntil: 'networkidle' });
     await expect(page.getByRole('main')).toBeVisible();
     await checkPhoneLayout(page, width);
@@ -127,6 +152,24 @@ test('Russian mobile dashboard, groups, expenses and admin at all 4 phone widths
     await expect(input).toBeInViewport();
     await checkPhoneLayout(page, width);
     await page.setViewportSize({ width, height: 800 });
+
+    if (width === 320 || width === 412) {
+      await page.goto('/settings', { waitUntil: 'networkidle' });
+      await expect(page.getByRole('heading', { name: 'Настройки' })).toBeVisible();
+      await checkPhoneLayout(page, width);
+      await page.setViewportSize({ width, height: 460 });
+      const name = page.locator('#name');
+      await name.focus();
+      await name.scrollIntoViewIfNeeded();
+      await expect(name).toBeInViewport();
+      expect((await name.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      const save = page.getByTestId('save-profile-btn');
+      await save.scrollIntoViewIfNeeded();
+      await expect(save).toBeInViewport();
+      expect((await save.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await checkPhoneLayout(page, width);
+      await page.setViewportSize({ width, height: 800 });
+    }
 
     await page.goto('/admin', { waitUntil: 'networkidle' });
     await expect(page.getByRole('heading', { name: 'Панель администратора' })).toBeVisible();
