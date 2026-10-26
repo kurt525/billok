@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { authedContext, trpcMutation, users } from './helpers';
+import { authedContext, trpcMutation, trpcQuery, trpcResult, users } from './helpers';
 
 /** Signed-in creator, anonymous recipient: real persistence, no photo, OCR, or AI. */
 async function fitsPhone(page: Page) {
@@ -16,7 +16,7 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
   page,
   browser,
 }) => {
-  test.setTimeout(110_000);
+  test.setTimeout(135_000);
   const remoteCalls: string[] = [];
   page.on('request', (request) => {
     if (/guest\.processReceipt|\/api\/upload|guest\.getUploadStatus|api\.openai/.test(request.url())) {
@@ -142,9 +142,30 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
     hasTouch: true,
   });
   try {
+    // A separate anonymous API read proves the saved split has committed and
+    // is accessible without any of the creator's session cookies. This also
+    // distinguishes server persistence/auth failures from rendering failures.
+    const publicResponse = await trpcQuery(otherDevice.request, 'guest.getSplit', { token: receiptToken });
+    const publicBody = await publicResponse.text();
+    expect(publicResponse.ok(), 'Anonymous guest.getSplit failed: ' + publicBody).toBe(true);
+    const publicSplit = await trpcResult({ json: async () => JSON.parse(publicBody) });
+    expect(publicSplit?.shareToken).toBe(receiptToken);
+    expect(publicSplit?.receiptData?.merchantName).toBe('Ужин в кафе');
+
     const otherPage = await otherDevice.newPage();
+    const pageErrors: string[] = [];
+    otherPage.on('pageerror', (error) => pageErrors.push(error.message));
+    otherPage.on('response', (response) => {
+      if (response.status() >= 400 && response.url().includes('/api/trpc/')) {
+        pageErrors.push('tRPC ' + response.status() + ' ' + new URL(response.url()).pathname);
+      }
+    });
     await otherPage.goto(shareUrl, { waitUntil: 'networkidle' });
-    await expect(otherPage.getByTestId('split-result')).toBeVisible();
+    await expect(otherPage).toHaveURL(new RegExp('/split/' + receiptToken + '$'));
+    await expect(
+      otherPage.getByTestId('split-result'),
+      'Anonymous public split did not render: ' + JSON.stringify(pageErrors),
+    ).toBeVisible({ timeout: 30_000 });
     await expect(otherPage.getByTestId('person-card-1')).toContainText('Чай');
     await expect(otherPage.getByTestId('person-card-1')).toContainText(longGuestName);
     await fitsPhone(otherPage);
