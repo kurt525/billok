@@ -31,6 +31,7 @@
   "onlyAdminsPlaceholderInvite": "Only admins and owners can create placeholder-linked invites",
   "onlyOwnerDeletesGroup": "Only the owner can delete a group",
   "onlyOwnerTransfers": "Only the owner can transfer ownership",
+  "rubOnlyExpense": "Editing is available only for expenses and groups in RUB. Existing amounts in other currencies are unchanged.",
   "rubOnlyGroup": "New expenses are allowed only in groups using RUB.",
   "currencyLocked": "Cannot change group currency after expenses or settlements have been recorded. Create a new group with the desired currency instead.",
   "archiveFormerMemberUnsettled": "Someone who is no longer in this group still owes or is owed money, so it can't be archived. Invite them back to settle up, or edit the expenses they're in.",
