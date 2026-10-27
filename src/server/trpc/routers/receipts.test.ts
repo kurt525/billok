@@ -49,6 +49,7 @@ describe('manual group bill authorization and storage', () => {
     mockDb.groupMember.findUnique.mockResolvedValue({ role: 'MEMBER', userId: 'u1', groupId: 'g1' });
     mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => unknown) => fn(mockDb));
     mockDb.$queryRaw.mockResolvedValue([{ archivedAt: null }]);
+    mockDb.group.findUnique.mockResolvedValue({ currency: 'RUB' });
     mockDb.receipt.create.mockResolvedValue({ id: 'r-manual' });
   });
   test('creates a resumable RUB bill with no file and no AI', async () => {
@@ -65,9 +66,39 @@ describe('manual group bill authorization and storage', () => {
       }),
     });
   });
+  test('checks RUB under the group row lock before creating a manual receipt', async () => {
+    expect(await (await caller()).createManual({ groupId: 'g1' })).toEqual({ receiptId: 'r-manual' });
+    expect(mockDb.group.findUnique).toHaveBeenCalledWith({
+      where: { id: 'g1' },
+      select: { currency: true },
+    });
+    const lockCall = mockDb.$queryRaw.mock.invocationCallOrder[0]!;
+    const currencyReadCall = mockDb.group.findUnique.mock.invocationCallOrder[0]!;
+    const createCall = mockDb.receipt.create.mock.invocationCallOrder[0]!;
+    expect(lockCall).toBeLessThan(currencyReadCall);
+    expect(currencyReadCall).toBeLessThan(createCall);
+  });
+
+  test.each(['USD', 'eur'])('rejects direct manual receipt creation in a %s group', async (currency) => {
+    mockDb.group.findUnique.mockResolvedValue({ currency });
+    await expect((await caller()).createManual({ groupId: 'g1' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Expenses from receipts are allowed only for RUB receipts in RUB groups.',
+    });
+    expect(mockDb.$queryRaw).toHaveBeenCalledOnce();
+    expect(mockDb.receipt.create).not.toHaveBeenCalled();
+  });
+
+  test('refuses a missing group without inserting an orphan receipt', async () => {
+    mockDb.group.findUnique.mockResolvedValue(null);
+    await expect((await caller()).createManual({ groupId: 'g1' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.receipt.create).not.toHaveBeenCalled();
+  });
+
   test('rejects archived groups without creating any bill', async () => {
     mockDb.$queryRaw.mockResolvedValue([{ archivedAt: new Date() }]);
     await expect((await caller()).createManual({ groupId: 'g1' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
     expect(mockDb.receipt.create).not.toHaveBeenCalled();
   });
   test('rejects callers who are not active group members', async () => {

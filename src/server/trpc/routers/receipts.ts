@@ -44,6 +44,16 @@ export const receiptsRouter = createTRPCRouter({
   createManual: groupMemberProcedure.input(z.object({ groupId: z.string() })).mutation(async ({ ctx, input }) => {
     return ctx.db.$transaction(async (tx) => {
       await lockActiveGroup(tx, input.groupId, 'archivedAddExpense');
+      // Guard direct API calls as well as the RUB-only mobile form. This read
+      // follows the group row lock, so a concurrent currency change cannot
+      // slip between validation and creating the manual receipt.
+      const group = await tx.group.findUnique({
+        where: { id: input.groupId },
+        select: { currency: true },
+      });
+      if (!group || group.currency.toUpperCase() !== 'RUB') {
+        throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+      }
       const receipt = await tx.receipt.create({
         data: {
           groupId: input.groupId,
