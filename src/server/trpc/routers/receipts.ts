@@ -261,6 +261,15 @@ export const receiptsRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const receipt = await verifyReceiptAccess(ctx.db, input.receiptId, ctx.user.id);
 
+      // Editing tax and tip must not modify historical foreign-currency
+      // receipts or write RUB amounts into a legacy non-RUB group.
+      // Group currency is immutable through our API, so this read-only guard
+      // does not need an additional group row lock.
+      const currency = parseExtractedData(receipt.extractedData).currency.toUpperCase();
+      if (currency !== 'RUB' || (receipt.groupId && receipt.group?.currency?.toUpperCase() !== 'RUB')) {
+        throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+      }
+
       const current = (receipt.extractedData ?? {}) as Record<string, unknown>;
       const updated = {
         ...current,
