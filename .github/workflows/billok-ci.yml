@@ -131,6 +131,14 @@ jobs:
           echo "UPLOAD_DIR=$UPLOAD_DIR" >> "$GITHUB_ENV"
           export ADMIN_EMAIL="alice@example.com"
           echo "ADMIN_EMAIL=$ADMIN_EMAIL" >> "$GITHUB_ENV"
+          # Only this isolated, disposable mobile QA server uses shared seed
+          # accounts. Six independent specs log in as Alice in <15 minutes,
+          # exceeding the production per-email limit (5). Next.js also
+          # forwards the local address as a common IP for these tests.
+          # Match the existing full-E2E CI exemptions; production defaults
+          # and application authentication remain unchanged.
+          export AUTH_RATE_LIMIT_MAX=1000
+          export AUTH_IP_RATE_LIMIT_MAX=10000
           echo "NEXTAUTH_URL=$NEXTAUTH_URL" >> "$GITHUB_ENV"
           echo "AUTH_URL=$AUTH_URL" >> "$GITHUB_ENV"
           echo "AUTH_SECRET=$AUTH_SECRET" >> "$GITHUB_ENV"
