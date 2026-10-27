@@ -140,7 +140,15 @@
     "validationNameRequired": "Укажите название позиции.",
     "validationPricePositive": "Цена должна быть больше нуля.",
     "validationQtyPositive": "Количество должно быть положительным целым числом.",
-    "receiptImageAlt": "Чек"
+    "receiptImageAlt": "Чек",
+    "personalTipTitle": "Мои чаевые",
+    "personalTipDescription": "Только вы решаете, сколько лично оставить официанту. Можно выбрать 0 ₽. Чаевые других участников менять нельзя.",
+    "personalTipAmount": "Мои чаевые, ₽",
+    "personalTipSave": "Сохранить чаевые",
+    "personalTipSaving": "Сохраняем…",
+    "personalTipSaved": "Мои чаевые сохранены",
+    "personalTipInvalid": "Укажите сумму от 0 ₽, не более двух знаков после запятой.",
+    "personalTipPendingTotals": "Чаевые пока сохраняются отдельно от стоимости блюд; в расчёт возмещений они войдут на следующем этапе."
   },
   "splits": {
     "selectAll": "Выбрать всё",

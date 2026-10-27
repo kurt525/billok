@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
-import { formatCents, centsToDecimal, parseToCents } from '@/lib/money';
+import { formatCents, centsToDecimal, parseToCents, isValidMoneyInput, MAX_MONEY_CENTS } from '@/lib/money';
 import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
 import { calculateManualReceiptTotals } from '@/lib/manual-receipt-split';
@@ -49,6 +49,8 @@ export function ItemAssignment({
   const [partsByItem, setPartsByItem] = useState<Record<string, Record<string, number>>>({});
   const [title, setTitle] = useState('');
   const [paidById, setPaidById] = useState('');
+  // This field is tied to the authenticated member, never the selected payer.
+  const [personalTipDraft, setPersonalTipDraft] = useState<string | null>(null);
   const [showImage, setShowImage] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -97,6 +99,15 @@ export function ItemAssignment({
   const saveForLater = trpc.receipts.saveForLater.useMutation({
     onSuccess: () => onSaveForLater?.(),
     onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
+  });
+
+  const savePersonalTip = trpc.receipts.setPersonalTip.useMutation({
+    onSuccess: async () => {
+      await utils.receipts.getReceiptItems.invalidate({ receiptId });
+      setPersonalTipDraft(null);
+      toast.success(t('personalTipSaved'));
+    },
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
   });
 
   // Toggle the image. Zoom/pan reset on every toggle (fresh view when
@@ -171,6 +182,20 @@ export function ItemAssignment({
   const currentUserId = profile.data?.id;
   const defaultPaidById = currentUserId && members.some((m) => m.id === currentUserId) ? currentUserId : '';
   const effectivePaidById = paidById || defaultPaidById;
+  const ownTipCents = currentUserId ? (extracted?.personalTips?.[currentUserId] ?? 0) : 0;
+  const personalTipValue = personalTipDraft ?? centsToDecimal(ownTipCents);
+  const parsedPersonalTip = parseToCents(personalTipValue);
+  const personalTipIsValid =
+    isValidMoneyInput(personalTipValue) &&
+    !/[.,]\d{3,}/.test(personalTipValue) &&
+    parsedPersonalTip >= 0 &&
+    parsedPersonalTip <= MAX_MONEY_CENTS;
+  const canEditOwnTip =
+    receipt?.isManual === true && !!currentUserId && members.some((member) => member.id === currentUserId);
+  function submitPersonalTip() {
+    if (!canEditOwnTip || !personalTipIsValid || parsedPersonalTip === ownTipCents || savePersonalTip.isPending) return;
+    savePersonalTip.mutate({ groupId, receiptId, tipCents: parsedPersonalTip });
+  }
 
   // Note (Finding #29): toggleAssignment and assignAllToEveryone are intentionally
   // duplicated from split/page.tsx. This component uses Record<string, Set<string>>
@@ -546,6 +571,55 @@ export function ItemAssignment({
           </div>
         </CardContent>
       </Card>
+
+      {/* Tips are owned by the signed-in member, not by the chosen payer or
+          any other person whose items this device might assign. No debt changes yet. */}
+      {canEditOwnTip && (
+        <Card data-testid="group-personal-tip-card">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">{t('personalTipTitle')}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">{t('personalTipDescription')}</p>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="min-w-0 flex-1 space-y-1">
+                <Label htmlFor="group-personal-tip">{t('personalTipAmount')}</Label>
+                <Input
+                  id="group-personal-tip"
+                  type="text"
+                  inputMode="decimal"
+                  className="h-11 min-w-0 text-base"
+                  value={personalTipValue}
+                  onChange={(event) => setPersonalTipDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      submitPersonalTip();
+                    }
+                  }}
+                  aria-invalid={!personalTipIsValid}
+                  data-testid="group-personal-tip-input"
+                />
+              </div>
+              <Button
+                type="button"
+                className="min-h-11"
+                onClick={submitPersonalTip}
+                disabled={!personalTipIsValid || parsedPersonalTip === ownTipCents || savePersonalTip.isPending}
+                data-testid="group-personal-tip-save"
+              >
+                {savePersonalTip.isPending ? t('personalTipSaving') : t('personalTipSave')}
+              </Button>
+            </div>
+            {!personalTipIsValid && (
+              <p className="text-sm text-destructive" role="alert">
+                {t('personalTipInvalid')}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">{t('personalTipPendingTotals')}</p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Expense details */}
       <Card>

@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { trpcQuery, trpcResult } from './helpers';
 
 /**
  * Real mobile interaction and persistence (no AI/OCR, no production accounts).
@@ -131,6 +132,89 @@ test('group receipt: add, edit, cancel, split, assign, save, delete and finalize
   await page.getByTestId('create-expense-btn').click();
   await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'));
   await expect(page.getByText('Тестовый чек', { exact: true }).first()).toBeVisible();
+});
+
+test('two registered group members independently save voluntary RUB tips on a mobile manual receipt', async ({
+  page,
+  browser,
+}) => {
+  test.skip(!groupId, 'Requires disposable RUB group fixture');
+  test.setTimeout(125_000);
+
+  await page.goto('/login', { waitUntil: 'networkidle' });
+  await page.locator('input[type=email]').fill('bob@example.com');
+  await page.locator('input[type=password]').fill('password123');
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard/);
+  await page.goto('/groups/' + groupId + '/expenses/new', { waitUntil: 'networkidle' });
+  await page.getByTestId('create-manual-group-receipt').click();
+  await expect(page).toHaveURL(/\/scan\?receiptId=/);
+  const receiptUrl = page.url();
+  const newReceiptId = new URL(receiptUrl).searchParams.get('receiptId');
+  expect(newReceiptId).toBeTruthy();
+
+  const bobTip = page.getByTestId('group-personal-tip-input');
+  const bobSave = page.getByTestId('group-personal-tip-save');
+  await expect(bobTip).toHaveValue('0.00');
+  await expect(bobSave).toBeDisabled();
+  await bobTip.fill('-2');
+  await expect(bobSave).toBeDisabled();
+  await bobTip.fill('1,235');
+  await expect(bobSave).toBeDisabled();
+  await bobTip.fill('2,75');
+  await touchTarget(bobSave);
+  await bobSave.click();
+  await expect(bobTip).toHaveValue('2.75', { timeout: 15_000 });
+  await expect(bobSave).toBeDisabled();
+  await noDocumentOverflow(page);
+
+  const aliceContext = await browser.newContext({
+    viewport: { width: 320, height: 800 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  try {
+    const alicePage = await aliceContext.newPage();
+    await alicePage.goto('/login', { waitUntil: 'networkidle' });
+    await alicePage.locator('input[type=email]').fill('alice@example.com');
+    await alicePage.locator('input[type=password]').fill('password123');
+    await alicePage.getByRole('button', { name: 'Войти', exact: true }).click();
+    await expect(alicePage).toHaveURL(/\/dashboard/);
+    await alicePage.goto(receiptUrl, { waitUntil: 'networkidle' });
+    const aliceTip = alicePage.getByTestId('group-personal-tip-input');
+    await expect(aliceTip).toHaveValue('0.00');
+    await aliceTip.fill('1,50');
+    await alicePage.getByTestId('group-personal-tip-save').click();
+    await expect(aliceTip).toHaveValue('1.50', { timeout: 15_000 });
+    await noDocumentOverflow(alicePage);
+
+    const receipt = await trpcResult(
+      await trpcQuery(page.request, 'receipts.getReceiptItems', {
+        receiptId: newReceiptId,
+      }),
+    );
+    const tips = Object.values(receipt.receipt.extractedData.personalTips as Record<string, number>).sort(
+      (a, b) => a - b,
+    );
+    expect(tips).toEqual([150, 275]);
+    // Bob's own value doesn't change after Alice saves; each editor reads
+    // only its signed-in profile id, not the payer or selected item participant.
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.getByTestId('group-personal-tip-input')).toHaveValue('2.75');
+    await bobTip.fill('0');
+    await bobSave.click();
+    await expect(page.getByTestId('group-personal-tip-input')).toHaveValue('0.00', { timeout: 15_000 });
+    const updated = await trpcResult(
+      await trpcQuery(page.request, 'receipts.getReceiptItems', {
+        receiptId: newReceiptId,
+      }),
+    );
+    expect(
+      Object.values(updated.receipt.extractedData.personalTips as Record<string, number>).sort((a, b) => a - b),
+    ).toEqual([0, 150]);
+  } finally {
+    await aliceContext.close();
+  }
 });
 
 test('manual group bill starts without upload and keeps its positions', async ({ page }) => {

@@ -131,7 +131,15 @@
     "validationNameRequired": "Item name is required.",
     "validationPricePositive": "Price must be greater than zero.",
     "validationQtyPositive": "Quantity must be a positive whole number.",
-    "receiptImageAlt": "Receipt"
+    "receiptImageAlt": "Receipt",
+    "personalTipTitle": "My voluntary tip",
+    "personalTipDescription": "Only you choose how much to tip. You may choose 0 RUB. You cannot change another person’s tip.",
+    "personalTipAmount": "My tip, RUB",
+    "personalTipSave": "Save my tip",
+    "personalTipSaving": "Saving…",
+    "personalTipSaved": "My tip saved",
+    "personalTipInvalid": "Enter 0 or more, with at most two decimal places.",
+    "personalTipPendingTotals": "Tips are saved separately from dish prices and will be included in reimbursement totals in the next stage."
   },
   "splits": {
     "selectAll": "Select all",
