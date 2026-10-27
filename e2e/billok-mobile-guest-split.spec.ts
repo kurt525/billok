@@ -176,6 +176,77 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
   expect(remoteCalls).toEqual([]);
 });
 
+test('anonymous participant chooses only own voluntary tips on mobile', async ({ page, browser }) => {
+  test.setTimeout(115_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const created = await trpcMutation(owner, 'guest.createClaimSession', {
+    receiptData: { merchantName: 'Кафе чаевые', subtotal: 1050, tax: 0, tip: 0, total: 1050, currency: 'RUB' },
+    items: [{ name: 'Чай', quantity: 1, unitPrice: 1050, totalPrice: 1050 }],
+    people: ['Анна', 'Борис'],
+    creatorName: 'Анна',
+    paidByName: 'Анна',
+  });
+  const raw = await created.text();
+  expect(created.ok(), raw).toBe(true);
+  const token = JSON.parse(raw).result.data.json.shareToken as string;
+
+  const second = await browser.newContext({
+    viewport: { width: 320, height: 460 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  try {
+    await page.setViewportSize({ width: 320, height: 460 });
+    await page.goto('/split/' + token + '/claim');
+    await expect(page.getByTestId('claim-join-form')).toBeVisible();
+    await expect(page.getByTestId('personal-tip-card')).toHaveCount(0);
+
+    await page.getByTestId('rejoin-person-0').click();
+    await expect(page.getByTestId('personal-tip-card')).toBeVisible({ timeout: 15_000 });
+    const amount = page.getByTestId('personal-tip-input');
+    const save = page.getByTestId('personal-tip-save');
+    await expect(amount).toHaveValue('0.00');
+    await expect(save).toBeDisabled();
+    await amount.fill('1,235');
+    await expect(save).toBeDisabled();
+    await amount.fill('1,25');
+    await expect(save).toBeEnabled();
+    await save.click();
+    await expect(amount).toHaveValue('1.25', { timeout: 15_000 });
+    await expect(save).toBeDisabled();
+    await fitsPhone(page);
+
+    // Switching who one is choosing dishes for cannot change tip ownership.
+    await page.getByTestId('switch-person-1').click();
+    await expect(amount).toHaveValue('1.25');
+    await amount.fill('0');
+    await save.click();
+    await expect(amount).toHaveValue('0.00', { timeout: 15_000 });
+    await expect(save).toBeDisabled();
+
+    const visitor = await second.newPage();
+    await visitor.goto('/split/' + token + '/claim');
+    await visitor.getByTestId('rejoin-person-1').click();
+    const visitorTip = visitor.getByTestId('personal-tip-input');
+    await expect(visitorTip).toHaveValue('0.00', { timeout: 15_000 });
+    await visitorTip.fill('3,50');
+    await visitor.getByTestId('personal-tip-save').click();
+    await expect(visitorTip).toHaveValue('3.50', { timeout: 15_000 });
+
+    const state = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(state.people.map((person: { name: string; tipCents: number }) => [person.name, person.tipCents])).toEqual([
+      ['Анна', 0],
+      ['Борис', 350],
+    ]);
+    await page.reload();
+    await expect(page.getByTestId('personal-tip-input')).toHaveValue('0.00', { timeout: 15_000 });
+    await fitsPhone(page);
+  } finally {
+    await second.close();
+    await owner.dispose();
+  }
+});
+
 test('anonymous mobile participant can join a long-name slot and edit it with touch controls', async ({ page }) => {
   test.setTimeout(90_000);
   const longName = 'Алексей'.repeat(5) + '12345';

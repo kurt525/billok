@@ -6,7 +6,7 @@ import { useLocale, useTranslations } from 'next-intl';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
-import { formatCents } from '@/lib/money';
+import { formatCents, centsToDecimal, isValidMoneyInput, parseToCents, MAX_MONEY_CENTS } from '@/lib/money';
 import { copyToClipboard } from '@/lib/clipboard';
 import {
   canAdoptAnswer,
@@ -110,6 +110,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // --- State ---
   const [name, setName] = useState('');
   const [groupSize, setGroupSize] = useState(1);
+  // Only the owner of this device's personToken can edit these tips.
+  const [personalTipDraft, setPersonalTipDraft] = useState<string | null>(null);
   // People are tracked by id, not index: someone's index changes when anyone listed before them
   // is removed, on any device. Indexes are looked up in the session as last loaded (below).
   // This device's person, once it joined or resumed
@@ -187,6 +189,16 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         }),
     },
   );
+  const setPersonalTip = trpc.guest.setPersonalTip.useMutation({
+    onSuccess: async (_result, variables) => {
+      await utils.guest.getSession.invalidate({ token });
+      if (identityRef.current?.personId === variables.personId) {
+        setPersonalTipDraft(null);
+        toast.success(t('personalTipSaved'));
+      }
+    },
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
+  });
   // The payer's Venmo handle follows the session (falling back to the creator's profile) until the
   // creator edits it, so a handle saved after this page loaded still shows
   const venmoHandle =
@@ -211,6 +223,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   function setIdentity(next: { personId: string; personToken: string } | null) {
     identityRef.current = next;
     setIdentityState(next);
+    setPersonalTipDraft(null);
   }
 
   // This device's person is gone (removed here or on another device): back to the join form.
@@ -941,6 +954,14 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
   const data = session.data!;
   const currency = data.receiptData.currency;
+  const savedPersonalTip = myPersonIndex === null ? 0 : (data.people[myPersonIndex]?.tipCents ?? 0);
+  const personalTipValue = personalTipDraft ?? centsToDecimal(savedPersonalTip);
+  const personalTipCents = parseToCents(personalTipValue);
+  const personalTipIsValid =
+    isValidMoneyInput(personalTipValue) &&
+    personalTipCents >= 0 &&
+    personalTipCents <= MAX_MONEY_CENTS &&
+    !/[.,]\d{3,}/.test(personalTipValue);
 
   // This person's own link for their other devices (joined or finalized view), with the
   // warning shown before anything is sent
@@ -1336,6 +1357,57 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         {personalLinkButton}
       </div>
       {personalLinkHint}
+
+      {/* Personal tips belong to this device's identity, never the person selected
+          for editing dish claims. Individual tips do not affect totals yet. */}
+      {myPersonIndex !== null && myPersonId && personToken && (
+        <Card data-testid="personal-tip-card">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">{t('personalTipTitle')}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">{t('personalTipDescription')}</p>
+            <form
+              className="flex flex-wrap items-end gap-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!personalTipIsValid || personalTipCents === savedPersonalTip || setPersonalTip.isPending) return;
+                setPersonalTip.mutate({ token, personId: myPersonId, personToken, tipCents: personalTipCents });
+              }}
+            >
+              <div className="min-w-0 flex-1 space-y-1">
+                <label htmlFor="personal-tip-amount" className="text-sm font-medium">
+                  {t('personalTipAmount')}
+                </label>
+                <Input
+                  id="personal-tip-amount"
+                  type="text"
+                  inputMode="decimal"
+                  className="h-11 min-w-0 text-base"
+                  value={personalTipValue}
+                  onChange={(event) => setPersonalTipDraft(event.target.value)}
+                  aria-invalid={!personalTipIsValid}
+                  data-testid="personal-tip-input"
+                />
+              </div>
+              <Button
+                type="submit"
+                className="min-h-11"
+                disabled={!personalTipIsValid || personalTipCents === savedPersonalTip || setPersonalTip.isPending}
+                data-testid="personal-tip-save"
+              >
+                {setPersonalTip.isPending ? t('saving') : t('personalTipSave')}
+              </Button>
+            </form>
+            {!personalTipIsValid && (
+              <p className="text-sm text-destructive" role="alert">
+                {t('personalTipInvalid')}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">{t('personalTipPendingTotals')}</p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Receipt image viewer */}
       {data.receiptImagePath && (

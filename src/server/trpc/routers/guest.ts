@@ -24,6 +24,7 @@ import {
 import { calculateSplitTotals, groupSizeWeights } from '@/lib/split-calculator';
 import { normalizeGuestName } from '@/lib/guest-session';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
+import { MAX_MONEY_CENTS } from '@/lib/money';
 import { checkJoinRateLimit } from '../../lib/guest-join-limit';
 import {
   assignPersonIds,
@@ -959,7 +960,7 @@ export const guestRouter = createTRPCRouter({
         token: shareTokenSchema,
         personId: personIdSchema,
         personToken: z.string().uuid(),
-        tipCents: z.number().int().min(0),
+        tipCents: z.number().int().min(0).max(MAX_MONEY_CENTS),
       }),
     )
     .mutation(async ({ ctx, input }) => {

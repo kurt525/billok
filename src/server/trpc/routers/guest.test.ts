@@ -1024,12 +1024,15 @@ describe('guest.setPersonalTip: voluntary kopecks per authenticated participant'
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
-  test.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])('refuses an invalid tip %s before DB access', async (tipCents) => {
-    await expect((await caller()).setPersonalTip({ ...alice, tipCents })).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-    });
-    expect(mockDb.$transaction).not.toHaveBeenCalled();
-  });
+  test.each([-1, 1.5, 2_147_483_648, Number.MAX_SAFE_INTEGER + 1])(
+    'refuses an invalid tip %s before DB access',
+    async (tipCents) => {
+      await expect((await caller()).setPersonalTip({ ...alice, tipCents })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      expect(mockDb.$transaction).not.toHaveBeenCalled();
+    },
+  );
 
   test('refuses finalized and expired sessions with no writes', async () => {
     claimSession(people, { status: 'FINALIZED' });

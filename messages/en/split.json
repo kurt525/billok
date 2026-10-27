@@ -149,7 +149,14 @@
     "finalizeDescription": "Everyone's totals are worked out and the split is locked, so nobody can change their claims after this.",
     "splitFinalized": "Split finalized!",
     "groupSize": "People in your group",
-    "groupSizeHint": "Enter 2+ if joining as a couple or group"
+    "groupSizeHint": "Enter 2+ if joining as a couple or group",
+    "personalTipTitle": "My voluntary tip",
+    "personalTipDescription": "Choose how much you personally want to tip. You may leave 0. You cannot change others’ tips.",
+    "personalTipAmount": "My tip, RUB",
+    "personalTipSave": "Save my tip",
+    "personalTipSaved": "My tip was saved",
+    "personalTipInvalid": "Enter an amount of at least 0 with no more than two decimal places.",
+    "personalTipPendingTotals": "Tips are currently saved separately from dish totals. They will be included in reimbursements in the next stage."
   },
   "result": {
     "loading": "Loading split...",
