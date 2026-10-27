@@ -545,6 +545,16 @@ export const receiptsRouter = createTRPCRouter({
       await verifyReceiptAccess(ctx.db, input.receiptId, ctx.user.id);
 
       await ctx.db.$transaction(async (tx) => {
+        // Keep group-before-receipt lock order, matching expense finalization.
+        await lockActiveGroup(tx, input.groupId, 'archivedAddExpense');
+        const group = await tx.group.findUnique({
+          where: { id: input.groupId },
+          select: { currency: true },
+        });
+        if (!group || group.currency.toUpperCase() !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+        }
+
         // Deleting it from the pending list takes it off the group and keeps it while a claim
         // session uses it (#318). Under its lock, that either waits for this save or is seen
         // here, and the access check above runs again on what the delete left
@@ -552,6 +562,9 @@ export const receiptsRouter = createTRPCRouter({
         const receipt = await verifyReceiptAccess(tx, input.receiptId, ctx.user.id);
         if (receipt.status !== 'COMPLETED') {
           throw new AppError('BAD_REQUEST', 'receiptNotProcessed');
+        }
+        if (parseExtractedData(receipt.extractedData).currency.toUpperCase() !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
         }
         // Check it's not already linked to an expense
         const existing = await tx.expense.findUnique({

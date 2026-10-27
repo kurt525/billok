@@ -503,7 +503,8 @@ describe('saving a receipt for later while it is deleted from the pending list (
   beforeEach(() => {
     mockDb.groupMember.findUnique.mockResolvedValue({ role: 'MEMBER', userId: 'u1', groupId: 'g1' });
     mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => unknown) => fn(mockDb));
-    mockDb.$queryRaw.mockResolvedValue([{ '?column?': 1 }]);
+    mockDb.$queryRaw.mockResolvedValue([{ archivedAt: null }]);
+    mockDb.group.findUnique.mockResolvedValue({ currency: 'RUB' });
     mockDb.expense.findUnique.mockResolvedValue(null);
   });
 
@@ -520,12 +521,61 @@ describe('saving a receipt for later while it is deleted from the pending list (
     const api = await caller();
     await api.saveForLater({ groupId: 'g1', receiptId: 'r1' });
 
-    expect(rawSql()[0]).toMatch(/FROM "Receipt" WHERE "id" = \? FOR NO KEY UPDATE/);
-    const [locked] = mockDb.$queryRaw.mock.invocationCallOrder;
-    expect(locked).toBeGreaterThan(mockDb.$transaction.mock.invocationCallOrder[0]!);
+    expect(rawSql()[0]).toMatch(/FROM "Group" WHERE "id" = \? FOR SHARE/);
+    expect(rawSql()[1]).toMatch(/FROM "Receipt" WHERE "id" = \? FOR NO KEY UPDATE/);
+    const [groupLocked, receiptLocked] = mockDb.$queryRaw.mock.invocationCallOrder;
+    const currencyChecked = mockDb.group.findUnique.mock.invocationCallOrder[0]!;
+    expect(groupLocked).toBeGreaterThan(mockDb.$transaction.mock.invocationCallOrder[0]!);
+    expect(currencyChecked).toBeGreaterThan(groupLocked!);
+    expect(currencyChecked).toBeLessThan(receiptLocked!);
     const lastRead = mockDb.receipt.findUnique.mock.invocationCallOrder.at(-1)!;
-    expect(lastRead).toBeGreaterThan(locked!);
+    expect(lastRead).toBeGreaterThan(receiptLocked!);
     expect(mockDb.receipt.update.mock.invocationCallOrder[0]).toBeGreaterThan(lastRead);
+  });
+
+  test.each(['USD', 'eur'])('rejects saving a receipt in a %s group before changing it', async (currency) => {
+    mockDb.receipt.findUnique.mockResolvedValue(inGroup);
+    mockDb.group.findUnique.mockResolvedValue({ currency });
+    await expect((await caller()).saveForLater({ groupId: 'g1', receiptId: 'r1' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Expenses from receipts are allowed only for RUB receipts in RUB groups.',
+    });
+    expect(rawSql()).toEqual([expect.stringMatching(/FROM "Group" WHERE "id" = \? FOR SHARE/)]);
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+    expect(mockDb.receiptItemAssignment.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test('rejects saving a non-RUB receipt in a RUB group, without changing it', async () => {
+    mockDb.receipt.findUnique.mockResolvedValue({
+      ...inGroup,
+      extractedData: { subtotal: 505, tax: 0, tip: 0, total: 505, currency: 'USD' },
+    });
+    await expect((await caller()).saveForLater({ groupId: 'g1', receiptId: 'r1' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(rawSql()).toHaveLength(2);
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+    expect(mockDb.expense.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('rejects saving when the group was archived before acquiring its row lock', async () => {
+    mockDb.receipt.findUnique.mockResolvedValue(inGroup);
+    mockDb.$queryRaw.mockResolvedValueOnce([{ archivedAt: new Date() }]);
+    await expect((await caller()).saveForLater({ groupId: 'g1', receiptId: 'r1' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Cannot add expenses to an archived group',
+    });
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects saving when the group was removed before the currency check', async () => {
+    mockDb.receipt.findUnique.mockResolvedValue(inGroup);
+    mockDb.group.findUnique.mockResolvedValue(null);
+    await expect((await caller()).saveForLater({ groupId: 'g1', receiptId: 'r1' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
   });
 
   test('a placeholder removed from the group is not saved as the payer (#284)', async () => {
