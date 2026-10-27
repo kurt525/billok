@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
-import { formatCents, centsToDecimal, parseToCents, isValidMoneyInput } from '@/lib/money';
+import { formatCents, centsToDecimal, parseToCents } from '@/lib/money';
 import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
 import { calculateManualReceiptTotals } from '@/lib/manual-receipt-split';
@@ -49,7 +49,6 @@ export function ItemAssignment({
   const [partsByItem, setPartsByItem] = useState<Record<string, Record<string, number>>>({});
   const [title, setTitle] = useState('');
   const [paidById, setPaidById] = useState('');
-  const [tipOverride, setTipOverride] = useState<string>('');
   const [showImage, setShowImage] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -167,11 +166,6 @@ export function ItemAssignment({
 
   const { receipt, items } = receiptData.data ?? { receipt: null, items: [] };
   const extracted = receipt?.extractedData ?? null;
-  const parsedTip = parseToCents(tipOverride);
-  const tip =
-    extracted && tipOverride !== '' && isValidMoneyInput(tipOverride) && parsedTip >= 0
-      ? parsedTip
-      : (extracted?.tip ?? 0);
   // Until someone picks a payer or a saved one loads, default to the current user (when
   // they're in the group), as Add Expense does (#271, #265)
   const currentUserId = profile.data?.id;
@@ -280,8 +274,6 @@ export function ItemAssignment({
         items: items.filter((item) => chosen.some((a) => a.receiptItemId === item.id)),
         assignments: chosen,
         creatorId: receipt.creatorId,
-        tax: chosen.length === items.length ? (extracted?.tax ?? 0) : 0,
-        tip: chosen.length === items.length ? tip : 0,
       });
     }
     // Build member-id -> index mapping for calculateSplitTotals
@@ -304,8 +296,8 @@ export function ItemAssignment({
     const results = calculateSplitTotals({
       items,
       assignments: assignmentList,
-      tax: extracted?.tax ?? 0,
-      tip,
+      tax: 0,
+      tip: 0,
       peopleCount: members.length,
     });
 
@@ -316,7 +308,7 @@ export function ItemAssignment({
       if (member) totals.set(member.id, r.total);
     }
     return totals;
-  }, [items, assignments, partsByItem, receipt, members, extracted, tip]);
+  }, [items, assignments, partsByItem, receipt, members]);
   const assignedItemCount = items.filter((item) => (assignments[item.id]?.size ?? 0) > 0).length;
   const partsAreValid = Object.entries(assignments).every(([itemId, users]) =>
     [...users].every((userId) => {
@@ -376,7 +368,6 @@ export function ItemAssignment({
       receiptId,
       title,
       paidById: effectivePaidById,
-      tipOverride: tipOverride !== '' && isValidMoneyInput(tipOverride) && parsedTip >= 0 ? parsedTip : undefined,
       assignments: Object.entries(assignments)
         .filter(([itemId, userIds]) => userIds.size > 0 && items.some((item) => item.id === itemId))
         .map(([receiptItemId, userIds]) => ({
@@ -548,18 +539,10 @@ export function ItemAssignment({
             <span className="text-muted-foreground">{t('subtotal')}</span>
             <span>{formatCents(subtotal, safeExtracted.currency, locale)}</span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">{t('tax')}</span>
-            <span>{formatCents(safeExtracted.tax, safeExtracted.currency, locale)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">{t('tip')}</span>
-            <span>{formatCents(tip, safeExtracted.currency, locale)}</span>
-          </div>
           <Separator />
           <div className="flex justify-between font-semibold">
             <span>{t('total')}</span>
-            <span>{formatCents(subtotal + safeExtracted.tax + tip, safeExtracted.currency, locale)}</span>
+            <span>{formatCents(subtotal, safeExtracted.currency, locale)}</span>
           </div>
         </CardContent>
       </Card>
@@ -594,17 +577,6 @@ export function ItemAssignment({
                 </option>
               ))}
             </select>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="tip">{t('tipOverride')}</Label>
-            <Input
-              id="tip"
-              type="text"
-              inputMode="decimal"
-              placeholder={t('tipDetected', { amount: formatCents(safeExtracted.tip, safeExtracted.currency, locale) })}
-              value={tipOverride}
-              onChange={(e) => setTipOverride(e.target.value)}
-            />
           </div>
         </CardContent>
       </Card>

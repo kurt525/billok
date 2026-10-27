@@ -187,97 +187,9 @@ describe('manual receipt: consumed portions and creator rounding', () => {
   });
 });
 
-describe('RUB-only updates to saved receipt tax and tip', () => {
-  const baseData = {
-    merchantName: 'Кафе',
-    subtotal: 1234,
-    tax: 100,
-    tip: 50,
-    total: 1384,
-    currency: 'RUB',
-    customField: 'keep',
-  };
-
-  beforeEach(() => {
-    mockDb.receipt.findUnique.mockResolvedValue({
-      id: 'r1',
-      groupId: 'g1',
-      uploadedById: 'u1',
-      group: { currency: 'RUB', members: [{ userId: 'u1' }] },
-      extractedData: baseData,
-    });
-  });
-
-  test('changes tax and tip in RUB kopecks, preserving other fields', async () => {
-    const api = await caller();
-    await expect(api.updateExtractedData({ receiptId: 'r1', tax: 125, tip: 75 })).resolves.toEqual({
-      success: true,
-    });
-    expect(mockDb.receipt.update).toHaveBeenCalledWith({
-      where: { id: 'r1' },
-      data: { extractedData: { ...baseData, tax: 125, tip: 75 } },
-    });
-    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
-    expect(mockDb.$transaction).not.toHaveBeenCalled();
-  });
-
-  test('rejects editing saved USD receipt data without writing', async () => {
-    mockDb.receipt.findUnique.mockResolvedValueOnce({
-      id: 'r1',
-      groupId: 'g1',
-      uploadedById: 'u1',
-      group: { currency: 'RUB', members: [{ userId: 'u1' }] },
-      extractedData: { ...baseData, currency: 'USD' },
-    });
-    await expect((await caller()).updateExtractedData({ receiptId: 'r1', tip: 200 })).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-      message: 'Expenses from receipts are allowed only for RUB receipts in RUB groups.',
-    });
-    expect(mockDb.receipt.update).not.toHaveBeenCalled();
-  });
-
-  test('rejects changing tax on a RUB receipt belonging to an old EUR group', async () => {
-    mockDb.receipt.findUnique.mockResolvedValueOnce({
-      id: 'r1',
-      groupId: 'g1',
-      uploadedById: 'u1',
-      group: { currency: 'EUR', members: [{ userId: 'u1' }] },
-      extractedData: baseData,
-    });
-    await expect((await caller()).updateExtractedData({ receiptId: 'r1', tax: 400 })).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-    });
-    expect(mockDb.receipt.update).not.toHaveBeenCalled();
-  });
-
-  test('permits the owner to edit an ungrouped RUB receipt', async () => {
-    mockDb.receipt.findUnique.mockResolvedValueOnce({
-      id: 'r1',
-      groupId: null,
-      uploadedById: 'u1',
-      group: null,
-      extractedData: { ...baseData, currency: 'rub' },
-    });
-    await (await caller()).updateExtractedData({ receiptId: 'r1', tax: 99 });
-    expect(mockDb.receipt.update).toHaveBeenCalledWith({
-      where: { id: 'r1' },
-      data: { extractedData: { ...baseData, currency: 'rub', tax: 99 } },
-    });
-  });
-
-  test('rejects a nonmember without changing the receipt or disclosing currency', async () => {
-    mockDb.receipt.findUnique.mockResolvedValueOnce({
-      id: 'r1',
-      groupId: 'g1',
-      uploadedById: 'u1',
-      group: { currency: 'USD', members: [] },
-      extractedData: baseData,
-    });
-    await expect((await caller()).updateExtractedData({ receiptId: 'r1', tax: 125 })).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-    });
-    expect(mockDb.receipt.update).not.toHaveBeenCalled();
-  });
+test('obsolete API for editing shared tax/tip is not exposed', async () => {
+  const { receiptsRouter } = await import('./receipts');
+  expect(Object.keys(receiptsRouter._def.procedures)).not.toContain('updateExtractedData');
 });
 
 describe('RUB-only finalization of a group receipt', () => {
@@ -341,6 +253,37 @@ describe('RUB-only finalization of a group receipt', () => {
       code: 'BAD_REQUEST',
     });
     expect(mockDb.$queryRaw).toHaveBeenCalledOnce();
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['extra tax', { tax: 110, tip: 0 }],
+    ['shared tip', { tax: 0, tip: 220 }],
+  ])('refuses finalization with %s already in receipt JSON', async (_name, charges) => {
+    mockDb.receipt.findUnique.mockResolvedValueOnce({
+      ...receipt,
+      extractedData: { ...receipt.extractedData, ...charges },
+    });
+    await expect((await caller()).assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Additional tax and shared tips are not supported for receipts.',
+    });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+    expect(mockDb.receiptItemAssignment.createMany).not.toHaveBeenCalled();
+  });
+
+  test('refuses any shared tipOverride, including zero, before reading group data', async () => {
+    const api = await caller();
+    for (const tipOverride of [0, 225]) {
+      await expect(
+        api.assignItemsAndCreateExpense({
+          ...finish,
+          tipOverride,
+        } as unknown as Parameters<typeof api.assignItemsAndCreateExpense>[0]),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
     expect(mockDb.expense.create).not.toHaveBeenCalled();
   });
 

@@ -37,8 +37,6 @@ export function calculateManualReceiptTotals(params: {
   items: { id: string; totalPrice: number }[];
   assignments: ManualAssignment[];
   creatorId: string;
-  tax?: number;
-  tip?: number;
 }): Map<string, number> {
   const totals = new Map<string, number>();
   const itemMap = new Map(params.items.map((item) => [item.id, item.totalPrice]));
@@ -49,20 +47,6 @@ export function calculateManualReceiptTotals(params: {
     }
     for (const [userId, share] of splitCents(amount, assignment.people, params.creatorId)) {
       totals.set(userId, (totals.get(userId) ?? 0) + share);
-    }
-  }
-  const extra = (params.tax ?? 0) + (params.tip ?? 0);
-  if (!Number.isSafeInteger(extra) || extra < 0) throw new RangeError('Invalid tax or tip');
-  if (extra) {
-    const taxable = [...totals.entries()]
-      .filter(([, share]) => share > 0)
-      .map(([userId, parts]) => ({ userId, parts }));
-    if (taxable.length) {
-      for (const [userId, share] of splitCents(extra, taxable, params.creatorId)) {
-        totals.set(userId, (totals.get(userId) ?? 0) + share);
-      }
-    } else {
-      totals.set(params.creatorId, (totals.get(params.creatorId) ?? 0) + extra);
     }
   }
   return totals;

@@ -250,40 +250,6 @@ export const receiptsRouter = createTRPCRouter({
       });
     }),
 
-  updateExtractedData: protectedProcedure
-    .input(
-      z.object({
-        receiptId: z.string(),
-        tax: z.number().int().min(0).optional(),
-        tip: z.number().int().min(0).optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const receipt = await verifyReceiptAccess(ctx.db, input.receiptId, ctx.user.id);
-
-      // Editing tax and tip must not modify historical foreign-currency
-      // receipts or write RUB amounts into a legacy non-RUB group.
-      // Group currency is immutable through our API, so this read-only guard
-      // does not need an additional group row lock.
-      const currency = parseExtractedData(receipt.extractedData).currency.toUpperCase();
-      if (currency !== 'RUB' || (receipt.groupId && receipt.group?.currency?.toUpperCase() !== 'RUB')) {
-        throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
-      }
-
-      const current = (receipt.extractedData ?? {}) as Record<string, unknown>;
-      const updated = {
-        ...current,
-        ...(input.tax !== undefined ? { tax: input.tax } : {}),
-        ...(input.tip !== undefined ? { tip: input.tip } : {}),
-      };
-
-      await ctx.db.receipt.update({
-        where: { id: input.receiptId },
-        data: { extractedData: updated as unknown as Prisma.InputJsonValue },
-      });
-      return { success: true };
-    }),
-
   assignItemsAndCreateExpense: groupMemberProcedure
     .input(
       z.object({
@@ -291,7 +257,7 @@ export const receiptsRouter = createTRPCRouter({
         receiptId: z.string(),
         title: z.string().min(1).max(200),
         paidById: z.string(),
-        tipOverride: z.number().int().min(0).optional(),
+        tipOverride: z.never().optional(), // shared tips are not part of BillOK receipts
         assignments: z.array(
           z.object({
             receiptItemId: z.string(),
@@ -355,8 +321,11 @@ export const receiptsRouter = createTRPCRouter({
         }
       }
 
-      const tax = extractedData.tax;
-      const tip = input.tipOverride ?? extractedData.tip;
+      // Prices already include restaurant taxes. Additional tax and common
+      // tips are not supported; personal voluntary tips are a separate step.
+      if (extractedData.tax !== 0 || extractedData.tip !== 0) {
+        throw new AppError('BAD_REQUEST', 'receiptExtraChargesNotSupported');
+      }
 
       // Build item map and verify all referenced items belong to this receipt
       const itemMap = new Map(receipt.items.map((item) => [item.id, item]));
@@ -382,15 +351,12 @@ export const receiptsRouter = createTRPCRouter({
           }
         }
 
-      // Proportionally distribute tax and tip using receipt subtotal as denominator.
-      // This ensures each assigned item gets its fair share of tax/tip relative to
-      // the full receipt subtotal, even when not all items are assigned.
-      const actualSubtotal = Array.from(userSubtotals.values()).reduce((a, b) => a + b, 0);
-      const receiptSubtotal = extractedData.subtotal > 0 ? extractedData.subtotal : actualSubtotal;
+      // Every item is charged at its displayed price without extra tax or a
+      // shared tip. Integer kopeck rounding for manual portions is unchanged.
       const totalAmount =
         receipt.originalName === 'billok-manual'
-          ? receipt.items.reduce((sum, item) => sum + item.totalPrice, 0) + tax + tip
-          : actualSubtotal + tax + tip;
+          ? receipt.items.reduce((sum, item) => sum + item.totalPrice, 0)
+          : [...userSubtotals.values()].reduce((sum, amount) => sum + amount, 0);
 
       const userTotals =
         receipt.originalName === 'billok-manual'
@@ -401,34 +367,8 @@ export const receiptsRouter = createTRPCRouter({
                 people: a.userIds.map((userId, i) => ({ userId, parts: a.parts?.[i] ?? 1 })),
               })),
               creatorId: receipt.uploadedById ?? ctx.user.id,
-              tax,
-              tip,
             })
-          : new Map<string, number>();
-      let allocatedTotal = 0;
-      const userEntries = Array.from(userSubtotals.entries());
-
-      if (receipt.originalName !== 'billok-manual')
-        for (const [i, [userId, itemTotal]] of userEntries.entries()) {
-          const proportion = receiptSubtotal > 0 ? itemTotal / receiptSubtotal : 0;
-
-          let userTax: number;
-          let userTip: number;
-
-          if (i === userEntries.length - 1) {
-            // Last user gets remainder to prevent off-by-one
-            const alreadyAllocated = allocatedTotal;
-            const userTotal = totalAmount - alreadyAllocated;
-            userTotals.set(userId, userTotal);
-            allocatedTotal += userTotal;
-          } else {
-            userTax = Math.round(tax * proportion);
-            userTip = Math.round(tip * proportion);
-            const userTotal = itemTotal + userTax + userTip;
-            userTotals.set(userId, userTotal);
-            allocatedTotal += userTotal;
-          }
-        }
+          : userSubtotals;
 
       // Save assignments in a single batch (replaces N×M individual upserts)
       const assignmentData = input.assignments.flatMap((a) =>

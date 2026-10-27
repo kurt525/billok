@@ -82,6 +82,7 @@
   "payerNotMember": "Плательщик не состоит в этой группе.",
   "onlyPayerDeletesPayment": "Удалять запись о переводе могут только плательщик, владелец группы или администратор.",
   "receiptNotFound": "Чек не найден.",
+  "receiptExtraChargesNotSupported": "Дополнительный налог и общие чаевые в чеке не поддерживаются.",
   "receiptNotReady": "Чек ещё не готов.",
   "receiptNotProcessed": "Сначала необходимо обработать чек.",
   "receiptHasExpense": "С этим чеком уже связан расход.",

@@ -42,7 +42,7 @@ describe('manual item splitting by consumed parts', () => {
     expect([...result.values()].reduce((sum, x) => sum + x, 0)).toBe(1);
     expect(result.get('creator')).toBe(1);
   });
-  test('tip and multiple items reconcile exactly', () => {
+  test('multiple items reconcile exactly', () => {
     const totals = calculateManualReceiptTotals({
       items: [
         { id: 'a', totalPrice: 101 },
@@ -59,10 +59,16 @@ describe('manual item splitting by consumed parts', () => {
         { receiptItemId: 'b', people: [{ userId: 'bob', parts: 1 }] },
       ],
       creatorId: 'creator',
-      tip: 37,
     });
-    expect([...totals.values()].reduce((sum, x) => sum + x, 0)).toBe(340);
+    expect([...totals.values()].reduce((sum, x) => sum + x, 0)).toBe(303);
   });
+  test('splitting 505 kopecks adds no mandatory tax or shared tip', () => {
+    const result = split(505, [2, 3]);
+    expect([...result.values()].reduce((sum, share) => sum + share, 0)).toBe(505);
+    expect(result.get('alice')).toBe(202);
+    expect(result.get('bob')).toBe(303);
+  });
+
   test('invalid and duplicate consumed parts are refused', () => {
     expect(() => split(100, [0, 5])).toThrow(RangeError);
     expect(() => split(100, [3.5, 5])).toThrow(RangeError);
