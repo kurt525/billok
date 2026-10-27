@@ -71,7 +71,7 @@ function toPublicPeople(people: GuestSessionPerson[]) {
 // The claim page's view of the people: public fields plus each person's id, which it uses to
 // target them (their index changes when someone listed before them is removed)
 function toClaimPeople(people: IdentifiedGuestPerson[]) {
-  return people.map((person) => ({ id: person.id, ...toPublicPerson(person) }));
+  return people.map((person) => ({ id: person.id, ...toPublicPerson(person), tipCents: person.tipCents ?? 0 }));
 }
 
 /**
@@ -947,6 +947,51 @@ export const guestRouter = createTRPCRouter({
           },
         });
         return { success: true, itemCount: items.length };
+      });
+    }),
+
+  // Every participant chooses only their own voluntary tip. This intentionally
+  // does not yet alter shares or final totals: those are handled with the
+  // subsequent personal-tip settlement and UI stages.
+  setPersonalTip: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        tipCents: z.number().int().min(0),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('personal-tip', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) {
+          throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+        }
+
+        const people = session.people as GuestSessionPerson[];
+        const personIndex = people.findIndex((person) => person.personToken === input.personToken);
+        if (personIndex < 0 || people[personIndex]?.id !== input.personId) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+
+        // Setting the same amount twice, including the default zero, is a
+        // no-op. Different devices are serialized through guestTransaction.
+        if ((people[personIndex]!.tipCents ?? 0) !== input.tipCents) {
+          const updated = people.map((person, index) =>
+            index === personIndex ? { ...person, tipCents: input.tipCents } : person,
+          );
+          await tx.guestSplit.update({
+            where: { id: session.id },
+            data: { people: updated as unknown as Prisma.InputJsonValue },
+          });
+        }
+        return { success: true, tipCents: input.tipCents };
       });
     }),
 

@@ -400,6 +400,7 @@ type TestPerson = {
   name: string;
   personToken?: string;
   groupSize?: number;
+  tipCents?: number;
   join?: { key: string; name: string; expiresAt: number };
   saves?: { key: string; hash: string }[];
 };
@@ -715,8 +716,8 @@ describe('guest.getSession people', () => {
     ]);
     const session = await (await caller()).getSession({ token: 'share-1' });
     expect(session.people).toEqual([
-      { id: pid(0), name: 'Host', groupSize: 1, hasJoined: false },
-      { id: pid(1), name: 'Alice', groupSize: 2, hasJoined: true },
+      { id: pid(0), name: 'Host', groupSize: 1, hasJoined: false, tipCents: 0 },
+      { id: pid(1), name: 'Alice', groupSize: 2, hasJoined: true, tipCents: 0 },
     ]);
     expect(JSON.stringify(session)).not.toContain(ALICE_TOKEN);
     expect(JSON.stringify(session)).not.toContain(JOIN_KEY);
@@ -918,6 +919,11 @@ describe('claim-session write limits (#204)', () => {
       call: (api: Awaited<ReturnType<typeof caller>>) =>
         api.splitClaimItem({ token: 'share-1', personToken: ALICE_TOKEN, itemIndex: 0, splitQuantity: 1 }),
     },
+    {
+      action: 'personal-tip',
+      call: (api: Awaited<ReturnType<typeof caller>>) =>
+        api.setPersonalTip({ token: 'share-1', personToken: ALICE_TOKEN, personId: pid(0), tipCents: 100 }),
+    },
   ];
 
   test.each(writes)(
@@ -954,6 +960,87 @@ describe('guest.getSession read limit (#204)', () => {
     });
     expect(checkRateLimit).toHaveBeenCalledWith('guest-session-read:share-1', 3000, 60_000);
     expect(mockDb.guestSplit.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('guest.setPersonalTip: voluntary kopecks per authenticated participant', () => {
+  const alice = { token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN };
+  const people = [
+    { name: 'Alice', personToken: ALICE_TOKEN },
+    { name: 'Bob', personToken: OTHER_TOKEN, tipCents: 400 },
+  ];
+
+  test('sets only own tip and keeps the other person and existing session data untouched', async () => {
+    claimSession(people);
+    await expect((await caller()).setPersonalTip({ ...alice, tipCents: 125 })).resolves.toEqual({
+      success: true,
+      tipCents: 125,
+    });
+    expect(savedPeople()).toEqual([
+      { id: pid(0), ...people[0], tipCents: 125 },
+      { id: pid(1), ...people[1] },
+    ]);
+    const update = mockDb.guestSplit.update.mock.calls[0]![0] as { data: Record<string, unknown> };
+    expect(Object.keys(update.data)).toEqual(['people']);
+    expect(mockDb.$transaction).toHaveBeenCalledOnce();
+  });
+
+  test('default zero, stored zero and a repeated identical update require no write', async () => {
+    claimSession(people);
+    const api = await caller();
+    expect((await api.getSession({ token: 'share-1' })).people).toEqual([
+      { id: pid(0), name: 'Alice', groupSize: 1, hasJoined: true, tipCents: 0 },
+      { id: pid(1), name: 'Bob', groupSize: 1, hasJoined: true, tipCents: 400 },
+    ]);
+    expect(await api.setPersonalTip({ ...alice, tipCents: 0 })).toEqual({ success: true, tipCents: 0 });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    claimSession([{ ...people[0]!, tipCents: 125 }, people[1]!]);
+    expect(await api.setPersonalTip({ ...alice, tipCents: 125 })).toEqual({ success: true, tipCents: 125 });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('a participant can replace their own tip with zero, never the other participant', async () => {
+    claimSession([{ ...people[0]!, tipCents: 125 }, people[1]!]);
+    await (await caller()).setPersonalTip({ ...alice, tipCents: 0 });
+    expect(savedPeople()).toEqual([
+      { id: pid(0), ...people[0], tipCents: 0 },
+      { id: pid(1), ...people[1] },
+    ]);
+  });
+
+  test('refuses a valid token used with another person id', async () => {
+    claimSession(people);
+    await expect((await caller()).setPersonalTip({ ...alice, personId: pid(1), tipCents: 800 })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('refuses a foreign or made-up person token even with a valid target id', async () => {
+    claimSession(people);
+    await expect(
+      (await caller()).setPersonalTip({ ...alice, personToken: D_TOKEN, tipCents: 500 }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])('refuses an invalid tip %s before DB access', async (tipCents) => {
+    await expect((await caller()).setPersonalTip({ ...alice, tipCents })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('refuses finalized and expired sessions with no writes', async () => {
+    claimSession(people, { status: 'FINALIZED' });
+    await expect((await caller()).setPersonalTip({ ...alice, tipCents: 150 })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    claimSession(people, { expiresAt: new Date(Date.now() - 60_000) });
+    await expect((await caller()).setPersonalTip({ ...alice, tipCents: 150 })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 });
 
