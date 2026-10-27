@@ -33,9 +33,9 @@ vi.mock('@/server/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-async function caller() {
+async function caller(userId = 'u1') {
   const { receiptsRouter } = await import('./receipts');
-  const ctx = { session: { user: { id: 'u1' } }, db: mockDb, headers: new Headers(), impersonating: null };
+  const ctx = { session: { user: { id: userId } }, db: mockDb, headers: new Headers(), impersonating: null };
   return receiptsRouter.createCaller(ctx as unknown as Parameters<typeof receiptsRouter.createCaller>[0]);
 }
 
@@ -110,6 +110,149 @@ describe('manual group bill authorization and storage', () => {
     const { receiptsRouter } = await import('./receipts');
     expect(Object.keys(receiptsRouter._def.procedures)).not.toContain('processReceipt');
     expect(Object.keys(receiptsRouter._def.procedures)).not.toContain('retryProcessing');
+  });
+});
+
+describe('manual group receipt: each member saves only their own voluntary tip', () => {
+  const baseData = { subtotal: 505, tax: 0, tip: 0, total: 505, currency: 'RUB' };
+  const receipt = {
+    id: 'r1',
+    groupId: 'g1',
+    status: 'COMPLETED',
+    originalName: 'billok-manual',
+    extractedData: baseData,
+  };
+  const input = { groupId: 'g1', receiptId: 'r1', tipCents: 125 };
+
+  beforeEach(() => {
+    mockDb.groupMember.findUnique.mockResolvedValue({ userId: 'u1', groupId: 'g1', removedAt: null });
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'RUB' });
+    mockDb.receipt.findUnique.mockResolvedValue(receipt);
+    mockDb.$queryRaw.mockResolvedValue([{ id: 'r1' }]);
+    mockDb.expense.findUnique.mockResolvedValue(null);
+    mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => unknown) => fn(mockDb));
+  });
+
+  test('saves own tip in RUB kopecks while retaining receipt totals and dish prices', async () => {
+    expect(await (await caller()).setPersonalTip(input)).toEqual({ success: true, tipCents: 125 });
+    expect(mockDb.receipt.update).toHaveBeenCalledWith({
+      where: { id: 'r1' },
+      data: {
+        extractedData: { ...baseData, personalTips: { u1: 125 } },
+      },
+    });
+    expect(mockDb.receiptItem.update).not.toHaveBeenCalled();
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+    expect(mockDb.$queryRaw).toHaveBeenCalledOnce();
+    const sql = (mockDb.$queryRaw.mock.calls[0]![0] as TemplateStringsArray).join('?');
+    expect(sql).toMatch(/FROM "Receipt" WHERE "id" = \? FOR UPDATE/);
+    expect(sql).not.toContain('FROM "Group"');
+    expect(mockDb.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mockDb.receipt.findUnique.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  test('default zero and repeated identical amount do not write anything', async () => {
+    expect(await (await caller()).setPersonalTip({ ...input, tipCents: 0 })).toEqual({ success: true, tipCents: 0 });
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+    mockDb.receipt.findUnique.mockResolvedValue({
+      ...receipt,
+      extractedData: { ...baseData, personalTips: { u1: 125 } },
+    });
+    expect(await (await caller()).setPersonalTip(input)).toEqual({ success: true, tipCents: 125 });
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+  });
+
+  test("two members saving in sequence preserve each other's tip in one receipt JSON", async () => {
+    let stored: Record<string, unknown> = { ...baseData };
+    mockDb.receipt.findUnique.mockImplementation(async () => ({ ...receipt, extractedData: stored }));
+    mockDb.receipt.update.mockImplementation(async (args: { data: { extractedData: Record<string, unknown> } }) => {
+      stored = args.data.extractedData;
+    });
+    expect(await (await caller()).setPersonalTip(input)).toEqual({ success: true, tipCents: 125 });
+    // Use an independent authenticated member on the next call: the endpoint
+    // never accepts a userId parameter from the requesting client.
+    mockDb.groupMember.findUnique.mockImplementation(async () => ({ removedAt: null }));
+    expect(await (await caller('u2')).setPersonalTip({ ...input, tipCents: 350 })).toEqual({
+      success: true,
+      tipCents: 350,
+    });
+    expect(stored.personalTips).toEqual({ u1: 125, u2: 350 });
+    expect(mockDb.receipt.update).toHaveBeenCalledTimes(2);
+    expect(mockDb.group.findUnique).toHaveBeenCalledTimes(2);
+    expect(mockDb.$queryRaw).toHaveBeenCalledTimes(2);
+  });
+
+  test('allows a member to set their own tip back to zero without touching others', async () => {
+    mockDb.receipt.findUnique.mockResolvedValue({
+      ...receipt,
+      extractedData: { ...baseData, personalTips: { u1: 125, u2: 350 } },
+    });
+    await (await caller()).setPersonalTip({ ...input, tipCents: 0 });
+    expect(mockDb.receipt.update).toHaveBeenCalledWith({
+      where: { id: 'r1' },
+      data: { extractedData: { ...baseData, personalTips: { u1: 0, u2: 350 } } },
+    });
+  });
+
+  test.each([-1, 1.4, 2_147_483_648])('rejects invalid tip %s without a transaction', async (tipCents) => {
+    await expect((await caller()).setPersonalTip({ ...input, tipCents })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('refuses a receipt belonging to another group, before any update', async () => {
+    mockDb.receipt.findUnique.mockResolvedValue({ ...receipt, groupId: 'g2' });
+    await expect((await caller()).setPersonalTip(input)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+  });
+
+  test('refuses a removed member even when middleware initially accepted the member', async () => {
+    mockDb.groupMember.findUnique
+      .mockResolvedValueOnce({ userId: 'u1', groupId: 'g1', removedAt: null })
+      .mockResolvedValueOnce({ userId: 'u1', groupId: 'g1', removedAt: new Date() });
+    await expect((await caller()).setPersonalTip(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+  });
+
+  test('refuses a finalized receipt whose expense already exists', async () => {
+    mockDb.expense.findUnique.mockResolvedValue({ id: 'e1' });
+    await expect((await caller()).setPersonalTip(input)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Receipt already has an expense',
+    });
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+  });
+
+  test.each(['USD', 'EUR'])('refuses tips on a group in %s', async (currency) => {
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency });
+    await expect((await caller()).setPersonalTip(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+  });
+
+  test('refuses archived groups and non-RUB receipts', async () => {
+    mockDb.group.findUnique.mockResolvedValueOnce({ archivedAt: new Date(), currency: 'RUB' });
+    await expect((await caller()).setPersonalTip(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    mockDb.receipt.findUnique.mockResolvedValue({
+      ...receipt,
+      extractedData: { ...baseData, currency: 'USD' },
+    });
+    await expect((await caller()).setPersonalTip(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+  });
+
+  test('refuses unauthorized nonmembers before acquiring receipt row lock', async () => {
+    mockDb.groupMember.findUnique.mockResolvedValueOnce(null);
+    await expect((await caller()).setPersonalTip(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+    expect(mockDb.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  test('rejects editing if the receipt has been deleted before the transaction lock', async () => {
+    mockDb.$queryRaw.mockResolvedValueOnce([]);
+    await expect((await caller()).setPersonalTip(input)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
   });
 });
 

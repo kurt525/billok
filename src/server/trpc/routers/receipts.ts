@@ -7,6 +7,7 @@ import { parseExtractedData } from '../../lib/json-schemas';
 import { stripUndefined } from '../../lib/strip-undefined';
 import { lockActiveGroup } from '../../lib/group-balances';
 import { calculateManualReceiptTotals } from '@/lib/manual-receipt-split';
+import { MAX_MONEY_CENTS } from '@/lib/money';
 import { deleteUnusedSplitReceipts, removeReceiptFiles } from '../../lib/receipt-cleanup';
 
 /**
@@ -107,11 +108,85 @@ export const receiptsRouter = createTRPCRouter({
           tip: number;
           total: number;
           currency: string;
+          personalTips?: Record<string, number>;
         } | null,
       },
       items: receiptWithItems.items as ReceiptItem[],
     };
   }),
+
+  // One voluntary RUB tip per registered participant, stored alongside this
+  // unfinalized manual receipt. Separate from dish prices and all expense debts
+  // until the subsequent personal-tip settlement stage.
+  setPersonalTip: groupMemberProcedure
+    .input(
+      z.object({
+        groupId: z.string(),
+        receiptId: z.string(),
+        tipCents: z.number().int().min(0).max(MAX_MONEY_CENTS),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.$transaction(async (tx) => {
+        // Serialize updates of the SAME receipt so two members can independently
+        // save tips without replacing each other's extractedData.personalTips.
+        // No group row lock: this mutation does not change balances or membership.
+        const [locked] = await tx.$queryRaw<{ id: string }[]>`
+          SELECT "id" FROM "Receipt" WHERE "id" = ${input.receiptId} FOR UPDATE`;
+        if (!locked) throw new AppError('NOT_FOUND');
+
+        const receipt = await tx.receipt.findUnique({ where: { id: input.receiptId } });
+        if (!receipt || receipt.groupId !== input.groupId) {
+          throw new AppError('NOT_FOUND');
+        }
+        if (receipt.status !== 'COMPLETED' || receipt.originalName !== 'billok-manual') {
+          throw new AppError('BAD_REQUEST', 'receiptNotReady');
+        }
+
+        const [group, member, expense] = await Promise.all([
+          tx.group.findUnique({
+            where: { id: input.groupId },
+            select: { currency: true, archivedAt: true },
+          }),
+          tx.groupMember.findUnique({
+            where: { userId_groupId: { userId: ctx.user.id, groupId: input.groupId } },
+          }),
+          tx.expense.findUnique({ where: { receiptId: input.receiptId } }),
+        ]);
+        if (!member || member.removedAt) throw new AppError('FORBIDDEN');
+        if (!group || group.archivedAt) {
+          throw new AppError('BAD_REQUEST', 'archivedAddExpense');
+        }
+        if (group.currency.toUpperCase() !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+        }
+        if (expense) {
+          throw new AppError('BAD_REQUEST', 'receiptAlreadyHasExpense');
+        }
+
+        const extracted = parseExtractedData(receipt.extractedData);
+        if (extracted.currency.toUpperCase() !== 'RUB' || extracted.tax !== 0 || extracted.tip !== 0) {
+          throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+        }
+        const storedTips = extracted.personalTips;
+        const tips =
+          storedTips && typeof storedTips === 'object' && !Array.isArray(storedTips)
+            ? (storedTips as Record<string, number>)
+            : {};
+        if ((tips[ctx.user.id] ?? 0) !== input.tipCents) {
+          await tx.receipt.update({
+            where: { id: input.receiptId },
+            data: {
+              extractedData: {
+                ...extracted,
+                personalTips: { ...tips, [ctx.user.id]: input.tipCents },
+              } as Prisma.InputJsonValue,
+            },
+          });
+        }
+        return { success: true, tipCents: input.tipCents };
+      });
+    }),
 
   updateItem: protectedProcedure
     .input(
