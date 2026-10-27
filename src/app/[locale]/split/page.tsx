@@ -5,7 +5,7 @@ import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Link, useRouter } from '@/i18n/navigation';
 import { trpc } from '@/lib/trpc';
-import { formatCents, centsToDecimal, parseToCents, isValidMoneyInput } from '@/lib/money';
+import { formatCents, centsToDecimal, parseToCents } from '@/lib/money';
 import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
 import { canStoreClaimIdentity, setStoredClaimIdentity } from '@/lib/guest-session';
@@ -79,7 +79,6 @@ function AuthenticatedGuestSplitPage() {
   const [personKeys, setPersonKeys] = useState<number[]>([0]);
   const [assignments, setAssignments] = useState<Record<number, Set<number>>>({}); // itemIdx -> Set<personIdx>
   const [paidByIndex, setPaidByIndex] = useState(0);
-  const [tipOverride, setTipOverride] = useState('');
 
   // Editing
   const [editingItem, setEditingItem] = useState<number | null>(null);
@@ -283,9 +282,6 @@ function AuthenticatedGuestSplitPage() {
   };
 
   // Calculate totals
-  const parsedTip = parseToCents(tipOverride);
-  const tip =
-    tipOverride !== '' && isValidMoneyInput(tipOverride) && parsedTip >= 0 ? parsedTip : (extracted?.tip ?? 0);
   const currency = 'RUB';
 
   const getPerPersonTotals = () => {
@@ -300,8 +296,8 @@ function AuthenticatedGuestSplitPage() {
     return calculateSplitTotals({
       items,
       assignments: assignmentList,
-      tax: extracted.tax,
-      tip,
+      tax: 0,
+      tip: 0,
       peopleCount: people.length,
     });
   };
@@ -340,12 +336,11 @@ function AuthenticatedGuestSplitPage() {
 
     try {
       const result = await createSplit.mutateAsync({
-        receiptData: { ...extracted, tip },
+        receiptData: extracted,
         items,
         people: validPeople.map((n) => ({ name: n })),
         assignments: assignmentList,
         paidByIndex: remappedPaidBy,
-        tipOverride: tipOverride !== '' && isValidMoneyInput(tipOverride) && parsedTip >= 0 ? parsedTip : undefined,
       });
       router.push(`/split/${result.shareToken}`);
     } catch {
@@ -362,7 +357,7 @@ function AuthenticatedGuestSplitPage() {
 
     try {
       const result = await createClaimSession.mutateAsync({
-        receiptData: { ...extracted, tip },
+        receiptData: extracted,
         items,
         people: validPeople,
         // The manually chosen payer also represents the guest who creates the session.
@@ -512,35 +507,13 @@ function AuthenticatedGuestSplitPage() {
                 <span className="text-muted-foreground">{t('assign.subtotal')}</span>
                 <span>{formatCents(extracted.subtotal, currency, locale)}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('assign.tax')}</span>
-                <span>{formatCents(extracted.tax, currency, locale)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('assign.tip')}</span>
-                <span>{formatCents(tip, currency, locale)}</span>
-              </div>
               <Separator />
               <div className="flex justify-between font-semibold">
                 <span>{t('assign.total')}</span>
-                <span>{formatCents(extracted.subtotal + extracted.tax + tip, currency, locale)}</span>
+                <span>{formatCents(extracted.subtotal, currency, locale)}</span>
               </div>
             </CardContent>
           </Card>
-
-          {/* Tip override */}
-          <div className="space-y-2">
-            <Label htmlFor="guest-tip">{t('assign.tipOverrideLabel')}</Label>
-            <Input
-              id="guest-tip"
-              type="text"
-              inputMode="decimal"
-              placeholder={t('assign.tipDetected', { amount: formatCents(extracted.tip, currency, locale) })}
-              value={tipOverride}
-              onChange={(e) => setTipOverride(e.target.value)}
-              className="h-12"
-            />
-          </div>
 
           {/* Quick actions */}
           <div className="flex flex-wrap gap-2">

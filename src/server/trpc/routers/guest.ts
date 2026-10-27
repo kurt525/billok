@@ -176,15 +176,21 @@ function cloneAssignments(assignments: { itemIndex: number; personIndices: numbe
 }
 
 // ─── Shared Zod schemas (Finding #27) ────────────────────────────
-const receiptDataSchema = z.object({
-  merchantName: z.string().optional(),
-  date: z.string().optional(),
-  subtotal: z.number().int(),
-  tax: z.number().int(),
-  tip: z.number().int(),
-  total: z.number().int(),
-  currency: z.string().trim().toUpperCase().pipe(z.literal('RUB')).default('RUB'),
-});
+const receiptDataSchema = z
+  .object({
+    merchantName: z.string().optional(),
+    date: z.string().optional(),
+    subtotal: z.number().int(),
+    // Item prices include restaurant taxes; personal tips will be separate.
+    tax: z.number().int().min(0).max(0).default(0),
+    tip: z.number().int().min(0).max(0).default(0),
+    total: z.number().int().min(0),
+    currency: z.string().trim().toUpperCase().pipe(z.literal('RUB')).default('RUB'),
+  })
+  .refine((receipt) => receipt.total === receipt.subtotal, {
+    path: ['total'],
+    message: 'No additional tax or shared tips in a new BillOK receipt',
+  });
 
 const itemSchema = z.object({
   name: z.string(),
@@ -354,7 +360,7 @@ export const guestRouter = createTRPCRouter({
           )
           .max(1000),
         paidByIndex: z.number().int().default(0),
-        tipOverride: z.number().int().min(0).optional(),
+        tipOverride: z.never().optional(), // no shared tip override
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -401,13 +407,11 @@ export const guestRouter = createTRPCRouter({
       // Note: second bounds-validation loop removed (Finding #13) — the remap above
       // only produces valid indices via indexMap filtering, making post-remap validation redundant.
 
-      const tip = input.tipOverride ?? input.receiptData.tip;
-
       const summary = calculateSplitTotals({
         items: input.items,
         assignments: remappedAssignments,
-        tax: input.receiptData.tax,
-        tip,
+        tax: 0,
+        tip: 0,
         peopleCount: filteredPeople.length,
       });
 
@@ -427,11 +431,7 @@ export const guestRouter = createTRPCRouter({
         return tx.guestSplit.create({
           data: {
             ...(receiptId !== undefined ? { receiptId, receiptShared: true } : {}),
-            receiptData: {
-              ...input.receiptData,
-              tip,
-              ...(input.tipOverride != null ? { total: input.receiptData.subtotal + input.receiptData.tax + tip } : {}),
-            } as unknown as Prisma.InputJsonValue,
+            receiptData: input.receiptData as unknown as Prisma.InputJsonValue,
             items: input.items as unknown as Prisma.InputJsonValue,
             people: filteredPeople as unknown as Prisma.InputJsonValue,
             assignments: remappedAssignments as unknown as Prisma.InputJsonValue,
@@ -1134,7 +1134,7 @@ export const guestRouter = createTRPCRouter({
         // Who is finalizing, by id; must be the holder of personToken
         personId: personIdSchema,
         personToken: z.string().uuid(),
-        tipOverride: z.number().int().min(0).optional(),
+        tipOverride: z.never().optional(), // no shared tip override
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -1166,7 +1166,7 @@ export const guestRouter = createTRPCRouter({
           throw new AppError('PRECONDITION_FAILED', 'itemsUnassigned');
         }
 
-        const tip = input.tipOverride ?? receiptData.tip;
+        const tip = receiptData.tip;
 
         // Each person's groupSize weights the items they share
         const summary = calculateSplitTotals({
@@ -1189,13 +1189,6 @@ export const guestRouter = createTRPCRouter({
             status: GuestSplitStatus.FINALIZED,
             summary: summaryWithNames as unknown as Prisma.InputJsonValue,
             assignments: assignments as unknown as Prisma.InputJsonValue,
-            ...(input.tipOverride !== undefined && {
-              receiptData: {
-                ...receiptData,
-                tip,
-                total: receiptData.subtotal + receiptData.tax + tip,
-              } as unknown as Prisma.InputJsonValue,
-            }),
           },
         });
 

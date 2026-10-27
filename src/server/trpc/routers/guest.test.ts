@@ -182,7 +182,10 @@ describe('new shared receipts use RUB exclusively', () => {
   const rubData = { merchantName: 'Ужин', subtotal: 505, tax: 0, tip: 0, total: 505 };
   const items = [{ name: 'Чай', quantity: 1, unitPrice: 505, totalPrice: 505 }];
   const create = {
-    createSplit: (api: Awaited<ReturnType<typeof caller>>, receiptData: typeof rubData & { currency?: string }) =>
+    createSplit: (
+      api: Awaited<ReturnType<typeof caller>>,
+      receiptData: Omit<typeof rubData, 'tax' | 'tip'> & { tax?: number; tip?: number; currency?: string },
+    ) =>
       api.createSplit({
         receiptData,
         items,
@@ -191,7 +194,7 @@ describe('new shared receipts use RUB exclusively', () => {
       }),
     createClaimSession: (
       api: Awaited<ReturnType<typeof caller>>,
-      receiptData: typeof rubData & { currency?: string },
+      receiptData: Omit<typeof rubData, 'tax' | 'tip'> & { tax?: number; tip?: number; currency?: string },
     ) => api.createClaimSession({ receiptData, items, creatorName: 'Анна', paidByName: 'Анна' }),
   };
 
@@ -227,6 +230,66 @@ describe('new shared receipts use RUB exclusively', () => {
     expect(mockDb.$transaction).not.toHaveBeenCalled();
     expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
     expect(checkRateLimit).not.toHaveBeenCalled();
+  });
+
+  test.each(Object.keys(create) as (keyof typeof create)[])(
+    '%s refuses extra tax or shared tips at creation',
+    async (name) => {
+      const api = await caller(signedIn);
+      const invalid = [
+        { ...rubData, tax: 125, total: 630 },
+        { ...rubData, tip: 75, total: 580 },
+        { ...rubData, total: 580 },
+      ];
+      for (const receiptData of invalid) {
+        await expect(create[name](api, receiptData)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      }
+      expect(mockDb.$transaction).not.toHaveBeenCalled();
+      expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+      expect(checkRateLimit).not.toHaveBeenCalled();
+    },
+  );
+
+  test('createSplit rejects shared tipOverride, including zero', async () => {
+    const api = await caller(signedIn);
+    const base = {
+      receiptData: rubData,
+      items,
+      people: [{ name: 'Анна' }],
+      assignments: [{ itemIndex: 0, personIndices: [0] }],
+    };
+    for (const tipOverride of [0, 100]) {
+      await expect(
+        api.createSplit({ ...base, tipOverride } as unknown as Parameters<typeof api.createSplit>[0]),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+  });
+
+  test('finalization cannot impose a shared tip on a claim session', async () => {
+    const api = await caller(signedIn);
+    const request = {
+      token: 'session',
+      personId: 'aaaaaaaa-0000-4000-8000-000000000000',
+      personToken: '11111111-1111-4111-8111-111111111111',
+    };
+    for (const tipOverride of [0, 250]) {
+      await expect(
+        api.finalizeSession({ ...request, tipOverride } as unknown as Parameters<typeof api.finalizeSession>[0]),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test.each(Object.keys(create) as (keyof typeof create)[])('%s defaults tax and shared tip to zero', async (name) => {
+    const api = await caller(signedIn);
+    await create[name](api, { merchantName: rubData.merchantName, subtotal: 505, total: 505 });
+    expect(mockDb.guestSplit.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        receiptData: expect.objectContaining({ total: 505, tax: 0, tip: 0 }),
+      }),
+    });
   });
 
   test('public links still read an already stored USD receipt without rewriting it', async () => {

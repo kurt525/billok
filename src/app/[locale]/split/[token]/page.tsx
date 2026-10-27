@@ -265,14 +265,20 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
             <span className="text-muted-foreground">{t('subtotal')}</span>
             <span>{formatCents(data.receiptData.subtotal, currency, locale)}</span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">{t('tax')}</span>
-            <span>{formatCents(data.receiptData.tax, currency, locale)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">{t('tip')}</span>
-            <span>{formatCents(data.receiptData.tip, currency, locale)}</span>
-          </div>
+          {/* Historical receipts may contain upstream charges. New BillOK receipts
+              use tax=0 and tip=0 until each person can choose their own tip. */}
+          {data.receiptData.tax > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('tax')}</span>
+              <span>{formatCents(data.receiptData.tax, currency, locale)}</span>
+            </div>
+          )}
+          {data.receiptData.tip > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('tip')}</span>
+              <span>{formatCents(data.receiptData.tip, currency, locale)}</span>
+            </div>
+          )}
           <Separator />
           <div className="flex justify-between font-semibold">
             <span>{t('total')}</span>
