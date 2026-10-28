@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
+import { SBP_BANKS } from '@/lib/sbp-banks';
 
 // Rendered only once the profile has loaded, so all fields can be
 // initialized directly from the data (no sync-from-query effects that
@@ -18,10 +19,14 @@ function ProfileForm({
   email,
   initialName,
   initialVenmoUsername,
+  initialSbpPhone,
+  initialSbpBankId,
 }: {
   email: string;
   initialName: string;
   initialVenmoUsername: string;
+  initialSbpPhone: string;
+  initialSbpBankId: string;
 }) {
   const t = useTranslations('settings');
   const tc = useTranslations('common');
@@ -29,6 +34,8 @@ function ProfileForm({
   const router = useRouter();
   const [name, setName] = useState(initialName);
   const [venmoUsername, setVenmoUsername] = useState(initialVenmoUsername);
+  const [sbpPhone, setSbpPhone] = useState(initialSbpPhone);
+  const [sbpBankId, setSbpBankId] = useState(initialSbpBankId);
 
   const updateProfile = trpc.auth.updateProfile.useMutation({
     onSuccess: async () => {
@@ -43,6 +50,8 @@ function ProfileForm({
     updateProfile.mutate({
       name: name.trim(),
       venmoUsername: venmoUsername.trim() || null,
+      sbpPhone: sbpPhone.trim() || null,
+      sbpBankId: sbpBankId || null,
     });
   }
 
@@ -74,6 +83,40 @@ function ProfileForm({
           placeholder={t('profile.venmoPlaceholder')}
           data-testid="venmo-username-input"
         />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="sbp-phone">{t('profile.sbpPhone')}</Label>
+        <Input
+          id="sbp-phone"
+          type="tel"
+          inputMode="tel"
+          autoComplete="tel"
+          maxLength={24}
+          className="h-11 min-w-0 text-base"
+          value={sbpPhone}
+          onChange={(e) => setSbpPhone(e.target.value)}
+          placeholder={t('profile.sbpPhonePlaceholder')}
+          data-testid="sbp-phone-input"
+        />
+        <p className="text-xs text-muted-foreground">{t('profile.sbpPhoneUnverified')}</p>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="sbp-bank">{t('profile.sbpBank')}</Label>
+        <select
+          id="sbp-bank"
+          className="h-11 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-base"
+          value={sbpBankId}
+          onChange={(e) => setSbpBankId(e.target.value)}
+          data-testid="sbp-bank-select"
+        >
+          <option value="">{t('profile.sbpBankNotSelected')}</option>
+          {SBP_BANKS.map((bank) => (
+            <option key={bank.id} value={bank.id}>
+              {bank.name}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-muted-foreground">{t('profile.sbpBankHint')}</p>
       </div>
       <Button
         type="submit"
@@ -137,6 +180,8 @@ export default function SettingsPage() {
               email={profile.data.email ?? session?.user?.email ?? ''}
               initialName={profile.data.name ?? session?.user?.name ?? ''}
               initialVenmoUsername={profile.data.venmoUsername ?? ''}
+              initialSbpPhone={profile.data.sbpPhone ?? ''}
+              initialSbpBankId={profile.data.sbpBankId ?? ''}
             />
           ) : (
             <div className="space-y-4">

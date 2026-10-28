@@ -160,5 +160,7 @@
   "providerCreateFailed": "Не удалось создать провайдера.",
   "providerUnavailable": "Провайдер «{provider}» недоступен.",
   "testImageTooLarge": "Изображение превышает ограничение в 5 МБ.",
-  "extractionFailed": "Не удалось извлечь данные."
+  "extractionFailed": "Не удалось извлечь данные.",
+  "sbpPhoneInvalid": "Укажите российский номер в формате +7XXXXXXXXXX или 8XXXXXXXXXX.",
+  "sbpBankInvalid": "Выберите банк из списка."
 }

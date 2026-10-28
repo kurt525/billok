@@ -160,5 +160,7 @@
   "providerCreateFailed": "Failed to create provider",
   "providerUnavailable": "Provider \"{provider}\" is not available",
   "testImageTooLarge": "Image exceeds 5 MB limit",
-  "extractionFailed": "Extraction failed"
+  "extractionFailed": "Extraction failed",
+  "sbpPhoneInvalid": "Enter a Russian phone number in +7XXXXXXXXXX or 8XXXXXXXXXX format.",
+  "sbpBankInvalid": "Select a bank from the list."
 }

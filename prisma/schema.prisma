@@ -59,6 +59,8 @@ model User {
   defaultCurrency String    @default("RUB")
   locale          String    @default("ru")
   venmoUsername   String?
+  sbpPhone        String? // normalized Russian number; no SMS validation
+  sbpBankId       String? // selected bank ID, not a verified account
   suspendedAt     DateTime?
   isPlaceholder   Boolean   @default(false)
   placeholderName String?

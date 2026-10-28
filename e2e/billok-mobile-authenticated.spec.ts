@@ -177,3 +177,29 @@ test('Russian mobile dashboard, groups, expenses and admin at all 4 phone widths
     await expect(page.locator('aside')).not.toBeVisible();
   }
 });
+
+
+test('mobile SBP profile persists phone and selected bank without verification claims', async ({ page }) => {
+  test.setTimeout(90_000);
+  await signInAsSeedAdmin(page);
+  await page.goto('/settings', { waitUntil: 'networkidle' });
+  const phone = page.getByTestId('sbp-phone-input');
+  const bank = page.getByTestId('sbp-bank-select');
+  await expect(phone).toBeVisible();
+  await expect(bank).toBeVisible();
+  await expect(page.getByText('Номер не проверяется по СМС')).toBeVisible();
+  await phone.fill('8 (999) 123-45-67');
+  await bank.selectOption('tbank');
+  await page.getByTestId('save-profile-btn').click();
+  await expect(page.getByText('Профиль обновлён!')).toBeVisible();
+  await page.reload({ waitUntil: 'networkidle' });
+  await expect(page.getByTestId('sbp-phone-input')).toHaveValue('+79991234567');
+  await expect(page.getByTestId('sbp-bank-select')).toHaveValue('tbank');
+  await checkPhoneLayout(page, 320);
+
+  // Leave the disposable CI account as it was before this test.
+  await page.getByTestId('sbp-phone-input').fill('');
+  await page.getByTestId('sbp-bank-select').selectOption('');
+  await page.getByTestId('save-profile-btn').click();
+  await expect(page.getByText('Профиль обновлён!')).toBeVisible();
+});

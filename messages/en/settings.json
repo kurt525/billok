@@ -10,7 +10,13 @@
     "venmo": "Venmo handle",
     "venmoPlaceholder": "@username",
     "language": "Language",
-    "languageDescription": "Choose your preferred language"
+    "languageDescription": "Choose your preferred language",
+    "sbpPhone": "Phone number for SBP",
+    "sbpPhonePlaceholder": "+7 999 123-45-67",
+    "sbpPhoneUnverified": "This number is not verified by SMS.",
+    "sbpBank": "Bank for SBP",
+    "sbpBankNotSelected": "No bank selected",
+    "sbpBankHint": "Initial list. Search and bank logos will follow separately."
   },
   "password": {
     "title": "Change Password",
