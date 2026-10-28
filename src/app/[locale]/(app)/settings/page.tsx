@@ -191,7 +191,12 @@ function ProfileForm({
                   {bank.name.trim().slice(0, 2).toLocaleUpperCase('ru-RU')}
                 </span>
               )}
-              <span className="min-w-0 flex-1 text-sm font-medium">{bank.name}</span>
+              <span className="min-w-0 flex-1 text-sm font-medium">
+                {bank.name}
+                {bank.active === false && (
+                  <span className="block text-xs text-muted-foreground">{t('profile.sbpBankRemoved')}</span>
+                )}
+              </span>
               {sbpBankId === bank.id && <Check className="size-5 shrink-0" aria-hidden="true" />}
             </label>
           ))}

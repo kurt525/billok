@@ -7,49 +7,57 @@
       "id": "sberbank",
       "name": "СберБанк",
       "nspkId": "100000000111",
-      "icon": "/banks/sberbank.svg"
+      "icon": "/banks/sberbank.svg",
+      "sourceName": "Сбербанк"
     },
     {
       "id": "tbank",
       "name": "Т-Банк",
       "nspkId": "100000000004",
-      "icon": "/banks/tbank.svg"
+      "icon": "/banks/tbank.svg",
+      "sourceName": "Т-Банк"
     },
     {
       "id": "vtb",
       "name": "ВТБ",
       "nspkId": "110000000005",
-      "icon": "/banks/vtb.svg"
+      "icon": "/banks/vtb.svg",
+      "sourceName": "Банк ВТБ"
     },
     {
       "id": "alfabank",
       "name": "Альфа-Банк",
       "nspkId": "100000000008",
-      "icon": "/banks/alfabank.svg"
+      "icon": "/banks/alfabank.svg",
+      "sourceName": "АЛЬФА-БАНК"
     },
     {
       "id": "gazprombank",
       "name": "Газпромбанк",
       "nspkId": "100000000001",
-      "icon": "/banks/gazprombank.svg"
+      "icon": "/banks/gazprombank.svg",
+      "sourceName": "Газпромбанк"
     },
     {
       "id": "akbars",
       "name": "Ак Барс Банк",
       "nspkId": "100000000006",
-      "icon": "/banks/akbars.svg"
+      "icon": "/banks/akbars.svg",
+      "sourceName": "АК БАРС БАНК"
     },
     {
       "id": "sovcombank",
       "name": "Совкомбанк",
       "nspkId": "100000000013",
-      "icon": "/banks/sovcombank.svg"
+      "icon": "/banks/sovcombank.svg",
+      "sourceName": "Совкомбанк"
     },
     {
       "id": "raiffeisen",
       "name": "Райффайзенбанк",
       "nspkId": "100000000007",
-      "icon": "/banks/raiffeisen.svg"
+      "icon": "/banks/raiffeisen.svg",
+      "sourceName": "Райффайзен Банк"
     },
     {
       "id": "100000000315",

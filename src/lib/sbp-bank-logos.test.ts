@@ -18,12 +18,12 @@ describe('Self-hosted bank logos', () => {
     },
   );
 
-  test('has icons for 185 of 195 banks and fallback for the remaining ten', () => {
-    expect(SBP_BANKS).toHaveLength(195);
+  test('has local assets for every bank with an icon and a safe fallback for missing assets', () => {
+    expect(SBP_BANKS.length).toBeGreaterThanOrEqual(100);
     const withLogo = SBP_BANKS.filter((bank) => bank.icon !== null);
     const fallback = SBP_BANKS.filter((bank) => bank.icon === null);
-    expect(withLogo).toHaveLength(185);
-    expect(fallback).toHaveLength(10);
+    expect(withLogo.length).toBeGreaterThanOrEqual(185);
+    expect(withLogo.length + fallback.length).toBe(SBP_BANKS.length);
     for (const bank of withLogo) {
       expect(bank.icon).toMatch(/^\/banks\/(?:[a-z]+\.svg|nspk\/\d{12}\.webp)$/);
       const asset = join(process.cwd(), 'public', bank.icon!.slice(1));

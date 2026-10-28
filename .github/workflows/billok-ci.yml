@@ -33,6 +33,8 @@ jobs:
         run: npm ci --legacy-peer-deps --no-audit --no-fund
       - name: Generate Prisma client
         run: npx prisma generate
+      - name: Verify SBP registry auto-update safety tests
+        run: npm run sbp:sync:test
       - name: Verify translation keys
         run: npm run lint:i18n
       - name: Check formatting

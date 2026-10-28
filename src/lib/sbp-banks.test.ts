@@ -29,8 +29,8 @@ describe('SBP profile contracts', () => {
 
   test('has unique bank IDs and rejects unlisted values', () => {
     expect(new Set(SBP_BANKS.map((bank) => bank.id)).size).toBe(SBP_BANKS.length);
-    expect(SBP_BANKS).toHaveLength(195);
-    expect(new Set(SBP_BANKS.map((bank) => bank.nspkId)).size).toBe(195);
+    expect(SBP_BANKS.length).toBeGreaterThanOrEqual(100);
+    expect(new Set(SBP_BANKS.map((bank) => bank.nspkId)).size).toBe(SBP_BANKS.length);
     expect(isSupportedSbpBankId('tbank')).toBe(true);
     expect(isSupportedSbpBankId('100000000273')).toBe(true);
     expect(isSupportedSbpBankId('100000000150')).toBe(true);

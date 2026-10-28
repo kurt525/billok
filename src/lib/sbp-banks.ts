@@ -5,11 +5,21 @@ import bankCatalog from './sbp-bank-catalog.json';
  * This is a bank *selector*, not a claim of C2C transfer availability.
  * Keep the eight original IDs stable for existing BillOK user profiles.
  */
-export const SBP_BANKS = bankCatalog.banks;
+export interface SbpBank {
+  id: string;
+  name: string;
+  nspkId: string;
+  icon: string | null;
+  active?: boolean;
+  sourceName?: string;
+}
+
+export const SBP_BANKS: SbpBank[] = bankCatalog.banks;
 export const SBP_BANK_CATALOG_UPDATED_AT = bankCatalog.sourceUpdatedAt;
 
+/** Only present banks should be available for new selections. Retired bank IDs remain in the catalog for existing profiles. */
 export function isSupportedSbpBankId(id: string): boolean {
-  return SBP_BANKS.some((bank) => bank.id === id);
+  return SBP_BANKS.some((bank) => bank.id === id && bank.active !== false);
 }
 
 /** Search bank names and familiar aliases; aliases never become payment endpoints. */
@@ -33,11 +43,13 @@ function normalizeBankSearch(value: string): string {
 
 export function searchSbpBanks(query: string): (typeof SBP_BANKS)[number][] {
   const normalized = normalizeBankSearch(query);
-  if (!normalized) return [...SBP_BANKS];
-  return SBP_BANKS.filter((bank) =>
-    [bank.name, ...(SBP_BANK_SEARCH_ALIASES[bank.id] ?? [])].some((name) =>
-      normalizeBankSearch(name).includes(normalized),
-    ),
+  if (!normalized) return SBP_BANKS.filter((bank) => bank.active !== false);
+  return SBP_BANKS.filter(
+    (bank) =>
+      bank.active !== false &&
+      [bank.name, ...(SBP_BANK_SEARCH_ALIASES[bank.id] ?? [])].some((name) =>
+        normalizeBankSearch(name).includes(normalized),
+      ),
   );
 }
 

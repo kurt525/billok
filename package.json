@@ -38,7 +38,9 @@
     "demo": "tsx e2e/demo-video.ts",
     "demo:gifs": "tsx e2e/demo-gifs.ts",
     "lint:i18n": "npx tsx scripts/check-translations.ts",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "sbp:sync": "node scripts/sync-sbp-banks.mjs",
+    "sbp:sync:test": "node --test scripts/lib/sbp-catalog-sync.test.mjs"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"

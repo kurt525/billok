@@ -10,7 +10,7 @@ import { parseAuthConfig } from '../../lib/auth-config';
 import { readRegistrationMode } from '../../lib/registration-mode';
 import { findUsersByEmail } from '../../lib/user-email';
 import { Prisma } from '@/generated/prisma/client';
-import { isSupportedSbpBankId, normalizeSbpPhone } from '@/lib/sbp-banks';
+import { isSupportedSbpBankId, normalizeSbpPhone, SBP_BANKS } from '@/lib/sbp-banks';
 
 export const authRouter = createTRPCRouter({
   getSession: publicProcedure.query(({ ctx }) => {
@@ -199,7 +199,17 @@ export const authRouter = createTRPCRouter({
         throw new AppError('BAD_REQUEST', 'sbpPhoneInvalid');
       }
       if (input.sbpBankId && !isSupportedSbpBankId(input.sbpBankId)) {
-        throw new AppError('BAD_REQUEST', 'sbpBankInvalid');
+        // An old profile can retain an existing bank that disappeared from the
+        // registry, but cannot newly select it (or an unknown bank ID).
+        const retired = SBP_BANKS.some((bank) => bank.id === input.sbpBankId && bank.active === false);
+        if (!retired) throw new AppError('BAD_REQUEST', 'sbpBankInvalid');
+        const previous = await ctx.db.user.findUnique({
+          where: { id: ctx.user.id },
+          select: { sbpBankId: true },
+        });
+        if (previous?.sbpBankId !== input.sbpBankId) {
+          throw new AppError('BAD_REQUEST', 'sbpBankInvalid');
+        }
       }
       const data = {
         ...stripUndefined(input),

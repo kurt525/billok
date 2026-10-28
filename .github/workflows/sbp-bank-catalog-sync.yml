@@ -1,0 +1,69 @@
+name: Daily SBP bank catalog review
+
+on:
+  schedule:
+    - cron: '20 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+# Scheduled workflows run on the default branch only after this PR is merged.
+concurrency:
+  group: billok-sbp-registry-sync
+  cancel-in-progress: false
+
+jobs:
+  catalog-update:
+    runs-on: [self-hosted, Linux, X64, billok]
+    timeout-minutes: 15
+    steps:
+      - name: Check out trusted default branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use existing Node.js 22.23.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_bin="$RUNNER_TOOL_CACHE/node/22.23.4/x64/bin"
+          test -x "$node_bin/node"
+          echo "$node_bin" >> "$GITHUB_PATH"
+          "$node_bin/node" --version
+
+      - name: Propose validated registry updates in a separate PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          existing="$(gh pr list --state open --limit 100 --json headRefName --jq 'map(select(.headRefName | startswith("billok/sbp-catalog-"))) | .[0].headRefName // ""')"
+          if [[ -n "$existing" ]]; then
+            branch="$existing"
+            git fetch origin "$branch"
+            git switch -c "$branch" --track "origin/$branch"
+          else
+            branch="billok/sbp-catalog-$(date -u +%Y%m%d%H%M%S)"
+            git switch -c "$branch" origin/main
+          fi
+          npm run sbp:sync
+          npm run sbp:sync:test
+          git add -- src/lib/sbp-bank-catalog.json
+          if git diff --cached --quiet; then
+            echo "Catalog unchanged: no commit or PR"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(billok): update SBP registry snapshot (refs #1)"
+          git push -u origin "$branch"
+          if [[ -z "$existing" ]]; then
+            gh pr create --base main --head "$branch" --title "chore: review updated SBP bank registry" --body "Automated proposal based on eav93/sbp (NSPK C2B registry). Review renamed, new, and retired IDs before merge. Saved IDs remain available; no auto-merge. Missing icons show a fallback. Not proof of C2C phone transfer support."
+          fi
+          # GITHUB_TOKEN pushes do not trigger push workflows; dispatch CI explicitly.
+          gh workflow run billok-ci.yml --ref "$branch"
