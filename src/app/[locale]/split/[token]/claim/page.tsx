@@ -78,6 +78,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog';
 import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
 import { GuestSbpReimbursementDetails } from '@/components/guest-sbp-reimbursement-details';
 import { GuestPaymentDeclaration } from '@/components/guest-payment-declaration';
+import { GuestPayerPaymentReview } from '@/components/guest-payer-payment-review';
 
 // How one claim save attempt ended: the answer's conflicts when stored, the server's message
 // when refused
@@ -1139,6 +1140,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               </div>
             </CardContent>
           </Card>
+        )}
+
+        {payerReimbursements && payerSummary && myPersonId && personToken && (
+          <GuestPayerPaymentReview key={personToken} token={token} personId={myPersonId} personToken={personToken} />
         )}
 
         {payerReimbursements && payerSummary && myPersonId && personToken && (

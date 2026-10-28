@@ -162,5 +162,6 @@
   "testImageTooLarge": "Image exceeds 5 MB limit",
   "extractionFailed": "Extraction failed",
   "sbpPhoneInvalid": "Enter a Russian phone number in +7XXXXXXXXXX or 8XXXXXXXXXX format.",
-  "sbpBankInvalid": "Select a bank from the list."
+  "sbpBankInvalid": "Select a bank from the list.",
+  "paymentNotDeclared": "The participant has not declared their payment yet."
 }

@@ -194,7 +194,18 @@
     "paymentDeclarationDisclaimer": "Нажимайте только после фактического перевода. Кнопка не переводит деньги и не подтверждает их поступление.",
     "paymentDeclarationFailed": "Не удалось сохранить отметку об оплате",
     "paymentDeclarationLoading": "Проверяем состояние оплаты…",
-    "paymentDeclarationLoadFailed": "Не удалось проверить состояние оплаты. Обновите страницу."
+    "paymentDeclarationLoadFailed": "Не удалось проверить состояние оплаты. Обновите страницу.",
+    "payerPaymentReviewTitle": "Поступления от участников",
+    "payerPaymentReviewHint": "Отметка участника не подтверждает поступление. Нажимайте «Поступление проверено» только после проверки денег в своём банке.",
+    "payerPaymentReviewLoading": "Загружаем состояния оплат…",
+    "payerPaymentReviewError": "Не удалось обновить список поступлений.",
+    "payerPaymentReviewNone": "Возмещений от других участников нет.",
+    "payerPaymentNotDeclared": "Ожидается отметка участника",
+    "payerPaymentDeclared": "Участник отметил оплату — проверьте поступление",
+    "payerPaymentVerified": "Поступление проверено",
+    "payerPaymentVerifyAction": "Поступление проверено",
+    "payerPaymentVerifiedToast": "Поступление отмечено как проверенное",
+    "payerPaymentVerifyFailed": "Не удалось подтвердить поступление"
   },
   "result": {
     "loading": "Загрузка расчёта…",

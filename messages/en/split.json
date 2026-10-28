@@ -194,7 +194,18 @@
     "paymentDeclarationDisclaimer": "Press only after making the transfer. This button neither sends nor verifies funds.",
     "paymentDeclarationFailed": "Could not record your payment declaration",
     "paymentDeclarationLoading": "Checking payment status…",
-    "paymentDeclarationLoadFailed": "Could not check payment status. Refresh the page."
+    "paymentDeclarationLoadFailed": "Could not check payment status. Refresh the page.",
+    "payerPaymentReviewTitle": "Participant reimbursements",
+    "payerPaymentReviewHint": "A payment declaration does not verify receipt. Confirm only after checking your bank.",
+    "payerPaymentReviewLoading": "Loading payment statuses…",
+    "payerPaymentReviewError": "Could not refresh payment statuses.",
+    "payerPaymentReviewNone": "No reimbursements from other participants.",
+    "payerPaymentNotDeclared": "Awaiting participant declaration",
+    "payerPaymentDeclared": "Participant marked paid — check receipt",
+    "payerPaymentVerified": "Receipt verified",
+    "payerPaymentVerifyAction": "Verify receipt of funds",
+    "payerPaymentVerifiedToast": "Receipt marked as verified",
+    "payerPaymentVerifyFailed": "Could not confirm funds received"
   },
   "result": {
     "loading": "Loading split...",

@@ -232,6 +232,57 @@ function requireGuestDebtor(
   return { people, person, personIndex };
 }
 
+/** Check payer's identity and reconcile the finalized receipt before allowing
+ * payer-only verification. The public share token and creator account are not authority.
+ */
+function requireGuestPayerReview(
+  split: {
+    status: GuestSplitStatus;
+    people: Prisma.JsonValue;
+    paidByIndex: number;
+    receiptData: Prisma.JsonValue;
+    summary: Prisma.JsonValue | null;
+  },
+  payerId: string,
+  payerToken: string,
+) {
+  const people = split.people as GuestSessionPerson[];
+  const payer = people[split.paidByIndex];
+  if (!payer || payer.id !== payerId || payer.personToken !== payerToken) {
+    throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  }
+  if (split.status !== GuestSplitStatus.FINALIZED) {
+    throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+  }
+  const receipt = split.receiptData as { currency?: string; tax?: number; tip?: number; total?: number };
+  const summary = split.summary as { personIndex: number; total: number; tip: number }[] | null;
+  if (
+    receipt.currency !== 'RUB' ||
+    receipt.tax !== 0 ||
+    receipt.tip !== 0 ||
+    !Number.isSafeInteger(receipt.total) ||
+    receipt.total! < 0 ||
+    !Array.isArray(summary) ||
+    summary.length !== people.length ||
+    summary.some(
+      (entry) =>
+        !Number.isSafeInteger(entry.personIndex) ||
+        entry.personIndex < 0 ||
+        entry.personIndex >= people.length ||
+        !Number.isSafeInteger(entry.total) ||
+        entry.total < 0 ||
+        !Number.isSafeInteger(entry.tip) ||
+        entry.tip < 0,
+    ) ||
+    new Set(summary.map((entry) => entry.personIndex)).size !== people.length ||
+    summary.reduce((sum, entry) => sum + entry.total, 0) !==
+      receipt.total! + summary.reduce((sum, entry) => sum + entry.tip, 0)
+  ) {
+    throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  }
+  return { people, summary };
+}
+
 // ─── Shared Zod schemas (Finding #27) ────────────────────────────
 const receiptDataSchema = z
   .object({
@@ -1327,7 +1378,10 @@ export const guestRouter = createTRPCRouter({
       if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
       if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
       const { person } = requireGuestDebtor(split, input.personId, input.personToken);
-      return { declaredPaidAt: person.paymentDeclaredAt ?? null };
+      return {
+        declaredPaidAt: person.paymentDeclaredAt ?? null,
+        verifiedAt: person.paymentDeclaredAt ? (person.paymentVerifiedAt ?? null) : null,
+      };
     }),
 
   markMyPayment: publicProcedure
@@ -1354,6 +1408,81 @@ export const guestRouter = createTRPCRouter({
           data: { people: updated as unknown as Prisma.InputJsonValue },
         });
         return { declaredPaidAt: timestamp };
+      });
+    }),
+
+  // Payer-only private overview, including who declared a transfer and who
+  // has had their incoming payment independently verified by the payer.
+  getMyPayerPaymentReview: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-payment-review', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const split = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: { expiresAt: true, status: true, people: true, paidByIndex: true, receiptData: true, summary: true },
+      });
+      if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      const { people, summary } = requireGuestPayerReview(split, input.personId, input.personToken);
+      return {
+        payments: summary
+          .filter((entry) => entry.personIndex !== split.paidByIndex && entry.total > 0)
+          .map((entry) => {
+            const person = people[entry.personIndex]!;
+            return {
+              personId: person.id!,
+              name: person.name,
+              amount: entry.total,
+              declaredPaidAt: person.paymentDeclaredAt ?? null,
+              verifiedAt: person.paymentDeclaredAt ? (person.paymentVerifiedAt ?? null) : null,
+            };
+          }),
+      };
+    }),
+
+  confirmGuestPaymentReceived: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        debtorId: personIdSchema,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-payment-verify', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const { people, summary } = requireGuestPayerReview(split, input.personId, input.personToken);
+        const debtorIndex = people.findIndex((person) => person.id === input.debtorId);
+        if (
+          debtorIndex < 0 ||
+          debtorIndex === split.paidByIndex ||
+          !summary.some((entry) => entry.personIndex === debtorIndex && entry.total > 0)
+        ) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        const debtor = people[debtorIndex]!;
+        // Cannot attest an incoming transfer the debtor never declared.
+        if (!debtor.paymentDeclaredAt) {
+          throw new AppError('BAD_REQUEST', 'paymentNotDeclared');
+        }
+        if (debtor.paymentVerifiedAt) return { verifiedAt: debtor.paymentVerifiedAt };
+        const verifiedAt = new Date().toISOString();
+        const updated = people.map((person, index) =>
+          index === debtorIndex ? { ...person, paymentVerifiedAt: verifiedAt } : person,
+        );
+        await tx.guestSplit.update({
+          where: { id: split.id },
+          data: { people: updated as unknown as Prisma.InputJsonValue },
+        });
+        return { verifiedAt };
       });
     }),
 

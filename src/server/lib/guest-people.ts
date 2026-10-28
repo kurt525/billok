@@ -23,6 +23,8 @@ export type GuestSessionPerson = {
   tipCents?: number;
   // Participant's declaration only; does NOT mean funds arrived or were verified.
   paymentDeclaredAt?: string;
+  // Payer's independent verification after checking actual incoming funds.
+  paymentVerifiedAt?: string;
   // The join that created (or first claimed) this person: its idempotency key and the normalized
   // name it was made with, replayable until expiresAt (epoch ms). See guest.joinSession.
   join?: { key: string; name: string; expiresAt: number };

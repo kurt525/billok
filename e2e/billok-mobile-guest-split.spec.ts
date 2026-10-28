@@ -256,7 +256,7 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
 });
 
 test('mobile guest finalization reconciles personal tips for three dining participants', async ({ page, browser }) => {
-  test.setTimeout(125_000);
+  test.setTimeout(150_000);
   const owner = await authedContext(users.alice.email, users.alice.password);
   const otherDevice = await browser.newContext({
     viewport: { width: 320, height: 560 },
@@ -422,6 +422,27 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await otherPage.reload({ waitUntil: 'networkidle' });
     await expect(otherPage.getByTestId('guest-mark-paid')).toHaveCount(0);
     await expect(otherPage.getByTestId('guest-payment-declared')).toHaveCount(0);
+    // Only Boris's personal payer token can inspect and verify Annа's transfer.
+    const payerReview = otherPage.getByTestId('guest-payer-payment-review');
+    await expect(payerReview).toBeVisible({ timeout: 15_000 });
+    const annaPayment = otherPage.getByTestId('guest-payer-payment-' + anna.personId);
+    await expect(annaPayment).toContainText('4,59');
+    await expect(annaPayment).toContainText('Участник отметил оплату');
+    const victorPayment = otherPage.getByTestId('guest-payer-payment-' + victor.personId);
+    await expect(victorPayment).toContainText('Ожидается отметка участника');
+    await expect(otherPage.getByTestId('guest-payer-verify-' + victor.personId)).toHaveCount(0);
+    await otherPage.getByTestId('guest-payer-verify-' + anna.personId).click();
+    await expect(annaPayment).toContainText('Поступление проверено');
+    await expect(otherPage.getByTestId('guest-payer-verify-' + anna.personId)).toHaveCount(0);
+    // The debtor learns the independent payer verification without reloading.
+    await expect(page.getByTestId('guest-payment-verified')).toHaveText('Поступление проверено', { timeout: 25_000 });
+    await otherPage.reload({ waitUntil: 'networkidle' });
+    await expect(otherPage.getByTestId('guest-payer-payment-' + anna.personId)).toContainText('Поступление проверено', {
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId('guest-payer-payment-review')).toHaveCount(0);
+    const publicStatus = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(JSON.stringify(publicStatus)).not.toContain('paymentVerifiedAt');
     await expect(otherPage.getByTestId('guest-payer-sbp-phone')).toHaveValue('+79991234567', { timeout: 15_000 });
     await otherPage.getByTestId('guest-payer-sbp-search').fill('Озон Банк');
     await expect(otherPage.getByTestId('guest-payer-sbp-bank-100000000273').locator('input')).toBeChecked();

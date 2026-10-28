@@ -25,7 +25,9 @@ export type ClaimWriteAction =
   | 'payer-sbp-write'
   | 'payer-sbp-reimbursement'
   | 'payment-declaration-read'
-  | 'payment-declaration-write';
+  | 'payment-declaration-write'
+  | 'payer-payment-review'
+  | 'payer-payment-verify';
 
 /**
  * Rate limit for the claim-session changes that take a person token: claimItems,

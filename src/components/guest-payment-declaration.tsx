@@ -20,23 +20,31 @@ export function GuestPaymentDeclaration({
   const read = trpc.guest.getMyPaymentDeclaration.useMutation();
   const mark = trpc.guest.markMyPayment.useMutation();
   const [declaredAt, setDeclaredAt] = useState<string | null>(null);
+  const [verifiedAt, setVerifiedAt] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const readStatus = read.mutateAsync;
 
   useEffect(() => {
     let cancelled = false;
-    void readStatus({ token, personId, personToken })
-      .then((data) => {
-        if (cancelled) return;
-        setDeclaredAt(data.declaredPaidAt);
-        setLoaded(true);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
+    const refresh = () => {
+      void readStatus({ token, personId, personToken })
+        .then((data) => {
+          if (cancelled) return;
+          setDeclaredAt(data.declaredPaidAt);
+          setVerifiedAt(data.verifiedAt);
+          setLoaded(true);
+          setFailed(false);
+        })
+        .catch(() => {
+          if (!cancelled) setFailed(true);
+        });
+    };
+    refresh();
+    const interval = setInterval(refresh, 12000);
     return () => {
       cancelled = true;
+      clearInterval(interval);
     };
   }, [readStatus, token, personId, personToken]);
 
@@ -63,7 +71,12 @@ export function GuestPaymentDeclaration({
           <p className="text-sm font-semibold" data-testid="guest-payment-declared">
             {t('paymentDeclared')}
           </p>
-          <p className="text-xs text-muted-foreground">{t('paymentAwaitingVerification')}</p>
+          <p
+            className="text-xs text-muted-foreground"
+            data-testid={verifiedAt ? 'guest-payment-verified' : 'guest-payment-awaiting'}
+          >
+            {verifiedAt ? t('payerPaymentVerified') : t('paymentAwaitingVerification')}
+          </p>
         </>
       ) : (
         <>

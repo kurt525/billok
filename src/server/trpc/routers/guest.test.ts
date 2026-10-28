@@ -2120,14 +2120,31 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
       ...base,
       people: [{ ...base.people[0], paymentDeclaredAt: marked }, base.people[1]],
     });
-    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({ declaredPaidAt: marked });
+    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({
+      declaredPaidAt: marked,
+      verifiedAt: null,
+    });
     await expect(api.markMyPayment(debtorAuth)).resolves.toEqual({ declaredPaidAt: marked });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
+  test('only the debtor can read the payer confirmation for their own payment', async () => {
+    const api = await caller();
+    const declared = '2026-10-28T18:00:00.000Z';
+    const verified = '2026-10-28T18:02:00.000Z';
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...base,
+      people: [{ ...base.people[0], paymentDeclaredAt: declared, paymentVerifiedAt: verified }, base.people[1]],
+    });
+    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({
+      declaredPaidAt: declared,
+      verifiedAt: verified,
+    });
+  });
+
   test('unmarked participant receives null, and another identity cannot read or mark', async () => {
     const api = await caller(signedIn);
-    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({ declaredPaidAt: null });
+    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({ declaredPaidAt: null, verifiedAt: null });
     const impostors = [
       { ...debtorAuth, personId: payerId },
       { ...debtorAuth, personToken: payerToken },
@@ -2173,5 +2190,141 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
       await expect(api.getMyPaymentDeclaration(debtorAuth)).rejects.toMatchObject({ code });
     }
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () => {
+  const payerId = '11111111-1111-4111-8111-111111111111';
+  const payerToken = '22222222-2222-4222-8222-222222222222';
+  const debtorId = '33333333-3333-4333-8333-333333333333';
+  const debtorToken = '44444444-4444-4444-8444-444444444444';
+  const anotherId = '55555555-5555-4555-8555-555555555555';
+  const anotherToken = '66666666-6666-4666-8666-666666666666';
+  const marked = '2026-10-28T18:00:00.000Z';
+  const payerAuth = { token: 'guest-payment-review', personId: payerId, personToken: payerToken };
+  const base = {
+    id: 'guest-payment-id',
+    expiresAt: new Date(Date.now() + 86400000),
+    status: 'FINALIZED',
+    paidByIndex: 1,
+    receiptData: { total: 1001, subtotal: 1001, tax: 0, tip: 0, currency: 'RUB' },
+    summary: [
+      { personIndex: 0, total: 459, tip: 125 },
+      { personIndex: 1, total: 334, tip: 0 },
+      { personIndex: 2, total: 408, tip: 75 },
+    ],
+    people: [
+      { id: debtorId, personToken: debtorToken, name: 'Анна', paymentDeclaredAt: marked },
+      { id: payerId, personToken: payerToken, name: 'Борис' },
+      { id: anotherId, personToken: anotherToken, name: 'Виктор' },
+    ],
+  };
+
+  beforeEach(() => {
+    mockDb.guestSplit.findUnique.mockResolvedValue(structuredClone(base));
+    mockDb.guestSplit.update.mockResolvedValue({ id: base.id });
+  });
+
+  test('payer sees declared and undeclared balances but never sees their own debt as a transfer', async () => {
+    const api = await caller();
+    await expect(api.getMyPayerPaymentReview(payerAuth)).resolves.toEqual({
+      payments: [
+        { personId: debtorId, name: 'Анна', amount: 459, declaredPaidAt: marked, verifiedAt: null },
+        { personId: anotherId, name: 'Виктор', amount: 408, declaredPaidAt: null, verifiedAt: null },
+      ],
+    });
+  });
+
+  test('only payer with valid personal token can confirm a declared transfer', async () => {
+    const api = await caller();
+    const result = await api.confirmGuestPaymentReceived({ ...payerAuth, debtorId });
+    expect(new Date(result.verifiedAt).toISOString()).toBe(result.verifiedAt);
+    const update = mockDb.guestSplit.update.mock.calls[0]![0];
+    expect(update.data.people[0].paymentVerifiedAt).toBe(result.verifiedAt);
+    expect(update.data.people[1].paymentVerifiedAt).toBeUndefined();
+    expect(update.data.people[2].paymentVerifiedAt).toBeUndefined();
+    expect(update.data).not.toHaveProperty('summary');
+    expect(update.data).not.toHaveProperty('status');
+  });
+
+  test('repeated verification returns original timestamp without another write', async () => {
+    const api = await caller();
+    const verifiedAt = '2026-10-28T18:03:00.000Z';
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...base,
+      people: [{ ...base.people[0], paymentVerifiedAt: verifiedAt }, ...base.people.slice(1)],
+    });
+    await expect(api.confirmGuestPaymentReceived({ ...payerAuth, debtorId })).resolves.toEqual({ verifiedAt });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('organizer login alone, the debtor, and someone from another bill are denied', async () => {
+    const api = await caller(signedIn);
+    const invalid = [
+      { ...payerAuth, personId: debtorId },
+      { ...payerAuth, personToken: debtorToken },
+      { ...payerAuth, personId: debtorId, personToken: debtorToken },
+    ];
+    for (const credentials of invalid) {
+      await expect(api.getMyPayerPaymentReview(credentials)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(api.confirmGuestPaymentReceived({ ...credentials, debtorId })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+    }
+    mockDb.guestSplit.findUnique.mockResolvedValueOnce(null);
+    await expect(api.getMyPayerPaymentReview({ ...payerAuth, token: 'other-bill' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('payer cannot confirm undeclared money, their own share, or unknown participant', async () => {
+    const api = await caller();
+    for (const id of [anotherId, payerId, '77777777-7777-4777-8777-777777777777']) {
+      await expect(api.confirmGuestPaymentReceived({ ...payerAuth, debtorId: id })).rejects.toMatchObject({
+        code: id === anotherId ? 'BAD_REQUEST' : 'FORBIDDEN',
+      });
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('finalized and reconciled amounts are required even with payer personal token', async () => {
+    const api = await caller();
+    for (const [override, code] of [
+      [{ status: 'CLAIMING' }, 'BAD_REQUEST'],
+      [{ expiresAt: new Date(Date.now() - 86400000) }, 'NOT_FOUND'],
+      [{ summary: null }, 'FORBIDDEN'],
+      [{ receiptData: { ...base.receiptData, total: 1002 } }, 'FORBIDDEN'],
+      [
+        {
+          summary: [
+            { personIndex: 0, total: 459, tip: 125 },
+            { personIndex: 0, total: 334, tip: 0 },
+            { personIndex: 2, total: 408, tip: 75 },
+          ],
+        },
+        'FORBIDDEN',
+      ],
+    ] as const) {
+      mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, ...override });
+      await expect(api.getMyPayerPaymentReview(payerAuth)).rejects.toMatchObject({ code });
+      await expect(api.confirmGuestPaymentReceived({ ...payerAuth, debtorId })).rejects.toMatchObject({ code });
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('confirmed timestamp stays private in the public guest session response', async () => {
+    const api = await caller();
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...base,
+      people: [{ ...base.people[0], paymentVerifiedAt: '2026-10-28T18:03:00.000Z' }, ...base.people.slice(1)],
+      receiptData: base.receiptData,
+      items: [],
+      assignments: [],
+      createdAt: new Date(),
+    });
+    const publicView = await api.getSession({ token: payerAuth.token });
+    expect(JSON.stringify(publicView)).not.toContain('paymentVerifiedAt');
+    expect(JSON.stringify(publicView)).not.toContain('paymentDeclaredAt');
   });
 });

@@ -162,5 +162,6 @@
   "testImageTooLarge": "Изображение превышает ограничение в 5 МБ.",
   "extractionFailed": "Не удалось извлечь данные.",
   "sbpPhoneInvalid": "Укажите российский номер в формате +7XXXXXXXXXX или 8XXXXXXXXXX.",
-  "sbpBankInvalid": "Выберите банк из списка."
+  "sbpBankInvalid": "Выберите банк из списка.",
+  "paymentNotDeclared": "Участник ещё не отметил оплату."
 }
