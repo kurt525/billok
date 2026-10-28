@@ -311,6 +311,160 @@ describe('manual receipt: consumed portions and creator rounding', () => {
     });
   });
 
+  test('atomically finalizes current personal tips, not the stale pre-lock receipt snapshot', async () => {
+    const raw = {
+      id: 'r1',
+      originalName: 'billok-manual',
+      uploadedById: 'u1',
+      groupId: 'g1',
+      status: 'COMPLETED',
+      extractedData: { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' },
+      items: [{ id: 'pizza', totalPrice: 101 }],
+    };
+    // Another member saved the tip while the finishing request was waiting
+    // for the receipt's FOR UPDATE lock. Read fresh JSON inside the transaction.
+    mockDb.receipt.findUnique.mockResolvedValueOnce(raw).mockResolvedValueOnce({
+      ...raw,
+      extractedData: { ...raw.extractedData, personalTips: { u1: 25, u2: 100, u3: 0 } },
+    });
+
+    await (await caller()).assignItemsAndCreateExpense(finish);
+
+    expect(mockDb.expense.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        amount: 226,
+        shares: {
+          create: [
+            { userId: 'u2', amount: 137 },
+            { userId: 'u3', amount: 63 },
+            { userId: 'u1', amount: 26 },
+          ],
+        },
+      }),
+    });
+    expect(mockDb.activityLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ metadata: { title: 'Пицца', amount: 226, fromReceipt: true } }),
+    });
+    const locks = mockDb.$queryRaw.mock.calls.map(([strings]) => (strings as TemplateStringsArray).join('?'));
+    expect(locks[0]).toContain('FROM "Group"');
+    expect(locks[0]).toContain('FOR SHARE');
+    expect(locks[1]).toContain('FROM "Receipt"');
+    expect(locks[1]).toContain('FOR UPDATE');
+    expect(mockDb.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(
+      mockDb.receipt.findUnique.mock.invocationCallOrder[1]!,
+    );
+    expect(mockDb.receipt.findUnique.mock.invocationCallOrder[1]).toBeLessThan(
+      mockDb.expense.create.mock.invocationCallOrder[0]!,
+    );
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+  });
+
+  test('participant with no assigned dish can leave a voluntary tip', async () => {
+    mockDb.groupMember.findMany.mockResolvedValue([
+      { userId: 'u1' },
+      { userId: 'u2' },
+      { userId: 'u3' },
+      { userId: 'u4' },
+    ]);
+    mockDb.receipt.findUnique.mockResolvedValue({
+      id: 'r1',
+      originalName: 'billok-manual',
+      uploadedById: 'u1',
+      groupId: 'g1',
+      status: 'COMPLETED',
+      extractedData: { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB', personalTips: { u4: 49 } },
+      items: [{ id: 'pizza', totalPrice: 101 }],
+    });
+
+    await (await caller()).assignItemsAndCreateExpense(finish);
+    expect(mockDb.expense.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        amount: 150,
+        shares: { create: expect.arrayContaining([{ userId: 'u4', amount: 49 }]) },
+      }),
+    });
+  });
+
+  test('rejects a tip from a removed member without writing an expense', async () => {
+    mockDb.receipt.findUnique.mockResolvedValue({
+      id: 'r1',
+      originalName: 'billok-manual',
+      uploadedById: 'u1',
+      groupId: 'g1',
+      status: 'COMPLETED',
+      extractedData: { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB', personalTips: { exMember: 1 } },
+      items: [{ id: 'pizza', totalPrice: 101 }],
+    });
+    await expect((await caller()).assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Invalid personal tips or receipt total exceeds the permitted amount.',
+    });
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+    expect(mockDb.receiptItemAssignment.createMany).not.toHaveBeenCalled();
+    expect(mockDb.activityLog.create).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['negative', { u2: -1 }],
+    ['fractional', { u2: 1.75 }],
+    ['string', { u2: '25' }],
+    ['overflow', { u2: 2_147_483_647 }],
+  ])('rejects %s personal tips before creating an expense', async (_name, personalTips) => {
+    mockDb.receipt.findUnique.mockResolvedValue({
+      id: 'r1',
+      originalName: 'billok-manual',
+      uploadedById: 'u1',
+      groupId: 'g1',
+      status: 'COMPLETED',
+      extractedData: { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB', personalTips },
+      items: [{ id: 'pizza', totalPrice: 101 }],
+    });
+    await expect((await caller()).assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects currency changed after locking manual receipt', async () => {
+    const original = {
+      id: 'r1',
+      originalName: 'billok-manual',
+      uploadedById: 'u1',
+      groupId: 'g1',
+      status: 'COMPLETED',
+      extractedData: { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' },
+      items: [{ id: 'pizza', totalPrice: 101 }],
+    };
+    mockDb.receipt.findUnique.mockResolvedValueOnce(original).mockResolvedValueOnce({
+      ...original,
+      extractedData: { ...original.extractedData, currency: 'USD' },
+    });
+    await expect((await caller()).assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects group detached or receipt finalized before the locked re-read', async () => {
+    const original = {
+      id: 'r1',
+      originalName: 'billok-manual',
+      uploadedById: 'u1',
+      groupId: 'g1',
+      status: 'COMPLETED',
+      extractedData: { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' },
+      items: [{ id: 'pizza', totalPrice: 101 }],
+    };
+    mockDb.receipt.findUnique.mockResolvedValueOnce(original).mockResolvedValueOnce({
+      ...original,
+      status: 'PENDING',
+    });
+    await expect((await caller()).assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+
   test('rejects mismatched portions before writing', async () => {
     await expect(
       (await caller()).assignItemsAndCreateExpense({

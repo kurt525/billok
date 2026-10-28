@@ -6,7 +6,7 @@ import { createTRPCRouter, protectedProcedure, groupMemberProcedure } from '../i
 import { parseExtractedData } from '../../lib/json-schemas';
 import { stripUndefined } from '../../lib/strip-undefined';
 import { lockActiveGroup } from '../../lib/group-balances';
-import { calculateManualReceiptTotals } from '@/lib/manual-receipt-split';
+import { calculateManualReceiptTotals, calculateTotalsWithPersonalTips } from '@/lib/manual-receipt-split';
 import { MAX_MONEY_CENTS } from '@/lib/money';
 import { deleteUnusedSplitReceipts, removeReceiptFiles } from '../../lib/receipt-cleanup';
 
@@ -469,8 +469,16 @@ export const receiptsRouter = createTRPCRouter({
         // Deleting the receipt from the pending list takes it off the group, and keeps it while
         // a claim session uses it (#318). Under its lock, that either waits for this expense
         // (and is refused) or finished first and is seen here
-        const [current] = await tx.$queryRaw<{ groupId: string | null }[]>`
-          SELECT "groupId" FROM "Receipt" WHERE "id" = ${input.receiptId} FOR SHARE`;
+        // A manual receipt's personal tips can be updated by other members.
+        // FOR UPDATE serializes finalization with receipts.setPersonalTip,
+        // which takes the same row lock before changing extractedData.
+        // Other receipt types keep the previous, weaker FOR SHARE lock.
+        const [current] =
+          receipt.originalName === 'billok-manual'
+            ? await tx.$queryRaw<{ groupId: string | null }[]>`
+                SELECT "groupId" FROM "Receipt" WHERE "id" = ${input.receiptId} FOR UPDATE`
+            : await tx.$queryRaw<{ groupId: string | null }[]>`
+                SELECT "groupId" FROM "Receipt" WHERE "id" = ${input.receiptId} FOR SHARE`;
         if (!current || current.groupId !== receipt.groupId) {
           throw new AppError('CONFLICT', 'receiptRemovedFromGroup');
         }
@@ -494,18 +502,55 @@ export const receiptsRouter = createTRPCRouter({
           }
         }
 
+        // The receipt was locked BEFORE this read. Never use the snapshot
+        // fetched outside the transaction: tips might have changed meanwhile.
+        // Both expense.amount and the shares must reflect one coherent version.
+        let finalTotalAmount = totalAmount;
+        let finalUserTotals = userTotals;
         if (receipt.originalName === 'billok-manual') {
-          // Remaining kopecks may belong to the creator who consumed no item.
-          for (const userId of userTotals.keys()) {
-            if (!memberIds.has(userId)) throw new AppError('BAD_REQUEST', 'assigneeNotMember');
+          const currentReceipt = await tx.receipt.findUnique({
+            where: { id: input.receiptId },
+            select: { groupId: true, status: true, originalName: true, extractedData: true },
+          });
+          if (
+            !currentReceipt ||
+            currentReceipt.groupId !== receipt.groupId ||
+            currentReceipt.status !== 'COMPLETED' ||
+            currentReceipt.originalName !== 'billok-manual'
+          ) {
+            throw new AppError('CONFLICT', 'receiptRemovedFromGroup');
           }
+          const currentData = parseExtractedData(currentReceipt.extractedData);
+          if (currentData.currency.toUpperCase() !== 'RUB') {
+            throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+          }
+          if (currentData.tax !== 0 || currentData.tip !== 0) {
+            throw new AppError('BAD_REQUEST', 'receiptExtraChargesNotSupported');
+          }
+
+          try {
+            const totals = calculateTotalsWithPersonalTips(userTotals, currentData.personalTips, memberIds);
+            if (totals.itemTotal !== totalAmount) {
+              throw new RangeError('Receipt item shares do not reconcile');
+            }
+            finalTotalAmount = totals.total;
+            finalUserTotals = totals.userTotals;
+          } catch (error) {
+            if (!(error instanceof RangeError)) throw error;
+            throw new AppError('BAD_REQUEST', 'receiptPersonalTipsInvalid', undefined, { cause: error });
+          }
+        }
+
+        // Remaining kopecks may belong to the creator who consumed nothing.
+        for (const userId of finalUserTotals.keys()) {
+          if (!memberIds.has(userId)) throw new AppError('BAD_REQUEST', 'assigneeNotMember');
         }
 
         const exp = await tx.expense.create({
           data: {
             groupId: input.groupId,
             title: input.title,
-            amount: totalAmount,
+            amount: finalTotalAmount,
             currency: 'RUB',
             exchangeRate: 1.0,
             baseCurrencyAmount: null,
@@ -514,7 +559,7 @@ export const receiptsRouter = createTRPCRouter({
             addedById: ctx.user.id,
             receiptId: input.receiptId,
             shares: {
-              create: Array.from(userTotals.entries()).map(([userId, amount]) => ({
+              create: Array.from(finalUserTotals.entries()).map(([userId, amount]) => ({
                 userId,
                 amount,
               })),
@@ -537,7 +582,7 @@ export const receiptsRouter = createTRPCRouter({
             userId: ctx.user.id,
             type: 'EXPENSE_CREATED',
             entityId: exp.id,
-            metadata: { title: input.title, amount: totalAmount, fromReceipt: true },
+            metadata: { title: input.title, amount: finalTotalAmount, fromReceipt: true },
           },
         });
 

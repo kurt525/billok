@@ -82,6 +82,7 @@
   "payerNotMember": "Payer is not a member of this group",
   "onlyPayerDeletesPayment": "Only the payer or a group owner/admin can delete this payment",
   "receiptNotFound": "Receipt not found",
+  "receiptPersonalTipsInvalid": "Invalid personal tips or receipt total exceeds the permitted amount.",
   "receiptExtraChargesNotSupported": "Additional tax and shared tips are not supported for receipts.",
   "receiptNotReady": "Receipt not ready",
   "receiptNotProcessed": "Receipt must be processed first",

@@ -119,7 +119,7 @@
     "removeDescription": "It's taken off this receipt, along with who it's assigned to.",
     "remove": "Remove",
     "splitAriaLabel": "Split {name} into separate line",
-    "perPersonTotals": "Per-person totals",
+    "perPersonTotals": "Dish costs per member (excluding tips)",
     "creatingExpense": "Creating expense...",
     "assignAllItems": "Assign all items ({remaining} remaining)",
     "createExpense": "Create Expense from Receipt",
@@ -139,7 +139,7 @@
     "personalTipSaving": "Saving…",
     "personalTipSaved": "My tip saved",
     "personalTipInvalid": "Enter 0 or more, with at most two decimal places.",
-    "personalTipPendingTotals": "Tips are saved separately from dish prices and will be included in reimbursement totals in the next stage."
+    "personalTipPendingTotals": "The table below shows dish costs only. Saved personal tips are added to each member’s share when the receipt is finalized."
   },
   "splits": {
     "selectAll": "Select all",
