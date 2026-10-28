@@ -92,8 +92,9 @@ describe('manual item splitting by consumed parts', () => {
 
 describe('individually chosen voluntary tips: exact RUB totals', () => {
   const participants = new Set(['alice', 'bob', 'creator', 'payer']);
+  const consumers = new Set(['alice', 'bob']);
   const apply = (tips: unknown, shares = split(101, [3, 5])) =>
-    calculateTotalsWithPersonalTips(shares, tips, participants);
+    calculateTotalsWithPersonalTips(shares, tips, participants, consumers);
 
   test('only chosen tips are added to each owner, preserving creator remainder', () => {
     const shares = split(101, [3, 5]);
@@ -118,11 +119,11 @@ describe('individually chosen voluntary tips: exact RUB totals', () => {
     expect([...result.userTotals.values()].reduce((sum, x) => sum + x, 0)).toBe(result.total);
   });
 
-  test('a participant can tip without consuming any dish', () => {
-    const result = apply({ payer: 99 });
-    expect(result.userTotals.get('payer')).toBe(99);
-    expect(result.tipTotal).toBe(99);
-    expect(result.total).toBe(200);
+  test('rejects a positive tip from a person not assigned any dish', () => {
+    expect(() => apply({ payer: 99 })).toThrow(RangeError);
+    expect(() => apply({ creator: 99 })).toThrow(RangeError);
+    // A non-consumer's default 0 ₽ does not create an extra debt.
+    expect(apply({ payer: 0 }).tipTotal).toBe(0);
   });
 
   test('zero or missing tips do not change dish-only amounts', () => {
@@ -167,7 +168,12 @@ describe('individually chosen voluntary tips: exact RUB totals', () => {
 
   test('accepts exactly the DB integer limit but rejects overflow in shares or tips', () => {
     const limit = 2_147_483_647;
-    const valid = calculateTotalsWithPersonalTips(new Map([['alice', 1]]), { alice: limit - 1 }, participants);
+    const valid = calculateTotalsWithPersonalTips(
+      new Map([['alice', 1]]),
+      { alice: limit - 1 },
+      participants,
+      consumers,
+    );
     expect(valid.total).toBe(limit);
     expect(valid.userTotals.get('alice')).toBe(limit);
     expect(() => apply({ alice: limit })).toThrow(RangeError);
@@ -180,11 +186,12 @@ describe('individually chosen voluntary tips: exact RUB totals', () => {
         ]),
         {},
         participants,
+        consumers,
       ),
     ).toThrow(RangeError);
-    expect(() => calculateTotalsWithPersonalTips(new Map([['alice', limit]]), { alice: 1 }, participants)).toThrow(
-      RangeError,
-    );
+    expect(() =>
+      calculateTotalsWithPersonalTips(new Map([['alice', limit]]), { alice: 1 }, participants, consumers),
+    ).toThrow(RangeError);
   });
 
   test('each participant is billed precisely once for their food and their personal tip', () => {
@@ -199,16 +206,15 @@ describe('individually chosen voluntary tips: exact RUB totals', () => {
       ],
       creatorId: 'creator',
     });
-    const result = apply({ alice: 25, bob: 75, payer: 1 }, base);
+    const result = apply({ alice: 25, bob: 75, payer: 0 }, base);
     expect(result.itemTotal).toBe(303);
-    expect(result.tipTotal).toBe(101);
-    expect(result.total).toBe(404);
+    expect(result.tipTotal).toBe(100);
+    expect(result.total).toBe(403);
     expect(result.userTotals).toEqual(
       new Map([
         ['alice', 227],
         ['bob', 176],
         ['creator', 0],
-        ['payer', 1],
       ]),
     );
   });

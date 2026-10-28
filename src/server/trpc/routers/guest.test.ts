@@ -1535,7 +1535,7 @@ describe('guest.finalizeSession', () => {
       ],
       {
         items: [{ name: 'Чай', quantity: 1, unitPrice: 101, totalPrice: 101 }],
-        assignments: [{ itemIndex: 0, personIndices: [0, 1] }],
+        assignments: [{ itemIndex: 0, personIndices: [0, 1, 2] }],
       },
     );
     await (await caller()).finalizeSession({ token: 'share-1', personToken: ALICE_TOKEN, personId: pid(0) });
@@ -1544,13 +1544,30 @@ describe('guest.finalizeSession', () => {
       data: expect.objectContaining({
         status: 'FINALIZED',
         summary: [
-          { personIndex: 0, name: 'Анна', itemTotal: 51, tax: 0, tip: 125, total: 176 },
-          { personIndex: 1, name: 'Борис', itemTotal: 50, tax: 0, tip: 0, total: 50 },
-          { personIndex: 2, name: 'Виктор', itemTotal: 0, tax: 0, tip: 35, total: 35 },
+          { personIndex: 0, name: 'Анна', itemTotal: 34, tax: 0, tip: 125, total: 159 },
+          { personIndex: 1, name: 'Борис', itemTotal: 34, tax: 0, tip: 0, total: 34 },
+          { personIndex: 2, name: 'Виктор', itemTotal: 33, tax: 0, tip: 35, total: 68 },
         ],
       }),
     });
     expect(mockDb.$transaction).toHaveBeenCalledOnce();
+  });
+
+  test('refuses a tip-only guest and does not finalize the split', async () => {
+    claimSession(
+      [
+        { name: 'Анна', personToken: ALICE_TOKEN, tipCents: 125 },
+        { name: 'Борис', personToken: OTHER_TOKEN, tipCents: 35 },
+      ],
+      {
+        items: [{ name: 'Чай', quantity: 1, unitPrice: 101, totalPrice: 101 }],
+        assignments: [{ itemIndex: 0, personIndices: [0] }],
+      },
+    );
+    await expect(
+      (await caller()).finalizeSession({ token: 'share-1', personToken: ALICE_TOKEN, personId: pid(0) }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
   test('finalization refuses malformed or overflowing tips without storing FINALIZED', async () => {

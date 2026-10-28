@@ -60,7 +60,7 @@ export function calculateSplitTotals(params: {
 
 /**
  * Add only each guest's own voluntary RUB tip to already allocated item shares.
- * A person may tip without claiming any dish. No proportional tip distribution,
+ * Only someone assigned an item may tip. No proportional tip distribution,
  * no implicit charges, and every amount remains integer kopecks.
  */
 export function addPersonalGuestTips(
@@ -92,12 +92,11 @@ export function addPersonalGuestTips(
     }
     if (tip === 0) continue;
     const previous = results.find((share) => share.personIndex === personIndex);
-    if (previous) {
-      previous.tip += tip;
-      previous.total += tip;
-    } else {
-      results.push({ personIndex, itemTotal: 0, tax: 0, tip, total: tip });
+    if (!previous) {
+      throw new RangeError('Cannot charge personal tips without assigned items');
     }
+    previous.tip += tip;
+    previous.total += tip;
     total += tip;
   }
   return results;

@@ -529,7 +529,13 @@ export const receiptsRouter = createTRPCRouter({
           }
 
           try {
-            const totals = calculateTotalsWithPersonalTips(userTotals, currentData.personalTips, memberIds);
+            const consumingIds = new Set(input.assignments.flatMap((assignment) => assignment.userIds));
+            const totals = calculateTotalsWithPersonalTips(
+              userTotals,
+              currentData.personalTips,
+              memberIds,
+              consumingIds,
+            );
             if (totals.itemTotal !== totalAmount) {
               throw new RangeError('Receipt item shares do not reconcile');
             }

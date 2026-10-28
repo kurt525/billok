@@ -255,10 +255,7 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
   }
 });
 
-test('mobile guest finalization reconciles personal tips, zero tips and tip-only participant', async ({
-  page,
-  browser,
-}) => {
+test('mobile guest finalization reconciles personal tips for three dining participants', async ({ page, browser }) => {
   test.setTimeout(125_000);
   const owner = await authedContext(users.alice.email, users.alice.password);
   const otherDevice = await browser.newContext({
@@ -288,7 +285,7 @@ test('mobile guest finalization reconciles personal tips, zero tips and tip-only
 
     await rememberClaimIdentity(page.context(), token, { name: anna.name, personToken: anna.personToken });
     await rememberClaimIdentity(otherDevice, token, { name: boris.name, personToken: boris.personToken });
-    for (const guest of [anna, boris]) {
+    for (const guest of [anna, boris, victor]) {
       const claimant = guest.personToken === anna.personToken ? page.request : otherDevice.request;
       const claimed = await trpcMutation(claimant, 'guest.claimItems', {
         token,
@@ -300,7 +297,7 @@ test('mobile guest finalization reconciles personal tips, zero tips and tip-only
     }
 
     // Anna voluntarily tips 1.25 RUB via the actual mobile editor. Boris leaves
-    // zero by default, and Victor tips 0.75 RUB without claiming any dishes.
+    // zero by default, and Victor tips 0.75 RUB for his shared portion.
     await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
     await expect(page.getByTestId('personal-tip-input')).toHaveValue('0.00', { timeout: 15_000 });
     await page.getByTestId('personal-tip-input').fill('1,25');
@@ -321,9 +318,9 @@ test('mobile guest finalization reconciles personal tips, zero tips and tip-only
     await page.getByRole('alertdialog').getByRole('button', { name: 'Завершить распределение' }).click();
 
     await expect(page.getByText('Расчёт завершён')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId('finalized-person-total-0')).toContainText('6,26');
-    await expect(page.getByTestId('finalized-person-total-1')).toContainText('5,00');
-    await expect(page.getByTestId('finalized-person-total-2')).toContainText('0,75');
+    await expect(page.getByTestId('finalized-person-total-0')).toContainText('4,59');
+    await expect(page.getByTestId('finalized-person-total-1')).toContainText('3,34');
+    await expect(page.getByTestId('finalized-person-total-2')).toContainText('4,08');
     await expect(page.getByTestId('finalized-bill-total')).toContainText('12,01');
     await fitsPhone(page);
 
@@ -331,9 +328,9 @@ test('mobile guest finalization reconciles personal tips, zero tips and tip-only
     expect(session.status).toBe('FINALIZED');
     expect(session.receiptData).toMatchObject({ subtotal: 1001, tax: 0, tip: 0, total: 1001 });
     expect(session.summary).toEqual([
-      { personIndex: 0, name: 'Анна', itemTotal: 501, tax: 0, tip: 125, total: 626 },
-      { personIndex: 1, name: 'Борис', itemTotal: 500, tax: 0, tip: 0, total: 500 },
-      { personIndex: 2, name: 'Виктор', itemTotal: 0, tax: 0, tip: 75, total: 75 },
+      { personIndex: 0, name: 'Анна', itemTotal: 334, tax: 0, tip: 125, total: 459 },
+      { personIndex: 1, name: 'Борис', itemTotal: 334, tax: 0, tip: 0, total: 334 },
+      { personIndex: 2, name: 'Виктор', itemTotal: 333, tax: 0, tip: 75, total: 408 },
     ]);
     expect(session.summary.reduce((sum: number, person: { total: number }) => sum + person.total, 0)).toBe(1201);
 

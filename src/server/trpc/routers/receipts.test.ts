@@ -325,25 +325,25 @@ describe('manual receipt: consumed portions and creator rounding', () => {
     // for the receipt's FOR UPDATE lock. Read fresh JSON inside the transaction.
     mockDb.receipt.findUnique.mockResolvedValueOnce(raw).mockResolvedValueOnce({
       ...raw,
-      extractedData: { ...raw.extractedData, personalTips: { u1: 25, u2: 100, u3: 0 } },
+      extractedData: { ...raw.extractedData, personalTips: { u1: 0, u2: 100, u3: 0 } },
     });
 
     await (await caller()).assignItemsAndCreateExpense(finish);
 
     expect(mockDb.expense.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        amount: 226,
+        amount: 201,
         shares: {
           create: [
             { userId: 'u2', amount: 137 },
             { userId: 'u3', amount: 63 },
-            { userId: 'u1', amount: 26 },
+            { userId: 'u1', amount: 1 },
           ],
         },
       }),
     });
     expect(mockDb.activityLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ metadata: { title: 'Пицца', amount: 226, fromReceipt: true } }),
+      data: expect.objectContaining({ metadata: { title: 'Пицца', amount: 201, fromReceipt: true } }),
     });
     const locks = mockDb.$queryRaw.mock.calls.map(([strings]) => (strings as TemplateStringsArray).join('?'));
     expect(locks[0]).toContain('FROM "Group"');
@@ -359,7 +359,7 @@ describe('manual receipt: consumed portions and creator rounding', () => {
     expect(mockDb.receipt.update).not.toHaveBeenCalled();
   });
 
-  test('participant with no assigned dish can leave a voluntary tip', async () => {
+  test('rejects an extra tip from a group member without any assigned positions', async () => {
     mockDb.groupMember.findMany.mockResolvedValue([
       { userId: 'u1' },
       { userId: 'u2' },
@@ -376,13 +376,10 @@ describe('manual receipt: consumed portions and creator rounding', () => {
       items: [{ id: 'pizza', totalPrice: 101 }],
     });
 
-    await (await caller()).assignItemsAndCreateExpense(finish);
-    expect(mockDb.expense.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        amount: 150,
-        shares: { create: expect.arrayContaining([{ userId: 'u4', amount: 49 }]) },
-      }),
+    await expect((await caller()).assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
     });
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
   });
 
   test('rejects a tip from a removed member without writing an expense', async () => {

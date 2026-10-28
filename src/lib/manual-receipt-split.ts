@@ -59,13 +59,14 @@ export function calculateManualReceiptTotals(params: {
  * This is a pure calculation, NOT an expense write: finalization must reload
  * tips under the receipt row lock before using the result.
  *
- * A member may leave a tip even if they consumed no item. Tip ownership is
+ * Only a participant assigned at least one item may leave a tip. Ownership is
  * never inferred from the receipt payer or item assignments.
  */
 export function calculateTotalsWithPersonalTips(
   itemShares: ReadonlyMap<string, number>,
   personalTips: unknown,
   eligibleParticipantIds: ReadonlySet<string>,
+  consumingParticipantIds: ReadonlySet<string>,
 ): { userTotals: Map<string, number>; itemTotal: number; tipTotal: number; total: number } {
   if (
     personalTips !== undefined &&
@@ -101,6 +102,9 @@ export function calculateTotalsWithPersonalTips(
       throw new RangeError('Invalid voluntary tip or participant');
     }
     const amount = tip as number;
+    if (amount > 0 && !consumingParticipantIds.has(userId)) {
+      throw new RangeError('Cannot charge tips to a member without assigned items');
+    }
     if (tipTotal + amount > MAX_MONEY_CENTS || (userTotals.get(userId) ?? 0) + amount > MAX_MONEY_CENTS) {
       throw new RangeError('Personal tip total exceeds RUB storage limit');
     }

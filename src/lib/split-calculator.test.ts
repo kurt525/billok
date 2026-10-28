@@ -518,15 +518,27 @@ describe('BillOK voluntary personal guest tips', () => {
     peopleCount: 3,
   });
 
-  test('adds only each participant own tip and includes tips without dishes', () => {
-    const actual = addPersonalGuestTips(shares, [{ tipCents: 125 }, { tipCents: 0 }, { tipCents: 35 }]);
+  test('adds only the chosen tips of guests who share the food', () => {
+    const participatingShares = calculateSplitTotals({
+      items: [{ totalPrice: 101 }],
+      assignments: [{ itemIndex: 0, personIndices: [0, 1, 2] }],
+      tax: 0,
+      tip: 0,
+      peopleCount: 3,
+    });
+    const actual = addPersonalGuestTips(participatingShares, [{ tipCents: 125 }, { tipCents: 0 }, { tipCents: 35 }]);
     expect(actual).toEqual([
-      { personIndex: 0, itemTotal: 51, tax: 0, tip: 125, total: 176 },
-      { personIndex: 1, itemTotal: 50, tax: 0, tip: 0, total: 50 },
-      { personIndex: 2, itemTotal: 0, tax: 0, tip: 35, total: 35 },
+      { personIndex: 0, itemTotal: 34, tax: 0, tip: 125, total: 159 },
+      { personIndex: 1, itemTotal: 34, tax: 0, tip: 0, total: 34 },
+      { personIndex: 2, itemTotal: 33, tax: 0, tip: 35, total: 68 },
     ]);
     expect(actual.reduce((sum, value) => sum + value.total, 0)).toBe(261);
-    expect(shares[0]!.tip).toBe(0); // Do not mutate the food-only shares
+    expect(participatingShares[0]!.tip).toBe(0);
+  });
+
+  test('refuses tip-only guests with no assigned positions', () => {
+    expect(() => addPersonalGuestTips(shares, [{ tipCents: 125 }, {}, { tipCents: 35 }])).toThrow(RangeError);
+    expect(addPersonalGuestTips(shares, [{ tipCents: 125 }, {}, { tipCents: 0 }])).toHaveLength(2);
   });
 
   test('missing and zero tips preserve prices and rounding', () => {
