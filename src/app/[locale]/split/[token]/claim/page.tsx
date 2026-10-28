@@ -51,6 +51,7 @@ import {
 import { calculateClaimTotals, groupSizeWeights } from '@/lib/split-calculator';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -956,6 +957,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const currency = data.receiptData.currency;
   // Finalized total includes personal tips, not just the restaurant subtotal.
   const finalizedTotal = data.summary?.reduce((sum, person) => sum + person.total, 0) ?? data.receiptData.total;
+  const finalizedPersonalTips = data.summary?.reduce((sum, person) => sum + person.tip, 0) ?? 0;
   const savedPersonalTip = myPersonIndex === null ? 0 : (data.people[myPersonIndex]?.tipCents ?? 0);
   const personalTipValue = personalTipDraft ?? centsToDecimal(savedPersonalTip);
   const personalTipCents = parseToCents(personalTipValue);
@@ -1031,13 +1033,36 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           <p className="text-muted-foreground">{t('sessionFinalizedDescription')}</p>
         </div>
 
-        {/* Total */}
+        {/* The finalized settlement must distinguish the original food bill
+            from everyone's individual voluntary tips. For the RUB manual flow
+            this is also the amount the sole payer passes on to the waiter. */}
         <Card className="bg-primary/5 border-primary/20">
-          <CardContent className="py-4">
-            <div className="flex justify-between items-center">
-              <span className="font-semibold text-lg">{t('totalBill')}</span>
-              <span className="text-2xl font-bold text-primary">
-                <span data-testid="finalized-bill-total">{formatCents(finalizedTotal, currency, locale)}</span>
+          <CardContent className="space-y-3 py-4">
+            {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0 && (
+              <>
+                <div className="flex min-w-0 justify-between gap-3 text-sm">
+                  <span>{t('dishesTotal')}</span>
+                  <span className="shrink-0 tabular-nums" data-testid="finalized-food-total">
+                    {formatCents(data.receiptData.total, currency, locale)}
+                  </span>
+                </div>
+                <div className="flex min-w-0 justify-between gap-3 text-sm">
+                  <span>{t('tipForWaiter')}</span>
+                  <span className="shrink-0 tabular-nums" data-testid="finalized-waiter-tip-total">
+                    {formatCents(finalizedPersonalTips, currency, locale)}
+                  </span>
+                </div>
+                <Separator />
+              </>
+            )}
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+              <span className="font-semibold text-lg">
+                {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0
+                  ? t('totalWithTips')
+                  : t('totalBill')}
+              </span>
+              <span className="text-2xl font-bold text-primary" data-testid="finalized-bill-total">
+                {formatCents(finalizedTotal, currency, locale)}
               </span>
             </div>
           </CardContent>

@@ -321,7 +321,11 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(page.getByTestId('finalized-person-total-0')).toContainText('4,59');
     await expect(page.getByTestId('finalized-person-total-1')).toContainText('3,34');
     await expect(page.getByTestId('finalized-person-total-2')).toContainText('4,08');
+    await expect(page.getByTestId('finalized-food-total')).toContainText('10,01');
+    await expect(page.getByTestId('finalized-waiter-tip-total')).toContainText('2,00');
+    await expect(page.getByText('Всего чаевых официанту')).toBeVisible();
     await expect(page.getByTestId('finalized-bill-total')).toContainText('12,01');
+    await expect(page.getByText('Итого с чаевыми')).toBeVisible();
     await fitsPhone(page);
 
     const session = await trpcResult(await trpcQuery(otherDevice.request, 'guest.getSession', { token }));
@@ -340,7 +344,10 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await fitsPhone(otherPage);
     await otherPage.goto('/split/' + token, { waitUntil: 'networkidle' });
     await expect(otherPage.getByTestId('split-result-total')).toContainText('12,01');
+    await expect(otherPage.getByTestId('split-result-food-total')).toContainText('10,01');
     await expect(otherPage.getByTestId('split-result-personal-tips')).toContainText('2,00');
+    await expect(otherPage.getByText('Всего чаевых официанту')).toBeVisible();
+    await expect(otherPage.getByText('Итого с чаевыми')).toBeVisible();
     await fitsPhone(otherPage);
 
     const lateTip = await trpcMutation(otherDevice.request, 'guest.setPersonalTip', {

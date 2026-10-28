@@ -156,7 +156,10 @@
     "personalTipSave": "Save my tip",
     "personalTipSaved": "My tip was saved",
     "personalTipInvalid": "Enter an amount of at least 0 with no more than two decimal places.",
-    "personalTipPendingTotals": "Preliminary participant totals show dishes only. Your voluntary tip is added to your own total when the split is finalized."
+    "personalTipPendingTotals": "Preliminary participant totals show dishes only. Your voluntary tip is added to your own total when the split is finalized.",
+    "dishesTotal": "Dish total",
+    "tipForWaiter": "Total voluntary tips for the waiter",
+    "totalWithTips": "Total including tips"
   },
   "result": {
     "loading": "Loading split...",
@@ -183,6 +186,9 @@
     "or": "or",
     "createAccount": "Create an account",
     "copyLink": "Copy Link",
-    "share": "Share"
+    "share": "Share",
+    "dishesTotal": "Dish total",
+    "tipForWaiter": "Total voluntary tips for the waiter",
+    "totalWithTips": "Total including tips"
   }
 }

@@ -264,9 +264,13 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
           <CardTitle className="text-base">{t('receiptDetails')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-1 text-sm">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">{t('subtotal')}</span>
-            <span>{formatCents(data.receiptData.subtotal, currency, locale)}</span>
+          <div className="flex justify-between gap-2">
+            <span className="text-muted-foreground">
+              {currency === 'RUB' && data.receiptData.tax === 0 ? t('dishesTotal') : t('subtotal')}
+            </span>
+            <span data-testid="split-result-food-total">
+              {formatCents(data.receiptData.subtotal, currency, locale)}
+            </span>
           </div>
           {/* Historical receipts may contain upstream charges. New BillOK receipts
               use tax=0 and tip=0 until each person can choose their own tip. */}
@@ -282,15 +286,26 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
               <span>{formatCents(data.receiptData.tip, currency, locale)}</span>
             </div>
           )}
-          {personalTipTotal > 0 && (
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('tip')}</span>
+          {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0 ? (
+            <div className="flex justify-between gap-2">
+              <span className="text-muted-foreground">{t('tipForWaiter')}</span>
               <span data-testid="split-result-personal-tips">{formatCents(personalTipTotal, currency, locale)}</span>
             </div>
+          ) : (
+            personalTipTotal > 0 && (
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">{t('tip')}</span>
+                <span data-testid="split-result-personal-tips">{formatCents(personalTipTotal, currency, locale)}</span>
+              </div>
+            )
           )}
           <Separator />
-          <div className="flex justify-between font-semibold">
-            <span>{t('total')}</span>
+          <div className="flex justify-between gap-2 font-semibold">
+            <span>
+              {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0
+                ? t('totalWithTips')
+                : t('total')}
+            </span>
             <span>{formatCents(finalizedTotal, currency, locale)}</span>
           </div>
         </CardContent>
