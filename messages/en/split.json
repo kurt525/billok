@@ -167,7 +167,19 @@
     "personalReimbursementTo": "Amount to reimburse the payer: {name}",
     "personalReimbursementNote": "This includes your dishes and personal tips. SBP transfer and receipt confirmation are not available yet.",
     "copyReimbursementAmount": "Copy transfer amount",
-    "reimbursementAmountCopied": "Transfer amount copied"
+    "reimbursementAmountCopied": "Transfer amount copied",
+    "payerSbpTitle": "My SBP reimbursement details",
+    "payerSbpPrivacy": "For this bill. Only you can change your details. Other participants cannot see them yet.",
+    "payerSbpLoading": "Loading bank details…",
+    "payerSbpLoadError": "Could not load details. Refresh the page.",
+    "payerSbpPhone": "My SBP phone number",
+    "payerSbpBank": "My SBP bank",
+    "payerSbpSearch": "Search banks",
+    "payerSbpNoBanks": "Bank not found",
+    "payerSbpUnverified": "The number is not SMS verified. Listing in the bank directory does not guarantee phone transfers.",
+    "payerSbpSave": "Save details",
+    "payerSbpClear": "Clear fields",
+    "payerSbpSaved": "Details saved"
   },
   "result": {
     "loading": "Loading split...",

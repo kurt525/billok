@@ -167,7 +167,19 @@
     "personalReimbursementTo": "К возмещению плательщику: {name}",
     "personalReimbursementNote": "Сумма включает ваши блюда и личные чаевые. Перевод через СБП и подтверждение поступления пока недоступны.",
     "copyReimbursementAmount": "Скопировать сумму для перевода",
-    "reimbursementAmountCopied": "Сумма для перевода скопирована"
+    "reimbursementAmountCopied": "Сумма для перевода скопирована",
+    "payerSbpTitle": "Мои реквизиты для возмещений СБП",
+    "payerSbpPrivacy": "Для этого чека. Изменять реквизиты можете только вы. Пока другие участники их не видят.",
+    "payerSbpLoading": "Загрузка реквизитов…",
+    "payerSbpLoadError": "Не удалось загрузить реквизиты. Обновите страницу.",
+    "payerSbpPhone": "Мой номер телефона СБП",
+    "payerSbpBank": "Мой банк СБП",
+    "payerSbpSearch": "Поиск банка",
+    "payerSbpNoBanks": "Банк не найден",
+    "payerSbpUnverified": "Номер не подтверждён по СМС. Наличие банка в каталоге не гарантирует переводы по номеру телефона.",
+    "payerSbpSave": "Сохранить реквизиты",
+    "payerSbpClear": "Очистить поля",
+    "payerSbpSaved": "Реквизиты сохранены"
   },
   "result": {
     "loading": "Загрузка расчёта…",

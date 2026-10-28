@@ -75,6 +75,7 @@ import { buildVenmoPayUrl, isValidVenmoHandle } from '@/lib/venmo';
 import { getInitials, guestAvatarColor } from '@/lib/avatar';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { ConfirmDialog } from '@/components/confirm-dialog';
+import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
 
 // How one claim save attempt ended: the answer's conflicts when stored, the server's message
 // when refused
@@ -1136,6 +1137,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               </div>
             </CardContent>
           </Card>
+        )}
+
+        {payerReimbursements && payerSummary && myPersonId && personToken && (
+          <GuestPayerSbpForm key={personToken} token={token} personId={myPersonId} personToken={personToken} />
         )}
 
         {/* The participant's own receipt amount is not a verified SBP payment.

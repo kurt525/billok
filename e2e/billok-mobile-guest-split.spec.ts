@@ -327,6 +327,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(page.getByTestId('finalized-bill-total')).toContainText('12,01');
     // Anna is the creator, not the payer: this breakdown belongs to Boris.
     await expect(page.getByTestId('guest-payer-reimbursements')).toHaveCount(0);
+    await expect(page.getByTestId('guest-payer-sbp-form')).toHaveCount(0);
     await expect(page.getByTestId('guest-personal-reimbursement')).toBeVisible();
     await expect(page.getByTestId('guest-personal-reimbursement')).toContainText('Борис');
     await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('4,59');
@@ -372,6 +373,26 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(otherPage.getByTestId('guest-payer-reimbursement-1')).toHaveCount(0);
     await expect(otherPage.getByTestId('guest-payer-own-share')).toContainText('3,34');
     await expect(otherPage.getByTestId('guest-payer-reimbursement-total')).toContainText('8,67');
+
+    // Only Boris's personal device can edit the payer's SBP destination.
+    const payerForm = otherPage.getByTestId('guest-payer-sbp-form');
+    await expect(payerForm).toBeVisible();
+    const payerPhone = otherPage.getByTestId('guest-payer-sbp-phone');
+    await expect(payerPhone).toBeVisible({ timeout: 15_000 });
+    await payerPhone.fill('8 (999) 123-45-67');
+    await otherPage.getByTestId('guest-payer-sbp-search').fill('Озон Банк');
+    await otherPage.getByTestId('guest-payer-sbp-bank-100000000273').click();
+    await otherPage.getByTestId('guest-payer-sbp-save').click();
+    await expect(otherPage.getByText('Реквизиты сохранены')).toBeVisible();
+    await otherPage.reload({ waitUntil: 'networkidle' });
+    await expect(otherPage.getByTestId('guest-payer-sbp-phone')).toHaveValue('+79991234567', { timeout: 15_000 });
+    await otherPage.getByTestId('guest-payer-sbp-search').fill('Озон Банк');
+    await expect(otherPage.getByTestId('guest-payer-sbp-bank-100000000273').locator('input')).toBeChecked();
+    // A payer may also revoke this receipt-specific destination.
+    await otherPage.getByTestId('guest-payer-sbp-clear').click();
+    await otherPage.getByTestId('guest-payer-sbp-save').click();
+    await otherPage.reload({ waitUntil: 'networkidle' });
+    await expect(otherPage.getByTestId('guest-payer-sbp-phone')).toHaveValue('', { timeout: 15_000 });
     await fitsPhone(otherPage);
     await otherPage.goto('/split/' + token, { waitUntil: 'networkidle' });
     await expect(otherPage.getByTestId('split-result-total')).toContainText('12,01');
