@@ -1,5 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
-import { authedContext, trpcMutation, trpcQuery, trpcResult, users } from './helpers';
+import {
+  authedContext,
+  joinGuestSession,
+  rememberClaimIdentity,
+  trpcMutation,
+  trpcQuery,
+  trpcResult,
+  users,
+} from './helpers';
 
 /** Signed-in creator, anonymous recipient: real persistence, no photo, OCR, or AI. */
 async function fitsPhone(page: Page) {
@@ -243,6 +251,112 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
     await fitsPhone(page);
   } finally {
     await second.close();
+    await owner.dispose();
+  }
+});
+
+test('mobile guest finalization reconciles personal tips, zero tips and tip-only participant', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(125_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const otherDevice = await browser.newContext({
+    viewport: { width: 320, height: 560 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  try {
+    const response = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Ужин без налога', subtotal: 1001, tax: 0, tip: 0, total: 1001, currency: 'RUB' },
+      items: [{ name: 'Ужин', quantity: 1, unitPrice: 1001, totalPrice: 1001 }],
+      people: ['Анна', 'Борис', 'Виктор'],
+      creatorName: 'Анна',
+      paidByName: 'Анна',
+      joinCreator: true,
+    });
+    const body = await response.text();
+    expect(response.ok(), body).toBe(true);
+    const created = JSON.parse(body).result.data.json as {
+      shareToken: string;
+      creator: { personId: string; personToken: string; name: string };
+    };
+    const token = created.shareToken;
+    const anna = created.creator;
+    const boris = await joinGuestSession(otherDevice.request, { token, name: 'Борис' });
+    const victor = await joinGuestSession(owner, { token, name: 'Виктор' });
+
+    await rememberClaimIdentity(page.context(), token, { name: anna.name, personToken: anna.personToken });
+    await rememberClaimIdentity(otherDevice, token, { name: boris.name, personToken: boris.personToken });
+    for (const guest of [anna, boris]) {
+      const claimant = guest.personToken === anna.personToken ? page.request : otherDevice.request;
+      const claimed = await trpcMutation(claimant, 'guest.claimItems', {
+        token,
+        personId: guest.personId,
+        personToken: guest.personToken,
+        claimedItemIndices: [0],
+      });
+      expect(claimed.ok(), await claimed.text()).toBe(true);
+    }
+
+    // Anna voluntarily tips 1.25 RUB via the actual mobile editor. Boris leaves
+    // zero by default, and Victor tips 0.75 RUB without claiming any dishes.
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('personal-tip-input')).toHaveValue('0.00', { timeout: 15_000 });
+    await page.getByTestId('personal-tip-input').fill('1,25');
+    await page.getByTestId('personal-tip-save').click();
+    await expect(page.getByTestId('personal-tip-input')).toHaveValue('1.25', { timeout: 15_000 });
+    const victorTip = await trpcMutation(owner, 'guest.setPersonalTip', {
+      token,
+      personId: victor.personId,
+      personToken: victor.personToken,
+      tipCents: 75,
+    });
+    expect(victorTip.ok(), await victorTip.text()).toBe(true);
+
+    await page.reload({ waitUntil: 'networkidle' });
+    const finish = page.getByTestId('finalize-btn');
+    await expect(finish).toBeVisible({ timeout: 15_000 });
+    await finish.click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Завершить распределение' }).click();
+
+    await expect(page.getByText('Расчёт завершён')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('finalized-person-total-0')).toContainText('6,26');
+    await expect(page.getByTestId('finalized-person-total-1')).toContainText('5,00');
+    await expect(page.getByTestId('finalized-person-total-2')).toContainText('0,75');
+    await expect(page.getByTestId('finalized-bill-total')).toContainText('12,01');
+    await fitsPhone(page);
+
+    const session = await trpcResult(await trpcQuery(otherDevice.request, 'guest.getSession', { token }));
+    expect(session.status).toBe('FINALIZED');
+    expect(session.receiptData).toMatchObject({ subtotal: 1001, tax: 0, tip: 0, total: 1001 });
+    expect(session.summary).toEqual([
+      { personIndex: 0, name: 'Анна', itemTotal: 501, tax: 0, tip: 125, total: 626 },
+      { personIndex: 1, name: 'Борис', itemTotal: 500, tax: 0, tip: 0, total: 500 },
+      { personIndex: 2, name: 'Виктор', itemTotal: 0, tax: 0, tip: 75, total: 75 },
+    ]);
+    expect(session.summary.reduce((sum: number, person: { total: number }) => sum + person.total, 0)).toBe(1201);
+
+    const otherPage = await otherDevice.newPage();
+    await otherPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await expect(otherPage.getByTestId('finalized-bill-total')).toContainText('12,01', { timeout: 15_000 });
+    await fitsPhone(otherPage);
+    await otherPage.goto('/split/' + token, { waitUntil: 'networkidle' });
+    await expect(otherPage.getByTestId('split-result-total')).toContainText('12,01');
+    await expect(otherPage.getByTestId('split-result-personal-tips')).toContainText('2,00');
+    await fitsPhone(otherPage);
+
+    const lateTip = await trpcMutation(otherDevice.request, 'guest.setPersonalTip', {
+      token,
+      personId: boris.personId,
+      personToken: boris.personToken,
+      tipCents: 100,
+    });
+    expect(lateTip.ok()).toBe(false);
+    const after = await trpcResult(await trpcQuery(otherDevice.request, 'guest.getSession', { token }));
+    expect(after.summary).toEqual(session.summary);
+  } finally {
+    await otherDevice.close();
     await owner.dispose();
   }
 });

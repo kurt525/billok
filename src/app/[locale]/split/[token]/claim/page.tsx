@@ -954,6 +954,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
   const data = session.data!;
   const currency = data.receiptData.currency;
+  // Finalized total includes personal tips, not just the restaurant subtotal.
+  const finalizedTotal = data.summary?.reduce((sum, person) => sum + person.total, 0) ?? data.receiptData.total;
   const savedPersonalTip = myPersonIndex === null ? 0 : (data.people[myPersonIndex]?.tipCents ?? 0);
   const personalTipValue = personalTipDraft ?? centsToDecimal(savedPersonalTip);
   const personalTipCents = parseToCents(personalTipValue);
@@ -1035,7 +1037,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             <div className="flex justify-between items-center">
               <span className="font-semibold text-lg">{t('totalBill')}</span>
               <span className="text-2xl font-bold text-primary">
-                {formatCents(data.receiptData.total, currency, locale)}
+                <span data-testid="finalized-bill-total">{formatCents(finalizedTotal, currency, locale)}</span>
               </span>
             </div>
           </CardContent>
@@ -1083,7 +1085,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       </Avatar>
                       <span className="font-medium">{person.name}</span>
                     </div>
-                    <span className="min-w-0 text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]">
+                    <span
+                      data-testid={'finalized-person-total-' + person.personIndex}
+                      className="min-w-0 text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
+                    >
                       {formatCents(person.total, currency, locale)}
                     </span>
                   </div>
@@ -1359,7 +1364,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       {personalLinkHint}
 
       {/* Personal tips belong to this device's identity, never the person selected
-          for editing dish claims. Individual tips do not affect totals yet. */}
+          for editing dish claims. Individual tips are included when finalizing. */}
       {myPersonIndex !== null && myPersonId && personToken && (
         <Card data-testid="personal-tip-card">
           <CardHeader className="pb-2">

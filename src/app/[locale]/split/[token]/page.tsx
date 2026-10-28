@@ -79,6 +79,9 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
 
   const data = split.data!;
   const currency = data.receiptData.currency;
+  // Saved shares are the definitive settlement, including personal tips.
+  const finalizedTotal = data.summary.reduce((sum, person) => sum + person.total, 0);
+  const personalTipTotal = data.summary.reduce((sum, person) => sum + person.tip, 0) - data.receiptData.tip;
   const paidBy = data.people[data.paidByIndex]?.name ?? t('someone');
   // Weighted the way the totals were, so each person's lines add up to their total
   const weights = groupSizeWeights(data.people);
@@ -87,7 +90,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
     const url = window.location.href;
     const text = t('shareText', {
       merchant: data.receiptData.merchantName ?? t('aReceipt'),
-      total: formatCents(data.receiptData.total, currency, locale),
+      total: formatCents(finalizedTotal, currency, locale),
     });
 
     if (navigator.share) {
@@ -157,7 +160,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
           <div className="flex justify-between items-center">
             <span className="font-semibold text-lg">{t('totalBill')}</span>
             <span className="text-2xl font-bold text-primary">
-              {formatCents(data.receiptData.total, currency, locale)}
+              <span data-testid="split-result-total">{formatCents(finalizedTotal, currency, locale)}</span>
             </span>
           </div>
         </CardContent>
@@ -279,10 +282,16 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
               <span>{formatCents(data.receiptData.tip, currency, locale)}</span>
             </div>
           )}
+          {personalTipTotal > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('tip')}</span>
+              <span data-testid="split-result-personal-tips">{formatCents(personalTipTotal, currency, locale)}</span>
+            </div>
+          )}
           <Separator />
           <div className="flex justify-between font-semibold">
             <span>{t('total')}</span>
-            <span>{formatCents(data.receiptData.total, currency, locale)}</span>
+            <span>{formatCents(finalizedTotal, currency, locale)}</span>
           </div>
         </CardContent>
       </Card>
