@@ -165,7 +165,9 @@
     "payerOwnShare": "Your share (no self-transfer)",
     "payerFromOthers": "Total to receive from others",
     "personalReimbursementTo": "Amount to reimburse the payer: {name}",
-    "personalReimbursementNote": "This includes your dishes and personal tips. SBP transfer and receipt confirmation are not available yet."
+    "personalReimbursementNote": "This includes your dishes and personal tips. SBP transfer and receipt confirmation are not available yet.",
+    "copyReimbursementAmount": "Copy transfer amount",
+    "reimbursementAmountCopied": "Transfer amount copied"
   },
   "result": {
     "loading": "Loading split...",

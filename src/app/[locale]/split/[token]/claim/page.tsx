@@ -57,6 +57,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import {
   Check,
+  Copy,
   Loader2,
   Users,
   Receipt,
@@ -697,6 +698,18 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     });
   }
 
+  async function copyReimbursementAmount(amountCents: number) {
+    // Only called from the finalized card of this device's own non-payer
+    // identity. Copy a RUB decimal without currency signs or grouping so a
+    // banking app can accept it; keep calculations in integer kopecks.
+    const value = centsToDecimal(amountCents).replace('.', ',');
+    if (await copyToClipboard(value)) {
+      toast.success(t('reimbursementAmountCopied'));
+    } else {
+      toast.error(tc('actions.copyFailed'));
+    }
+  }
+
   async function copyLink() {
     // The plain share link; never carry a #fragment, which could hold a personal token
     const url = new URL(window.location.href);
@@ -1141,6 +1154,16 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               >
                 {formatCents(personalReimbursement.total, currency, locale)}
               </p>
+              <Button
+                type="button"
+                variant="outline"
+                className="min-h-11 w-full"
+                onClick={() => copyReimbursementAmount(personalReimbursement.total)}
+                data-testid="guest-copy-reimbursement-amount"
+              >
+                <Copy className="mr-2 size-4" aria-hidden="true" />
+                {t('copyReimbursementAmount')}
+              </Button>
               <p className="text-xs text-muted-foreground">{t('personalReimbursementNote')}</p>
             </CardContent>
           </Card>

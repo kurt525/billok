@@ -330,6 +330,22 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(page.getByTestId('guest-personal-reimbursement')).toBeVisible();
     await expect(page.getByTestId('guest-personal-reimbursement')).toContainText('Борис');
     await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('4,59');
+    // A participant can copy the exact RUB amount (with comma and kopecks)
+    // to paste into their bank app; this does not report a payment.
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (value: string) => {
+            (window as Window & { __billokCopiedAmount?: string }).__billokCopiedAmount = value;
+          },
+        },
+      });
+    });
+    await page.getByTestId('guest-copy-reimbursement-amount').click();
+    await expect
+      .poll(() => page.evaluate(() => (window as Window & { __billokCopiedAmount?: string }).__billokCopiedAmount))
+      .toBe('4,59');
     await expect(page.getByText('Итого с чаевыми')).toBeVisible();
     await fitsPhone(page);
 
@@ -350,6 +366,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // Anna's 4.59 + Victor's 4.08 = 8.67 RUB owed to Boris.
     await expect(otherPage.getByTestId('guest-payer-reimbursements')).toBeVisible({ timeout: 15_000 });
     await expect(otherPage.getByTestId('guest-personal-reimbursement')).toHaveCount(0);
+    await expect(otherPage.getByTestId('guest-copy-reimbursement-amount')).toHaveCount(0);
     await expect(otherPage.getByTestId('guest-payer-reimbursement-0')).toContainText('4,59');
     await expect(otherPage.getByTestId('guest-payer-reimbursement-2')).toContainText('4,08');
     await expect(otherPage.getByTestId('guest-payer-reimbursement-1')).toHaveCount(0);
