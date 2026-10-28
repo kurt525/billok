@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { isSupportedSbpBankId, normalizeSbpPhone, SBP_BANKS } from './sbp-banks';
+import { isSupportedSbpBankId, normalizeSbpPhone, SBP_BANKS, searchSbpBanks } from './sbp-banks';
 
 describe('SBP profile contracts', () => {
   test('normalizes common Russian dialling formats without verification', () => {
@@ -12,6 +12,16 @@ describe('SBP profile contracts', () => {
     for (const value of ['', '123', '+15551234567', '8999123456', '+7 999 123 45 6a']) {
       expect(normalizeSbpPhone(value)).toBeNull();
     }
+  });
+
+  test('searches the curated bank list, ignoring case, spaces and hyphens', () => {
+    expect(searchSbpBanks('АК БАРС').map((bank) => bank.id)).toEqual(['akbars']);
+    expect(searchSbpBanks('акбарс').map((bank) => bank.id)).toEqual(['akbars']);
+    expect(searchSbpBanks('тИнЬкОфФ').map((bank) => bank.id)).toEqual(['tbank']);
+    expect(searchSbpBanks('T-BANK').map((bank) => bank.id)).toEqual(['tbank']);
+    expect(searchSbpBanks('СБЕР').map((bank) => bank.id)).toEqual(['sberbank']);
+    expect(searchSbpBanks('несуществующий банк')).toEqual([]);
+    expect(searchSbpBanks('  ')).toHaveLength(SBP_BANKS.length);
   });
 
   test('has unique bank IDs and rejects unlisted values', () => {

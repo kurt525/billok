@@ -16,7 +16,10 @@
     "sbpPhoneUnverified": "This number is not verified by SMS.",
     "sbpBank": "Bank for SBP",
     "sbpBankNotSelected": "No bank selected",
-    "sbpBankHint": "Initial list. Search and bank logos will follow separately."
+    "sbpBankHint": "Search the initial eight banks. Logos and catalogue expansion will follow separately.",
+    "sbpBankSearch": "Search banks",
+    "sbpBankSearchPlaceholder": "Enter a bank name",
+    "sbpBankNoResults": "No matching bank in the current list."
   },
   "password": {
     "title": "Change Password",

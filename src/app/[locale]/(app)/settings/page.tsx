@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
-import { SBP_BANKS } from '@/lib/sbp-banks';
+import { SBP_BANKS, searchSbpBanks } from '@/lib/sbp-banks';
 
 // Rendered only once the profile has loaded, so all fields can be
 // initialized directly from the data (no sync-from-query effects that
@@ -36,6 +36,14 @@ function ProfileForm({
   const [venmoUsername, setVenmoUsername] = useState(initialVenmoUsername);
   const [sbpPhone, setSbpPhone] = useState(initialSbpPhone);
   const [sbpBankId, setSbpBankId] = useState(initialSbpBankId);
+  const [sbpBankSearch, setSbpBankSearch] = useState('');
+  const matchingSbpBanks = searchSbpBanks(sbpBankSearch);
+  const selectedSbpBank = SBP_BANKS.find((bank) => bank.id === sbpBankId);
+  // A search must not clear the payer's saved bank when it filters the list.
+  const visibleSbpBanks =
+    selectedSbpBank && !matchingSbpBanks.some((bank) => bank.id === selectedSbpBank.id)
+      ? [selectedSbpBank, ...matchingSbpBanks]
+      : matchingSbpBanks;
 
   const updateProfile = trpc.auth.updateProfile.useMutation({
     onSuccess: async () => {
@@ -102,6 +110,22 @@ function ProfileForm({
       </div>
       <div className="space-y-2">
         <Label htmlFor="sbp-bank">{t('profile.sbpBank')}</Label>
+        <Input
+          id="sbp-bank-search"
+          type="search"
+          autoComplete="off"
+          className="h-11 min-w-0 text-base"
+          placeholder={t('profile.sbpBankSearchPlaceholder')}
+          aria-label={t('profile.sbpBankSearch')}
+          value={sbpBankSearch}
+          onChange={(e) => setSbpBankSearch(e.target.value)}
+          data-testid="sbp-bank-search"
+        />
+        {sbpBankSearch.trim() && matchingSbpBanks.length === 0 && (
+          <p className="text-xs text-muted-foreground" data-testid="sbp-bank-no-results">
+            {t('profile.sbpBankNoResults')}
+          </p>
+        )}
         <select
           id="sbp-bank"
           className="h-11 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-base"
@@ -110,7 +134,7 @@ function ProfileForm({
           data-testid="sbp-bank-select"
         >
           <option value="">{t('profile.sbpBankNotSelected')}</option>
-          {SBP_BANKS.map((bank) => (
+          {visibleSbpBanks.map((bank) => (
             <option key={bank.id} value={bank.id}>
               {bank.name}
             </option>
