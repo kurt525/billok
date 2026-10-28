@@ -409,7 +409,19 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       .poll(() => page.evaluate(() => (window as Window & { __billokCopiedPhone?: string }).__billokCopiedPhone))
       .toBe('+79991234567');
 
+    // A debtor's declaration is not a bank transaction or payer verification.
+    await expect(page.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId('guest-mark-paid').click();
+    await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено');
+    await expect(page.getByText('Поступление денег ещё не проверено плательщиком.')).toBeVisible();
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено', { timeout: 15_000 });
+    await expect(page.getByTestId('guest-mark-paid')).toHaveCount(0);
+    await expect(page.getByTestId('guest-payer-sbp-form')).toHaveCount(0);
+
     await otherPage.reload({ waitUntil: 'networkidle' });
+    await expect(otherPage.getByTestId('guest-mark-paid')).toHaveCount(0);
+    await expect(otherPage.getByTestId('guest-payment-declared')).toHaveCount(0);
     await expect(otherPage.getByTestId('guest-payer-sbp-phone')).toHaveValue('+79991234567', { timeout: 15_000 });
     await otherPage.getByTestId('guest-payer-sbp-search').fill('Озон Банк');
     await expect(otherPage.getByTestId('guest-payer-sbp-bank-100000000273').locator('input')).toBeChecked();

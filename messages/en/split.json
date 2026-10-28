@@ -187,7 +187,14 @@
     "payerSbpRecipientUnknownBank": "Bank no longer in directory — ask the payer",
     "payerSbpRecipientCopied": "Payer phone copied",
     "payerSbpRecipientCopyPhone": "Copy phone number",
-    "payerSbpRecipientDisclaimer": "Transfer using your bank app. Showing contact information does not confirm payment or receipt."
+    "payerSbpRecipientDisclaimer": "Transfer using your bank app. Showing contact information does not confirm payment or receipt.",
+    "markMyPayment": "I have paid",
+    "paymentDeclared": "Paid",
+    "paymentAwaitingVerification": "You marked the payment. The payer has not verified receipt of funds.",
+    "paymentDeclarationDisclaimer": "Press only after making the transfer. This button neither sends nor verifies funds.",
+    "paymentDeclarationFailed": "Could not record your payment declaration",
+    "paymentDeclarationLoading": "Checking payment status…",
+    "paymentDeclarationLoadFailed": "Could not check payment status. Refresh the page."
   },
   "result": {
     "loading": "Loading split...",

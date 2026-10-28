@@ -21,6 +21,8 @@ export type GuestSessionPerson = {
   groupSize?: number; // defaults to 1, > 1 means this person represents a group
   // Voluntary tip personally chosen for this receipt, integer RUB kopecks; missing = 0.
   tipCents?: number;
+  // Participant's declaration only; does NOT mean funds arrived or were verified.
+  paymentDeclaredAt?: string;
   // The join that created (or first claimed) this person: its idempotency key and the normalized
   // name it was made with, replayable until expiresAt (epoch ms). See guest.joinSession.
   join?: { key: string; name: string; expiresAt: number };

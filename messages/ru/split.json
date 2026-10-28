@@ -187,7 +187,14 @@
     "payerSbpRecipientUnknownBank": "Банк больше не найден в каталоге — уточните его у плательщика",
     "payerSbpRecipientCopied": "Номер плательщика скопирован",
     "payerSbpRecipientCopyPhone": "Скопировать номер",
-    "payerSbpRecipientDisclaimer": "Перевод через приложение вашего банка. Отображение реквизитов не подтверждает оплату и не проверяет получение денег."
+    "payerSbpRecipientDisclaimer": "Перевод через приложение вашего банка. Отображение реквизитов не подтверждает оплату и не проверяет получение денег.",
+    "markMyPayment": "Я оплатил",
+    "paymentDeclared": "Оплачено",
+    "paymentAwaitingVerification": "Вы отметили оплату. Поступление денег ещё не проверено плательщиком.",
+    "paymentDeclarationDisclaimer": "Нажимайте только после фактического перевода. Кнопка не переводит деньги и не подтверждает их поступление.",
+    "paymentDeclarationFailed": "Не удалось сохранить отметку об оплате",
+    "paymentDeclarationLoading": "Проверяем состояние оплаты…",
+    "paymentDeclarationLoadFailed": "Не удалось проверить состояние оплаты. Обновите страницу."
   },
   "result": {
     "loading": "Загрузка расчёта…",

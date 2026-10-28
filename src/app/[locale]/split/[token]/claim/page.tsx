@@ -77,6 +77,7 @@ import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
 import { GuestSbpReimbursementDetails } from '@/components/guest-sbp-reimbursement-details';
+import { GuestPaymentDeclaration } from '@/components/guest-payment-declaration';
 
 // How one claim save attempt ended: the answer's conflicts when stored, the server's message
 // when refused
@@ -1172,6 +1173,14 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               </Button>
               {myPersonId && personToken && (
                 <GuestSbpReimbursementDetails
+                  key={personToken}
+                  token={token}
+                  personId={myPersonId}
+                  personToken={personToken}
+                />
+              )}
+              {myPersonId && personToken && (
+                <GuestPaymentDeclaration
                   key={personToken}
                   token={token}
                   personId={myPersonId}

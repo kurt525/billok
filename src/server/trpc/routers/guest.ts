@@ -177,6 +177,61 @@ function cloneAssignments(assignments: { itemIndex: number; personIndices: numbe
   }));
 }
 
+/** Return only a verified non-payer with a positive, reconciled personal debt.
+ * Never authorize using a public share token, creator login or display name.
+ */
+function requireGuestDebtor(
+  split: {
+    status: GuestSplitStatus;
+    people: Prisma.JsonValue;
+    paidByIndex: number;
+    receiptData: Prisma.JsonValue;
+    summary: Prisma.JsonValue | null;
+  },
+  personId: string,
+  personToken: string,
+) {
+  if (split.status !== GuestSplitStatus.FINALIZED) {
+    throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+  }
+  const people = split.people as GuestSessionPerson[];
+  const personIndex = people.findIndex((person) => person.id === personId && person.personToken === personToken);
+  if (personIndex < 0 || personIndex === split.paidByIndex) {
+    throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  }
+  const person = people[personIndex]!;
+  const receipt = split.receiptData as { currency?: string; tax?: number; tip?: number; total?: number };
+  const summary = split.summary as { personIndex: number; total: number; tip: number }[] | null;
+  if (
+    receipt.currency !== 'RUB' ||
+    receipt.tax !== 0 ||
+    receipt.tip !== 0 ||
+    !Number.isSafeInteger(receipt.total) ||
+    receipt.total! < 0 ||
+    !Array.isArray(summary) ||
+    summary.length !== people.length ||
+    !people[split.paidByIndex] ||
+    summary.some(
+      (entry) =>
+        !Number.isSafeInteger(entry.personIndex) ||
+        entry.personIndex < 0 ||
+        entry.personIndex >= people.length ||
+        !Number.isSafeInteger(entry.total) ||
+        entry.total < 0 ||
+        !Number.isSafeInteger(entry.tip) ||
+        entry.tip < 0,
+    ) ||
+    new Set(summary.map((entry) => entry.personIndex)).size !== people.length ||
+    summary.reduce((sum, entry) => sum + entry.total, 0) !==
+      receipt.total! + summary.reduce((sum, entry) => sum + entry.tip, 0)
+  ) {
+    throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  }
+  const due = summary.find((entry) => entry.personIndex === personIndex);
+  if (!due || due.total <= 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  return { people, person, personIndex };
+}
+
 // ─── Shared Zod schemas (Finding #27) ────────────────────────────
 const receiptDataSchema = z
   .object({
@@ -1255,6 +1310,51 @@ export const guestRouter = createTRPCRouter({
       // Log only once the transaction has committed; the callback may run more than once.
       logger.info('guest.session.finalized', finalizeLog);
       return { shareToken };
+    }),
+
+  // The declaration is NOT a bank transaction and never means the payer has
+  // received money. A person's own token is needed both to read and to write.
+  getMyPaymentDeclaration: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payment-declaration-read', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const split = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: { expiresAt: true, status: true, people: true, paidByIndex: true, receiptData: true, summary: true },
+      });
+      if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      const { person } = requireGuestDebtor(split, input.personId, input.personToken);
+      return { declaredPaidAt: person.paymentDeclaredAt ?? null };
+    }),
+
+  markMyPayment: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payment-declaration-write', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const { people, person, personIndex } = requireGuestDebtor(split, input.personId, input.personToken);
+        if (person.paymentDeclaredAt) {
+          // Idempotent when a delayed retry or a second tab sends the same action.
+          return { declaredPaidAt: person.paymentDeclaredAt };
+        }
+        const timestamp = new Date().toISOString();
+        const updated = people.map((entry, index) =>
+          index === personIndex ? { ...entry, paymentDeclaredAt: timestamp } : entry,
+        );
+        await tx.guestSplit.update({
+          where: { id: split.id },
+          data: { people: updated as unknown as Prisma.InputJsonValue },
+        });
+        return { declaredPaidAt: timestamp };
+      });
     }),
 
   // Read payer contact via a personal token only. The share token on its own

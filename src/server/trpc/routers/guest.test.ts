@@ -2069,3 +2069,109 @@ describe('BillOK guest payer-only SBP contact (Issue #1 1.3.19)', () => {
     expect(publicSession).not.toHaveProperty('payerSbpBankId');
   });
 });
+
+describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
+  const payerId = '11111111-1111-4111-8111-111111111111';
+  const payerToken = '22222222-2222-4222-8222-222222222222';
+  const debtorId = '33333333-3333-4333-8333-333333333333';
+  const debtorToken = '44444444-4444-4444-8444-444444444444';
+  const debtorAuth = { token: 'guest-payment-token', personId: debtorId, personToken: debtorToken };
+  const base = {
+    id: 'guest-payment-id',
+    expiresAt: new Date(Date.now() + 86400000),
+    status: 'FINALIZED',
+    paidByIndex: 1,
+    receiptData: { total: 1001, subtotal: 1001, tax: 0, tip: 0, currency: 'RUB' },
+    summary: [
+      { personIndex: 0, total: 459, tip: 125 },
+      { personIndex: 1, total: 742, tip: 75 },
+    ],
+    people: [
+      { id: debtorId, personToken: debtorToken, name: 'Анна' },
+      { id: payerId, personToken: payerToken, name: 'Борис' },
+    ],
+  };
+
+  beforeEach(() => {
+    mockDb.guestSplit.findUnique.mockResolvedValue(structuredClone(base));
+    mockDb.guestSplit.update.mockResolvedValue({ id: base.id });
+  });
+
+  test('a verified guest debtor declares payment without implying receipt or bank settlement', async () => {
+    const api = await caller();
+    const result = await api.markMyPayment(debtorAuth);
+    expect(new Date(result.declaredPaidAt).toISOString()).toBe(result.declaredPaidAt);
+    expect(mockDb.guestSplit.update).toHaveBeenCalledTimes(1);
+    const data = mockDb.guestSplit.update.mock.calls[0]![0].data;
+    expect(data).toHaveProperty('people');
+    expect(data).not.toHaveProperty('summary');
+    expect(data).not.toHaveProperty('status');
+    expect(data.people[0].paymentDeclaredAt).toBe(result.declaredPaidAt);
+    expect(data.people[1].paymentDeclaredAt).toBeUndefined();
+    // Returning a timestamp means only that the participant pressed the button.
+    expect(result).not.toHaveProperty('confirmedAt');
+    expect(result).not.toHaveProperty('receiptVerifiedAt');
+  });
+
+  test('a reload can read the own declaration; repeating mark is idempotent', async () => {
+    const api = await caller();
+    const marked = '2026-10-28T18:00:00.000Z';
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...base,
+      people: [{ ...base.people[0], paymentDeclaredAt: marked }, base.people[1]],
+    });
+    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({ declaredPaidAt: marked });
+    await expect(api.markMyPayment(debtorAuth)).resolves.toEqual({ declaredPaidAt: marked });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('unmarked participant receives null, and another identity cannot read or mark', async () => {
+    const api = await caller(signedIn);
+    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({ declaredPaidAt: null });
+    const impostors = [
+      { ...debtorAuth, personId: payerId },
+      { ...debtorAuth, personToken: payerToken },
+      { ...debtorAuth, personToken: '55555555-5555-4555-8555-555555555555' },
+      { ...debtorAuth, personId: payerId, personToken: payerToken },
+    ];
+    for (const creds of impostors) {
+      await expect(api.markMyPayment(creds)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(api.getMyPaymentDeclaration(creds)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects a nonfinalized, expired, zero-due or unreconciled receipt', async () => {
+    const api = await caller();
+    const scenarios = [
+      [{ status: 'CLAIMING' }, 'BAD_REQUEST'],
+      [{ expiresAt: new Date(Date.now() - 86400000) }, 'NOT_FOUND'],
+      [
+        {
+          summary: [
+            { personIndex: 0, total: 0, tip: 0 },
+            { personIndex: 1, total: 1001, tip: 0 },
+          ],
+        },
+        'FORBIDDEN',
+      ],
+      [{ summary: null }, 'FORBIDDEN'],
+      [
+        {
+          summary: [
+            { personIndex: 0, total: 459, tip: 125 },
+            { personIndex: 0, total: 742, tip: 75 },
+          ],
+        },
+        'FORBIDDEN',
+      ],
+      [{ receiptData: { ...base.receiptData, total: 1002 } }, 'FORBIDDEN'],
+    ] as const;
+    for (const [change, code] of scenarios) {
+      mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, ...change });
+      await expect(api.markMyPayment(debtorAuth)).rejects.toMatchObject({ code });
+      await expect(api.getMyPaymentDeclaration(debtorAuth)).rejects.toMatchObject({ code });
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+});
