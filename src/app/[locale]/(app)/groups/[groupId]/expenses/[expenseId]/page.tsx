@@ -160,6 +160,36 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
                     {formatCents(manualSummary.total, 'RUB', locale)}
                   </span>
                 </div>
+                <Separator />
+                <p className="font-medium">{t('detail.initialReimbursements')}</p>
+                <p className="text-xs text-muted-foreground">{t('detail.initialReimbursementsHint')}</p>
+                <div className="flex min-w-0 justify-between gap-3">
+                  <span className="text-muted-foreground">{t('detail.payerOwnShare')}</span>
+                  <span className="shrink-0 tabular-nums" data-testid="group-payer-own-share">
+                    {formatCents(manualSummary.payerShare, 'RUB', locale)}
+                  </span>
+                </div>
+                {manualSummary.reimbursements.map((reimbursement) => {
+                  const member = e.shares.find((share) => share.userId === reimbursement.fromId);
+                  return (
+                    <div
+                      key={reimbursement.fromId}
+                      className="flex min-w-0 justify-between gap-3"
+                      data-testid={'group-payer-reimbursement-' + reimbursement.fromId}
+                    >
+                      <span className="min-w-0 truncate">
+                        {t('detail.memberReimburses', { name: member?.user.name ?? t('detail.unknown') })}
+                      </span>
+                      <span className="shrink-0 tabular-nums">{formatCents(reimbursement.amount, 'RUB', locale)}</span>
+                    </div>
+                  );
+                })}
+                <div className="flex min-w-0 justify-between gap-3 font-semibold">
+                  <span>{t('detail.reimbursementsTotal')}</span>
+                  <span className="shrink-0 tabular-nums" data-testid="group-payer-reimbursements-total">
+                    {formatCents(manualSummary.reimbursementTotal, 'RUB', locale)}
+                  </span>
+                </div>
               </div>
             </>
           )}

@@ -23,9 +23,17 @@ export function manualExpenseBreakdown(input: {
   expense: {
     amount: number;
     currency: string;
+    paidById: string;
     shares: readonly { userId: string; amount: number }[];
   };
-}): { foodTotal: number; tipTotal: number; total: number } | null {
+}): {
+  foodTotal: number;
+  tipTotal: number;
+  total: number;
+  payerShare: number;
+  reimbursementTotal: number;
+  reimbursements: { fromId: string; amount: number }[];
+} | null {
   const { receipt, items, expense } = input;
   const data = receipt.extractedData;
   if (
@@ -65,7 +73,24 @@ export function manualExpenseBreakdown(input: {
     const calculated = calculateTotalsWithPersonalTips(food, data.personalTips, validMembers, consumers);
     if (calculated.total !== expense.amount || calculated.userTotals.size !== expense.shares.length) return null;
     if (expense.shares.some((share) => calculated.userTotals.get(share.userId) !== share.amount)) return null;
-    return { foodTotal: calculated.itemTotal, tipTotal: calculated.tipTotal, total: calculated.total };
+
+    // This is the ORIGINAL per-receipt settlement, not the group's running
+    // balance after other expenses or previously recorded payments.
+    // The sole payer never needs to reimburse themselves.
+    const payerShare = calculated.userTotals.get(expense.paidById) ?? 0;
+    const reimbursements = expense.shares
+      .filter((share) => share.userId !== expense.paidById && share.amount > 0)
+      .map((share) => ({ fromId: share.userId, amount: share.amount }));
+    const reimbursementTotal = reimbursements.reduce((sum, payment) => sum + payment.amount, 0);
+    if (reimbursementTotal + payerShare !== calculated.total) return null;
+    return {
+      foodTotal: calculated.itemTotal,
+      tipTotal: calculated.tipTotal,
+      total: calculated.total,
+      payerShare,
+      reimbursementTotal,
+      reimbursements,
+    };
   } catch (error) {
     if (error instanceof RangeError) return null;
     throw error;

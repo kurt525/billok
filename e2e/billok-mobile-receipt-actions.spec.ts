@@ -255,6 +255,13 @@ test('two registered group members independently save voluntary RUB tips on a mo
     await expect(page.getByTestId('group-finalized-tip-total')).toContainText('1,50');
     await expect(page.getByTestId('group-finalized-grand-total')).toContainText('11,51');
     await expect(page.getByText('Всего чаевых официанту')).toBeVisible();
+    await expect(page.getByTestId('group-payer-own-share')).toContainText('5,01');
+    await expect(page.getByTestId('group-payer-reimbursements-total')).toContainText('6,50');
+    const payerReimbursements = page.locator('[data-testid^="group-payer-reimbursement-"]');
+    await expect(payerReimbursements).toHaveCount(1);
+    await expect(payerReimbursements).toContainText('6,50');
+    await expect(payerReimbursements).toContainText('Alice');
+    await expect(page.getByText('Возмещения плательщику по этому чеку')).toBeVisible();
     await noDocumentOverflow(page);
   } finally {
     await aliceContext.close();

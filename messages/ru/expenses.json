@@ -67,7 +67,12 @@
     "waiterTipSummary": "Чаевые для официанта",
     "dishesTotal": "Стоимость блюд",
     "tipForWaiter": "Всего чаевых официанту",
-    "totalWithTips": "Итого с чаевыми"
+    "totalWithTips": "Итого с чаевыми",
+    "initialReimbursements": "Возмещения плательщику по этому чеку",
+    "initialReimbursementsHint": "Первоначальные суммы; уже записанные переводы и другие расходы группы здесь не вычитаются.",
+    "payerOwnShare": "Доля плательщика (перевод самому себе не нужен)",
+    "memberReimburses": "{name} возмещает плательщику",
+    "reimbursementsTotal": "Всего к получению от остальных"
   },
   "scan": {
     "title": "Распознать чек",

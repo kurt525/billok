@@ -63,7 +63,12 @@
     "waiterTipSummary": "Tips for the waiter",
     "dishesTotal": "Dish total",
     "tipForWaiter": "Total voluntary tips for the waiter",
-    "totalWithTips": "Total including tips"
+    "totalWithTips": "Total including tips",
+    "initialReimbursements": "Reimbursements to the payer for this receipt",
+    "initialReimbursementsHint": "Original amounts only; previously recorded payments and other group expenses are not deducted here.",
+    "payerOwnShare": "Payer’s own share (no payment to oneself)",
+    "memberReimburses": "{name} reimburses the payer",
+    "reimbursementsTotal": "Total reimbursement from others"
   },
   "scan": {
     "title": "Scan Receipt",
