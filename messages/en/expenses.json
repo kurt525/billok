@@ -59,7 +59,11 @@
     "exchangeRate": "Rate: 1 {from} = {rate} {to}",
     "notFound": "Expense not found",
     "notFoundDescription": "This expense doesn't exist or has been deleted.",
-    "backToGroup": "Back to Group"
+    "backToGroup": "Back to Group",
+    "waiterTipSummary": "Tips for the waiter",
+    "dishesTotal": "Dish total",
+    "tipForWaiter": "Total voluntary tips for the waiter",
+    "totalWithTips": "Total including tips"
   },
   "scan": {
     "title": "Scan Receipt",

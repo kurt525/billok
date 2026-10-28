@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from 'next-intl';
 import { Link, useRouter } from '@/i18n/navigation';
 import { trpc } from '@/lib/trpc';
 import { formatCents } from '@/lib/money';
+import { manualExpenseBreakdown } from '@/lib/manual-expense-breakdown';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -24,6 +25,12 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const expense = trpc.expenses.get.useQuery({ groupId, expenseId });
+  // The original positions and recorded personal tips remain on the receipt.
+  // Non-receipt expenses incur no extra fetch or tip display.
+  const receiptItems = trpc.receipts.getReceiptItems.useQuery(
+    { receiptId: expense.data?.receiptId ?? '' },
+    { enabled: !!expense.data?.receiptId },
+  );
   const group = trpc.groups.get.useQuery({ groupId });
   const deleteExpense = trpc.expenses.delete.useMutation({
     onSuccess: () => router.push(`/groups/${groupId}`),
@@ -54,6 +61,14 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
   } satisfies Record<typeof e.splitMode, string>;
   const groupCurrency = group.data?.currency ?? 'RUB';
   const isCurrencyConverted = e.baseCurrencyAmount != null && e.currency.toUpperCase() !== groupCurrency.toUpperCase();
+  const manualSummary =
+    receiptItems.data?.receipt.isManual && e.receiptId === receiptItems.data.receipt.id
+      ? manualExpenseBreakdown({
+          receipt: receiptItems.data.receipt,
+          items: receiptItems.data.items,
+          expense: e,
+        })
+      : null;
 
   return (
     <div className="mx-auto max-w-lg space-y-6">
@@ -119,6 +134,33 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
             <>
               <Separator />
               <p className="text-sm">{e.description}</p>
+            </>
+          )}
+
+          {manualSummary && (
+            <>
+              <Separator />
+              <div className="space-y-2 text-sm" data-testid="manual-group-payer-summary">
+                <p className="font-semibold">{t('detail.waiterTipSummary')}</p>
+                <div className="flex min-w-0 justify-between gap-3">
+                  <span className="text-muted-foreground">{t('detail.dishesTotal')}</span>
+                  <span className="shrink-0 tabular-nums" data-testid="group-finalized-food-total">
+                    {formatCents(manualSummary.foodTotal, 'RUB', locale)}
+                  </span>
+                </div>
+                <div className="flex min-w-0 justify-between gap-3">
+                  <span className="text-muted-foreground">{t('detail.tipForWaiter')}</span>
+                  <span className="shrink-0 tabular-nums" data-testid="group-finalized-tip-total">
+                    {formatCents(manualSummary.tipTotal, 'RUB', locale)}
+                  </span>
+                </div>
+                <div className="flex min-w-0 justify-between gap-3 font-semibold">
+                  <span>{t('detail.totalWithTips')}</span>
+                  <span className="shrink-0 tabular-nums" data-testid="group-finalized-grand-total">
+                    {formatCents(manualSummary.total, 'RUB', locale)}
+                  </span>
+                </div>
+              </div>
             </>
           )}
 

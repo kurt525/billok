@@ -139,7 +139,7 @@ test('two registered group members independently save voluntary RUB tips on a mo
   browser,
 }) => {
   test.skip(!groupId, 'Requires disposable RUB group fixture');
-  test.setTimeout(125_000);
+  test.setTimeout(165_000);
 
   await page.goto('/login', { waitUntil: 'networkidle' });
   await page.locator('input[type=email]').fill('bob@example.com');
@@ -223,6 +223,39 @@ test('two registered group members independently save voluntary RUB tips on a mo
     expect(
       Object.values(updated.receipt.extractedData.personalTips as Record<string, number>).sort((a, b) => a - b),
     ).toEqual([0, 150]);
+
+    // Finalize a real manual receipt with both diners assigned a dish.
+    // Bob is the creator/payer and chooses 0 RUB; Alice chooses 1.50 RUB.
+    await page.getByTestId('add-item-btn').click();
+    const add = page.getByTestId('add-item-form');
+    await add.locator('input').nth(0).fill('Десерт');
+    await add.locator('input').nth(1).fill('1');
+    await add.locator('input').nth(2).fill('10,01');
+    await add.getByRole('button', { name: 'Добавить', exact: true }).click();
+    const dessert = item(page, 'Десерт');
+    await expect(dessert).toBeVisible();
+    await dessert.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Alice' }).click();
+    await dessert.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Bob' }).click();
+    await page.locator('#title').fill('Десерт с личными чаевыми');
+    await page.getByTestId('create-expense-btn').click();
+    await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'), { timeout: 20_000 });
+
+    const response = await trpcResult(await trpcQuery(page.request, 'expenses.list', { groupId, limit: 100 }));
+    const finalized = response.expenses.find((expense: { receiptId?: string }) => expense.receiptId === newReceiptId);
+    expect(finalized).toBeTruthy();
+    expect(finalized.amount).toBe(1151);
+    const shares = finalized.shares
+      .map((share: { amount: number }) => share.amount)
+      .sort((a: number, b: number) => a - b);
+    expect(shares).toEqual([501, 650]);
+
+    await page.goto('/groups/' + groupId + '/expenses/' + finalized.id, { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('manual-group-payer-summary')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('group-finalized-food-total')).toContainText('10,01');
+    await expect(page.getByTestId('group-finalized-tip-total')).toContainText('1,50');
+    await expect(page.getByTestId('group-finalized-grand-total')).toContainText('11,51');
+    await expect(page.getByText('Всего чаевых официанту')).toBeVisible();
+    await noDocumentOverflow(page);
   } finally {
     await aliceContext.close();
   }

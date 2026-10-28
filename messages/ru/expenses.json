@@ -63,7 +63,11 @@
     "exchangeRate": "Курс: 1 {from} = {rate} {to}",
     "notFound": "Расход не найден",
     "notFoundDescription": "Этот расход не существует или был удалён.",
-    "backToGroup": "К группе"
+    "backToGroup": "К группе",
+    "waiterTipSummary": "Чаевые для официанта",
+    "dishesTotal": "Стоимость блюд",
+    "tipForWaiter": "Всего чаевых официанту",
+    "totalWithTips": "Итого с чаевыми"
   },
   "scan": {
     "title": "Распознать чек",
