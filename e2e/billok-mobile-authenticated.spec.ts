@@ -195,7 +195,12 @@ test('mobile SBP profile persists phone and selected bank without verification c
   await expect(page.getByTestId('sbp-bank-option-sberbank')).toHaveCount(0);
   const logo = tbankRow.locator('img');
   await expect(logo).toHaveAttribute('src', '/banks/tbank.svg');
-  await expect(logo).toHaveJSProperty('naturalWidth', 40);
+  // SVG intrinsic dimensions are browser-dependent; naturalWidth need not
+  // equal the 40px CSS display size. Assert successful load and layout separately.
+  await expect(logo).toHaveJSProperty('complete', true);
+  await expect.poll(() => logo.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+  await expect(logo).toHaveCSS('width', '40px');
+  await expect(logo).toHaveCSS('height', '40px');
   await expect(page.getByText('Номер не проверяется по СМС')).toBeVisible();
   await phone.fill('8 (999) 123-45-67');
   await tbankRow.click();
