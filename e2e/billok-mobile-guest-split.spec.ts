@@ -269,7 +269,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       items: [{ name: 'Ужин', quantity: 1, unitPrice: 1001, totalPrice: 1001 }],
       people: ['Анна', 'Борис', 'Виктор'],
       creatorName: 'Анна',
-      paidByName: 'Анна',
+      paidByName: 'Борис',
       joinCreator: true,
     });
     const body = await response.text();
@@ -325,6 +325,8 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(page.getByTestId('finalized-waiter-tip-total')).toContainText('2,00');
     await expect(page.getByText('Всего чаевых официанту')).toBeVisible();
     await expect(page.getByTestId('finalized-bill-total')).toContainText('12,01');
+    // Anna is the creator, not the payer: this breakdown belongs to Boris.
+    await expect(page.getByTestId('guest-payer-reimbursements')).toHaveCount(0);
     await expect(page.getByText('Итого с чаевыми')).toBeVisible();
     await fitsPhone(page);
 
@@ -341,6 +343,14 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     const otherPage = await otherDevice.newPage();
     await otherPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
     await expect(otherPage.getByTestId('finalized-bill-total')).toContainText('12,01', { timeout: 15_000 });
+    // Boris pays but did not create the receipt: his 3.34 RUB is not reimbursed.
+    // Anna's 4.59 + Victor's 4.08 = 8.67 RUB owed to Boris.
+    await expect(otherPage.getByTestId('guest-payer-reimbursements')).toBeVisible({ timeout: 15_000 });
+    await expect(otherPage.getByTestId('guest-payer-reimbursement-0')).toContainText('4,59');
+    await expect(otherPage.getByTestId('guest-payer-reimbursement-2')).toContainText('4,08');
+    await expect(otherPage.getByTestId('guest-payer-reimbursement-1')).toHaveCount(0);
+    await expect(otherPage.getByTestId('guest-payer-own-share')).toContainText('3,34');
+    await expect(otherPage.getByTestId('guest-payer-reimbursement-total')).toContainText('8,67');
     await fitsPhone(otherPage);
     await otherPage.goto('/split/' + token, { waitUntil: 'networkidle' });
     await expect(otherPage.getByTestId('split-result-total')).toContainText('12,01');

@@ -159,7 +159,11 @@
     "personalTipPendingTotals": "Preliminary participant totals show dishes only. Your voluntary tip is added to your own total when the split is finalized.",
     "dishesTotal": "Dish total",
     "tipForWaiter": "Total voluntary tips for the waiter",
-    "totalWithTips": "Total including tips"
+    "totalWithTips": "Total including tips",
+    "payerReimbursementsTitle": "Reimbursements to the payer for this receipt",
+    "payerReimbursementsNote": "Initial amounts before transfers and confirmations. No transfer to yourself is needed.",
+    "payerOwnShare": "Your share (no self-transfer)",
+    "payerFromOthers": "Total to receive from others"
   },
   "result": {
     "loading": "Loading split...",

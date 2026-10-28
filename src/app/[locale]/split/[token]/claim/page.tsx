@@ -958,6 +958,20 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // Finalized total includes personal tips, not just the restaurant subtotal.
   const finalizedTotal = data.summary?.reduce((sum, person) => sum + person.total, 0) ?? data.receiptData.total;
   const finalizedPersonalTips = data.summary?.reduce((sum, person) => sum + person.tip, 0) ?? 0;
+  // Identify the payer by this device's resumed personal token, not by the
+  // currently edited person. This is the original receipt balance, not a bank payment.
+  const payerSummary = data.summary?.find((person) => person.personIndex === data.paidByIndex);
+  const payerReimbursements =
+    currency === 'RUB' &&
+    data.receiptData.tax === 0 &&
+    data.receiptData.tip === 0 &&
+    myPersonIndex === data.paidByIndex &&
+    payerSummary &&
+    data.summary?.every((person) => Number.isSafeInteger(person.total) && person.total >= 0) &&
+    finalizedTotal === data.receiptData.total + finalizedPersonalTips
+      ? data.summary.filter((person) => person.personIndex !== data.paidByIndex && person.total > 0)
+      : null;
+  const payerReimbursementTotal = payerReimbursements?.reduce((sum, person) => sum + person.total, 0) ?? 0;
   const savedPersonalTip = myPersonIndex === null ? 0 : (data.people[myPersonIndex]?.tipCents ?? 0);
   const personalTipValue = personalTipDraft ?? centsToDecimal(savedPersonalTip);
   const personalTipCents = parseToCents(personalTipValue);
@@ -1067,6 +1081,39 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             </div>
           </CardContent>
         </Card>
+
+        {payerReimbursements && payerSummary && (
+          <Card data-testid="guest-payer-reimbursements">
+            <CardContent className="space-y-3 py-4">
+              <h3 className="font-semibold">{t('payerReimbursementsTitle')}</h3>
+              <p className="text-xs text-muted-foreground">{t('payerReimbursementsNote')}</p>
+              {payerReimbursements.map((person) => (
+                <div key={person.personIndex} className="flex min-w-0 justify-between gap-3 text-sm">
+                  <span className="min-w-0 [overflow-wrap:anywhere]">{person.name}</span>
+                  <span
+                    className="shrink-0 tabular-nums"
+                    data-testid={'guest-payer-reimbursement-' + person.personIndex}
+                  >
+                    {formatCents(person.total, currency, locale)}
+                  </span>
+                </div>
+              ))}
+              <Separator />
+              <div className="flex min-w-0 justify-between gap-3 text-sm">
+                <span>{t('payerOwnShare')}</span>
+                <span className="shrink-0 tabular-nums" data-testid="guest-payer-own-share">
+                  {formatCents(payerSummary.total, currency, locale)}
+                </span>
+              </div>
+              <div className="flex min-w-0 justify-between gap-3 font-semibold">
+                <span>{t('payerFromOthers')}</span>
+                <span className="shrink-0 tabular-nums" data-testid="guest-payer-reimbursement-total">
+                  {formatCents(payerReimbursementTotal, currency, locale)}
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Venmo handle */}
         {venmoSetting.data?.enabled &&
