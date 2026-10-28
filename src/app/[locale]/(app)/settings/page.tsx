@@ -1,6 +1,9 @@
 'use client';
 
 import { useState } from 'react';
+import Image from 'next/image';
+import { Check } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { useSession } from 'next-auth/react';
 import { useTranslations } from 'next-intl';
 import { useRouter } from '@/i18n/navigation';
@@ -126,20 +129,63 @@ function ProfileForm({
             {t('profile.sbpBankNoResults')}
           </p>
         )}
-        <select
-          id="sbp-bank"
-          className="h-11 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-base"
-          value={sbpBankId}
-          onChange={(e) => setSbpBankId(e.target.value)}
-          data-testid="sbp-bank-select"
+        <div
+          role="radiogroup"
+          aria-label={t('profile.sbpBank')}
+          className="max-h-64 space-y-1 overflow-y-auto rounded-xl border p-1"
+          data-testid="sbp-bank-list"
         >
-          <option value="">{t('profile.sbpBankNotSelected')}</option>
+          <label
+            className={cn(
+              'flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 focus-within:ring-2 focus-within:ring-ring',
+              sbpBankId === '' ? 'border-primary bg-primary/10' : 'border-transparent hover:bg-muted/50',
+            )}
+            data-testid="sbp-bank-option-none"
+          >
+            <input
+              type="radio"
+              name="sbp-bank"
+              value=""
+              checked={sbpBankId === ''}
+              onChange={() => setSbpBankId('')}
+              className="sr-only"
+              data-testid="sbp-bank-radio-none"
+            />
+            <span className="min-w-0 flex-1 text-sm">{t('profile.sbpBankNotSelected')}</span>
+            {sbpBankId === '' && <Check className="size-5 shrink-0" aria-hidden="true" />}
+          </label>
           {visibleSbpBanks.map((bank) => (
-            <option key={bank.id} value={bank.id}>
-              {bank.name}
-            </option>
+            <label
+              key={bank.id}
+              className={cn(
+                'flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border px-2 py-1 focus-within:ring-2 focus-within:ring-ring',
+                sbpBankId === bank.id ? 'border-primary bg-primary/10' : 'border-transparent hover:bg-muted/50',
+              )}
+              data-testid={'sbp-bank-option-' + bank.id}
+            >
+              <input
+                type="radio"
+                name="sbp-bank"
+                value={bank.id}
+                checked={sbpBankId === bank.id}
+                onChange={() => setSbpBankId(bank.id)}
+                className="sr-only"
+                data-testid={'sbp-bank-radio-' + bank.id}
+              />
+              <Image
+                src={'/banks/' + bank.id + '.svg'}
+                width={40}
+                height={40}
+                alt=""
+                unoptimized
+                className="size-10 shrink-0 rounded-md"
+                aria-hidden="true"
+              />
+              <span className="min-w-0 flex-1 text-sm font-medium">{bank.name}</span>
+              {sbpBankId === bank.id && <Check className="size-5 shrink-0" aria-hidden="true" />}
+            </label>
           ))}
-        </select>
+        </div>
         <p className="text-xs text-muted-foreground">{t('profile.sbpBankHint')}</p>
       </div>
       <Button
