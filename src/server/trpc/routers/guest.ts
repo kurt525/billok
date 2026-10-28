@@ -25,6 +25,7 @@ import { calculateSplitTotals, addPersonalGuestTips, groupSizeWeights } from '@/
 import { normalizeGuestName } from '@/lib/guest-session';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { MAX_MONEY_CENTS } from '@/lib/money';
+import { normalizeSbpPhone, isSupportedSbpBankId } from '@/lib/sbp-banks';
 import { checkJoinRateLimit } from '../../lib/guest-join-limit';
 import {
   assignPersonIds,
@@ -1254,6 +1255,78 @@ export const guestRouter = createTRPCRouter({
       // Log only once the transaction has committed; the callback may run more than once.
       logger.info('guest.session.finalized', finalizeLog);
       return { shareToken };
+    }),
+
+  // Read payer contact via a personal token only. The share token on its own
+  // is a public receipt link and MUST NOT return the bank/phone. Use mutation
+  // so the person's secret is sent in the request body, not the URL.
+  getMyPayerSbpContact: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-sbp-read', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const split = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: {
+          expiresAt: true,
+          people: true,
+          paidByIndex: true,
+          payerSbpPhone: true,
+          payerSbpBankId: true,
+        },
+      });
+      if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      const people = split.people as GuestSessionPerson[];
+      const payer = people[split.paidByIndex];
+      if (!payer || payer.id !== input.personId || payer.personToken !== input.personToken) {
+        throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      }
+      return { phone: split.payerSbpPhone, bankId: split.payerSbpBankId };
+    }),
+
+  // Only the person holding the payer's actual personal token may configure
+  // where reimbursements go, even when the creator is somebody else.
+  setMyPayerSbpContact: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        phone: z.string().max(24).nullable(),
+        bankId: z.string().max(40).nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-sbp-write', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const emptyPhone = input.phone === null || input.phone.trim() === '';
+      const emptyBank = input.bankId === null || input.bankId.trim() === '';
+      if (emptyPhone !== emptyBank) throw new AppError('BAD_REQUEST', 'sbpBankInvalid');
+      const phone = emptyPhone ? null : normalizeSbpPhone(input.phone!);
+      if (!emptyPhone && !phone) throw new AppError('BAD_REQUEST', 'sbpPhoneInvalid');
+      if (!emptyBank && !isSupportedSbpBankId(input.bankId!)) {
+        throw new AppError('BAD_REQUEST', 'sbpBankInvalid');
+      }
+
+      return guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const payer = (split.people as GuestSessionPerson[])[split.paidByIndex];
+        if (!payer || payer.id !== input.personId || payer.personToken !== input.personToken) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        if (split.payerSbpPhone !== phone || split.payerSbpBankId !== (emptyBank ? null : input.bankId)) {
+          await tx.guestSplit.update({
+            where: { id: split.id },
+            data: { payerSbpPhone: phone, payerSbpBankId: emptyBank ? null : input.bankId },
+          });
+        }
+        return { success: true };
+      });
     }),
 
   setPayerVenmoHandle: protectedProcedure

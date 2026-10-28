@@ -1869,3 +1869,122 @@ describe('making a split from a receipt', () => {
     },
   );
 });
+
+describe('BillOK guest payer-only SBP contact (Issue #1 1.3.19)', () => {
+  const payerId = '11111111-1111-4111-8111-111111111111';
+  const payerToken = '22222222-2222-4222-8222-222222222222';
+  const otherId = '33333333-3333-4333-8333-333333333333';
+  const otherToken = '44444444-4444-4444-8444-444444444444';
+  const base = {
+    id: 'session-id',
+    shareToken: 'private-bill-token',
+    expiresAt: new Date(Date.now() + 86400000),
+    paidByIndex: 1,
+    status: 'FINALIZED',
+    userId: 'user-1',
+    payerSbpPhone: null,
+    payerSbpBankId: null,
+    people: [
+      { id: otherId, name: 'Организатор', personToken: otherToken },
+      { id: payerId, name: 'Плательщик-гость', personToken: payerToken },
+    ],
+  };
+  const payerAuth = { token: base.shareToken, personId: payerId, personToken: payerToken };
+  const otherAuth = { token: base.shareToken, personId: otherId, personToken: otherToken };
+
+  beforeEach(() => {
+    mockDb.guestSplit.findUnique.mockResolvedValue(structuredClone(base));
+    mockDb.guestSplit.update.mockResolvedValue({ id: base.id });
+  });
+
+  test('guest payer can save an unverified phone and active bank without a user account', async () => {
+    const api = await caller();
+    await expect(
+      api.setMyPayerSbpContact({ ...payerAuth, phone: '8 (999) 123-45-67', bankId: '100000000273' }),
+    ).resolves.toEqual({ success: true });
+    expect(mockDb.guestSplit.update).toHaveBeenCalledWith({
+      where: { id: base.id },
+      data: { payerSbpPhone: '+79991234567', payerSbpBankId: '100000000273' },
+    });
+  });
+
+  test('non-payer, creator and wrong personal token cannot read or overwrite payer contact', async () => {
+    const api = await caller(signedIn);
+    for (const credentials of [
+      otherAuth,
+      { ...payerAuth, personToken: otherToken },
+      { ...payerAuth, personId: otherId },
+    ]) {
+      await expect(api.getMyPayerSbpContact(credentials)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        api.setMyPayerSbpContact({ ...credentials, phone: '+79991234567', bankId: 'tbank' }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('payer can read only their own stored contact and clear it', async () => {
+    const api = await caller();
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...base,
+      payerSbpPhone: '+79991234567',
+      payerSbpBankId: 'akbars',
+    });
+    await expect(api.getMyPayerSbpContact(payerAuth)).resolves.toEqual({
+      phone: '+79991234567',
+      bankId: 'akbars',
+    });
+    await expect(api.setMyPayerSbpContact({ ...payerAuth, phone: null, bankId: null })).resolves.toEqual({
+      success: true,
+    });
+    expect(mockDb.guestSplit.update).toHaveBeenCalledWith({
+      where: { id: base.id },
+      data: { payerSbpPhone: null, payerSbpBankId: null },
+    });
+  });
+
+  test('rejects invalid phone, unknown bank, or incomplete destination before writing', async () => {
+    const api = await caller();
+    for (const data of [
+      { phone: '+15551234567', bankId: 'tbank' },
+      { phone: '+79991234567', bankId: 'not-a-bank' },
+      { phone: '+79991234567', bankId: null },
+      { phone: null, bankId: 'tbank' },
+    ]) {
+      await expect(api.setMyPayerSbpContact({ ...payerAuth, ...data })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('expired session cannot read or save sensitive destination', async () => {
+    const api = await caller();
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...base,
+      expiresAt: new Date(Date.now() - 86400000),
+    });
+    await expect(api.getMyPayerSbpContact(payerAuth)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(
+      api.setMyPayerSbpContact({ ...payerAuth, phone: '+79991234567', bankId: 'tbank' }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  test('payer SBP secret is never returned in public getSession or getSplit', async () => {
+    const api = await caller();
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...base,
+      payerSbpPhone: '+79991234567',
+      payerSbpBankId: 'tbank',
+      receiptData: { subtotal: 100, tax: 0, tip: 0, total: 100, currency: 'RUB' },
+      items: [],
+      assignments: [],
+      summary: [],
+      createdAt: new Date(),
+    });
+    const publicSession = await api.getSession({ token: base.shareToken });
+    expect(JSON.stringify(publicSession)).not.toContain('+79991234567');
+    expect(publicSession).not.toHaveProperty('payerSbpPhone');
+    expect(publicSession).not.toHaveProperty('payerSbpBankId');
+  });
+});

@@ -420,6 +420,9 @@ model GuestSplit {
   summary     Json?    // [{name, itemTotal, tax, tip, total}]
   paidByIndex      Int              @default(0)
   payerVenmoHandle String?
+  // Confidential payer-selected SBP destination; not part of the public guest receipt.
+  payerSbpPhone    String?
+  payerSbpBankId   String?
   status           GuestSplitStatus @default(FINALIZED)
   userId           String?
   createdBy   User?    @relation("GuestSplits", fields: [userId], references: [id], onDelete: SetNull)
