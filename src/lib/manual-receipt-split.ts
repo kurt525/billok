@@ -1,3 +1,5 @@
+import { MAX_MONEY_CENTS } from './money';
+
 /**
  * Integer-only proportional splitting. Each participant gets the floor of their
  * proportional item cost; remaining kopecks always belong to the receipt creator,
@@ -50,4 +52,64 @@ export function calculateManualReceiptTotals(params: {
     }
   }
   return totals;
+}
+
+/**
+ * Add each participant's own, voluntary RUB tip to their item share.
+ * This is a pure calculation, NOT an expense write: finalization must reload
+ * tips under the receipt row lock before using the result.
+ *
+ * A member may leave a tip even if they consumed no item. Tip ownership is
+ * never inferred from the receipt payer or item assignments.
+ */
+export function calculateTotalsWithPersonalTips(
+  itemShares: ReadonlyMap<string, number>,
+  personalTips: unknown,
+  eligibleParticipantIds: ReadonlySet<string>,
+): { userTotals: Map<string, number>; itemTotal: number; tipTotal: number; total: number } {
+  if (
+    personalTips !== undefined &&
+    personalTips !== null &&
+    (typeof personalTips !== 'object' || Array.isArray(personalTips))
+  ) {
+    throw new RangeError('Invalid personal tip data');
+  }
+  const tips = (personalTips ?? {}) as Record<string, unknown>;
+  const userTotals = new Map<string, number>();
+  let itemTotal = 0;
+  let tipTotal = 0;
+  for (const [userId, amount] of itemShares) {
+    if (
+      !eligibleParticipantIds.has(userId) ||
+      !Number.isSafeInteger(amount) ||
+      amount < 0 ||
+      amount > MAX_MONEY_CENTS ||
+      itemTotal + amount > MAX_MONEY_CENTS
+    ) {
+      throw new RangeError('Invalid participant or receipt share');
+    }
+    userTotals.set(userId, amount);
+    itemTotal += amount;
+  }
+  for (const [userId, tip] of Object.entries(tips)) {
+    if (
+      !eligibleParticipantIds.has(userId) ||
+      !Number.isSafeInteger(tip) ||
+      (tip as number) < 0 ||
+      (tip as number) > MAX_MONEY_CENTS
+    ) {
+      throw new RangeError('Invalid voluntary tip or participant');
+    }
+    const amount = tip as number;
+    if (tipTotal + amount > MAX_MONEY_CENTS || (userTotals.get(userId) ?? 0) + amount > MAX_MONEY_CENTS) {
+      throw new RangeError('Personal tip total exceeds RUB storage limit');
+    }
+    tipTotal += amount;
+    if (amount > 0) userTotals.set(userId, (userTotals.get(userId) ?? 0) + amount);
+  }
+  const total = itemTotal + tipTotal;
+  if (total > MAX_MONEY_CENTS) {
+    throw new RangeError('Receipt with tips exceeds RUB storage limit');
+  }
+  return { userTotals, itemTotal, tipTotal, total };
 }
