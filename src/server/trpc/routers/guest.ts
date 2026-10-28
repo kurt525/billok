@@ -1286,6 +1286,69 @@ export const guestRouter = createTRPCRouter({
       return { phone: split.payerSbpPhone, bankId: split.payerSbpBankId };
     }),
 
+  // A participant may learn the payer's destination only when this finalized
+  // receipt actually requires THEM to reimburse the payer. A public share link,
+  // the creator's account and a different guest's personal token are insufficient.
+  getPayerSbpForReimbursement: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-sbp-reimbursement', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const split = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: {
+          expiresAt: true,
+          status: true,
+          people: true,
+          paidByIndex: true,
+          receiptData: true,
+          summary: true,
+          payerSbpPhone: true,
+          payerSbpBankId: true,
+        },
+      });
+      if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      if (split.status !== GuestSplitStatus.FINALIZED) {
+        throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+      }
+      const people = split.people as GuestSessionPerson[];
+      const personIndex = people.findIndex(
+        (person) => person.id === input.personId && person.personToken === input.personToken,
+      );
+      if (personIndex < 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      if (personIndex === split.paidByIndex) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      const receipt = split.receiptData as { currency?: string; tax?: number; tip?: number; total?: number };
+      const summary = split.summary as { personIndex: number; total: number; tip: number }[] | null;
+      // Fail closed if stale or malformed settlement sums cannot be reconciled.
+      if (
+        receipt.currency !== 'RUB' ||
+        receipt.tax !== 0 ||
+        receipt.tip !== 0 ||
+        !Number.isSafeInteger(receipt.total) ||
+        !Array.isArray(summary) ||
+        summary.length !== people.length ||
+        summary.some(
+          (person) =>
+            !Number.isSafeInteger(person.total) ||
+            person.total < 0 ||
+            !Number.isSafeInteger(person.tip) ||
+            person.tip < 0,
+        ) ||
+        summary.reduce((sum, person) => sum + person.total, 0) !==
+          receipt.total! + summary.reduce((sum, person) => sum + person.tip, 0)
+      ) {
+        throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      }
+      const owed = summary.find((person) => person.personIndex === personIndex);
+      if (!owed || owed.total <= 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      return {
+        phone: split.payerSbpPhone && split.payerSbpBankId ? split.payerSbpPhone : null,
+        bankId: split.payerSbpPhone && split.payerSbpBankId ? split.payerSbpBankId : null,
+      };
+    }),
+
   // Only the person holding the payer's actual personal token may configure
   // where reimbursements go, even when the creator is somebody else.
   setMyPayerSbpContact: publicProcedure

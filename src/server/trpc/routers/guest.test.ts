@@ -1970,6 +1970,87 @@ describe('BillOK guest payer-only SBP contact (Issue #1 1.3.19)', () => {
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
+  describe('reimbursement-only contact sharing', () => {
+    const receipt = { subtotal: 1001, total: 1001, tax: 0, tip: 0, currency: 'RUB' };
+    const shares = [
+      { personIndex: 0, total: 459, tip: 125 },
+      { personIndex: 1, total: 742, tip: 75 },
+    ];
+    beforeEach(() => {
+      mockDb.guestSplit.findUnique.mockResolvedValue({
+        ...base,
+        receiptData: receipt,
+        summary: shares,
+        payerSbpPhone: '+79991234567',
+        payerSbpBankId: '100000000273',
+      });
+    });
+
+    test('an actual nonpayer who owes money can read the bank/phone without signing in', async () => {
+      const api = await caller();
+      await expect(api.getPayerSbpForReimbursement(otherAuth)).resolves.toEqual({
+        phone: '+79991234567',
+        bankId: '100000000273',
+      });
+    });
+
+    test('creator account alone, unrelated token, swapped ID or payer token do not expose the contact', async () => {
+      const api = await caller(signedIn);
+      for (const credentials of [
+        payerAuth,
+        { ...otherAuth, personToken: payerToken },
+        { ...otherAuth, personId: payerId },
+        { ...otherAuth, token: 'other-receipt' },
+      ]) {
+        if (credentials.token !== base.shareToken) mockDb.guestSplit.findUnique.mockResolvedValueOnce(null);
+        await expect(api.getPayerSbpForReimbursement(credentials)).rejects.toMatchObject({
+          code: credentials.token !== base.shareToken ? 'NOT_FOUND' : 'FORBIDDEN',
+        });
+      }
+    });
+
+    test('an unpaid, incomplete, expired or not finalized receipt does not expose a contact', async () => {
+      const api = await caller();
+      const original = {
+        ...base,
+        receiptData: receipt,
+        summary: shares,
+        payerSbpPhone: '+79991234567',
+        payerSbpBankId: '100000000273',
+      };
+      for (const override of [
+        {
+          summary: [
+            { personIndex: 0, total: 0, tip: 0 },
+            { personIndex: 1, total: 1001, tip: 0 },
+          ],
+        },
+        { summary: null },
+        { status: 'CLAIMING' },
+        { expiresAt: new Date(Date.now() - 86400000) },
+        { receiptData: { ...receipt, total: 1002 } },
+      ]) {
+        mockDb.guestSplit.findUnique.mockResolvedValueOnce({ ...original, ...override });
+        await expect(api.getPayerSbpForReimbursement(otherAuth)).rejects.toMatchObject({
+          code: 'code' in override ? override.code : expect.stringMatching(/FORBIDDEN|BAD_REQUEST|NOT_FOUND/),
+        });
+      }
+    });
+
+    test('without payer consent the response contains no destination; public data remains private', async () => {
+      const api = await caller();
+      mockDb.guestSplit.findUnique.mockResolvedValue({
+        ...base,
+        receiptData: receipt,
+        summary: shares,
+      });
+      await expect(api.getPayerSbpForReimbursement(otherAuth)).resolves.toEqual({
+        phone: null,
+        bankId: null,
+      });
+    });
+  });
+
   test('payer SBP secret is never returned in public getSession or getSplit', async () => {
     const api = await caller();
     mockDb.guestSplit.findUnique.mockResolvedValue({

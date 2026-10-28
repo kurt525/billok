@@ -76,6 +76,7 @@ import { getInitials, guestAvatarColor } from '@/lib/avatar';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
+import { GuestSbpReimbursementDetails } from '@/components/guest-sbp-reimbursement-details';
 
 // How one claim save attempt ended: the answer's conflicts when stored, the server's message
 // when refused
@@ -1169,6 +1170,14 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 <Copy className="mr-2 size-4" aria-hidden="true" />
                 {t('copyReimbursementAmount')}
               </Button>
+              {myPersonId && personToken && (
+                <GuestSbpReimbursementDetails
+                  key={personToken}
+                  token={token}
+                  personId={myPersonId}
+                  personToken={personToken}
+                />
+              )}
               <p className="text-xs text-muted-foreground">{t('personalReimbursementNote')}</p>
             </CardContent>
           </Card>

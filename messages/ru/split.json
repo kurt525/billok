@@ -179,7 +179,15 @@
     "payerSbpUnverified": "Номер не подтверждён по СМС. Наличие банка в каталоге не гарантирует переводы по номеру телефона.",
     "payerSbpSave": "Сохранить реквизиты",
     "payerSbpClear": "Очистить поля",
-    "payerSbpSaved": "Реквизиты сохранены"
+    "payerSbpSaved": "Реквизиты сохранены",
+    "payerSbpRecipientUnavailable": "Не удалось получить реквизиты плательщика. Обновите страницу.",
+    "payerSbpRecipientLoading": "Получаем реквизиты плательщика…",
+    "payerSbpRecipientNotConfigured": "Плательщик пока не указал реквизиты для СБП.",
+    "payerSbpRecipientTitle": "Реквизиты плательщика для возмещения",
+    "payerSbpRecipientUnknownBank": "Банк больше не найден в каталоге — уточните его у плательщика",
+    "payerSbpRecipientCopied": "Номер плательщика скопирован",
+    "payerSbpRecipientCopyPhone": "Скопировать номер",
+    "payerSbpRecipientDisclaimer": "Перевод через приложение вашего банка. Отображение реквизитов не подтверждает оплату и не проверяет получение денег."
   },
   "result": {
     "loading": "Загрузка расчёта…",

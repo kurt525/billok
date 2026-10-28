@@ -179,7 +179,15 @@
     "payerSbpUnverified": "The number is not SMS verified. Listing in the bank directory does not guarantee phone transfers.",
     "payerSbpSave": "Save details",
     "payerSbpClear": "Clear fields",
-    "payerSbpSaved": "Details saved"
+    "payerSbpSaved": "Details saved",
+    "payerSbpRecipientUnavailable": "Could not load payer details. Refresh the page.",
+    "payerSbpRecipientLoading": "Loading payer details…",
+    "payerSbpRecipientNotConfigured": "The payer has not provided an SBP destination yet.",
+    "payerSbpRecipientTitle": "Payer details for reimbursement",
+    "payerSbpRecipientUnknownBank": "Bank no longer in directory — ask the payer",
+    "payerSbpRecipientCopied": "Payer phone copied",
+    "payerSbpRecipientCopyPhone": "Copy phone number",
+    "payerSbpRecipientDisclaimer": "Transfer using your bank app. Showing contact information does not confirm payment or receipt."
   },
   "result": {
     "loading": "Loading split...",

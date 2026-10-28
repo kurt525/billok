@@ -384,6 +384,31 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await otherPage.getByTestId('guest-payer-sbp-bank-100000000273').click();
     await otherPage.getByTestId('guest-payer-sbp-save').click();
     await expect(otherPage.getByText('Реквизиты сохранены')).toBeVisible();
+
+    // Anna joined as herself and owes Boris 4.59 RUB; her personal token is
+    // required to fetch Boris's destination. It is absent from public getSession.
+    const publicView = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(JSON.stringify(publicView)).not.toContain('+79991234567');
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.getByTestId('guest-sbp-reimbursement-details')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('guest-sbp-reimbursement-bank')).toContainText('Озон Банк');
+    await expect(page.getByTestId('guest-sbp-reimbursement-phone')).toContainText('+79991234567');
+    await expect(page.getByTestId('guest-payer-sbp-form')).toHaveCount(0);
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (value: string) => {
+            (window as Window & { __billokCopiedPhone?: string }).__billokCopiedPhone = value;
+          },
+        },
+      });
+    });
+    await page.getByTestId('guest-sbp-copy-phone').click();
+    await expect
+      .poll(() => page.evaluate(() => (window as Window & { __billokCopiedPhone?: string }).__billokCopiedPhone))
+      .toBe('+79991234567');
+
     await otherPage.reload({ waitUntil: 'networkidle' });
     await expect(otherPage.getByTestId('guest-payer-sbp-phone')).toHaveValue('+79991234567', { timeout: 15_000 });
     await otherPage.getByTestId('guest-payer-sbp-search').fill('Озон Банк');
@@ -393,6 +418,10 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await otherPage.getByTestId('guest-payer-sbp-save').click();
     await otherPage.reload({ waitUntil: 'networkidle' });
     await expect(otherPage.getByTestId('guest-payer-sbp-phone')).toHaveValue('', { timeout: 15_000 });
+    // Revocation takes effect on the server, not just in the payer's UI.
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.getByTestId('guest-sbp-not-configured')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('guest-sbp-reimbursement-phone')).toHaveCount(0);
     await fitsPhone(otherPage);
     await otherPage.goto('/split/' + token, { waitUntil: 'networkidle' });
     await expect(otherPage.getByTestId('split-result-total')).toContainText('12,01');

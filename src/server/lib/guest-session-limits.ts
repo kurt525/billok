@@ -16,7 +16,14 @@ const WINDOW_MS = 60 * 1000;
 
 /** The claim-session changes that take a person token, each budgeted separately. */
 export type ClaimWriteAction =
-  'claim' | 'edit-name' | 'remove-person' | 'split-item' | 'personal-tip' | 'payer-sbp-read' | 'payer-sbp-write';
+  | 'claim'
+  | 'edit-name'
+  | 'remove-person'
+  | 'split-item'
+  | 'personal-tip'
+  | 'payer-sbp-read'
+  | 'payer-sbp-write'
+  | 'payer-sbp-reimbursement';
 
 /**
  * Rate limit for the claim-session changes that take a person token: claimItems,
