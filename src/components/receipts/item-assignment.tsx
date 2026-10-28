@@ -39,7 +39,14 @@ export function ItemAssignment({
   const locale = useLocale();
   const t = useTranslations('expenses.receipt');
   const tc = useTranslations('common');
-  const receiptData = trpc.receipts.getReceiptItems.useQuery({ receiptId });
+  const receiptData = trpc.receipts.getReceiptItems.useQuery(
+    { receiptId },
+    {
+      // Guest claims already poll. Group member tips need the same live
+      // visibility across devices; never overwrite unsaved local assignments.
+      refetchInterval: (query) => (query.state.data?.receipt.isManual ? 3_000 : false),
+    },
+  );
   // Who tRPC acts as: the impersonated user while an admin impersonates, where
   // useSession() would still report the admin
   const profile = trpc.auth.getProfile.useQuery();
@@ -617,6 +624,22 @@ export function ItemAssignment({
               </p>
             )}
             <p className="text-xs text-muted-foreground">{t('personalTipPendingTotals')}</p>
+            <div className="space-y-2 border-t pt-3" data-testid="group-personal-tip-list">
+              <p className="text-sm font-medium">{t('personalTipMembersTitle')}</p>
+              {members.map((member) => (
+                <div
+                  key={member.id}
+                  className="flex min-w-0 items-center justify-between gap-2 text-sm"
+                  data-testid={'group-personal-tip-member-' + member.id}
+                >
+                  <span className="min-w-0 truncate">{member.name ?? t('unnamed')}</span>
+                  <span className="shrink-0 tabular-nums">
+                    {formatCents(extracted?.personalTips?.[member.id] ?? 0, 'RUB', locale)}
+                  </span>
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground">{t('personalTipMembersLive')}</p>
+            </div>
           </CardContent>
         </Card>
       )}

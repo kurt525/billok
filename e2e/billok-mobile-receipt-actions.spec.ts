@@ -166,6 +166,7 @@ test('two registered group members independently save voluntary RUB tips on a mo
   await bobSave.click();
   await expect(bobTip).toHaveValue('2.75', { timeout: 15_000 });
   await expect(bobSave).toBeDisabled();
+  await expect(page.getByTestId('group-personal-tip-list')).toContainText('2,75');
   await noDocumentOverflow(page);
 
   const aliceContext = await browser.newContext({
@@ -182,6 +183,8 @@ test('two registered group members independently save voluntary RUB tips on a mo
     await expect(alicePage).toHaveURL(/\/dashboard/);
     await alicePage.goto(receiptUrl, { waitUntil: 'networkidle' });
     const aliceTip = alicePage.getByTestId('group-personal-tip-input');
+    // Alice can see Bob's already saved tip, but cannot edit it.
+    await expect(alicePage.getByTestId('group-personal-tip-list')).toContainText('2,75');
     await expect(aliceTip).toHaveValue('0.00');
     await aliceTip.fill('1,50');
     await alicePage.getByTestId('group-personal-tip-save').click();
@@ -197,13 +200,21 @@ test('two registered group members independently save voluntary RUB tips on a mo
       (a, b) => a - b,
     );
     expect(tips).toEqual([150, 275]);
-    // Bob's own value doesn't change after Alice saves; each editor reads
-    // only its signed-in profile id, not the payer or selected item participant.
-    await page.reload({ waitUntil: 'networkidle' });
-    await expect(page.getByTestId('group-personal-tip-input')).toHaveValue('2.75');
+    // Bob's open tab must observe Alice's update WITHOUT a reload. The
+    // server updates only Alice's record and Bob's own input stays unchanged.
+    await expect(
+      page.locator('[data-testid^="group-personal-tip-member-"]').filter({ hasText: 'Alice' }),
+    ).toContainText('1,50', { timeout: 15_000 });
+    await expect(bobTip).toHaveValue('2.75');
     await bobTip.fill('0');
     await bobSave.click();
-    await expect(page.getByTestId('group-personal-tip-input')).toHaveValue('0.00', { timeout: 15_000 });
+    await expect(bobTip).toHaveValue('0.00', { timeout: 15_000 });
+    // Conversely Alice's open tab sees Bob's updated amount without a reload.
+    await expect(
+      alicePage.locator('[data-testid^="group-personal-tip-member-"]').filter({ hasText: 'Bob' }),
+    ).toContainText('0,00', { timeout: 15_000 });
+    await expect(aliceTip).toHaveValue('1.50');
+    await noDocumentOverflow(page);
     const updated = await trpcResult(
       await trpcQuery(page.request, 'receipts.getReceiptItems', {
         receiptId: newReceiptId,

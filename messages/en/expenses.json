@@ -139,7 +139,9 @@
     "personalTipSaving": "Saving…",
     "personalTipSaved": "My tip saved",
     "personalTipInvalid": "Enter 0 or more, with at most two decimal places.",
-    "personalTipPendingTotals": "The table below shows dish costs only. Saved personal tips are added to each member’s share when the receipt is finalized."
+    "personalTipPendingTotals": "The table below shows dish costs only. Saved personal tips are added to each member’s share when the receipt is finalized.",
+    "personalTipMembersTitle": "Participant tips",
+    "personalTipMembersLive": "Saved amounts update automatically. Each member can change only their own tip."
   },
   "splits": {
     "selectAll": "Select all",
