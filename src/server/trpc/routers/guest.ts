@@ -21,7 +21,7 @@ import {
   parseGuestAssignments,
   validSaveRecords,
 } from '../../lib/json-schemas';
-import { calculateSplitTotals, groupSizeWeights } from '@/lib/split-calculator';
+import { calculateSplitTotals, addPersonalGuestTips, groupSizeWeights } from '@/lib/split-calculator';
 import { normalizeGuestName } from '@/lib/guest-session';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { MAX_MONEY_CENTS } from '@/lib/money';
@@ -1215,7 +1215,7 @@ export const guestRouter = createTRPCRouter({
         const tip = receiptData.tip;
 
         // Each person's groupSize weights the items they share
-        const summary = calculateSplitTotals({
+        const itemShares = calculateSplitTotals({
           items,
           assignments,
           tax: receiptData.tax,
@@ -1223,6 +1223,13 @@ export const guestRouter = createTRPCRouter({
           peopleCount: people.length,
           ...groupSizeWeights(people),
         });
+        let summary: ReturnType<typeof calculateSplitTotals>;
+        try {
+          summary = addPersonalGuestTips(itemShares, people);
+        } catch (error) {
+          if (!(error instanceof RangeError)) throw error;
+          throw new AppError('BAD_REQUEST', 'receiptPersonalTipsInvalid', undefined, { cause: error });
+        }
 
         const summaryWithNames = summary.map((s) => ({
           ...s,

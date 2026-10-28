@@ -75,6 +75,17 @@ describe('parseGuestPeople', () => {
     expect(people[1]!.groupSize).toBe(2);
   });
 
+  it('preserves own chosen tips when parsing people for guest finalization', () => {
+    expect(parseGuestPeople([{ name: 'Анна', tipCents: 125 }, { name: 'Борис' }])).toEqual([
+      { name: 'Анна', tipCents: 125 },
+      { name: 'Борис' },
+    ]);
+  });
+
+  it.each([-1, 1.25, 2_147_483_648, '100', null])('rejects invalid stored personal tip %s', (tipCents) => {
+    expect(() => parseGuestPeople([{ name: 'Анна', tipCents }])).toThrow(TRPCError);
+  });
+
   it('rejects person without name', () => {
     expect(() => parseGuestPeople([{}])).toThrow(TRPCError);
   });

@@ -156,7 +156,7 @@
     "personalTipSave": "Save my tip",
     "personalTipSaved": "My tip was saved",
     "personalTipInvalid": "Enter an amount of at least 0 with no more than two decimal places.",
-    "personalTipPendingTotals": "Tips are currently saved separately from dish totals. They will be included in reimbursements in the next stage."
+    "personalTipPendingTotals": "Preliminary participant totals show dishes only. Your voluntary tip is added to your own total when the split is finalized."
   },
   "result": {
     "loading": "Loading split...",

@@ -1526,6 +1526,58 @@ describe('guest.finalizeSession', () => {
     expect(savedStatus()).toBe('FINALIZED');
   });
 
+  test('uses only current personal tips when finalizing guest shares in the same transaction', async () => {
+    claimSession(
+      [
+        { id: pid(0), name: 'Анна', personToken: ALICE_TOKEN, tipCents: 125 },
+        { id: pid(1), name: 'Борис', personToken: OTHER_TOKEN, tipCents: 0 },
+        { id: pid(2), name: 'Виктор', personToken: D_TOKEN, tipCents: 35 },
+      ],
+      {
+        items: [{ name: 'Чай', quantity: 1, unitPrice: 101, totalPrice: 101 }],
+        assignments: [{ itemIndex: 0, personIndices: [0, 1] }],
+      },
+    );
+    await (await caller()).finalizeSession({ token: 'share-1', personToken: ALICE_TOKEN, personId: pid(0) });
+    expect(mockDb.guestSplit.update).toHaveBeenCalledWith({
+      where: { id: 'gs1' },
+      data: expect.objectContaining({
+        status: 'FINALIZED',
+        summary: [
+          { personIndex: 0, name: 'Анна', itemTotal: 51, tax: 0, tip: 125, total: 176 },
+          { personIndex: 1, name: 'Борис', itemTotal: 50, tax: 0, tip: 0, total: 50 },
+          { personIndex: 2, name: 'Виктор', itemTotal: 0, tax: 0, tip: 35, total: 35 },
+        ],
+      }),
+    });
+    expect(mockDb.$transaction).toHaveBeenCalledOnce();
+  });
+
+  test('finalization refuses malformed or overflowing tips without storing FINALIZED', async () => {
+    const fixture = [
+      { name: 'Анна', personToken: ALICE_TOKEN, tipCents: 2_147_483_647 },
+      { name: 'Борис', personToken: OTHER_TOKEN },
+    ];
+    claimSession(fixture, {
+      items: [{ name: 'Чай', quantity: 1, unitPrice: 101, totalPrice: 101 }],
+      assignments: [{ itemIndex: 0, personIndices: [0] }],
+    });
+    await expect(
+      (await caller()).finalizeSession({ token: 'share-1', personToken: ALICE_TOKEN, personId: pid(0) }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('a tip update after finalization is refused to prevent changing locked settlement amounts', async () => {
+    claimSession([{ name: 'Анна', personToken: ALICE_TOKEN, tipCents: 125 }], {
+      status: 'FINALIZED',
+    });
+    await expect(
+      (await caller()).setPersonalTip({ token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN, tipCents: 0 }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
   test('refuses while an item has nobody, and finalizes nothing (#237)', async () => {
     // Items 0 and 2 are unclaimed
     sessionAfterBWasRemoved();
