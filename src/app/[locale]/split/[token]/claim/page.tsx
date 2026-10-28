@@ -972,6 +972,16 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       ? data.summary.filter((person) => person.personIndex !== data.paidByIndex && person.total > 0)
       : null;
   const payerReimbursementTotal = payerReimbursements?.reduce((sum, person) => sum + person.total, 0) ?? 0;
+  const personalReimbursement =
+    currency === 'RUB' &&
+    data.receiptData.tax === 0 &&
+    data.receiptData.tip === 0 &&
+    myPersonIndex !== null &&
+    myPersonIndex !== data.paidByIndex &&
+    data.summary?.every((person) => Number.isSafeInteger(person.total) && person.total >= 0) &&
+    finalizedTotal === data.receiptData.total + finalizedPersonalTips
+      ? data.summary.find((person) => person.personIndex === myPersonIndex && person.total > 0)
+      : null;
   const savedPersonalTip = myPersonIndex === null ? 0 : (data.people[myPersonIndex]?.tipCents ?? 0);
   const personalTipValue = personalTipDraft ?? centsToDecimal(savedPersonalTip);
   const personalTipCents = parseToCents(personalTipValue);
@@ -1111,6 +1121,27 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                   {formatCents(payerReimbursementTotal, currency, locale)}
                 </span>
               </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* The participant's own receipt amount is not a verified SBP payment.
+            The payer's personal token sees the payer summary instead. */}
+        {personalReimbursement && (
+          <Card data-testid="guest-personal-reimbursement">
+            <CardContent className="space-y-2 py-4">
+              <p className="text-sm font-medium">
+                {t('personalReimbursementTo', {
+                  name: data.people[data.paidByIndex]?.name ?? t('personFallback', { index: data.paidByIndex + 1 }),
+                })}
+              </p>
+              <p
+                className="text-2xl font-bold text-primary tabular-nums"
+                data-testid="guest-personal-reimbursement-amount"
+              >
+                {formatCents(personalReimbursement.total, currency, locale)}
+              </p>
+              <p className="text-xs text-muted-foreground">{t('personalReimbursementNote')}</p>
             </CardContent>
           </Card>
         )}

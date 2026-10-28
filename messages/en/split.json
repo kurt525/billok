@@ -163,7 +163,9 @@
     "payerReimbursementsTitle": "Reimbursements to the payer for this receipt",
     "payerReimbursementsNote": "Initial amounts before transfers and confirmations. No transfer to yourself is needed.",
     "payerOwnShare": "Your share (no self-transfer)",
-    "payerFromOthers": "Total to receive from others"
+    "payerFromOthers": "Total to receive from others",
+    "personalReimbursementTo": "Amount to reimburse the payer: {name}",
+    "personalReimbursementNote": "This includes your dishes and personal tips. SBP transfer and receipt confirmation are not available yet."
   },
   "result": {
     "loading": "Loading split...",

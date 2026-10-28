@@ -327,6 +327,9 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(page.getByTestId('finalized-bill-total')).toContainText('12,01');
     // Anna is the creator, not the payer: this breakdown belongs to Boris.
     await expect(page.getByTestId('guest-payer-reimbursements')).toHaveCount(0);
+    await expect(page.getByTestId('guest-personal-reimbursement')).toBeVisible();
+    await expect(page.getByTestId('guest-personal-reimbursement')).toContainText('Борис');
+    await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('4,59');
     await expect(page.getByText('Итого с чаевыми')).toBeVisible();
     await fitsPhone(page);
 
@@ -346,6 +349,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // Boris pays but did not create the receipt: his 3.34 RUB is not reimbursed.
     // Anna's 4.59 + Victor's 4.08 = 8.67 RUB owed to Boris.
     await expect(otherPage.getByTestId('guest-payer-reimbursements')).toBeVisible({ timeout: 15_000 });
+    await expect(otherPage.getByTestId('guest-personal-reimbursement')).toHaveCount(0);
     await expect(otherPage.getByTestId('guest-payer-reimbursement-0')).toContainText('4,59');
     await expect(otherPage.getByTestId('guest-payer-reimbursement-2')).toContainText('4,08');
     await expect(otherPage.getByTestId('guest-payer-reimbursement-1')).toHaveCount(0);
