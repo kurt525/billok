@@ -201,6 +201,17 @@ test('mobile SBP profile persists phone and selected bank without verification c
   await expect.poll(() => logo.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
   await expect(logo).toHaveCSS('width', '40px');
   await expect(logo).toHaveCSS('height', '40px');
+  // A bank outside the original eight must be searchable and its local WEBP must load.
+  await search.fill('Озон Банк');
+  const ozon = page.getByTestId('sbp-bank-option-100000000273');
+  await expect(ozon).toBeVisible();
+  const ozonLogo = ozon.locator('img');
+  await expect(ozonLogo).toHaveAttribute('src', '/banks/nspk/100000000273.webp');
+  await expect.poll(() => ozonLogo.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+  // An entry missing an image should still be available via the fallback label.
+  await search.fill('НООСФЕРА');
+  await expect(page.getByTestId('sbp-bank-fallback-100000000313')).toBeVisible();
+  await search.fill('ТИНЬКОФФ');
   await expect(page.getByText('Номер не проверяется по СМС')).toBeVisible();
   await phone.fill('8 (999) 123-45-67');
   await tbankRow.click();
@@ -217,6 +228,16 @@ test('mobile SBP profile persists phone and selected bank without verification c
   await page.reload({ waitUntil: 'networkidle' });
   await expect(page.getByTestId('sbp-phone-input')).toHaveValue('+79991234567');
   await expect(page.getByTestId('sbp-bank-radio-tbank')).toBeChecked();
+  await checkPhoneLayout(page, 320);
+
+  // A new registry bank ID must persist through the existing profile API.
+  await page.getByTestId('sbp-bank-search').fill('Озон Банк');
+  await page.getByTestId('sbp-bank-option-100000000273').click();
+  await expect(page.getByTestId('sbp-bank-radio-100000000273')).toBeChecked();
+  await page.getByTestId('save-profile-btn').click();
+  await expect(page.getByText('Профиль обновлён!')).toBeVisible();
+  await page.reload({ waitUntil: 'networkidle' });
+  await expect(page.getByTestId('sbp-bank-radio-100000000273')).toBeChecked();
   await checkPhoneLayout(page, 320);
 
   // Leave the disposable CI account as it was before this test.

@@ -14,19 +14,26 @@ describe('SBP profile contracts', () => {
     }
   });
 
-  test('searches the curated bank list, ignoring case, spaces and hyphens', () => {
+  test('searches the bank registry snapshot, ignoring case, spaces and hyphens', () => {
     expect(searchSbpBanks('АК БАРС').map((bank) => bank.id)).toEqual(['akbars']);
     expect(searchSbpBanks('акбарс').map((bank) => bank.id)).toEqual(['akbars']);
     expect(searchSbpBanks('тИнЬкОфФ').map((bank) => bank.id)).toEqual(['tbank']);
     expect(searchSbpBanks('T-BANK').map((bank) => bank.id)).toEqual(['tbank']);
     expect(searchSbpBanks('СБЕР').map((bank) => bank.id)).toEqual(['sberbank']);
+    expect(searchSbpBanks('Озон').some((bank) => bank.id === '100000000273')).toBe(true);
+    expect(searchSbpBanks('Яндекс').some((bank) => bank.id === '100000000150')).toBe(true);
+    expect(searchSbpBanks('Банк ПСБ').some((bank) => bank.id === '100000000010')).toBe(true);
     expect(searchSbpBanks('несуществующий банк')).toEqual([]);
     expect(searchSbpBanks('  ')).toHaveLength(SBP_BANKS.length);
   });
 
   test('has unique bank IDs and rejects unlisted values', () => {
     expect(new Set(SBP_BANKS.map((bank) => bank.id)).size).toBe(SBP_BANKS.length);
+    expect(SBP_BANKS).toHaveLength(195);
+    expect(new Set(SBP_BANKS.map((bank) => bank.nspkId)).size).toBe(195);
     expect(isSupportedSbpBankId('tbank')).toBe(true);
+    expect(isSupportedSbpBankId('100000000273')).toBe(true);
+    expect(isSupportedSbpBankId('100000000150')).toBe(true);
     expect(isSupportedSbpBankId('unknown-bank')).toBe(false);
   });
 });

@@ -1,21 +1,18 @@
-/** Initial SBP directory. Logos/search and a full bank catalogue follow separately. */
-export const SBP_BANKS = [
-  { id: 'sberbank', name: 'СберБанк' },
-  { id: 'tbank', name: 'Т-Банк' },
-  { id: 'vtb', name: 'ВТБ' },
-  { id: 'alfabank', name: 'Альфа-Банк' },
-  { id: 'gazprombank', name: 'Газпромбанк' },
-  { id: 'akbars', name: 'Ак Барс Банк' },
-  { id: 'sovcombank', name: 'Совкомбанк' },
-  { id: 'raiffeisen', name: 'Райффайзенбанк' },
-] as const;
+import bankCatalog from './sbp-bank-catalog.json';
+
+/**
+ * Snapshot of the NSPK C2B bank registry, via eav93/sbp (2026-10-28).
+ * This is a bank *selector*, not a claim of C2C transfer availability.
+ * Keep the eight original IDs stable for existing BillOK user profiles.
+ */
+export const SBP_BANKS = bankCatalog.banks;
+export const SBP_BANK_CATALOG_UPDATED_AT = bankCatalog.sourceUpdatedAt;
 
 export function isSupportedSbpBankId(id: string): boolean {
   return SBP_BANKS.some((bank) => bank.id === id);
 }
 
-/** Search is limited to the curated bank list. Historical names are search
- * aliases only and are not themselves bank identifiers or payment endpoints. */
+/** Search bank names and familiar aliases; aliases never become payment endpoints. */
 const SBP_BANK_SEARCH_ALIASES: Partial<Record<(typeof SBP_BANKS)[number]['id'], string[]>> = {
   sberbank: ['сбер', 'сбербанк'],
   tbank: ['тинькофф', 'тинькофф банк', 't-bank', 'tbank'],
