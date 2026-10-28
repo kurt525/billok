@@ -12,7 +12,7 @@
     "language": "Язык",
     "languageDescription": "Выберите язык интерфейса",
     "sbpPhone": "Телефон для СБП",
-    "sbpPhonePlaceholder": "+7 999 123-45-67",
+    "sbpPhonePlaceholder": "Например: +7 999 123-45-67",
     "sbpPhoneUnverified": "Номер не проверяется по СМС и не считается подтверждённым.",
     "sbpBank": "Банк для СБП",
     "sbpBankNotSelected": "Банк не выбран",

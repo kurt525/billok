@@ -220,7 +220,10 @@ describe('auth.updateProfile SBP details', () => {
   test('saves normalized phone and selected bank for signed-in user', async () => {
     mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
     mockDb.user.update.mockResolvedValue({
-      id: 'u1', name: 'Ada', sbpPhone: '+79991234567', sbpBankId: 'tbank',
+      id: 'u1',
+      name: 'Ada',
+      sbpPhone: '+79991234567',
+      sbpBankId: 'tbank',
     });
     const api = await caller({ user: { id: 'u1' } });
     const updated = await api.updateProfile({ sbpPhone: '8 (999) 123-45-67', sbpBankId: 'tbank' });

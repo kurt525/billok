@@ -178,7 +178,6 @@ test('Russian mobile dashboard, groups, expenses and admin at all 4 phone widths
   }
 });
 
-
 test('mobile SBP profile persists phone and selected bank without verification claims', async ({ page }) => {
   test.setTimeout(90_000);
   await signInAsSeedAdmin(page);
