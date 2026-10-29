@@ -423,23 +423,31 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(otherPage.getByTestId('guest-mark-paid')).toHaveCount(0);
     await expect(otherPage.getByTestId('guest-payment-declared')).toHaveCount(0);
     // Only Boris's personal payer token can inspect and verify Annа's transfer.
-    const payerReview = otherPage.getByTestId('guest-payer-payment-review');
-    await expect(payerReview).toBeVisible({ timeout: 15_000 });
-    const annaPayment = otherPage.getByTestId('guest-payer-payment-' + anna.personId);
+    // Next.js may retain an inactive route tree in the DOM across a reload.
+    // Strictly require ONE visible review, not merely the first matching node:
+    // two visible payer reviews would still fail this regression.
+    const payerReview = otherPage.getByTestId('guest-payer-payment-review').filter({ visible: true });
+    await expect(payerReview).toHaveCount(1, { timeout: 15_000 });
+    await expect(payerReview).toBeVisible();
+    const annaPayment = payerReview.getByTestId('guest-payer-payment-' + anna.personId);
     await expect(annaPayment).toContainText('4,59');
     await expect(annaPayment).toContainText('Участник отметил оплату');
-    const victorPayment = otherPage.getByTestId('guest-payer-payment-' + victor.personId);
+    const victorPayment = payerReview.getByTestId('guest-payer-payment-' + victor.personId);
     await expect(victorPayment).toContainText('Ожидается отметка участника');
-    await expect(otherPage.getByTestId('guest-payer-verify-' + victor.personId)).toHaveCount(0);
-    await otherPage.getByTestId('guest-payer-verify-' + anna.personId).click();
+    await expect(payerReview.getByTestId('guest-payer-verify-' + victor.personId)).toHaveCount(0);
+    await payerReview.getByTestId('guest-payer-verify-' + anna.personId).click();
     await expect(annaPayment).toContainText('Поступление проверено');
-    await expect(otherPage.getByTestId('guest-payer-verify-' + anna.personId)).toHaveCount(0);
+    await expect(payerReview.getByTestId('guest-payer-verify-' + anna.personId)).toHaveCount(0);
     // The debtor learns the independent payer verification without reloading.
     await expect(page.getByTestId('guest-payment-verified')).toHaveText('Поступление проверено', { timeout: 25_000 });
     await otherPage.reload({ waitUntil: 'networkidle' });
-    await expect(otherPage.getByTestId('guest-payer-payment-' + anna.personId)).toContainText('Поступление проверено', {
-      timeout: 15_000,
-    });
+    await expect(payerReview).toHaveCount(1, { timeout: 15_000 });
+    await expect(payerReview.getByTestId('guest-payer-payment-' + anna.personId)).toContainText(
+      'Поступление проверено',
+      {
+        timeout: 15_000,
+      },
+    );
     await expect(page.getByTestId('guest-payer-payment-review')).toHaveCount(0);
     const publicStatus = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     expect(JSON.stringify(publicStatus)).not.toContain('paymentVerifiedAt');
