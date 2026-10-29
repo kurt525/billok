@@ -26,6 +26,7 @@ function responses() {
       workflow_runs: [
         {
           id: 100,
+          run_attempt: 1,
           name: 'BillOK CI',
           event: 'push',
           head_sha: headSha,
@@ -36,9 +37,17 @@ function responses() {
         },
       ],
     },
-    [path + '/actions/runs/100/jobs?per_page=100']: {
+    [path + '/actions/runs/100/attempts/1/jobs?per_page=100']: {
       total_count: 5,
       jobs: REQUIRED_BILLOK_JOBS.map((name) => ({ name, status: 'completed', conclusion: 'success' })),
+    },
+    [path + '/actions/runs/100']: {
+      id: 100,
+      run_attempt: 1,
+      head_sha: headSha,
+      head_branch: branch,
+      status: 'completed',
+      conclusion: 'success',
     },
   };
 }
@@ -60,7 +69,7 @@ describe('read-only SBP publication GitHub evidence', () => {
     assert.equal(evidence.mainSha, mainSha);
     assert.equal(evidence.files.length, 1);
     assert.equal(evidence.jobs.length, 5);
-    assert.equal(queried.length, 5);
+    assert.equal(queried.length, 6);
     assert.ok(queried.every((url) => url.startsWith(path + '/')));
     // Even with a successful CI, missing first-release approval denies.
     assert.equal(assessSbpAutoPublish({ ...evidence, catalogValidatedSha: headSha }).allowed, false);
@@ -69,7 +78,13 @@ describe('read-only SBP publication GitHub evidence', () => {
     const data = responses();
     const key = path + '/actions/runs?head_sha=' + headSha + '&per_page=100';
     data[key].workflow_runs.unshift({ ...data[key].workflow_runs[0], id: 101, conclusion: 'failure' });
-    data[path + '/actions/runs/101/jobs?per_page=100'] = data[path + '/actions/runs/100/jobs?per_page=100'];
+    data[path + '/actions/runs/101/attempts/1/jobs?per_page=100'] =
+      data[path + '/actions/runs/100/attempts/1/jobs?per_page=100'];
+    data[path + '/actions/runs/101'] = {
+      ...data[path + '/actions/runs/100'],
+      id: 101,
+      conclusion: 'failure',
+    };
     const evidence = await collectSbpPublishEvidence(17, fixture(data).getJson);
     assert.equal(evidence.run.id, 101);
     assert.equal(
@@ -95,8 +110,50 @@ describe('read-only SBP publication GitHub evidence', () => {
     await assert.rejects(collectSbpPublishEvidence(17, fixture(files).getJson), /count/);
 
     const jobs = responses();
-    jobs[path + '/actions/runs/100/jobs?per_page=100'].total_count = 6;
+    jobs[path + '/actions/runs/100/attempts/1/jobs?per_page=100'].total_count = 6;
     await assert.rejects(collectSbpPublishEvidence(17, fixture(jobs).getJson), /incomplete/);
+  });
+  it('uses only the CURRENT attempt, never a previous green CI attempt', async () => {
+    const data = responses();
+    const runsKey = path + '/actions/runs?head_sha=' + headSha + '&per_page=100';
+    data[runsKey].workflow_runs[0].run_attempt = 2;
+    data[runsKey].workflow_runs[0].conclusion = 'failure';
+    data[path + '/actions/runs/100'] = {
+      ...data[path + '/actions/runs/100'],
+      run_attempt: 2,
+      conclusion: 'failure',
+    };
+    data[path + '/actions/runs/100/attempts/2/jobs?per_page=100'] = {
+      total_count: 1,
+      jobs: [{ name: 'Mobile Chromium (320–720 px)', status: 'completed', conclusion: 'failure' }],
+    };
+    const { getJson, queried } = fixture(data);
+    const evidence = await collectSbpPublishEvidence(17, getJson);
+    assert.equal(evidence.run.run_attempt, 2);
+    assert.ok(queried.some((url) => url.includes('/attempts/2/jobs?per_page=100')));
+    assert.equal(
+      assessSbpAutoPublish({
+        ...evidence,
+        catalogValidatedSha: headSha,
+        publicationState: {
+          firstReleasePublishedAndAccepted: true,
+          catalogAutomationExplicitlyEnabled: true,
+        },
+      }).allowed,
+      false,
+    );
+  });
+  it('refuses a new CI rerun started during the evidence read', async () => {
+    const data = responses();
+    data[path + '/actions/runs/100'].run_attempt = 2;
+    data[path + '/actions/runs/100'].status = 'in_progress';
+    data[path + '/actions/runs/100'].conclusion = null;
+    await assert.rejects(collectSbpPublishEvidence(17, fixture(data).getJson), /changed while checking/);
+  });
+  it('fails closed for missing attempt number instead of accepting unscoped jobs', async () => {
+    const data = responses();
+    delete data[path + '/actions/runs?head_sha=' + headSha + '&per_page=100'].workflow_runs[0].run_attempt;
+    await assert.rejects(collectSbpPublishEvidence(17, fixture(data).getJson), /did not identify/);
   });
   it('fails closed when CI is missing or belongs to a different branch', async () => {
     const missing = responses();

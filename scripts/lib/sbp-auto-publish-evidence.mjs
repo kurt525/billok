@@ -53,10 +53,35 @@ export async function collectSbpPublishEvidence(prNumber, getJson) {
   if (!run || !Number.isSafeInteger(run.id) || run.id < 1) {
     throw new Error('No BillOK CI run for the exact proposal head');
   }
-  const runJobs = requireObject(await getJson(REPO_API + '/actions/runs/' + run.id + '/jobs?per_page=100'), 'CI jobs');
-  const jobs = requireArray(runJobs.jobs, 'CI jobs');
+  // A workflow run may have multiple attempts. Never accept jobs from an
+  // earlier green attempt after a failed or still-running re-run. GitHub
+  // provides a dedicated endpoint scoped to one exact run attempt.
+  if (!Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1) {
+    throw new Error('GitHub did not identify the workflow run attempt');
+  }
+  const runJobs = requireObject(
+    await getJson(REPO_API + '/actions/runs/' + run.id + '/attempts/' + run.run_attempt + '/jobs?per_page=100'),
+    'exact CI attempt jobs',
+  );
+  const jobs = requireArray(runJobs.jobs, 'exact CI attempt jobs');
   if (runJobs.total_count !== jobs.length) {
-    throw new Error('CI jobs listing is incomplete');
+    throw new Error('Exact CI attempt jobs listing is incomplete');
+  }
+
+  // A new re-run can start while the jobs are being fetched. Check the run
+  // AGAIN; if its attempt, conclusion or head changed, fail closed. A later
+  // privileged merger must repeat the complete collector immediately before
+  // any mutation, including checking for newer runs of the same head.
+  const currentRun = requireObject(await getJson(REPO_API + '/actions/runs/' + run.id), 'current CI run');
+  if (
+    currentRun.id !== run.id ||
+    currentRun.run_attempt !== run.run_attempt ||
+    currentRun.head_sha !== run.head_sha ||
+    currentRun.head_branch !== run.head_branch ||
+    currentRun.status !== run.status ||
+    currentRun.conclusion !== run.conclusion
+  ) {
+    throw new Error('CI run changed while checking the exact attempt');
   }
 
   // No publicationState or catalogValidatedSha is derived from GitHub. The
