@@ -67,3 +67,51 @@ for other in package.json .github/workflows/billok-ci.yml src/lib/hidden.ts; do
   verify_sbp_catalog_checkout trusted-main
 done
 echo 'trust guard rejects changes outside the JSON catalog'
+
+# A JSON-only PR must not silently replace the stable ID or the local logo
+# used by an already saved payer profile.
+for attribute in id nspkId icon source; do
+  python3 - "$attribute" <<'PYCODE'
+import json
+import sys
+from pathlib import Path
+path = Path('src/lib/sbp-bank-catalog.json')
+catalog = json.loads(path.read_text())
+field = sys.argv[1]
+if field == 'source':
+    catalog[field] = 'https://untrusted.invalid'
+elif field == 'icon':
+    catalog['banks'][0][field] = 'https://untrusted.invalid/icon.svg'
+elif field == 'nspkId':
+    catalog['banks'][0][field] = '999999999995'
+else:
+    catalog['banks'][0][field] = 'substituted-sberbank'
+path.write_text(json.dumps(catalog, ensure_ascii=False))
+PYCODE
+  if verify_sbp_catalog_checkout trusted-main 2>/dev/null; then
+    echo "Trust guard accepted modified catalog identity: $attribute" >&2
+    exit 1
+  fi
+  git restore -- src/lib/sbp-bank-catalog.json
+done
+echo 'trust guard rejects altered saved IDs, logos and provenance'
+
+# Keep normal upstream name changes, retirements and newly joined banks
+# permissible, without rewriting any existing profile identifiers.
+python3 - <<'PYCODE'
+import json
+from pathlib import Path
+path = Path('src/lib/sbp-bank-catalog.json')
+catalog = json.loads(path.read_text())
+catalog['banks'][0]['name'] = 'Сбербанк — новое название'
+catalog['banks'][1]['active'] = False
+catalog['banks'].append({
+    'id': '999999999991',
+    'nspkId': '999999999991',
+    'name': 'Новый участник СБП',
+    'icon': None
+})
+path.write_text(json.dumps(catalog, ensure_ascii=False))
+PYCODE
+verify_sbp_catalog_checkout trusted-main
+echo 'trust guard permits legal bank renames, retirement and additions'

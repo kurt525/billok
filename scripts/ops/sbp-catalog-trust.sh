@@ -28,4 +28,56 @@ verify_sbp_catalog_checkout() {
     echo 'Unsafe SBP proposal: catalog must be a regular JSON file' >&2
     return 1
   fi
+
+  # The proposal JSON itself is unreviewed. Preserve stable bank identities,
+  # locally stored icons and catalog provenance from trusted main. Legitimate
+  # upstream renames, activations/retirements and new NSPK IDs stay possible.
+  python3 - "$trusted_ref" <<'PYCODE' || return 1
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+try:
+    trusted = json.loads(subprocess.check_output(
+        ['git', 'show', sys.argv[1] + ':src/lib/sbp-bank-catalog.json'], text=True
+    ))
+    proposed = json.loads(Path('src/lib/sbp-bank-catalog.json').read_text())
+    if not isinstance(trusted.get('banks'), list) or not isinstance(proposed.get('banks'), list):
+        raise ValueError('invalid catalog entries')
+    if any(proposed.get(key) != trusted.get(key) for key in ('source', 'sourceSystem')):
+        raise ValueError('catalog provenance changed')
+    if len(proposed['banks']) < len(trusted['banks']):
+        raise ValueError('previously saved banks were removed')
+    names = set()
+    registry_ids = set()
+    for index, bank in enumerate(proposed['banks']):
+        if not isinstance(bank, dict) or not isinstance(bank.get('name'), str):
+            raise ValueError('invalid bank')
+        name = bank['name'].strip()
+        if not 2 <= len(name) <= 120 or re.search(r'[<>\x00-\x1f]', name):
+            raise ValueError('invalid bank name')
+        if not isinstance(bank.get('nspkId'), str) or not re.fullmatch(r'\d{12}', bank['nspkId']):
+            raise ValueError('invalid NSPK identifier')
+        if not isinstance(bank.get('id'), str) or bank['id'] in names or bank['nspkId'] in registry_ids:
+            raise ValueError('duplicate or invalid bank ID')
+        names.add(bank['id'])
+        registry_ids.add(bank['nspkId'])
+        if bank.get('active', True) not in (True, False) or not isinstance(bank.get('active', True), bool):
+            raise ValueError('invalid active flag')
+        if index < len(trusted['banks']):
+            original = trusted['banks'][index]
+            if any(bank.get(key) != original.get(key) for key in ('id', 'nspkId', 'icon')):
+                raise ValueError('existing bank identity or logo changed')
+        elif bank['id'] != bank['nspkId'] or bank.get('icon') is not None:
+            raise ValueError('new bank has unexpected ID or icon')
+        if set(bank).difference({'id', 'nspkId', 'icon', 'name', 'sourceName', 'active'}):
+            raise ValueError('unexpected bank fields')
+    if not isinstance(proposed.get('sourceUpdatedAt'), str):
+        raise ValueError('invalid source timestamp')
+except (OSError, ValueError, TypeError, subprocess.CalledProcessError) as error:
+    print('Unsafe SBP proposal: ' + str(error), file=sys.stderr)
+    sys.exit(1)
+PYCODE
 }

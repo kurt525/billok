@@ -17,6 +17,7 @@ command -v gh >/dev/null
 command -v git >/dev/null
 command -v flock >/dev/null
 command -v cmp >/dev/null
+command -v python3 >/dev/null
 mkdir -p "$state_dir"
 exec 9>"$state_dir/sync.lock"
 if ! flock -n 9; then
