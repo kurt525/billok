@@ -28,6 +28,7 @@ git -C "$tmp/src" remote add origin "file://$tmp/remote.git"
 git -C "$tmp/src" push --quiet -u origin main
 cp "$repo_dir/scripts/ops/sbp-catalog-poll.sh" "$tmp/bin/sbp-catalog-poll.sh"
 cp "$repo_dir/scripts/ops/sbp-catalog-trust.sh" "$tmp/bin/sbp-catalog-trust.sh"
+cp "$repo_dir/scripts/ops/sbp-catalog-release-gate.sh" "$tmp/bin/sbp-catalog-release-gate.sh"
 python3 - "$tmp" "$(dirname -- "$(command -v node)")" <<'PYCODE'
 from pathlib import Path
 import sys
@@ -43,6 +44,18 @@ for old,new in (
  assert s.count(old)==(2 if 'https://github.com' in old else 1),old
  s=s.replace(old,new)
 p.write_text(s)
+# Adapt only the disposable test copy. Production still requires a root-owned
+# /etc/billok file and has no runtime environment bypass.
+approval=Path(tmp,'bin/sbp-catalog-release-gate.sh')
+text=approval.read_text()
+for old,new in (
+ ('sbp_approval_dir=/etc/billok','sbp_approval_dir='+tmp+'/approval'),
+ ('sbp_approval_file=/etc/billok/sbp-catalog-release-approval','sbp_approval_file='+tmp+'/approval/approval'),
+ ('sbp_approval_owner_uid=0','sbp_approval_owner_uid='+str(__import__('os').getuid())),
+):
+ assert text.count(old)==1,old
+ text=text.replace(old,new,1)
+approval.write_text(text)
 PYCODE
 cat > "$tmp/bin/gh" <<'MOCK'
 #!/usr/bin/env bash
@@ -77,6 +90,34 @@ source={'updatedAt':(datetime.fromisoformat(catalog['sourceUpdatedAt'].replace('
 PYCODE
 poll() { bash "$tmp/bin/sbp-catalog-poll.sh" >"$tmp/poll.log" 2>&1 || { tail -n 45 "$tmp/poll.log"; return 1; }; }
 baseline="$(git --git-dir="$tmp/remote.git" rev-parse refs/heads/main)"
+# A timer inadvertently enabled before the first accepted release must have
+# no GitHub calls, worktree changes, or even create a state lock.
+if poll; then echo 'Unapproved poll unexpectedly succeeded' >&2; exit 1; fi
+grep -q 'SBP automation denied' "$tmp/poll.log"
+test ! -e "$tmp/state/sync.lock"
+test ! -e "$SBP_TEST_PR_FILE"
+test "$(git --git-dir="$tmp/remote.git" rev-parse refs/heads/main)" = "$baseline"
+echo 'offline poll: prior to accepted launch zero GitHub requests or changes'
+
+mkdir -p "$tmp/approval"
+printf 'firstReleasePublishedAndAccepted=true\ncatalogAutomationExplicitlyEnabled=false\n' > "$tmp/approval/approval"
+if poll; then echo 'Missing separate opt-in unexpectedly accepted' >&2; exit 1; fi
+printf 'firstReleasePublishedAndAccepted=false\ncatalogAutomationExplicitlyEnabled=true\n' > "$tmp/approval/approval"
+if poll; then echo 'Missing accepted first release unexpectedly accepted' >&2; exit 1; fi
+printf 'firstReleasePublishedAndAccepted=true\ncatalogAutomationExplicitlyEnabled=true\n' > "$tmp/approval/approval"
+chmod 666 "$tmp/approval/approval"
+if poll; then echo 'Insecure approval file unexpectedly accepted' >&2; exit 1; fi
+chmod 600 "$tmp/approval/approval"
+printf 'firstReleasePublishedAndAccepted=true\ncatalogAutomationExplicitlyEnabled=true\nunknown=true\n' > "$tmp/approval/approval"
+if poll; then echo 'Extra approval fields unexpectedly accepted' >&2; exit 1; fi
+printf 'firstReleasePublishedAndAccepted=true\ncatalogAutomationExplicitlyEnabled=true\n' > "$tmp/approval/approval"
+mv "$tmp/approval/approval" "$tmp/approval/real"
+ln -s real "$tmp/approval/approval"
+if poll; then echo 'Approval symlink unexpectedly accepted' >&2; exit 1; fi
+rm "$tmp/approval/approval"
+mv "$tmp/approval/real" "$tmp/approval/approval"
+chmod 600 "$tmp/approval/approval"
+echo 'offline poll: separate secure acceptance and explicit owner enablement required'
 poll
 test ! -e "$SBP_TEST_PR_FILE"
 test "$(git --git-dir="$tmp/remote.git" rev-parse refs/heads/main)" = "$baseline"

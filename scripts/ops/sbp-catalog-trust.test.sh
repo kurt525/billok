@@ -152,5 +152,10 @@ stage = poll.index('git add -- src/lib/sbp-bank-catalog.json')
 commit = poll.index('git commit --quiet')
 push = poll.index('git push --quiet')
 assert first < sync < tests < second < stage < commit < push
+gate = poll.index('require_sbp_catalog_release_approval')
+repo = poll.index('repo=kurt525/billok')
+lock = poll.index('mkdir -p "$state_dir"')
+assert gate < repo < lock < first
+assert 'source "$(dirname -- "$0")/sbp-catalog-release-gate.sh"' in poll
 PYCODE
 echo 'trust guard runs before sync and again before commit/push'

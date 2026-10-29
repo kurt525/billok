@@ -5,6 +5,11 @@ set -euo pipefail
 # Load the trusted helper installed beside this systemd executable, rather
 # than running verification logic from a potentially edited proposal branch.
 source "$(dirname -- "$0")/sbp-catalog-trust.sh"
+source "$(dirname -- "$0")/sbp-catalog-release-gate.sh"
+
+# Deny BEFORE git, gh, mkdir, flock, registry or any network access.
+# Neither CI success nor merging main enables the poller.
+require_sbp_catalog_release_approval
 
 repo=kurt525/billok
 state_dir=/var/lib/billok-sbp-sync
