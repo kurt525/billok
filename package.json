@@ -40,7 +40,7 @@
     "lint:i18n": "npx tsx scripts/check-translations.ts",
     "test:coverage": "vitest run --coverage",
     "sbp:sync": "node scripts/sync-sbp-banks.mjs",
-    "sbp:sync:test": "node --test scripts/lib/sbp-catalog-sync.test.mjs && bash scripts/ops/sbp-catalog-trust.test.sh && bash scripts/ops/sbp-catalog-poll.test.sh"
+    "sbp:sync:test": "node --test scripts/lib/sbp-catalog-sync.test.mjs && node --test scripts/lib/sbp-auto-publish-gate.test.mjs && bash scripts/ops/sbp-catalog-trust.test.sh && bash scripts/ops/sbp-catalog-poll.test.sh"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"
