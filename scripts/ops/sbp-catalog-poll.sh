@@ -2,6 +2,10 @@
 # Designed for a dedicated VPS systemd timer, not GitHub Actions.
 set -euo pipefail
 
+# Load the trusted helper installed beside this systemd executable, rather
+# than running verification logic from a potentially edited proposal branch.
+source "$(dirname -- "$0")/sbp-catalog-trust.sh"
+
 repo=kurt525/billok
 state_dir=/var/lib/billok-sbp-sync
 branch_prefix=billok/sbp-catalog-
@@ -12,6 +16,7 @@ test -x "$node_dir/node"
 command -v gh >/dev/null
 command -v git >/dev/null
 command -v flock >/dev/null
+command -v cmp >/dev/null
 mkdir -p "$state_dir"
 exec 9>"$state_dir/sync.lock"
 if ! flock -n 9; then
@@ -41,6 +46,11 @@ else
   git clone --quiet --depth 1 --branch main "https://github.com/$repo.git" "$work/repo"
 fi
 cd "$work/repo"
+
+# Never run JavaScript from an unreviewed reused proposal branch. Refuse
+# mismatches with current main instead of auto-rebasing/revising history.
+git fetch --quiet --depth 1 origin main
+verify_sbp_catalog_checkout FETCH_HEAD
 
 node scripts/sync-sbp-banks.mjs
 node --test scripts/lib/sbp-catalog-sync.test.mjs

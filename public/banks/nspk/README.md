@@ -36,8 +36,12 @@
 соответствующих изменений в main (здесь приведены команды администратора):
 
 1. Создать системный путь /usr/local/libexec/billok.
-2. Скопировать scripts/ops/sbp-catalog-poll.sh в
-   /usr/local/libexec/billok/sbp-catalog-poll.sh с правами 0755.
+2. Скопировать **оба** доверенных файла scripts/ops/sbp-catalog-poll.sh
+   и scripts/ops/sbp-catalog-trust.sh в /usr/local/libexec/billok/
+   с правами 0755. Скрипт сверки проверяет JS-файлы повторно используемой
+   ветки PR по текущему main **до их запуска**. Если ветка изменена вручную
+   или отстала от main по исполняемым файлам, автоматизация прекращает работу
+   без коммита и требует ручной проверки. Подменённые symlink отклоняются.
 3. Скопировать deploy/systemd/billok-sbp-catalog-sync.service и
    deploy/systemd/billok-sbp-catalog-sync.timer в /etc/systemd/system/.
 4. Выполнить systemctl daemon-reload и
