@@ -120,6 +120,20 @@ jobs:
           npm run db:seed
           BILLOK_QA_FIXTURES=1 npx tsx e2e/seed-mobile-receipt.ts > "$RUNNER_TEMP/billok-mobile-receipt.env"
           cat "$RUNNER_TEMP/billok-mobile-receipt.env" >> "$GITHUB_ENV"
+      # The browser suite checks exactly the same optimized React/Next.js
+      # rendering mode used by the released website, not dev/Turbopack route
+      # trees which can remain mounted during transitions.
+      - name: Build isolated production-mode app for mobile browser checks
+        shell: bash
+        env:
+          NEXTAUTH_URL: http://127.0.0.1:3000
+          AUTH_URL: http://127.0.0.1:3000
+        run: |
+          set -euo pipefail
+          # Build-time secret is ephemeral and never committed or printed.
+          export AUTH_SECRET="$(openssl rand -hex 32)"
+          npm run build
+
       - name: Start local BillOK for real browser checks
         shell: bash
         run: |
@@ -144,8 +158,9 @@ jobs:
           echo "NEXTAUTH_URL=$NEXTAUTH_URL" >> "$GITHUB_ENV"
           echo "AUTH_URL=$AUTH_URL" >> "$GITHUB_ENV"
           echo "AUTH_SECRET=$AUTH_SECRET" >> "$GITHUB_ENV"
-          # setsid gives the development server a separate process group for cleanup.
-          setsid npm run dev -- -H 127.0.0.1 -p "$qa_port" \
+          # setsid gives the isolated compiled server its own process group
+          # for cleanup. Never launch Next.js dev mode for browser acceptance.
+          setsid npm run start -- -H 127.0.0.1 -p "$qa_port" \
             > "$RUNNER_TEMP/billok-mobile-next.log" 2>&1 < /dev/null &
           qa_pid=$!
           echo "BILLOK_QA_PID=$qa_pid" >> "$GITHUB_ENV"
