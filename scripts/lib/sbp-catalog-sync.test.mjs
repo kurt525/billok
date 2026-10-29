@@ -7,7 +7,9 @@ const baseline = JSON.parse(readFileSync(new URL('../../src/lib/sbp-bank-catalog
 function fixture() {
   const current = structuredClone(baseline);
   const source = {
-    updatedAt: '2026-10-29T03:00:00.000Z',
+    // Advance beyond the checked-in snapshot, not a hard-coded 2026 date:
+    // daily upstream updates must not break CI as the catalog gets newer.
+    updatedAt: new Date(Date.parse(current.sourceUpdatedAt) + 60000).toISOString(),
     banks: current.banks.map((bank) => ({ id: bank.nspkId, name: bank.sourceName ?? bank.name })),
   };
   return { current, source };
@@ -68,11 +70,27 @@ describe('daily SBP catalog sync', () => {
     assert.throws(() => reconcileSbpCatalog(current, source), /Duplicate upstream bank ID/);
   });
 
+  it('remains valid after future daily registry refreshes, without date-only commits', () => {
+    const { current, source } = fixture();
+    current.sourceUpdatedAt = '2032-08-15T09:00:00.000Z';
+    source.updatedAt = new Date(Date.parse(current.sourceUpdatedAt) + 60000).toISOString();
+    const result = reconcileSbpCatalog(current, source);
+    assert.equal(result.changed, false);
+    assert.equal(result.catalog.sourceUpdatedAt, current.sourceUpdatedAt);
+
+    // A real content change on a later day still produces a reviewable diff.
+    source.banks.push({ id: '999999999992', name: 'Банк для будущего обновления' });
+    const changed = reconcileSbpCatalog(current, source);
+    assert.equal(changed.changed, true);
+    assert.equal(changed.stats.added, 1);
+    assert.equal(changed.catalog.sourceUpdatedAt, source.updatedAt);
+  });
+
   it('rejects unsafe or stale data, without modifying the local catalog', () => {
     const { current, source } = fixture();
     source.updatedAt = '2020-01-01T00:00:00Z';
     assert.throws(() => reconcileSbpCatalog(current, source), /older/);
-    source.updatedAt = '2026-10-29T03:00:00Z';
+    source.updatedAt = fixture().source.updatedAt;
     source.banks[0].name = '<script>alert(1)</script>';
     assert.throws(() => reconcileSbpCatalog(current, source), /Invalid upstream bank display name/);
     assert.equal(current.banks[0].name, 'СберБанк');
