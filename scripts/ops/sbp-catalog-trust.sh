@@ -37,7 +37,19 @@ import json
 import re
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+def parse_registry_date(value):
+    if not isinstance(value, str):
+        raise ValueError('invalid catalog timestamp')
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError as error:
+        raise ValueError('invalid catalog timestamp') from error
+    if parsed.tzinfo is None:
+        raise ValueError('catalog timestamp must include timezone')
+    return parsed.astimezone(timezone.utc)
 
 try:
     trusted = json.loads(subprocess.check_output(
@@ -74,8 +86,12 @@ try:
             raise ValueError('new bank has unexpected ID or icon')
         if set(bank).difference({'id', 'nspkId', 'icon', 'name', 'sourceName', 'active'}):
             raise ValueError('unexpected bank fields')
-    if not isinstance(proposed.get('sourceUpdatedAt'), str):
-        raise ValueError('invalid source timestamp')
+    trusted_date = parse_registry_date(trusted.get('sourceUpdatedAt'))
+    proposal_date = parse_registry_date(proposed.get('sourceUpdatedAt'))
+    if proposal_date < trusted_date:
+        raise ValueError('catalog timestamp predates trusted main')
+    if proposal_date > datetime.now(timezone.utc) + timedelta(hours=24):
+        raise ValueError('catalog timestamp is implausibly far in the future')
 except (OSError, ValueError, TypeError, subprocess.CalledProcessError) as error:
     print('Unsafe SBP proposal: ' + str(error), file=sys.stderr)
     sys.exit(1)
