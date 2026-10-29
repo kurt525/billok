@@ -78,6 +78,11 @@ test('Russian mobile dashboard, groups, expenses and admin at all 4 phone widths
     await menu.getByRole('link', { name: 'Группы', exact: true }).click();
     await expect(page).toHaveURL(/\/groups$/);
     await expect(page.getByRole('heading', { name: 'Группы' })).toBeVisible();
+    // Base UI keeps the closing sheet portal in the DOM for its exit
+    // transition, translated off the right edge of the viewport. Verify
+    // the sheet has actually unmounted after navigation, THEN measure the
+    // settled page. Never hide clipped controls from checkPhoneLayout.
+    await expect(menu).toHaveCount(0, { timeout: 15_000 });
     await checkPhoneLayout(page, width);
 
     const groupLink = page.locator('a[href^="/groups/"]').filter({ hasText: 'Apartment' }).first();
