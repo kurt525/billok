@@ -56,6 +56,11 @@ verify_sbp_catalog_checkout FETCH_HEAD
 node scripts/sync-sbp-banks.mjs
 node --test scripts/lib/sbp-catalog-sync.test.mjs
 
+# The external registry can supply data that passed its own format checks but
+# violates our trusted proposal policy. Check the generated JSON again BEFORE
+# staging, committing or pushing any change to GitHub.
+verify_sbp_catalog_checkout FETCH_HEAD
+
 git add -- src/lib/sbp-bank-catalog.json
 if git diff --cached --quiet; then
   echo 'SBP bank list unchanged; no commit and no PR'

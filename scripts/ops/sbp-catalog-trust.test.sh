@@ -135,3 +135,22 @@ path.write_text(json.dumps(catalog, ensure_ascii=False))
 PYCODE
 verify_sbp_catalog_checkout trusted-main
 echo 'trust guard permits legal bank renames, retirement and additions'
+
+# Regression: the daemon must validate both the existing proposal and the
+# newly generated upstream JSON before git add/commit/push. Verifying only
+# before the registry download would permit unreviewed generated data.
+python3 - "$repo_dir/scripts/ops/sbp-catalog-poll.sh" <<'PYCODE'
+from pathlib import Path
+import sys
+poll = Path(sys.argv[1]).read_text()
+assert poll.count('verify_sbp_catalog_checkout FETCH_HEAD') == 2
+first = poll.index('verify_sbp_catalog_checkout FETCH_HEAD')
+sync = poll.index('node scripts/sync-sbp-banks.mjs')
+tests = poll.index('node --test scripts/lib/sbp-catalog-sync.test.mjs')
+second = poll.index('verify_sbp_catalog_checkout FETCH_HEAD', first + 1)
+stage = poll.index('git add -- src/lib/sbp-bank-catalog.json')
+commit = poll.index('git commit --quiet')
+push = poll.index('git push --quiet')
+assert first < sync < tests < second < stage < commit < push
+PYCODE
+echo 'trust guard runs before sync and again before commit/push'
