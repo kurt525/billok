@@ -84,6 +84,54 @@ export async function collectSbpPublishEvidence(prNumber, getJson) {
     throw new Error('CI run changed while checking the exact attempt');
   }
 
+  // Re-read all mutable GitHub refs after the CI checks. Otherwise main or
+  // the proposal could change while fetching jobs, leaving a stale positive
+  // decision even if the individual observations looked consistent.
+  const latestPr = requireObject(await getJson(REPO_API + '/pulls/' + prNumber), 'latest pull request');
+  const latestMain = requireObject(await getJson(REPO_API + '/branches/main'), 'latest main branch');
+  if (
+    latestPr.number !== pr.number ||
+    latestPr.state !== pr.state ||
+    latestPr.draft !== pr.draft ||
+    latestPr.base?.ref !== pr.base?.ref ||
+    latestPr.base?.sha !== pr.base?.sha ||
+    latestPr.base?.repo?.full_name !== pr.base?.repo?.full_name ||
+    latestPr.head?.ref !== pr.head?.ref ||
+    latestPr.head?.sha !== pr.head?.sha ||
+    latestPr.head?.repo?.full_name !== pr.head?.repo?.full_name ||
+    latestPr.changed_files !== pr.changed_files ||
+    latestPr.mergeable !== pr.mergeable ||
+    latestPr.mergeable_state !== pr.mergeable_state ||
+    latestMain.commit?.sha !== mainSha
+  ) {
+    throw new Error('PR or main changed while validating catalog publication evidence');
+  }
+
+  // A later workflow run for the same PR head can appear while reading jobs.
+  // Do not allow the earlier green run to override that new pending/failing CI.
+  const latestRuns = requireObject(
+    await getJson(REPO_API + '/actions/runs?head_sha=' + headSha + '&per_page=100'),
+    'latest workflow runs',
+  );
+  const latestCandidates = requireArray(latestRuns.workflow_runs, 'latest workflow runs')
+    .filter(
+      (candidate) =>
+        candidate.name === 'BillOK CI' &&
+        candidate.event === 'push' &&
+        candidate.head_sha === headSha &&
+        candidate.head_branch === pr.head?.ref &&
+        candidate.head_repository?.full_name === 'kurt525/billok',
+    )
+    .sort((a, b) => b.id - a.id);
+  if (
+    latestCandidates[0]?.id !== run.id ||
+    latestCandidates[0]?.run_attempt !== run.run_attempt ||
+    latestCandidates[0]?.status !== run.status ||
+    latestCandidates[0]?.conclusion !== run.conclusion
+  ) {
+    throw new Error('A newer CI run or attempt appeared during evidence collection');
+  }
+
   // No publicationState or catalogValidatedSha is derived from GitHub. The
   // caller must verify deployment approval locally and revalidate the exact
   // catalog commit itself before even considering a merge.

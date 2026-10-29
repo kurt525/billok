@@ -69,7 +69,7 @@ describe('read-only SBP publication GitHub evidence', () => {
     assert.equal(evidence.mainSha, mainSha);
     assert.equal(evidence.files.length, 1);
     assert.equal(evidence.jobs.length, 5);
-    assert.equal(queried.length, 6);
+    assert.equal(queried.length, 9);
     assert.ok(queried.every((url) => url.startsWith(path + '/')));
     // Even with a successful CI, missing first-release approval denies.
     assert.equal(assessSbpAutoPublish({ ...evidence, catalogValidatedSha: headSha }).allowed, false);
@@ -154,6 +154,58 @@ describe('read-only SBP publication GitHub evidence', () => {
     const data = responses();
     delete data[path + '/actions/runs?head_sha=' + headSha + '&per_page=100'].workflow_runs[0].run_attempt;
     await assert.rejects(collectSbpPublishEvidence(17, fixture(data).getJson), /did not identify/);
+  });
+  it('rejects a PR whose head, base, mergeability or state changes during job reads', async () => {
+    for (const mutate of [
+      (pr) => (pr.head.sha = 'c'.repeat(40)),
+      (pr) => (pr.base.sha = 'd'.repeat(40)),
+      (pr) => (pr.mergeable = false),
+      (pr) => (pr.draft = true),
+      (pr) => (pr.state = 'closed'),
+    ]) {
+      const data = responses();
+      const key = path + '/pulls/17';
+      let reads = 0;
+      const getJson = async (url) => {
+        if (url === key && ++reads === 2) {
+          const changed = structuredClone(data[key]);
+          mutate(changed);
+          return changed;
+        }
+        assert.ok(Object.hasOwn(data, url), 'unexpected GitHub request: ' + url);
+        return data[url];
+      };
+      await assert.rejects(collectSbpPublishEvidence(17, getJson), /PR or main changed/);
+    }
+  });
+  it('refuses main branch movement during CI evidence collection', async () => {
+    const data = responses();
+    const key = path + '/branches/main';
+    let reads = 0;
+    const getJson = async (url) => {
+      if (url === key && ++reads === 2) return { commit: { sha: 'c'.repeat(40) } };
+      assert.ok(Object.hasOwn(data, url));
+      return data[url];
+    };
+    await assert.rejects(collectSbpPublishEvidence(17, getJson), /PR or main changed/);
+  });
+  it('refuses newer CI runs appearing while an earlier successful attempt is inspected', async () => {
+    const data = responses();
+    const key = path + '/actions/runs?head_sha=' + headSha + '&per_page=100';
+    let reads = 0;
+    const getJson = async (url) => {
+      if (url === key && ++reads === 2) {
+        return {
+          workflow_runs: [
+            { ...data[key].workflow_runs[0], id: 101, status: 'in_progress', conclusion: null },
+            ...data[key].workflow_runs,
+          ],
+        };
+      }
+      assert.ok(Object.hasOwn(data, url));
+      return data[url];
+    };
+    await assert.rejects(collectSbpPublishEvidence(17, getJson), /newer CI run/);
   });
   it('fails closed when CI is missing or belongs to a different branch', async () => {
     const missing = responses();
