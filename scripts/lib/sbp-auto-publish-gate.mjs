@@ -13,8 +13,18 @@ const CATALOG_PATH = 'src/lib/sbp-bank-catalog.json';
 const REPO = 'kurt525/billok';
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 
-export function assessSbpAutoPublish({ pr, files, run, jobs, mainSha, catalogValidatedSha }) {
+// Release approval is supplied only by trusted, local deployment controls;
+// never infer it from a GitHub PR, green CI, or an unchecked environment default.
+export function assessSbpAutoPublish({ pr, files, run, jobs, mainSha, catalogValidatedSha, publicationState } = {}) {
   const refuse = (reason) => ({ allowed: false, reason });
+  if (
+    publicationState?.firstReleasePublishedAndAccepted !== true ||
+    publicationState?.catalogAutomationExplicitlyEnabled !== true
+  ) {
+    return refuse(
+      'Catalog automation is disabled until first production release is published, accepted and explicitly enabled',
+    );
+  }
   if (!SHA_PATTERN.test(mainSha || '') || !SHA_PATTERN.test(catalogValidatedSha || '')) {
     return refuse('Current main and catalog validation SHA must be verified');
   }

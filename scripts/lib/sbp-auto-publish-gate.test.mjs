@@ -7,6 +7,10 @@ const headSha = 'b'.repeat(40);
 const valid = () => ({
   mainSha,
   catalogValidatedSha: headSha,
+  publicationState: {
+    firstReleasePublishedAndAccepted: true,
+    catalogAutomationExplicitlyEnabled: true,
+  },
   pr: {
     state: 'open',
     draft: false,
@@ -43,6 +47,20 @@ const rejected = (change) => {
 };
 
 describe('strict unattended SBP auto-publication eligibility', () => {
+  it('defaults to DENY, even if all five CI jobs succeeded', () => {
+    const data = valid();
+    delete data.publicationState;
+    assert.match(assessSbpAutoPublish(data).reason, /disabled until first production release/);
+    assert.equal(assessSbpAutoPublish(data).allowed, false);
+    assert.equal(assessSbpAutoPublish().allowed, false);
+  });
+  it('requires BOTH verified first publication and separate enablement', () => {
+    rejected((x) => (x.publicationState = {}));
+    rejected((x) => (x.publicationState.firstReleasePublishedAndAccepted = false));
+    rejected((x) => (x.publicationState.catalogAutomationExplicitlyEnabled = false));
+    rejected((x) => (x.publicationState.catalogAutomationExplicitlyEnabled = 'true'));
+    rejected((x) => (x.publicationState.firstReleasePublishedAndAccepted = 'true'));
+  });
   it('only approves a checked single-file catalog change with all five passing jobs', () => {
     assert.deepEqual(assessSbpAutoPublish(valid()), {
       allowed: true,
