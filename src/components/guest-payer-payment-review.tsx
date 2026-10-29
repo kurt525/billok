@@ -89,6 +89,11 @@ export function GuestPayerPaymentReview({
     }
   }
 
+  // Do not server-render an empty review card. On hydration a stale loading
+  // card could remain beside the freshly populated card in the DOM.
+  // Mount the review card only after its private data has been loaded.
+  if (payments === null && !loadFailed) return null;
+
   return (
     <Card data-testid="guest-payer-payment-review">
       <CardContent className="space-y-3 py-4">
@@ -99,9 +104,7 @@ export function GuestPayerPaymentReview({
             {t('payerPaymentReviewError')}
           </p>
         )}
-        {!payments ? (
-          <p className="text-sm text-muted-foreground">{t('payerPaymentReviewLoading')}</p>
-        ) : payments.length === 0 ? (
+        {!payments ? null : payments.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t('payerPaymentReviewNone')}</p>
         ) : (
           <div className="space-y-3">
