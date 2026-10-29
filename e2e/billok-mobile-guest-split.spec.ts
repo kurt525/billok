@@ -409,10 +409,22 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       .poll(() => page.evaluate(() => (window as Window & { __billokCopiedPhone?: string }).__billokCopiedPhone))
       .toBe('+79991234567');
 
+    // Boris's review must already have its baseline, or a fresh page
+    // should not toast about declarations that existed before it loaded.
+    const livePayerReview = otherPage.getByTestId('guest-payer-payment-review').filter({ visible: true });
+    await expect(livePayerReview).toHaveCount(1, { timeout: 15_000 });
+    await expect(livePayerReview.getByTestId('guest-payer-payment-' + anna.personId)).toContainText(
+      'Ожидается отметка участника',
+    );
+
     // A debtor's declaration is not a bank transaction or payer verification.
     await expect(page.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 15_000 });
     await page.getByTestId('guest-mark-paid').click();
     await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено');
+    // A private live notification reaches the payer on their already-open page.
+    const payerNotice = otherPage.getByText('Новая отметка об оплате: Анна. Проверьте поступление.');
+    await expect(payerNotice).toHaveCount(1, { timeout: 25_000 });
+    await expect(payerNotice).toBeVisible();
     await expect(page.getByText('Поступление денег ещё не проверено плательщиком.')).toBeVisible();
     await page.reload({ waitUntil: 'networkidle' });
     await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено', { timeout: 15_000 });
@@ -440,6 +452,9 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(payerReview.getByTestId('guest-payer-verify-' + anna.personId)).toHaveCount(0);
     // The debtor learns the independent payer verification without reloading.
     await expect(page.getByTestId('guest-payment-verified')).toHaveText('Поступление проверено', { timeout: 25_000 });
+    const debtorNotice = page.getByText('Плательщик подтвердил поступление денег.');
+    await expect(debtorNotice).toHaveCount(1, { timeout: 15_000 });
+    await expect(debtorNotice).toBeVisible();
     await otherPage.reload({ waitUntil: 'networkidle' });
     await expect(payerReview).toHaveCount(1, { timeout: 15_000 });
     await expect(payerReview.getByTestId('guest-payer-payment-' + anna.personId)).toContainText(

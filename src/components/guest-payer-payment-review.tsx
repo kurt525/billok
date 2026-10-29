@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { formatCents } from '@/lib/money';
+import { mergeGuestPaymentStatuses, newlyDeclaredGuestPayments } from '@/lib/guest-payment-notifications';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -35,6 +36,7 @@ export function GuestPayerPaymentReview({
   const [payments, setPayments] = useState<PaymentRow[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const latestPayments = useRef<PaymentRow[] | null>(null);
   const readPayments = read.mutateAsync;
 
   useEffect(() => {
@@ -44,18 +46,27 @@ export function GuestPayerPaymentReview({
       void readPayments({ token, personId, personToken })
         .then((result) => {
           if (cancelled) return;
-          // Declarations and verifications are irreversible. A poll started
-          // before an action must not overwrite a newer confirmed status.
-          setPayments((current) =>
-            result.payments.map((entry) => {
-              const previous = current?.find((item) => item.personId === entry.personId);
-              return {
-                ...entry,
-                declaredPaidAt: entry.declaredPaidAt ?? previous?.declaredPaidAt ?? null,
-                verifiedAt: entry.verifiedAt ?? previous?.verifiedAt ?? null,
-              };
-            }),
-          );
+          const merged = mergeGuestPaymentStatuses(latestPayments.current, result.payments);
+          const newlyDeclared = newlyDeclaredGuestPayments(latestPayments.current, merged);
+          latestPayments.current = merged;
+          setPayments(merged);
+          // One stable Sonner ID per private event: a temporary second route
+          // observer must not display the same event twice.
+          if (newlyDeclared.length > 0) {
+            const noticeId =
+              'billok-declared-' +
+              token +
+              '-' +
+              newlyDeclared
+                .map((row) => row.personId + ':' + row.declaredPaidAt)
+                .sort()
+                .join(',');
+            if (newlyDeclared.length === 1) {
+              toast.info(t('payerPaymentDeclarationNotice', { name: newlyDeclared[0]!.name }), { id: noticeId });
+            } else {
+              toast.info(t('payerPaymentDeclarationBatchNotice', { count: newlyDeclared.length }), { id: noticeId });
+            }
+          }
           setLoadFailed(false);
         })
         .catch(() => {
@@ -68,19 +79,19 @@ export function GuestPayerPaymentReview({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [readPayments, token, personId, personToken]);
+  }, [readPayments, token, personId, personToken, t]);
 
   async function confirmReceipt(debtorId: string) {
     if (verifyingId || !payments?.some((p) => p.personId === debtorId && p.declaredPaidAt && !p.verifiedAt)) return;
     setVerifyingId(debtorId);
     try {
       const result = await verify.mutateAsync({ token, personId, personToken, debtorId });
-      setPayments(
-        (current) =>
-          current?.map((entry) =>
-            entry.personId === debtorId ? { ...entry, verifiedAt: result.verifiedAt } : entry,
-          ) ?? null,
-      );
+      const updated =
+        latestPayments.current?.map((entry) =>
+          entry.personId === debtorId ? { ...entry, verifiedAt: result.verifiedAt } : entry,
+        ) ?? null;
+      latestPayments.current = updated;
+      setPayments(updated);
       toast.success(t('payerPaymentVerifiedToast'));
     } catch {
       toast.error(t('payerPaymentVerifyFailed'));
