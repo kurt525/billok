@@ -114,6 +114,31 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
   await expect(page.getByTestId('person-card-0')).not.toContainText('Чай');
   const shareUrl = page.url();
 
+  // Unfolded Android widths with enlarged system text: long guest names and
+  // receipt totals must remain inside one centered column without sideways
+  // scrolling. Sharing buttons stay touch-size at every width.
+  await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+  for (const width of [430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 460 });
+    await fitsPhone(page);
+    for (const index of [0, 1]) {
+      const card = page.getByTestId('person-card-' + index);
+      const bounds = await card.boundingBox();
+      expect(bounds, 'Guest receipt card ' + index + ' at ' + width + 'px').not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      if (width === 720) expect(bounds!.width).toBeLessThan(width - 16);
+    }
+    await expect(page.getByTestId('person-card-1')).toContainText(longGuestName);
+    for (const button of [page.getByTestId('copy-link-btn'), page.getByTestId('share-btn')]) {
+      const bounds = await button.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.height).toBeGreaterThanOrEqual(44);
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    }
+  }
+
   // Simulate the shorter visual height left above an Android soft keyboard:
   // both sharing actions must stay inside the visible viewport and remain tappable.
   await page.setViewportSize({ width: 320, height: 360 });
