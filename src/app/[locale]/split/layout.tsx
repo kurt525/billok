@@ -8,7 +8,7 @@ export default async function SplitLayout({ children }: { children: React.ReactN
   return (
     <div className="min-h-[100dvh] flex flex-col bg-background">
       {/* Minimal header */}
-      <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <header className="sticky top-0 z-50 border-b bg-background/95 pt-[env(safe-area-inset-top)] backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="mx-auto flex h-14 max-w-lg items-center justify-between px-4">
           <Link href="/split" className="inline-flex min-h-11 items-center gap-2 text-lg font-bold">
             <Receipt className="h-5 w-5 text-primary" />

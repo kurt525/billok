@@ -24,8 +24,8 @@ export function MobileHeader({ isAdmin }: { isAdmin?: boolean }) {
   const t = useTranslations('common');
 
   return (
-    <header className="sticky top-0 z-50 h-14 border-b border-border/60 bg-background/80 px-4 backdrop-blur-md supports-[backdrop-filter]:bg-background/60">
-      <div className="mx-auto flex h-full w-full max-w-xl items-center justify-between">
+    <header className="sticky top-0 z-50 border-b border-border/60 bg-background/80 px-4 pt-[env(safe-area-inset-top)] backdrop-blur-md supports-[backdrop-filter]:bg-background/60">
+      <div className="mx-auto flex h-14 w-full max-w-xl items-center justify-between">
         <div className="flex items-center gap-2.5">
           <Receipt className="h-5 w-5 text-primary drop-shadow-sm" />
           <span className="text-lg font-bold tracking-wide">BillOK</span>

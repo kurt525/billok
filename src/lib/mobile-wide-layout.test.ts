@@ -16,9 +16,21 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
 
   it('aligns mobile navigation with the same content width without shrinking the menu button', () => {
     const header = source('src/components/layout/mobile-header.tsx');
-    expect(header).toContain('mx-auto flex h-full w-full max-w-xl items-center justify-between');
+    expect(header).toContain('mx-auto flex h-14 w-full max-w-xl items-center justify-between');
     expect(header).toContain('className="size-11"');
     expect(header).not.toContain('lg:hidden');
+  });
+
+  it('keeps navigation below Android status-bar safe areas without shrinking 44px touch targets', () => {
+    const header = source('src/components/layout/mobile-header.tsx');
+    const split = source('src/app/[locale]/split/layout.tsx');
+    const locale = source('src/app/[locale]/layout.tsx');
+    expect(locale).toContain("viewportFit: 'cover'");
+    expect(header).toContain('pt-[env(safe-area-inset-top)]');
+    expect(header).toContain('flex h-14 w-full max-w-xl');
+    expect(split).toContain('pt-[env(safe-area-inset-top)]');
+    expect(split).toContain('flex h-14 max-w-lg');
+    expect(split).toContain('inline-flex min-h-11');
   });
 
   it('keeps group creation one-handed with 44px controls and an accessible selected emoji', () => {
