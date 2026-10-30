@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -18,6 +18,10 @@ describe('RUB-only creation of new group expenses', () => {
     expect(source).not.toContain('exchangeRate:');
     expect(source).not.toContain('getExchangeRate');
     expect(source).not.toContain('manualRate');
+  });
+
+  it('does not ship a currency-rate API client for RUB-only BillOK', () => {
+    expect(existsSync(resolve(process.cwd(), 'src/server/lib/exchange-rates.ts'))).toBe(false);
   });
 
   it('seeds only RUB groups and uses the existing seed group for manual receipt QA', () => {
