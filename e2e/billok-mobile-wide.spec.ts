@@ -50,6 +50,21 @@ test('login and registration keep fields and actions reachable on large Android 
         await noHorizontalOverflow(page, width);
       }
     }
+
+    // Galaxy S23-sized portrait viewport with enlarged text and the height
+    // left above an Android keyboard: inputs and submit must remain reachable.
+    await page.setViewportSize({ width: 360, height: 380 });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const lastInput = inputs.last();
+    await lastInput.focus();
+    await lastInput.scrollIntoViewIfNeeded();
+    await expect(lastInput).toBeInViewport();
+    await submit.scrollIntoViewIfNeeded();
+    await expect(submit).toBeInViewport();
+    for (const control of [lastInput, submit]) {
+      expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    }
+    await noHorizontalOverflow(page, 360);
   }
 });
 
