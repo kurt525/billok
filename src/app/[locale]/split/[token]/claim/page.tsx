@@ -2059,7 +2059,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             </Button>
           )}
           <Button
-            className="w-full h-14"
+            className="min-h-14 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center leading-tight"
             onClick={saveClaims}
             disabled={saving || splitClaimItem.isPending || !hasUnsavedChanges}
             data-testid="save-claims-btn"

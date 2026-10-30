@@ -599,6 +599,26 @@ test('anonymous mobile participant can join a long-name slot and edit it with to
     await expect(nameEdit).toHaveValue(longName);
     expect((await nameEdit.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await fitsPhone(page);
+
+    // The save action contains the full 40-character name. With Android text
+    // scaling it must wrap rather than extending beyond the phone viewport.
+    await page.getByTestId('claim-item-0').click();
+    const saveClaims = page.getByTestId('save-claims-btn');
+    await expect(saveClaims).toContainText(longName);
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    for (const width of [360, 430, 720]) {
+      await page.setViewportSize({ width, height: 380 });
+      await saveClaims.scrollIntoViewIfNeeded();
+      await expect(saveClaims).toBeInViewport();
+      const bounds = await saveClaims.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.height).toBeGreaterThanOrEqual(44);
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      const overflow = await saveClaims.evaluate((element) => element.scrollWidth - element.clientWidth);
+      expect(overflow).toBeLessThanOrEqual(1);
+      await fitsPhone(page);
+    }
   } finally {
     if (token) await trpcMutation(owner, 'guest.expireSession', { token });
     await owner.dispose();

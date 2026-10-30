@@ -63,3 +63,12 @@ describe('Android confirmation dialogs on compact viewports', () => {
     expect(dialog).toContain('pb-[calc(1rem+env(safe-area-inset-bottom))]');
   });
 });
+
+describe('Long claimant names on enlarged Android displays', () => {
+  it('lets the claim-save button wrap a 40-character participant name while staying touch-sized', () => {
+    const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
+    expect(claim).toContain(
+      'className="min-h-14 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center leading-tight"',
+    );
+  });
+});
