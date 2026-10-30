@@ -31,3 +31,13 @@ describe('Android guest result and claim actions', () => {
     });
   }
 });
+
+describe('Standard BillOK dialogs on small Android viewports', () => {
+  it('keeps dialog contents and confirmation controls scrollable above Android navigation and keyboard', () => {
+    const dialog = read('src/components/ui/dialog.tsx');
+    expect(dialog).toContain('data-slot="dialog-content"');
+    expect(dialog).toContain('max-h-[calc(100dvh-2rem)]');
+    expect(dialog).toContain('overflow-y-auto overscroll-contain');
+    expect(dialog).toContain('pb-[calc(1rem+env(safe-area-inset-bottom))]');
+  });
+});
