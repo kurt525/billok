@@ -41,3 +41,13 @@ describe('Standard BillOK dialogs on small Android viewports', () => {
     expect(dialog).toContain('pb-[calc(1rem+env(safe-area-inset-bottom))]');
   });
 });
+
+describe('Android confirmation dialogs on compact viewports', () => {
+  it('keeps destructive-action confirmation and cancellation reachable with internal scrolling', () => {
+    const dialog = read('src/components/ui/alert-dialog.tsx');
+    expect(dialog).toContain('data-slot="alert-dialog-content"');
+    expect(dialog).toContain('max-h-[calc(100dvh-2rem)]');
+    expect(dialog).toContain('overflow-y-auto overscroll-contain');
+    expect(dialog).toContain('pb-[calc(1rem+env(safe-area-inset-bottom))]');
+  });
+});

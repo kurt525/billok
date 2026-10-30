@@ -152,7 +152,19 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
       await remove.click();
       const dialog = page.getByRole('alertdialog');
       await expect(dialog).toBeVisible();
-      await dialog.getByRole('button', { name: 'Отмена' }).click();
+      // An Android keyboard leaves a much smaller visual viewport. The
+      // destructive-action dialog must not escape its bounds; the cancel
+      // action remains reachable without closing or deleting the receipt.
+      await page.setViewportSize({ width: 320, height: 240 });
+      const alertBounds = await dialog.boundingBox();
+      expect(alertBounds).not.toBeNull();
+      expect(alertBounds!.y).toBeGreaterThanOrEqual(0);
+      expect(alertBounds!.y + alertBounds!.height).toBeLessThanOrEqual(240);
+      const cancel = dialog.getByRole('button', { name: 'Отмена' });
+      await cancel.scrollIntoViewIfNeeded();
+      await expect(cancel).toBeInViewport();
+      await cancel.click();
+      await page.setViewportSize({ width: 320, height: 460 });
       await expect(historyCard).toBeVisible();
     }
   }
