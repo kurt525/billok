@@ -105,6 +105,27 @@ test('mobile app stays centered and scroll-free horizontally at 430–720px with
       await noHorizontalOverflow(page, 600);
       const hamburger = page.getByRole('button', { name: 'Открыть меню' });
       expect((await hamburger.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+
+      // Unfolded Android display, large system text and reduced height:
+      // navigation stays touchable and the sign-out action stays scrollable.
+      await page.setViewportSize({ width: 720, height: 380 });
+      await noHorizontalOverflow(page, 720);
+      await hamburger.click();
+      const sheet = page.getByRole('dialog');
+      await expect(sheet).toBeVisible();
+      for (const name of ['Главная', 'Группы', 'Разделить чек', 'Мои чеки', 'Настройки']) {
+        const link = sheet.getByRole('link', { name, exact: true });
+        const bounds = await link.boundingBox();
+        expect(bounds, name + ' on 720px Android').not.toBeNull();
+        expect(bounds!.height).toBeGreaterThanOrEqual(44);
+      }
+      const signOut = sheet.getByRole('button', { name: 'Выйти' });
+      await signOut.scrollIntoViewIfNeeded();
+      await expect(signOut).toBeInViewport();
+      expect((await signOut.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await sheet.getByRole('button', { name: 'Закрыть' }).click();
+      await expect(sheet).toHaveCount(0);
+      await noHorizontalOverflow(page, 720);
     }
   }
   // An actual group is created in the disposable CI database after validating
