@@ -144,9 +144,7 @@ describe('Guest claim item splitting on Android', () => {
 describe('Android numeric input for editing guest group size', () => {
   it('opens the numeric keypad when editing guest group size', () => {
     const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
-    expect(claim).toMatch(
-      /type="number"\s+inputMode="numeric"\s+min=\{1\}\s+max=\{20\}\s+value=\{editingGroupSize\}/,
-    );
+    expect(claim).toMatch(/type="number"\s+inputMode="numeric"\s+min=\{1\}\s+max=\{20\}\s+value=\{editingGroupSize\}/);
     expect(claim).toContain('className="h-11 w-16 min-w-0 text-base"');
   });
 });
