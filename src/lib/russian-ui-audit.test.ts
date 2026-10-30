@@ -129,7 +129,7 @@ describe('BillOK small Android viewport static contracts', () => {
   it('keeps mobile navigation and guest header reachable without desktop-only layouts', () => {
     const header = source('src/components/layout/mobile-header.tsx');
     const splitLayout = source('src/app/[locale]/split/layout.tsx');
-    expect(header).toContain('lg:hidden');
+    expect(header).not.toContain('lg:hidden');
     expect(header).toContain('<Sheet');
     expect(splitLayout).toContain('min-h-[100dvh]');
     expect(splitLayout).toContain('px-4');

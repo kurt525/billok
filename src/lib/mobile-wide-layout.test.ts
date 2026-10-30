@@ -7,16 +7,18 @@ const source = (file: string) => readFileSync(resolve(process.cwd(), file), 'utf
 describe('Wide Android and Galaxy S23 mobile layout', () => {
   it('centers a readable single-column app on wide phones and unfolded small mobile displays', () => {
     const app = source('src/app/[locale]/(app)/layout.tsx');
-    expect(app).toContain('max-lg:mx-auto max-lg:max-w-xl');
-    expect(app).toContain('w-full px-4 py-4');
-    expect(app).toContain('lg:overflow-auto');
+    expect(app).toContain('mx-auto w-full min-w-0 max-w-xl px-4 py-4');
+    expect(app).toContain('<MobileHeader isAdmin={isAdmin} />');
+    expect(app).not.toContain('<AppSidebar');
+    expect(app).not.toContain('lg:flex-row');
+    expect(app).not.toContain('2xl:max-w-5xl');
   });
 
   it('aligns mobile navigation with the same content width without shrinking the menu button', () => {
     const header = source('src/components/layout/mobile-header.tsx');
     expect(header).toContain('mx-auto flex h-full w-full max-w-xl items-center justify-between');
     expect(header).toContain('className="size-11"');
-    expect(header).toContain('lg:hidden');
+    expect(header).not.toContain('lg:hidden');
   });
 
   it('keeps group creation one-handed with 44px controls and an accessible selected emoji', () => {
