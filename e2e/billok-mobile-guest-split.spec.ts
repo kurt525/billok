@@ -87,6 +87,19 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
   await expect(tea.getByRole('button', { name: /Анна/ })).not.toHaveClass(/bg-primary/);
   await expect(tea.getByRole('button', { name: /БорисБорис/ })).toHaveClass(/bg-primary/);
 
+  // Extremely short viewport simulates a software keyboard covering most of
+  // the screen: the action panel must scroll internally, not extend above it.
+  await page.setViewportSize({ width: 320, height: 180 });
+  const assignActions = page.getByTestId('guest-assign-actions');
+  const panelBounds = await assignActions.boundingBox();
+  expect(panelBounds).not.toBeNull();
+  expect(panelBounds!.y).toBeGreaterThanOrEqual(0);
+  expect(panelBounds!.height).toBeLessThanOrEqual(164);
+  await page.getByTestId('share-for-claiming-btn').scrollIntoViewIfNeeded();
+  await expect(page.getByTestId('share-for-claiming-btn')).toBeInViewport();
+  await page.getByTestId('create-split-btn').scrollIntoViewIfNeeded();
+  await expect(page.getByTestId('create-split-btn')).toBeInViewport();
+
   await page.setViewportSize({ width: 412, height: 460 });
   await fitsPhone(page);
   await page.getByTestId('create-split-btn').scrollIntoViewIfNeeded();

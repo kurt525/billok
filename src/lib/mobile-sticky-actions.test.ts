@@ -4,6 +4,16 @@ import { describe, expect, it } from 'vitest';
 
 const read = (file: string) => readFileSync(resolve(process.cwd(), file), 'utf8');
 
+describe('Mobile manual receipt action bar and Android keyboard', () => {
+  it('keeps both steps within the dynamic viewport with scrollable safe-area actions', () => {
+    const guest = read('src/app/[locale]/split/page.tsx');
+    expect(guest).toContain('data-testid="guest-assign-actions"');
+    expect(guest.match(/max-h-\[calc\(100dvh-1rem\)\] overflow-y-auto overscroll-contain/g)).toHaveLength(2);
+    expect(guest.match(/pb-\[calc\(1rem\+env\(safe-area-inset-bottom\)\)\]/g)).toHaveLength(2);
+    expect(guest).not.toContain('fixed right-0 bottom-0 left-0 border-t bg-background p-4');
+  });
+});
+
 describe('Android guest result and claim actions', () => {
   for (const [file, testid, bottomSpace] of [
     ['src/app/[locale]/split/[token]/page.tsx', 'split-result-actions', '7rem'],
