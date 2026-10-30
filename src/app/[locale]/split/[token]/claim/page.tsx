@@ -1649,6 +1649,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                     />
                     <Input
                       type="number"
+                      inputMode="numeric"
                       min={1}
                       max={20}
                       value={editingGroupSize}
