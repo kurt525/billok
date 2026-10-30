@@ -117,7 +117,10 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
   const initials = getInitials;
 
   return (
-    <div className="space-y-6 pb-[calc(7rem+env(safe-area-inset-bottom))]" data-testid="split-result">
+    <div
+      className="space-y-6 pb-[calc(7rem+env(safe-area-inset-bottom))] max-[399px]:pb-[calc(11rem+env(safe-area-inset-bottom))]"
+      data-testid="split-result"
+    >
       {/* Header */}
       <div className="text-center space-y-1 pt-4">
         <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
@@ -334,12 +337,21 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
         className="fixed inset-x-0 bottom-0 z-10 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
         data-testid="split-result-actions"
       >
-        <div className="mx-auto max-w-lg flex gap-2">
-          <Button variant="outline" className="flex-1 h-14" onClick={handleCopy} data-testid="copy-link-btn">
+        <div className="mx-auto flex max-w-lg min-w-0 gap-2 max-[399px]:flex-col">
+          <Button
+            variant="outline"
+            className="min-h-14 min-w-0 w-full flex-1 whitespace-normal text-center leading-tight"
+            onClick={handleCopy}
+            data-testid="copy-link-btn"
+          >
             <Copy className="mr-2 h-5 w-5" />
             {t('copyLink')}
           </Button>
-          <Button className="flex-1 h-14" onClick={handleShare} data-testid="share-btn">
+          <Button
+            className="min-h-14 min-w-0 w-full flex-1 whitespace-normal text-center leading-tight"
+            onClick={handleShare}
+            data-testid="share-btn"
+          >
             <Share2 className="mr-2 h-5 w-5" />
             {t('share')}
           </Button>

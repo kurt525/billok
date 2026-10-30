@@ -14,6 +14,18 @@ describe('Mobile manual receipt action bar and Android keyboard', () => {
   });
 });
 
+describe('Responsive guest sharing actions with large Android system text', () => {
+  it('stacks buttons only on narrow phones and prevents overflow on larger mobile screens', () => {
+    const ui = read('src/app/[locale]/split/[token]/page.tsx');
+    expect(ui).toContain('max-[399px]:flex-col');
+    expect(ui).toContain('max-[399px]:pb-[calc(11rem+env(safe-area-inset-bottom))]');
+    expect(
+      ui.match(/className="min-h-14 min-w-0 w-full flex-1 whitespace-normal text-center leading-tight"/g),
+    ).toHaveLength(2);
+    expect(ui).not.toContain('className="flex-1 h-14"');
+  });
+});
+
 describe('Android guest result and claim actions', () => {
   for (const [file, testid, bottomSpace] of [
     ['src/app/[locale]/split/[token]/page.tsx', 'split-result-actions', '7rem'],
