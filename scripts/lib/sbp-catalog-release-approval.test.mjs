@@ -76,8 +76,15 @@ describe('read-only root-owned bank release approval', () => {
     const f = fixture();
     assert.deepEqual(await read(f), APPROVED);
     assert.deepEqual(f.calls, [
-      'lstat:' + DIR, 'lstat:' + FILE, 'open:' + FILE,
-      'stat', 'readFile', 'stat', 'lstat:' + FILE, 'lstat:' + DIR, 'close',
+      'lstat:' + DIR,
+      'lstat:' + FILE,
+      'open:' + FILE,
+      'stat',
+      'readFile',
+      'stat',
+      'lstat:' + FILE,
+      'lstat:' + DIR,
+      'close',
     ]);
   });
 
@@ -155,7 +162,9 @@ describe('read-only root-owned bank release approval', () => {
 
   it('rejects failures in file-handle operations and never writes or executes commands', async () => {
     const f = fixture();
-    f.fsOps.open = async () => { throw new Error('O_NOFOLLOW rejected'); };
+    f.fsOps.open = async () => {
+      throw new Error('O_NOFOLLOW rejected');
+    };
     assert.deepEqual(await read(f), DENIED);
     assert.deepEqual(Object.keys(f.fsOps).sort(), ['lstat', 'open']);
   });
