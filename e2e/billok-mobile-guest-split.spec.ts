@@ -608,6 +608,17 @@ test('anonymous mobile participant can join a long-name slot and edit it with to
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
     for (const width of [360, 430, 720]) {
       await page.setViewportSize({ width, height: 380 });
+      const editForm = nameEdit.locator('xpath=ancestor::form');
+      await expect(nameEdit).toHaveValue(longName);
+      const editControls = [nameEdit, editForm.locator('button').nth(0), editForm.locator('button').nth(1)];
+      for (const control of editControls) {
+        await control.scrollIntoViewIfNeeded();
+        const rect = await control.boundingBox();
+        expect(rect, 'Claim name editor control at ' + width + 'px').not.toBeNull();
+        expect(rect!.height).toBeGreaterThanOrEqual(44);
+        expect(rect!.x).toBeGreaterThanOrEqual(0);
+        expect(rect!.x + rect!.width).toBeLessThanOrEqual(width);
+      }
       await saveClaims.scrollIntoViewIfNeeded();
       await expect(saveClaims).toBeInViewport();
       const bounds = await saveClaims.boundingBox();
