@@ -6,6 +6,7 @@ import { planSbpCatalogRollback } from './sbp-catalog-rollback-plan.mjs';
 // The adapter must lock the release and independently observe runtime facts.
 // In particular, a successful CI, PR, or merge NEVER activates this runner.
 const OPERATIONS = [
+  'readReleaseApproval',
   'inspectBeforeDeploy',
   'deployPinnedImage',
   'inspectAfterDeploy',
@@ -37,6 +38,20 @@ export async function executeSbpCatalogDeployment({
   if (!preflight.ready) return { outcome: 'disabled-or-blocked', reason: preflight.reason };
   if (!adapter || !OPERATIONS.every((name) => typeof adapter[name] === 'function')) {
     return { outcome: 'disabled-or-blocked', reason: 'Trusted deployment adapter is missing an operation' };
+  }
+
+  // Never trust caller-supplied approval as proof of the root-owned gate.
+  // The privileged adapter must read this while holding the release lock.
+  const operatorApproved = async () => {
+    try {
+      const state = await adapter.readReleaseApproval();
+      return state?.firstReleasePublishedAndAccepted === true && state?.catalogAutomationExplicitlyEnabled === true;
+    } catch {
+      return false;
+    }
+  };
+  if (!(await operatorApproved())) {
+    return { outcome: 'disabled-or-blocked', reason: 'Trusted release approval unavailable or revoked' };
   }
 
   const notify = async (stage) => {
@@ -72,6 +87,12 @@ export async function executeSbpCatalogDeployment({
 
   // Exactly one deployment attempt, then either successful public and local
   // observations or exactly one recovery attempt. Never delete volumes.
+  // Re-check the root-owned opt-in just before the Docker mutation.
+  // The privileged adapter must hold the lock through that write.
+  if (!(await operatorApproved())) {
+    return { outcome: 'disabled-or-blocked', reason: 'Trusted release approval revoked before deployment' };
+  }
+
   let after;
   let deploymentCommandFailed = false;
   try {

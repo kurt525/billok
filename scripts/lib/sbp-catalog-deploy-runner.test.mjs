@@ -37,6 +37,9 @@ function setup() {
     },
   };
   state.adapter = {
+    async readReleaseApproval() {
+      return { ...state.publicationState };
+    },
     async inspectBeforeDeploy() {
       steps.push('before');
       return {
@@ -93,6 +96,45 @@ describe('inert injected-operations SBP deployment coordinator', () => {
       },
     };
     assert.equal((await execute(state)).outcome, 'disabled-or-blocked');
+  });
+  it('rejects unavailable or revoked trusted approval without touching the site', async () => {
+    for (const disabled of [false, true]) {
+      const { state, steps } = setup();
+      state.adapter.readReleaseApproval = async () => {
+        if (disabled) return { firstReleasePublishedAndAccepted: true, catalogAutomationExplicitlyEnabled: false };
+        throw new Error('root-owned approval file unavailable');
+      };
+      assert.deepEqual(await execute(state), {
+        outcome: 'disabled-or-blocked',
+        reason: 'Trusted release approval unavailable or revoked',
+      });
+      assert.deepEqual(steps, []);
+    }
+  });
+  it('rechecks opt-in after inspection and blocks revoked permission before Docker', async () => {
+    const { state, steps } = setup();
+    let reads = 0;
+    state.adapter.readReleaseApproval = async () => ({
+      firstReleasePublishedAndAccepted: true,
+      catalogAutomationExplicitlyEnabled: ++reads === 1,
+    });
+    assert.deepEqual(await execute(state), {
+      outcome: 'disabled-or-blocked',
+      reason: 'Trusted release approval revoked before deployment',
+    });
+    assert.equal(reads, 2);
+    assert.deepEqual(steps, ['before']);
+  });
+  it('blocks when trusted approval becomes unreadable after inspection', async () => {
+    const { state, steps } = setup();
+    let reads = 0;
+    state.adapter.readReleaseApproval = async () => {
+      if (++reads === 2) throw new Error('permission read failed');
+      return { ...state.publicationState };
+    };
+    assert.equal((await execute(state)).outcome, 'disabled-or-blocked');
+    assert.equal(reads, 2);
+    assert.deepEqual(steps, ['before']);
   });
   it('deploys exactly once with success and never mails or rolls back', async () => {
     const { state, steps } = setup();
