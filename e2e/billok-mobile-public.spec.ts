@@ -26,6 +26,13 @@ for (const width of widths) {
             'href',
             /\/login\?callbackUrl=/,
           );
+          const header = page.locator('header').first();
+          for (const href of ['/split', '/login']) {
+            const link = header.locator('a[href="' + href + '"]');
+            await expect(link).toBeVisible();
+            const bounds = await link.boundingBox();
+            expect(bounds?.height, href + ' header height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+          }
         }
 
         const checkWidth = async () => {

@@ -44,6 +44,12 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
     expect(settings).toContain('description: description || undefined');
   });
 
+  it('keeps both guest header navigation links at least 44px high', () => {
+    const header = source('src/app/[locale]/split/layout.tsx');
+    expect(header).toContain('inline-flex min-h-11 items-center gap-2');
+    expect(header.match(/inline-flex min-h-11 min-w-11 items-center justify-center/g)).toHaveLength(2);
+  });
+
   it('keeps authentication and guest receipts one column regardless of wide phone viewport', () => {
     const auth = source('src/app/[locale]/(auth)/layout.tsx');
     const split = source('src/app/[locale]/split/layout.tsx');
