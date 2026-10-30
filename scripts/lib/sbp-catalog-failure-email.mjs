@@ -87,6 +87,19 @@ export async function sendSbpCatalogFailureEmail({
     requireTLS: port !== 465,
     auth: { user, pass },
   });
-  await transport.sendMail({ from, to, subject: prepared.subject, text: prepared.text });
+  const info = await transport.sendMail({ from, to, subject: prepared.subject, text: prepared.text });
+  // A resolved SMTP request is not proof the intended recipient was accepted.
+  // Fail closed on missing/ambiguous acceptance rather than falsely reporting
+  // that an operator received an incident notification.
+  const recipient = to.toLowerCase();
+  const accepted = info?.accepted?.some(
+    (address) => typeof address === 'string' && address.toLowerCase() === recipient,
+  );
+  const rejected = info?.rejected?.some(
+    (address) => typeof address === 'string' && address.toLowerCase() === recipient,
+  );
+  if (!accepted || rejected) {
+    return { sent: false, reason: 'SMTP did not accept intended failure alert recipient' };
+  }
   return { sent: true };
 }

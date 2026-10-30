@@ -92,6 +92,7 @@ describe('bank catalog error-only email, disabled until first accepted release',
         return {
           sendMail: async (email) => {
             sent.push(email);
+            return { accepted: [env.BILLOK_SBP_ALERT_TO], rejected: [] };
           },
         };
       },
@@ -103,6 +104,32 @@ describe('bank catalog error-only email, disabled until first accepted release',
     assert.match(sent[0].text, /40932219271/);
     assert.equal(JSON.stringify(sent).includes(env.BILLOK_SBP_ALERT_SMTP_PASSWORD), false);
     assert.equal(Object.hasOwn(sent[0], 'html'), false);
+  });
+  it('does not report a sent alert without positive recipient acceptance', async () => {
+    for (const reply of [
+      undefined,
+      {},
+      { accepted: [], rejected: [] },
+      { accepted: ['someone-else@example.com'], rejected: [] },
+      { accepted: ['owner@example.com'], rejected: ['owner@example.com'] },
+    ]) {
+      const result = await send({
+        ...failure,
+        env,
+        createTransport: () => ({ sendMail: async () => reply }),
+      });
+      assert.deepEqual(result, { sent: false, reason: 'SMTP did not accept intended failure alert recipient' });
+    }
+  });
+  it('accepts a case-insensitive SMTP recipient match', async () => {
+    const result = await send({
+      ...failure,
+      env,
+      createTransport: () => ({
+        sendMail: async () => ({ accepted: ['OWNER@EXAMPLE.COM'], rejected: [] }),
+      }),
+    });
+    assert.deepEqual(result, { sent: true });
   });
   it('refuses incomplete mail configuration without connecting or echoing secrets', async () => {
     let called = false;
