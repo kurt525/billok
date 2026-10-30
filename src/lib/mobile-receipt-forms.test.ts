@@ -128,3 +128,15 @@ describe('Guest claiming join screen Android keyboard and listed names', () => {
     expect(claim).toContain('className="min-h-11 w-full text-base"');
   });
 });
+
+describe('Guest claim item splitting on Android', () => {
+  it('uses a numeric keyboard and touch-sized split, confirm and cancel controls', () => {
+    const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
+    const split = claim.slice(claim.indexOf('{/* Split form */}'), claim.indexOf('{/* Other claimants */}'));
+    expect(split).toContain('flex min-w-0 flex-wrap items-center gap-2');
+    expect(split).toContain('inputMode="numeric"');
+    expect(split).toContain('className="h-11 w-20 min-w-0 text-base"');
+    expect(split.match(/className="min-h-11 min-w-11 text-sm"/g)).toHaveLength(2);
+    expect(split).not.toContain('h-7 text-xs');
+  });
+});

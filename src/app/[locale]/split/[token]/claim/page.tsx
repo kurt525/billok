@@ -1847,18 +1847,19 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           const validQty = Number.isSafeInteger(parsed) && parsed >= 1 && parsed < item.quantity;
                           return (
                             <div
-                              className="flex items-center gap-2 mt-2"
+                              className="mt-2 flex min-w-0 flex-wrap items-center gap-2"
                               onClick={(e) => e.stopPropagation()}
                               onKeyDown={(e) => e.stopPropagation()}
                             >
                               <span className="text-xs text-muted-foreground">{t('splitOff')}</span>
                               <Input
                                 type="number"
+                                inputMode="numeric"
                                 min={1}
                                 max={item.quantity - 1}
                                 value={splitQty}
                                 onChange={(e) => setSplitQty(e.target.value)}
-                                className="w-16 h-7 text-xs"
+                                className="h-11 w-20 min-w-0 text-base"
                                 aria-label={t('splitOff')}
                                 data-testid={`split-qty-input-${idx}`}
                               />
@@ -1868,7 +1869,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                               <Button
                                 type="button"
                                 size="sm"
-                                className="h-7 text-xs"
+                                className="min-h-11 min-w-11 text-sm"
                                 // Not while a save is in flight or parked: splitting shifts the item
                                 // indexes its changes are keyed by, and a parked save is sent again as it
                                 // was
@@ -1890,7 +1891,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                                 type="button"
                                 variant="ghost"
                                 size="sm"
-                                className="h-7 text-xs"
+                                className="min-h-11 min-w-11 text-sm"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setSplittingItemIdx(null);
