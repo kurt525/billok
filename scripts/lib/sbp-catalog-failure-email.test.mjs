@@ -145,8 +145,18 @@ describe('bank catalog error-only email, disabled until first accepted release',
     assert.equal(called, false);
   });
   it('supports only the documented failure stages', () => {
-    for (const stage of ['registry', 'validation', 'ci', 'merge', 'deployment', 'rollback']) {
-      assert.equal(prepare({ ...failure, stage }).allowed, true);
+    for (const [stage, label] of [
+      ['registry', 'реестр банков'],
+      ['validation', 'проверка данных'],
+      ['ci', 'проверки CI'],
+      ['merge', 'слияние изменений'],
+      ['deployment', 'публикация сайта'],
+      ['rollback', 'откат обновления'],
+    ]) {
+      const email = prepare({ ...failure, stage });
+      assert.equal(email.allowed, true);
+      assert.ok(email.text.includes('Этап: ' + label));
+      assert.ok(!email.text.includes('Этап: ' + stage));
     }
   });
 });

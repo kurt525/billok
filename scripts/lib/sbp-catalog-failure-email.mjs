@@ -2,7 +2,15 @@ import nodemailer from 'nodemailer';
 
 // No scheduler, no CLI and no email on import. The future trusted operator
 // invokes this only after the first accepted release and separate activation.
-const ALLOWED_FAILURE_STAGES = new Set(['registry', 'validation', 'ci', 'merge', 'deployment', 'rollback']);
+// Internal stage identifiers must never appear as untranslated labels in operator email.
+const FAILURE_STAGE_LABELS = new Map([
+  ['registry', 'реестр банков'],
+  ['validation', 'проверка данных'],
+  ['ci', 'проверки CI'],
+  ['merge', 'слияние изменений'],
+  ['deployment', 'публикация сайта'],
+  ['rollback', 'откат обновления'],
+]);
 const CI_LOG_LINK = /^https:\/\/github\.com\/kurt525\/billok\/actions\/runs\/[1-9][0-9]*(?:\/attempts\/[1-9][0-9]*)?$/;
 
 function cleanLine(text, maxLength = 240) {
@@ -25,7 +33,7 @@ export function prepareSbpCatalogFailureEmail({ publicationState, stage, message
   if (!approvedForAlerts(publicationState)) {
     return { allowed: false, reason: 'Bank catalog automation not enabled after accepted first release' };
   }
-  if (!ALLOWED_FAILURE_STAGES.has(stage)) {
+  if (!FAILURE_STAGE_LABELS.has(stage)) {
     return { allowed: false, reason: 'Not an allowed bank catalog failure stage' };
   }
   if (typeof logUrl !== 'string' || !CI_LOG_LINK.test(logUrl)) {
@@ -41,7 +49,7 @@ export function prepareSbpCatalogFailureEmail({ publicationState, stage, message
     subject: title,
     text: [
       'Автоматическое обновление каталога банков СБП не завершено.',
-      'Этап: ' + stage,
+      'Этап: ' + FAILURE_STAGE_LABELS.get(stage),
       'Причина: ' + description,
       'Журнал: ' + logUrl,
       'Требуется проверка оператором. Успешные обновления не создают писем.',
