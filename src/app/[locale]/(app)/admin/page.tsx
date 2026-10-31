@@ -195,13 +195,19 @@ function StorageStatsSection() {
 
         <Card className="@2xl:col-span-2">
           <CardHeader className="pb-2">
-            <CardTitle className="flex items-center justify-between">
-              <span className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <CardTitle className="flex flex-wrap items-center justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-muted-foreground">
                 <FileWarning className="h-4 w-4" />
                 {t('storage.orphanedFiles')}
               </span>
               {(data?.orphanCount ?? 0) > 0 && (
-                <Button size="sm" variant="destructive" onClick={() => cleanup.mutate()} disabled={cleanup.isPending}>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="min-h-11 min-w-11 whitespace-normal leading-tight"
+                  onClick={() => cleanup.mutate()}
+                  disabled={cleanup.isPending}
+                >
                   {cleanup.isPending ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : (
@@ -225,8 +231,8 @@ function StorageStatsSection() {
 
         <Card className="@2xl:col-span-2" data-testid="unused-receipts-card">
           <CardHeader className="pb-2">
-            <CardTitle className="flex items-center justify-between">
-              <span className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <CardTitle className="flex flex-wrap items-center justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-muted-foreground">
                 <ReceiptText className="h-4 w-4" />
                 {t('storage.unusedReceipts')}
               </span>
@@ -234,6 +240,7 @@ function StorageStatsSection() {
                 <Button
                   size="sm"
                   variant="destructive"
+                  className="min-h-11 min-w-11 whitespace-normal leading-tight"
                   onClick={() => cleanupUnused.mutate()}
                   disabled={cleanupUnused.isPending}
                 >

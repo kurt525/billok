@@ -63,6 +63,14 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
     expect(claim).toContain("otherClaimants.map((pi) => data.people[pi]?.name ?? '?').join(', ')");
   });
 
+  it('keeps rare admin clean-up controls touch-sized with wrapping titles on mobile', () => {
+    const admin = source('src/app/[locale]/(app)/admin/page.tsx');
+    expect(admin.match(/<CardTitle className="flex flex-wrap items-center justify-between gap-2">/g)).toHaveLength(2);
+    expect(admin.match(/className="min-h-11 min-w-11 whitespace-normal leading-tight"/g)).toHaveLength(2);
+    expect(admin).toContain('onClick={() => cleanup.mutate()}');
+    expect(admin).toContain('onClick={() => cleanupUnused.mutate()}');
+  });
+
   it('keeps both guest header navigation links at least 44px high', () => {
     const header = source('src/app/[locale]/split/layout.tsx');
     expect(header).toContain('inline-flex min-h-11 items-center gap-2');
