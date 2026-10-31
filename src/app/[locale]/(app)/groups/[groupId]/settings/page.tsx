@@ -313,14 +313,14 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                 {placeholders.map((m) => (
                   <div
                     key={m.user.id}
-                    className="flex items-center justify-between rounded-md border border-dashed p-2"
+                    className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-md border border-dashed p-2"
                   >
                     {editingPlaceholder === m.user.id ? (
-                      <div className="flex flex-1 items-center gap-2">
+                      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                         <Input
                           value={editingName}
                           onChange={(e) => setEditingName(e.target.value)}
-                          className="h-7 text-sm"
+                          className="h-11 min-w-[8rem] flex-1 text-base"
                           autoFocus
                           onKeyDown={(e) => {
                             if (e.key === 'Enter')
@@ -341,7 +341,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                               name: editingName.trim(),
                             })
                           }
-                          className="text-primary hover:text-primary/80"
+                          className="flex size-11 shrink-0 items-center justify-center rounded-md text-primary hover:text-primary/80"
                           disabled={renamePlaceholder.isPending}
                           aria-label={t('settings.saveName')}
                           title={t('settings.saveName')}
@@ -351,7 +351,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                         <button
                           type="button"
                           onClick={() => setEditingPlaceholder(null)}
-                          className="text-muted-foreground hover:text-foreground"
+                          className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
                           aria-label={t('settings.cancelRename')}
                           title={t('settings.cancelRename')}
                         >
@@ -360,13 +360,15 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                       </div>
                     ) : (
                       <>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm">{m.user.placeholderName ?? m.user.name}</span>
+                        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                          <span className="min-w-0 text-sm [overflow-wrap:anywhere]">
+                            {m.user.placeholderName ?? m.user.name}
+                          </span>
                           <Badge variant="outline" className="text-[10px]">
                             {t('settings.pending')}
                           </Badge>
                         </div>
-                        <div className="flex items-center gap-1">
+                        <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
                           {canMerge && (
                             <>
                               <button
@@ -374,7 +376,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                                 aria-label={t('settings.inviteToClaim', { name: m.displayName })}
                                 title={t('settings.inviteToClaim', { name: m.displayName })}
                                 onClick={() => setClaimFor({ id: m.user.id, name: m.displayName })}
-                                className="text-muted-foreground hover:text-foreground"
+                                className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
                               >
                                 <Link2 className="h-3.5 w-3.5" />
                               </button>
@@ -383,7 +385,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                                 aria-label={t('settings.mergeIntoMember', { name: m.displayName })}
                                 title={t('settings.mergeIntoMember', { name: m.displayName })}
                                 onClick={() => setMergeFor({ id: m.user.id, name: m.displayName })}
-                                className="text-muted-foreground hover:text-foreground"
+                                className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
                               >
                                 <Merge className="h-3.5 w-3.5" />
                               </button>
@@ -397,7 +399,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                               setEditingPlaceholder(m.user.id);
                               setEditingName(m.displayName);
                             }}
-                            className="text-muted-foreground hover:text-foreground"
+                            className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
                           >
                             <Pencil className="h-3.5 w-3.5" />
                           </button>
@@ -406,7 +408,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                             aria-label={t('settings.removePlaceholder', { name: m.displayName })}
                             title={t('settings.removePlaceholder', { name: m.displayName })}
                             onClick={() => setRemoveFor({ id: m.user.id, name: m.displayName })}
-                            className="text-muted-foreground hover:text-destructive"
+                            className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-destructive"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
