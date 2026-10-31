@@ -18,6 +18,40 @@ async function fitsPhone(page: Page) {
   expect(scrollWidth).toBeLessThanOrEqual(width + 1);
 }
 
+/** Only DOM structure, never private personal tokens or payment row data. */
+async function payerReviewDomDiagnostic(page: Page) {
+  return page.evaluate(() => {
+    const mains = [...document.querySelectorAll('main')];
+    const primary = mains[0];
+    const reviews = [...document.querySelectorAll<HTMLElement>('[data-testid="guest-payer-payment-review"]')];
+    return {
+      mainCount: mains.length,
+      mainChildCount: primary?.children.length ?? 0,
+      finalizedTotalCount: document.querySelectorAll('[data-testid="finalized-bill-total"]').length,
+      reimbursementCardCount: document.querySelectorAll('[data-testid="guest-payer-reimbursements"]').length,
+      sbpFormCount: document.querySelectorAll('[data-testid="guest-payer-sbp-form"]').length,
+      payerReviewCount: reviews.length,
+      reviews: reviews.map((el) => {
+        const path: number[] = [];
+        let cursor: Element | null = el;
+        while (cursor?.parentElement && cursor !== primary) {
+          path.push([...cursor.parentElement.children].indexOf(cursor));
+          cursor = cursor.parentElement;
+        }
+        return {
+          mainIndex: mains.indexOf(el.closest('main')!),
+          childPath: path.reverse(),
+          visible: el.getClientRects().length > 0,
+          reactFiberAttached: Object.keys(el).some((key) => key.startsWith('__reactFiber$')),
+          reactPropsAttached: Object.keys(el).some((key) => key.startsWith('__reactProps$')),
+          paymentRowCount: el.querySelectorAll('[data-testid^="guest-payer-payment-"]').length,
+          verifyButtonCount: el.querySelectorAll('button').length,
+        };
+      }),
+    };
+  });
+}
+
 test.use({ viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
 
 test('authenticated manual receipt: add, edit, allocate, share with a second anonymous device', async ({
@@ -541,23 +575,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     } catch (error) {
       // Diagnose retained Next.js route trees without relaxing the requirement
       // of exactly one visible private review. Do not log personal access tokens.
-      const diagnostic = await otherPage.evaluate(() => {
-        const mains = [...document.querySelectorAll('main')];
-        const reviews = [...document.querySelectorAll<HTMLElement>('[data-testid="guest-payer-payment-review"]')];
-        return {
-          mainCount: mains.length,
-          visibleReviewCount: reviews.filter((el) => el.getClientRects().length > 0).length,
-          reviews: reviews.map((el) => ({
-            mainIndex: mains.indexOf(el.closest('main')!),
-            visible: el.getClientRects().length > 0,
-            paymentRowCount: el.querySelectorAll('[data-testid^="guest-payer-payment-"]').length,
-            verifyButtonCount: el.querySelectorAll('button').length,
-            ancestorTags: [el.parentElement, el.parentElement?.parentElement, el.closest('main')]
-              .filter((ancestor): ancestor is HTMLElement => ancestor instanceof HTMLElement)
-              .map((ancestor) => ancestor.tagName + ':' + (ancestor.getAttribute('data-testid') ?? '')),
-          })),
-        };
-      });
+      const diagnostic = await payerReviewDomDiagnostic(otherPage);
       throw new Error('Multiple payer review DOM nodes: ' + JSON.stringify(diagnostic) + '\\n' + String(error));
     }
     await expect(payerReview).toBeVisible();
@@ -602,20 +620,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     } catch (error) {
       // The second payer review failure used to bypass the initial DOM
       // diagnostic. Capture safe structural data, never session credentials.
-      const diagnostic = await otherPage.evaluate(() => {
-        const mains = [...document.querySelectorAll('main')];
-        return {
-          mainCount: mains.length,
-          reviews: [...document.querySelectorAll<HTMLElement>('[data-testid="guest-payer-payment-review"]')].map(
-            (el) => ({
-              mainIndex: mains.indexOf(el.closest('main')!),
-              visible: el.getClientRects().length > 0,
-              verifyButtonCount: el.querySelectorAll('button').length,
-              parentTag: el.parentElement?.tagName ?? null,
-            }),
-          ),
-        };
-      });
+      const diagnostic = await payerReviewDomDiagnostic(otherPage);
       throw new Error(
         'Duplicate payer review after verification reload: ' + JSON.stringify(diagnostic) + '\\n' + String(error),
       );
