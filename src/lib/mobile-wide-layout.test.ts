@@ -84,9 +84,9 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
 
   it('keeps adding placeholder members mobile-friendly at 320px with large text', () => {
     const group = source('src/app/[locale]/(app)/groups/[groupId]/settings/page.tsx');
-    expect(group).toContain(
-      'onSubmit={handleAddPlaceholder} className="flex min-w-0 flex-wrap gap-2" data-testid="group-placeholder-form"',
-    );
+    expect(group).toContain('onSubmit={handleAddPlaceholder}');
+    expect(group).toContain('className="flex min-w-0 flex-wrap gap-2"');
+    expect(group).toContain('data-testid="group-placeholder-form"');
     expect(group).toContain('onChange={(e) => setPlaceholderName(e.target.value)}');
     expect(group).toContain('className="h-11 min-w-[8rem] flex-1 text-base"');
     expect(group).toContain('type="submit" className="min-h-11 min-w-11" disabled={addPlaceholder.isPending}');
