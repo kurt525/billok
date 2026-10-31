@@ -10,7 +10,7 @@ const { nextAuth, authMock, google, logger, checkGoogleSignIn, checkOidcSignIn, 
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   checkGoogleSignIn: vi.fn(),
   checkOidcSignIn: vi.fn(),
-  db: { user: { findUnique: vi.fn() } },
+  db: { user: { findUnique: vi.fn() }, $queryRaw: vi.fn(), systemSetting: { findUnique: vi.fn() } },
 }));
 vi.mock('next-auth', () => ({ default: nextAuth }));
 vi.mock('@auth/prisma-adapter', () => ({ PrismaAdapter: vi.fn(() => ({})) }));
@@ -87,6 +87,8 @@ const OIDC_ENV = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  db.$queryRaw.mockResolvedValue([]);
+  db.systemSetting.findUnique.mockResolvedValue({ value: 'open' });
   // clearAllMocks keeps implementations, so a test's rejection can't reach the next one.
   authMock.mockResolvedValue(null);
   checkGoogleSignIn.mockResolvedValue(true);
@@ -159,6 +161,48 @@ describe('other providers', () => {
 });
 
 describe('signIn callback', () => {
+  test.each(['nodemailer', 'google', 'oidc'])(
+    'denies %s sign-in for a pending registration before invoking a provider policy',
+    async (provider) => {
+      const config = await loadAuth({ ...GOOGLE_ENV, ...OIDC_ENV, EMAIL_SERVER_HOST: 'smtp.example.test' });
+      db.$queryRaw.mockResolvedValue([
+        { email: 'pending@mail.ru', registrationEmailVerificationRequired: true, emailVerified: null },
+      ]);
+      expect(
+        await config.callbacks.signIn({
+          user: { email: 'pending@mail.ru' },
+          account: { provider, providerAccountId: 'pending' },
+        }),
+      ).toBe('/login?error=RegistrationEmailUnverified');
+      expect(checkGoogleSignIn).not.toHaveBeenCalled();
+      expect(checkOidcSignIn).not.toHaveBeenCalled();
+    },
+  );
+
+  test('invite-only mode prevents sign-in providers from creating accounts without codes; existing users still work', async () => {
+    const config = await loadAuth({ ...GOOGLE_ENV, ...OIDC_ENV, EMAIL_SERVER_HOST: 'smtp.example.test' });
+    db.systemSetting.findUnique.mockResolvedValue({ value: 'invite-only' });
+
+    for (const provider of ['nodemailer', 'google', 'oidc']) {
+      expect(
+        await config.callbacks.signIn({
+          user: { email: 'unknown@mail.ru' },
+          account: { provider, providerAccountId: 'new-user' },
+        }),
+      ).toBe('/login?error=RegistrationInviteRequired');
+    }
+
+    db.$queryRaw.mockResolvedValue([
+      { email: 'legacy@mail.ru', registrationEmailVerificationRequired: false, emailVerified: null },
+    ]);
+    expect(
+      await config.callbacks.signIn({
+        user: { email: 'legacy@mail.ru' },
+        account: { provider: 'nodemailer' },
+      }),
+    ).toBe(true);
+  });
+
   const googleSignIn = {
     user: { email: 'alice@gmail.com' },
     account: { provider: 'google', providerAccountId: 'g-1' },

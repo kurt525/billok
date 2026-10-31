@@ -8,6 +8,7 @@ export type SignInErrorKey =
   | 'accountNotLinked'
   | 'accountExists'
   | 'emailUnverified'
+  | 'pendingEmailConfirmation'
   | 'adminEmailNotHosted'
   | 'registrationDisabled'
   | 'linkExpired'
@@ -40,6 +41,8 @@ const ERROR_KEYS = new Map<string, SignInErrorKey>([
   // Auth.js' own client-safe error codes
   ['OAuthAccountNotLinked', 'accountNotLinked'],
   ['Verification', 'linkExpired'],
+  ['RegistrationEmailUnverified', 'pendingEmailConfirmation'],
+  ['RegistrationInviteRequired', 'registrationDisabled'],
 ]);
 
 /**

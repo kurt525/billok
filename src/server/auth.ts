@@ -14,6 +14,7 @@ import { OIDC_PROVIDER_ID, checkOidcSignIn, mapOidcProfile } from './lib/oidc-si
 import { authorizePasswordLogin } from './lib/password-login';
 import { readEmailVerified } from './lib/sign-in-identity';
 import { findUserByEmail } from './lib/user-email';
+import { readRegistrationMode } from './lib/registration-mode';
 import { sendRussianSignInEmail } from './lib/magic-link-email';
 
 const authConfig = parseAuthConfig(process.env);
@@ -131,6 +132,36 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   callbacks: {
     async signIn({ user, account, profile }): Promise<boolean | string> {
+      // A pending invite-only password registration must not be activated
+      // through a magic sign-in link or an external identity provider.
+      // Match exact email (case-insensitive, without ILIKE wildcards) and the
+      // linked account id if the provider supplies one.
+      const provider = account?.provider;
+      if (provider === 'nodemailer' || provider === GOOGLE_PROVIDER_ID || provider === OIDC_PROVIDER_ID) {
+        const accountId = user.id ?? '';
+        const email = user.email ?? '';
+        const matchedUsers = await db.$queryRaw<
+          { email: string; registrationEmailVerificationRequired: boolean; emailVerified: Date | null }[]
+        >`
+          SELECT email, "registrationEmailVerificationRequired", "emailVerified"
+          FROM "User"
+          WHERE id = ${accountId} OR lower(email) = lower(${email})
+          LIMIT 2
+        `;
+
+        if (matchedUsers.some((match) => match.registrationEmailVerificationRequired && !match.emailVerified)) {
+          logger.warn('auth.registration_confirmation_required', { provider });
+          return '/login?error=RegistrationEmailUnverified';
+        }
+
+        // In invite-only/closed mode neither a magic link nor an external
+        // provider may auto-create an account without an invitation.
+        // Existing users retain their sign-in methods, including legacy ones.
+        if (matchedUsers.length === 0 && (await readRegistrationMode(db)) !== 'open') {
+          return '/login?error=RegistrationInviteRequired';
+        }
+      }
+
       if (account?.provider === GOOGLE_PROVIDER_ID) {
         return checkGoogleSignIn(db, {
           providerAccountId: account.providerAccountId,
