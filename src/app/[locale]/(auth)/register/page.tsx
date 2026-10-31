@@ -17,7 +17,8 @@ import { Receipt } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { normalizeCallbackPath, stripLocalePrefix } from '@/lib/locale-paths';
 
-type RegistrationErrorKey = 'emailTaken' | 'inviteRequired' | 'inviteInvalid' | 'closed' | 'generic';
+type RegistrationErrorKey =
+  'emailTaken' | 'inviteRequired' | 'inviteInvalid' | 'closed' | 'emailDomain' | 'emailUnavailable' | 'generic';
 
 function getRegistrationErrorKey(error: unknown): RegistrationErrorKey {
   if (!(error instanceof TRPCClientError)) {
@@ -26,6 +27,13 @@ function getRegistrationErrorKey(error: unknown): RegistrationErrorKey {
 
   if (error.data?.code === 'CONFLICT') {
     return 'emailTaken';
+  }
+
+  if (error.data?.messageKey === 'registrationEmailDomainInvalid') {
+    return 'emailDomain';
+  }
+  if (error.data?.messageKey === 'registrationEmailUnavailable') {
+    return 'emailUnavailable';
   }
 
   if (error.data?.code !== 'FORBIDDEN') {

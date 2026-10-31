@@ -6,12 +6,13 @@ import { checkRateLimit, parsePositiveInt } from '../../lib/rate-limit';
 import { getClientIp } from '../../lib/client-ip';
 import { locales } from '@/i18n/routing';
 import { stripUndefined } from '../../lib/strip-undefined';
-import { parseAuthConfig } from '../../lib/auth-config';
+import { parseAuthConfig, readRegistrationEmailConfig } from '../../lib/auth-config';
 import { readRegistrationMode } from '../../lib/registration-mode';
 import { runRegistrationCleanupIfDue } from '../../lib/registration-cleanup-trigger';
 import { confirmRegistrationEmail } from '../../lib/registration-email-confirmation';
 import { findUsersByEmail } from '../../lib/user-email';
-import { Prisma } from '@/generated/prisma/client';
+import { isAllowedRegistrationEmailDomain } from '../../lib/registration-email-domain';
+import { createAndDeliverPendingInviteRegistration } from '../../lib/registration-invite-delivery';
 import { isSupportedSbpBankId, normalizeSbpPhone, SBP_BANKS } from '@/lib/sbp-banks';
 
 export const authRouter = createTRPCRouter({
@@ -37,7 +38,10 @@ export const authRouter = createTRPCRouter({
     if (!parseAuthConfig(process.env).passwordLogin) {
       return { mode: 'closed' as const };
     }
-    return { mode: await readRegistrationMode(ctx.db) };
+    const mode = await readRegistrationMode(ctx.db);
+    // BillOK accepts new registrations by invitation only. A legacy "open"
+    // setting is not permission to bypass the code; show the code field.
+    return { mode: mode === 'closed' ? ('closed' as const) : ('invite-only' as const) };
   }),
 
   register: publicProcedure
@@ -46,7 +50,7 @@ export const authRouter = createTRPCRouter({
         name: z.string().trim().min(1).max(100),
         email: z.string().email(),
         password: z.string().min(8).max(100),
-        inviteCode: z.string().optional(),
+        inviteCode: z.string().trim().max(128).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -62,76 +66,56 @@ export const authRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'registerRateLimited');
       }
 
-      // Check registration mode
       const mode = await readRegistrationMode(ctx.db);
-
       if (mode === 'closed') {
         throw new AppError('FORBIDDEN', 'registrationClosed');
       }
 
-      // Best-effort hourly cleanup; never blocks registration on a database
-      // cleanup error, and never consumes an unused invitation.
-      await runRegistrationCleanupIfDue(ctx.db);
-
-      if (mode === 'invite-only') {
-        if (!input.inviteCode) {
-          throw new AppError('FORBIDDEN', 'inviteCodeRequired');
-        }
-
-        const invite = await ctx.db.systemInvite.findUnique({
-          where: { code: input.inviteCode },
-        });
-        if (!invite || invite.revokedAt || invite.usedAt || (invite.expiresAt && invite.expiresAt < new Date())) {
-          throw new AppError('FORBIDDEN', 'inviteCodeInvalid');
-        }
+      // Enforce the single supported registration path irrespective of the
+      // legacy "open" registration setting. Providers cannot register users.
+      if (!input.inviteCode) {
+        throw new AppError('FORBIDDEN', 'inviteCodeRequired');
+      }
+      if (!isAllowedRegistrationEmailDomain(input.email)) {
+        throw new AppError('BAD_REQUEST', 'registrationEmailDomainInvalid');
       }
 
-      // Case-insensitive: `Bob@x` and `bob@x` are treated as the same address, and
-      // every sign-in method matches users by email ignoring case.
-      const existing = await findUsersByEmail(ctx.db, input.email);
-      if (existing.length > 0) {
+      // Check the mail configuration BEFORE reserving an invite or creating
+      // an account; never return a fake pending signup when SMTP is missing.
+      let emailConfig: ReturnType<typeof readRegistrationEmailConfig>;
+      try {
+        emailConfig = readRegistrationEmailConfig(process.env);
+      } catch {
+        throw new AppError('SERVICE_UNAVAILABLE', 'registrationEmailUnavailable');
+      }
+
+      // Cleanup and user lookup are reused; both precede the transactional
+      // reservation, which is the authoritative concurrent invite check.
+      await runRegistrationCleanupIfDue(ctx.db);
+      if ((await findUsersByEmail(ctx.db, input.email)).length > 0) {
         throw new AppError('CONFLICT', 'emailTaken');
       }
 
       const passwordHash = await bcrypt.hash(input.password, 12);
-      const user = await ctx.db.$transaction(async (tx) => {
-        const created = await tx.user
-          .create({
-            data: {
-              name: input.name,
-              email: input.email,
-              passwordHash,
-            },
-          })
-          .catch((error: unknown) => {
-            // A concurrent sign-up for this address, in any letter case, got
-            // in after the check above; the unique indexes on email and on
-            // lower(email) (prisma/after-push/) reject this one.
-            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-              throw new AppError('CONFLICT', 'emailTaken');
-            }
-            throw error;
-          });
+      let pending: Awaited<ReturnType<typeof createAndDeliverPendingInviteRegistration>>;
+      try {
+        pending = await createAndDeliverPendingInviteRegistration({
+          db: ctx.db,
+          name: input.name,
+          email: input.email,
+          passwordHash,
+          inviteCode: input.inviteCode,
+          ...emailConfig,
+        });
+      } catch (error) {
+        if (error instanceof AppError) throw error;
+        // Do not expose SMTP details or passwords in API errors.
+        throw new AppError('SERVICE_UNAVAILABLE', 'registrationEmailUnavailable');
+      }
 
-        if (input.inviteCode && mode === 'invite-only') {
-          const claimed = await tx.systemInvite.updateMany({
-            where: {
-              code: input.inviteCode,
-              usedAt: null,
-              revokedAt: null,
-              OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-            },
-            data: { usedById: created.id, usedAt: new Date() },
-          });
-          if (claimed.count === 0) {
-            throw new AppError('FORBIDDEN', 'inviteCodeInvalid');
-          }
-        }
-
-        return created;
-      });
-
-      return { id: user.id, name: user.name, email: user.email };
+      // The user has no active session: the invite is redeemed only after the
+      // link is confirmed through auth.confirmEmail.
+      return { email: pending.email, verificationRequired: true as const };
     }),
 
   // A POST mutation prevents mail scanners from consuming links on GET.

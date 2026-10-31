@@ -1,13 +1,18 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { Prisma } from '@/generated/prisma/client';
+import { AppError } from '../../lib/app-error';
 
 vi.mock('next/headers', () => ({
   cookies: vi.fn().mockResolvedValue({ get: vi.fn().mockReturnValue(null) }),
 }));
 vi.mock('@/server/auth', () => ({ auth: vi.fn() }));
-const { cleanupGate, confirmationGate } = vi.hoisted(() => ({ cleanupGate: vi.fn(), confirmationGate: vi.fn() }));
+const { cleanupGate, confirmationGate, signupGate } = vi.hoisted(() => ({
+  cleanupGate: vi.fn(),
+  confirmationGate: vi.fn(),
+  signupGate: vi.fn(),
+}));
 vi.mock('../../lib/registration-cleanup-trigger', () => ({ runRegistrationCleanupIfDue: cleanupGate }));
 vi.mock('../../lib/registration-email-confirmation', () => ({ confirmRegistrationEmail: confirmationGate }));
+vi.mock('../../lib/registration-invite-delivery', () => ({ createAndDeliverPendingInviteRegistration: signupGate }));
 vi.mock('bcryptjs', () => ({
   default: { hash: vi.fn().mockResolvedValue('hashed'), compare: vi.fn() },
 }));
@@ -45,11 +50,18 @@ beforeEach(() => {
   vi.clearAllMocks();
   cleanupGate.mockResolvedValue(undefined);
   confirmationGate.mockResolvedValue(true);
+  signupGate.mockResolvedValue({ email: 'ada@mail.ru', expiresAt: new Date('2026-11-01T12:30:00Z') });
+  vi.stubEnv('REGISTER_RATE_LIMIT_MAX', '9999');
   // Start from a clean auth env regardless of the developer's .env
   for (const key of [
     ...Object.keys(OIDC_ENV),
     'DISABLE_PASSWORD_LOGIN',
     'EMAIL_SERVER_HOST',
+    'EMAIL_SERVER_PORT',
+    'EMAIL_SERVER_USER',
+    'EMAIL_SERVER_PASSWORD',
+    'EMAIL_FROM',
+    'NEXTAUTH_URL',
     'GOOGLE_CLIENT_ID',
     'GOOGLE_CLIENT_SECRET',
   ]) {
@@ -150,70 +162,111 @@ describe('password login disabled', () => {
   });
 });
 
-describe('auth.register duplicate check', () => {
-  test('refuses an email that differs from an existing one only by case', async () => {
+const EMAIL_ENV = {
+  NEXTAUTH_URL: 'https://billok.ru',
+  EMAIL_SERVER_HOST: 'smtp.reg.ru',
+  EMAIL_SERVER_PORT: '465',
+  EMAIL_SERVER_USER: 'noreply@billok.ru',
+  EMAIL_SERVER_PASSWORD: 'smtp-test-only',
+  EMAIL_FROM: 'BillOK <noreply@billok.ru>',
+};
+
+describe('auth.register invite-only email confirmation', () => {
+  test('requires an invite code even if the stored setting is open', async () => {
     mockDb.systemSetting.findUnique.mockResolvedValue(null);
-    mockDb.$queryRaw.mockResolvedValue([{ id: 'bob' }]);
-    mockDb.user.findMany.mockResolvedValue([{ id: 'bob', email: 'Bob@example.com' }]);
+    const api = await caller();
+    await expect(api.register({ name: 'Ada', email: 'ada@mail.ru', password: 'password123' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'An invite code is required to register.',
+    });
+    expect(signupGate).not.toHaveBeenCalled();
+  });
+
+  test.each(['ada@example.com', 'ada@mail.ru.evil.com', 'ada@mail.рф'])(
+    'rejects a registration email outside the permitted .ru/.su zones: %s',
+    async (email) => {
+      mockDb.systemSetting.findUnique.mockResolvedValue(null);
+      const api = await caller();
+      await expect(
+        api.register({ name: 'Ada', email, password: 'password123', inviteCode: 'valid' }),
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      expect(signupGate).not.toHaveBeenCalled();
+    },
+  );
+
+  test('fails closed when SMTP is not configured before creating a pending account', async () => {
+    mockDb.systemSetting.findUnique.mockResolvedValue(null);
     const api = await caller();
     await expect(
-      api.register({ name: 'Mallory', email: 'bob@example.com', password: 'password123' }),
+      api.register({ name: 'Ada', email: 'ada@mail.ru', password: 'password123', inviteCode: 'valid' }),
+    ).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+    expect(signupGate).not.toHaveBeenCalled();
+    expect(cleanupGate).not.toHaveBeenCalled();
+  });
+
+  test('still rejects emails that already exist with different letter case', async () => {
+    stubEnv(EMAIL_ENV);
+    mockDb.systemSetting.findUnique.mockResolvedValue(null);
+    mockDb.$queryRaw.mockResolvedValue([{ id: 'bob' }]);
+    mockDb.user.findMany.mockResolvedValue([{ id: 'bob', email: 'Bob@mail.ru' }]);
+    const api = await caller();
+    await expect(
+      api.register({ name: 'Mallory', email: 'bob@mail.ru', password: 'password123', inviteCode: 'valid' }),
     ).rejects.toMatchObject({ code: 'CONFLICT' });
-    expect(mockDb.$transaction).not.toHaveBeenCalled();
+    expect(signupGate).not.toHaveBeenCalled();
     expect(cleanupGate).toHaveBeenCalledExactlyOnceWith(mockDb);
   });
 
-  // Two sign-ups for case variants of one address can both pass the check
-  // above; the database's unique index on lower(email) stops the second.
-  function signUpRace(createError: unknown) {
-    mockDb.systemSetting.findUnique.mockResolvedValue(null);
+  test.each(['ada@mail.ru', 'ada@mail.su'])(
+    'sends only a pending confirmation response for %s; never signs in or returns the password hash',
+    async (email) => {
+      stubEnv(EMAIL_ENV);
+      mockDb.systemSetting.findUnique.mockResolvedValue(null);
+      mockDb.$queryRaw.mockResolvedValue([]);
+      signupGate.mockResolvedValue({ email, expiresAt: new Date('2026-11-01T12:30:00Z') });
+      const api = await caller();
+      const response = await api.register({
+        name: '  Ada  ',
+        email,
+        password: 'password123',
+        inviteCode: 'valid',
+      });
+      expect(response).toEqual({ email, verificationRequired: true });
+      expect(signupGate).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          db: mockDb,
+          name: 'Ada',
+          email,
+          passwordHash: 'hashed',
+          inviteCode: 'valid',
+          siteOrigin: 'https://billok.ru',
+          from: 'BillOK <noreply@billok.ru>',
+          server: expect.objectContaining({ secure: true }),
+        }),
+      );
+      expect(JSON.stringify(response)).not.toContain('hashed');
+    },
+  );
+
+  test('keeps concurrent invite rejection and unique email conflict errors distinct from mail failures', async () => {
+    stubEnv(EMAIL_ENV);
+    mockDb.systemSetting.findUnique.mockResolvedValue({ value: 'invite-only' });
     mockDb.$queryRaw.mockResolvedValue([]);
-    const tx = { user: { create: vi.fn().mockRejectedValue(createError) } };
-    mockDb.$transaction.mockImplementation(async (fn: (client: typeof tx) => unknown) => fn(tx));
-  }
-
-  test('a sign-up that loses the race to a case variant gets the same conflict error', async () => {
-    signUpRace(
-      new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the constraint: `User_email_lower_key`', {
-        code: 'P2002',
-        clientVersion: 'test',
-      }),
-    );
     const api = await caller();
+    signupGate.mockRejectedValueOnce(new AppError('FORBIDDEN', 'inviteCodeInvalid'));
     await expect(
-      api.register({ name: 'Mallory', email: 'bob@example.com', password: 'password123' }),
-    ).rejects.toMatchObject({
-      code: 'CONFLICT',
-      message: 'Unable to create account. Please try a different email or sign in.',
-    });
-  });
-
-  test('other database errors from creating the user are not reported as a duplicate', async () => {
-    signUpRace(
-      new Prisma.PrismaClientKnownRequestError('Foreign key constraint violated', {
-        code: 'P2003',
-        clientVersion: 'test',
-      }),
-    );
-    const api = await caller();
-    await expect(
-      api.register({ name: 'Mallory', email: 'bob@example.com', password: 'password123' }),
-    ).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
-  });
-
-  test('an invite that is claimed concurrently is still reported as an invite error', async () => {
-    mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'invite-only' });
-    mockDb.systemInvite.findUnique.mockResolvedValue({ code: 'inv', revokedAt: null, usedAt: null, expiresAt: null });
-    mockDb.$queryRaw.mockResolvedValue([]);
-    const tx = {
-      user: { create: vi.fn().mockResolvedValue({ id: 'new', name: 'Mallory', email: 'bob@example.com' }) },
-      systemInvite: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
-    };
-    mockDb.$transaction.mockImplementation(async (fn: (client: typeof tx) => unknown) => fn(tx));
-    const api = await caller();
-    await expect(
-      api.register({ name: 'Mallory', email: 'bob@example.com', password: 'password123', inviteCode: 'inv' }),
+      api.register({ name: 'Ada', email: 'ada@mail.ru', password: 'password123', inviteCode: 'claimed' }),
     ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Invalid or expired invite code.' });
+    signupGate.mockRejectedValueOnce(new AppError('CONFLICT', 'emailTaken'));
+    await expect(
+      api.register({ name: 'Ada', email: 'ada@mail.ru', password: 'password123', inviteCode: 'valid' }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    signupGate.mockRejectedValueOnce(new Error('secret SMTP detail'));
+    await expect(
+      api.register({ name: 'Ada', email: 'ada@mail.ru', password: 'password123', inviteCode: 'valid' }),
+    ).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
   });
 });
 
@@ -228,18 +281,6 @@ describe('names are trimmed', () => {
       },
     );
     expect(mockDb.$transaction).not.toHaveBeenCalled();
-  });
-
-  test('register stores the name without surrounding whitespace', async () => {
-    mockDb.systemSetting.findUnique.mockResolvedValue(null);
-    mockDb.$queryRaw.mockResolvedValue([]);
-    const tx = { user: { create: vi.fn().mockResolvedValue({ id: 'new', name: 'Ada', email: 'ada@example.com' }) } };
-    mockDb.$transaction.mockImplementation(async (fn: (client: typeof tx) => unknown) => fn(tx));
-    const api = await caller();
-    await api.register({ name: '  Ada  ', email: 'ada@example.com', password: 'password123' });
-    expect(tx.user.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ name: 'Ada' }) }),
-    );
   });
 
   test('updateProfile refuses a name that is only whitespace', async () => {
@@ -306,10 +347,10 @@ describe('password login enabled', () => {
     expect(await api.getRegistrationMode()).toEqual({ mode: 'invite-only' });
   });
 
-  test('getRegistrationMode reads an unrecognised setting as open, as register does', async () => {
+  test('getRegistrationMode treats legacy open settings as invitation-only', async () => {
     mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'something-else' });
     const api = await caller();
-    expect(await api.getRegistrationMode()).toEqual({ mode: 'open' });
+    expect(await api.getRegistrationMode()).toEqual({ mode: 'invite-only' });
   });
 
   test('register is refused while the setting is closed', async () => {
@@ -322,15 +363,13 @@ describe('password login enabled', () => {
     expect(mockDb.$transaction).not.toHaveBeenCalled();
   });
 
-  test('register goes ahead with an unrecognised setting, read as open', async () => {
-    stubEnv({ REGISTER_RATE_LIMIT_MAX: '9999' });
+  test('registration cannot bypass the invitation even with a legacy open setting', async () => {
     mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'something-else' });
-    mockDb.$queryRaw.mockResolvedValue([]);
-    const tx = { user: { create: vi.fn().mockResolvedValue({ id: 'new', name: 'Ada', email: 'ada@example.com' }) } };
-    mockDb.$transaction.mockImplementation(async (fn: (client: typeof tx) => unknown) => fn(tx));
     const api = await caller();
-    await api.register({ name: 'Ada', email: 'ada@example.com', password: 'password123' });
-    expect(tx.user.create).toHaveBeenCalled();
+    await expect(api.register({ name: 'Ada', email: 'ada@mail.ru', password: 'password123' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(signupGate).not.toHaveBeenCalled();
   });
 });
 

@@ -15,6 +15,8 @@
   "registrationClosed": "Registration is currently closed.",
   "inviteCodeRequired": "An invite code is required to register.",
   "inviteCodeInvalid": "Invalid or expired invite code.",
+  "registrationEmailDomainInvalid": "Registration requires an email address ending in .ru or .su.",
+  "registrationEmailUnavailable": "Could not send the verification email. Please try registering again later.",
   "emailVerificationLinkInvalid": "The confirmation link is invalid, already used, or expired.",
   "emailVerificationRateLimited": "Too many email confirmation attempts. Please try again later.",
   "emailTaken": "Unable to create account. Please try a different email or sign in.",
