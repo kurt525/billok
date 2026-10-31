@@ -32,6 +32,9 @@ describe('Mobile authentication and verification forms', () => {
     expect(register).toContain('autoComplete="new-password"');
     expect(register.match(/className="h-11 min-w-0 text-base"/g)).toHaveLength(4);
     expect(register).toContain('min-h-11 w-full');
+    expect(register).toContain("'verificationRequired' in registration");
+    expect(register).toContain('setConfirmationEmail(email)');
+    expect(register).toContain('confirmationPendingDescription');
   });
 
   it('keeps the confirmation email page back action tappable', () => {

@@ -65,6 +65,7 @@ function RegisterForm() {
   const [error, setError] = useState('');
   const [nameError, setNameError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [confirmationEmail, setConfirmationEmail] = useState<string | null>(null);
 
   const regMode = trpc.auth.getRegistrationMode.useQuery();
   const registerMutation = trpc.auth.register.useMutation();
@@ -86,12 +87,20 @@ function RegisterForm() {
     setLoading(true);
 
     try {
-      await registerMutation.mutateAsync({
+      const registration = await registerMutation.mutateAsync({
         name: trimmedName,
         email,
         password,
         ...(mode === 'invite-only' && inviteCode ? { inviteCode } : {}),
       });
+
+      // New invite-only registrations must verify their email before sign-in.
+      // Keep the legacy successful response working until the API switches.
+      if ('verificationRequired' in registration && registration.verificationRequired === true) {
+        setPassword('');
+        setConfirmationEmail(email);
+        return;
+      }
 
       const result = await signIn('credentials', {
         email,
@@ -123,7 +132,16 @@ function RegisterForm() {
         <CardDescription className="mt-1">{t('subtitle')}</CardDescription>
       </CardHeader>
       <CardContent className="pt-4">
-        {regMode.isPending ? (
+        {confirmationEmail !== null ? (
+          <div className="space-y-4" role="status" aria-live="polite">
+            <p className="text-base font-semibold">{t('confirmationPendingTitle')}</p>
+            <p className="break-words text-sm">{t('confirmationPendingDescription', { email: confirmationEmail })}</p>
+            <p className="text-sm text-muted-foreground">{t('confirmationPendingSpamHint')}</p>
+            <Link href={loginHref} className="inline-flex min-h-11 items-center font-medium text-primary underline">
+              {t('signIn')}
+            </Link>
+          </div>
+        ) : regMode.isPending ? (
           <LoadingSpinner className="py-8" />
         ) : mode === 'closed' ? (
           // Also the state when DISABLE_PASSWORD_LOGIN is set: don't show a
