@@ -85,6 +85,37 @@ for (const width of widths) {
   });
 }
 
+// Security-relevant UI check: email scanners can render GET links, so only an
+// explicit button click may consume the one-time confirmation token.
+test('registration email link requires a tap before POST confirmation', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  const token = 'A'.repeat(43);
+  let confirmations = 0;
+  await page.route('**/api/trpc/auth.confirmEmail*', async (route) => {
+    confirmations++;
+    expect(route.request().method()).toBe('POST');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{ result: { data: { json: { verified: true } } } }]),
+    });
+  });
+
+  await page.goto(`/verify-email?token=${token}`, { waitUntil: 'networkidle' });
+  await expect(page.getByRole('heading', { name: 'Подтверждение почты' })).toBeVisible();
+  expect(confirmations, 'opening a mail link must not consume a token').toBe(0);
+  const button = page.getByRole('button', { name: 'Подтвердить адрес' });
+  await expect(button).toBeVisible();
+  expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+
+  await button.click();
+  await expect(page.getByText('Адрес электронной почты подтверждён. Теперь можно войти в аккаунт.')).toBeVisible();
+  expect(confirmations).toBe(1);
+  await expect(page).toHaveURL(/\/verify-email$/);
+  const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+  expect(documentWidth).toBeLessThanOrEqual(321);
+});
+
 test.describe('mail waiting screen on wide mobile viewports', () => {
   test.use({ viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
 
