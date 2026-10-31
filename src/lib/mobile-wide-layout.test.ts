@@ -104,6 +104,15 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
     expect(group).toContain('onClick={() => setDeleteReceiptId(r.id)}');
   });
 
+  it('keeps the archived group notice and unarchive action usable on narrow phones', () => {
+    const settings = source('src/app/[locale]/(app)/groups/[groupId]/settings/page.tsx');
+    expect(settings).toContain('flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-amber-300');
+    expect(settings).toContain('min-w-0 flex-1 [overflow-wrap:anywhere]');
+    expect(settings).toContain('className="min-h-11 min-w-11 shrink-0 whitespace-normal leading-tight"');
+    expect(settings).toContain('onClick={() => unarchiveGroup.mutate({ groupId })}');
+    expect(settings).toContain("myRole === 'OWNER' || myRole === 'ADMIN'");
+  });
+
   it('keeps both guest header navigation links at least 44px high', () => {
     const header = source('src/app/[locale]/split/layout.tsx');
     expect(header).toContain('inline-flex min-h-11 items-center gap-2');

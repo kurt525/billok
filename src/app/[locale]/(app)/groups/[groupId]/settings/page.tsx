@@ -246,9 +246,9 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
       </div>
 
       {group.data.archivedAt && (
-        <div className="flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200">
+        <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200">
           <Archive className="h-5 w-5 shrink-0" />
-          <div className="flex-1">
+          <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
             <p className="font-medium">{t('settings.archived')}</p>
             <p className="text-amber-700 dark:text-amber-300">
               {t('settings.archivedOn', { date: new Date(group.data.archivedAt).toLocaleDateString(locale) })}
@@ -260,6 +260,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
             <Button
               size="sm"
               variant="outline"
+              className="min-h-11 min-w-11 shrink-0 whitespace-normal leading-tight"
               onClick={() => unarchiveGroup.mutate({ groupId })}
               disabled={unarchiveGroup.isPending}
             >
