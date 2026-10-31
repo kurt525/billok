@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { formatCents } from '@/lib/money';
 import { mergeGuestPaymentStatuses, newlyDeclaredGuestPayments } from '@/lib/guest-payment-notifications';
+import { createLatestActiveMountRegistry } from '@/lib/latest-active-mount';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -16,6 +17,11 @@ type PaymentRow = {
   declaredPaidAt: string | null;
   verifiedAt: string | null;
 };
+
+// An old App Router tree may stay mounted while a new route hydrates.
+// Only the newest mounted payer review is shown and polls the server.
+const activePayerReviews = createLatestActiveMountRegistry();
+const inactiveOnServer = () => false;
 
 /** Shows the payer only the receipt's outstanding, declared and verified transfers.
  * The data is never included in guest.getSession or the public receipt link.
@@ -38,8 +44,20 @@ export function GuestPayerPaymentReview({
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const latestPayments = useRef<PaymentRow[] | null>(null);
   const readPayments = read.mutateAsync;
+  const [mountId] = useState(() => Symbol('payer-review'));
+  const activeReviewKey = [token, personId, personToken].join(':');
+  const subscribeToActiveReview = useCallback(
+    (onChange: () => void) => activePayerReviews.subscribe(activeReviewKey, mountId, onChange),
+    [activeReviewKey, mountId],
+  );
+  const getActiveReviewSnapshot = useCallback(
+    () => activePayerReviews.isActive(activeReviewKey, mountId),
+    [activeReviewKey, mountId],
+  );
+  const isActiveReview = useSyncExternalStore(subscribeToActiveReview, getActiveReviewSnapshot, inactiveOnServer);
 
   useEffect(() => {
+    if (!isActiveReview) return;
     let cancelled = false;
     const refresh = () => {
       // Always read a fresh snapshot using the payer's personal token.
@@ -79,7 +97,7 @@ export function GuestPayerPaymentReview({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [readPayments, token, personId, personToken, t]);
+  }, [isActiveReview, readPayments, token, personId, personToken, t]);
 
   async function confirmReceipt(debtorId: string) {
     if (verifyingId || !payments?.some((p) => p.personId === debtorId && p.declaredPaidAt && !p.verifiedAt)) return;
@@ -103,7 +121,7 @@ export function GuestPayerPaymentReview({
   // Do not server-render an empty review card. On hydration a stale loading
   // card could remain beside the freshly populated card in the DOM.
   // Mount the review card only after its private data has been loaded.
-  if (payments === null && !loadFailed) return null;
+  if (!isActiveReview || (payments === null && !loadFailed)) return null;
 
   return (
     <Card data-testid="guest-payer-payment-review">
