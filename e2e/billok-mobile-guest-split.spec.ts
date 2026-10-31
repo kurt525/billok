@@ -586,6 +586,24 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(victorPayment).toContainText('Ожидается отметка участника');
     await expect(payerReview.getByTestId('guest-payer-verify-' + victor.personId)).toHaveCount(0);
 
+    // Stress a second full reload before confirmation: intermittently a new
+    // hydrated payer review coexists with an older route's visible card.
+    await otherPage.reload({ waitUntil: 'networkidle' });
+    try {
+      await expect(payerReview).toHaveCount(1, { timeout: 15_000 });
+    } catch (error) {
+      const diagnostic = await payerReviewDomDiagnostic(otherPage);
+      throw new Error(
+        'Duplicate payer review on repeated pre-verification reload: ' +
+          JSON.stringify(diagnostic) +
+          '\\n' +
+          String(error),
+      );
+    }
+    await expect(payerReview.getByTestId('guest-payer-payment-' + anna.personId)).toContainText(
+      'Участник отметил оплату',
+    );
+
     // A real payer must be able to verify a declared transfer on a wide
     // Android display or Galaxy S23 with enlarged text and a short viewport.
     await otherPage.addStyleTag({ content: 'html { font-size: 20px !important; }' });
@@ -630,6 +648,20 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       {
         timeout: 15_000,
       },
+    );
+    // A second reload must not reintroduce a stale payer review after the
+    // receipt confirmation was already persisted on the server.
+    await otherPage.reload({ waitUntil: 'networkidle' });
+    try {
+      await expect(payerReview).toHaveCount(1, { timeout: 15_000 });
+    } catch (error) {
+      const diagnostic = await payerReviewDomDiagnostic(otherPage);
+      throw new Error(
+        'Duplicate payer review on repeated verified reload: ' + JSON.stringify(diagnostic) + '\\n' + String(error),
+      );
+    }
+    await expect(payerReview.getByTestId('guest-payer-payment-' + anna.personId)).toContainText(
+      'Поступление проверено',
     );
     await expect(page.getByTestId('guest-payer-payment-review')).toHaveCount(0);
     const publicStatus = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
