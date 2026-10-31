@@ -1,3 +1,5 @@
+import { MAX_MONEY_CENTS } from './money';
+
 /**
  * Pure function to calculate per-person totals with proportional tax/tip distribution.
  * Used by both the authenticated receipt flow and the guest split flow.
@@ -53,6 +55,50 @@ export function calculateSplitTotals(params: {
     }
   }
 
+  return results;
+}
+
+/**
+ * Add only each guest's own voluntary RUB tip to already allocated item shares.
+ * Only someone assigned an item may tip. No proportional tip distribution,
+ * no implicit charges, and every amount remains integer kopecks.
+ */
+export function addPersonalGuestTips(
+  shares: ReturnType<typeof calculateSplitTotals>,
+  people: readonly { tipCents?: number | undefined }[],
+): ReturnType<typeof calculateSplitTotals> {
+  const results = shares.map((share) => ({ ...share }));
+  const indices = new Set<number>();
+  let total = 0;
+  for (const share of results) {
+    if (
+      !Number.isSafeInteger(share.personIndex) ||
+      share.personIndex < 0 ||
+      share.personIndex >= people.length ||
+      indices.has(share.personIndex) ||
+      !Number.isSafeInteger(share.total) ||
+      share.total < 0 ||
+      total + share.total > MAX_MONEY_CENTS
+    ) {
+      throw new RangeError('Invalid existing guest share');
+    }
+    indices.add(share.personIndex);
+    total += share.total;
+  }
+  for (const [personIndex, person] of people.entries()) {
+    const tip = person.tipCents ?? 0;
+    if (!Number.isSafeInteger(tip) || tip < 0 || tip > MAX_MONEY_CENTS || total + tip > MAX_MONEY_CENTS) {
+      throw new RangeError('Invalid voluntary guest tip or total');
+    }
+    if (tip === 0) continue;
+    const previous = results.find((share) => share.personIndex === personIndex);
+    if (!previous) {
+      throw new RangeError('Cannot charge personal tips without assigned items');
+    }
+    previous.tip += tip;
+    previous.total += tip;
+    total += tip;
+  }
   return results;
 }
 

@@ -17,13 +17,13 @@ describe('parseExtractedData', () => {
     expect(result.currency).toBe('USD');
   });
 
-  it('defaults missing numeric fields to 0', () => {
+  it('defaults missing numeric fields to 0 and currency to RUB', () => {
     const result = parseExtractedData({});
     expect(result.subtotal).toBe(0);
     expect(result.tax).toBe(0);
     expect(result.tip).toBe(0);
     expect(result.total).toBe(0);
-    expect(result.currency).toBe('USD');
+    expect(result.currency).toBe('RUB');
   });
 
   it('handles null input', () => {
@@ -73,6 +73,17 @@ describe('parseGuestPeople', () => {
     const people = parseGuestPeople([{ name: 'Alice' }, { name: 'Bob', personToken: 'abc-123', groupSize: 2 }]);
     expect(people).toHaveLength(2);
     expect(people[1]!.groupSize).toBe(2);
+  });
+
+  it('preserves own chosen tips when parsing people for guest finalization', () => {
+    expect(parseGuestPeople([{ name: 'Анна', tipCents: 125 }, { name: 'Борис' }])).toEqual([
+      { name: 'Анна', tipCents: 125 },
+      { name: 'Борис' },
+    ]);
+  });
+
+  it.each([-1, 1.25, 2_147_483_648, '100', null])('rejects invalid stored personal tip %s', (tipCents) => {
+    expect(() => parseGuestPeople([{ name: 'Анна', tipCents }])).toThrow(TRPCError);
   });
 
   it('rejects person without name', () => {

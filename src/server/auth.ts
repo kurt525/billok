@@ -14,6 +14,7 @@ import { OIDC_PROVIDER_ID, checkOidcSignIn, mapOidcProfile } from './lib/oidc-si
 import { authorizePasswordLogin } from './lib/password-login';
 import { readEmailVerified } from './lib/sign-in-identity';
 import { findUserByEmail } from './lib/user-email';
+import { sendRussianSignInEmail } from './lib/magic-link-email';
 
 const authConfig = parseAuthConfig(process.env);
 for (const warning of authConfig.warnings) {
@@ -65,7 +66,14 @@ if (authConfig.magicLink) {
   providers.push(
     Nodemailer({
       server,
-      from: process.env.EMAIL_FROM ?? 'ShareTab <noreply@sharetab.local>',
+      from: process.env.EMAIL_FROM ?? 'BillOK <noreply@billok.ru>',
+      sendVerificationRequest: ({ identifier, url, provider }) =>
+        sendRussianSignInEmail({
+          to: identifier,
+          url,
+          from: provider.from ?? 'BillOK <noreply@billok.ru>',
+          server,
+        }),
     }),
   );
 }

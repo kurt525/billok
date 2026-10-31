@@ -31,6 +31,10 @@
   "onlyAdminsPlaceholderInvite": "Only admins and owners can create placeholder-linked invites",
   "onlyOwnerDeletesGroup": "Only the owner can delete a group",
   "onlyOwnerTransfers": "Only the owner can transfer ownership",
+  "rubOnlyExpense": "Editing is available only for expenses and groups in RUB. Existing amounts in other currencies are unchanged.",
+  "rubOnlyReceipt": "Expenses from receipts are allowed only for RUB receipts in RUB groups.",
+  "rubOnlySettlement": "New settlements are allowed only in groups using RUB.",
+  "rubOnlyGroup": "New expenses are allowed only in groups using RUB.",
   "currencyLocked": "Cannot change group currency after expenses or settlements have been recorded. Create a new group with the desired currency instead.",
   "archiveFormerMemberUnsettled": "Someone who is no longer in this group still owes or is owed money, so it can't be archived. Invite them back to settle up, or edit the expenses they're in.",
   "archiveUnsettled": "This group still has unsettled balances. Settle up before archiving it.",
@@ -78,6 +82,8 @@
   "payerNotMember": "Payer is not a member of this group",
   "onlyPayerDeletesPayment": "Only the payer or a group owner/admin can delete this payment",
   "receiptNotFound": "Receipt not found",
+  "receiptPersonalTipsInvalid": "Invalid personal tips or receipt total exceeds the permitted amount.",
+  "receiptExtraChargesNotSupported": "Additional tax and shared tips are not supported for receipts.",
   "receiptNotReady": "Receipt not ready",
   "receiptNotProcessed": "Receipt must be processed first",
   "receiptHasExpense": "Receipt has an expense",
@@ -119,7 +125,7 @@
   "onlyCreatorSetsVenmo": "Only the split creator can update the Venmo handle",
   "personNameRequired": "At least one person with a name is required",
   "splitBusy": "Someone else is updating this split right now. Please try again.",
-  "serverBusy": "ShareTab is busy right now. Please try again in a moment.",
+  "serverBusy": "BillOK is busy right now. Please try again in a moment.",
   "invalidData": "Invalid {label} data",
   "invalidItemIndex": "Invalid item index",
   "invalidItemIndexValue": "Invalid item index: {index}",
@@ -154,5 +160,8 @@
   "providerCreateFailed": "Failed to create provider",
   "providerUnavailable": "Provider \"{provider}\" is not available",
   "testImageTooLarge": "Image exceeds 5 MB limit",
-  "extractionFailed": "Extraction failed"
+  "extractionFailed": "Extraction failed",
+  "sbpPhoneInvalid": "Enter a Russian phone number in +7XXXXXXXXXX or 8XXXXXXXXXX format.",
+  "sbpBankInvalid": "Select a bank from the list.",
+  "paymentNotDeclared": "The participant has not declared their payment yet."
 }

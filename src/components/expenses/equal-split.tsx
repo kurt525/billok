@@ -62,16 +62,17 @@ export function EqualSplit({
       {members.map((m) => (
         <label
           key={m.id}
-          className="flex cursor-pointer items-center justify-between rounded-md border p-3 hover:bg-muted/50"
+          className="flex min-h-11 min-w-0 flex-wrap cursor-pointer items-center justify-between gap-2 rounded-md border p-3 hover:bg-muted/50"
+          data-testid="split-member-row"
         >
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             <input
               type="checkbox"
               checked={selected.has(m.id)}
               onChange={() => toggle(m.id)}
-              className="h-4 w-4 rounded border-gray-300"
+              className="h-5 w-5 shrink-0 rounded border-gray-300"
             />
-            <span className="text-sm">{m.name ?? 'Unnamed'}</span>
+            <span className="min-w-0 break-words text-sm">{m.name ?? 'Без имени'}</span>
           </div>
           {selected.has(m.id) && totalCents > 0 && (
             <span className="text-sm text-muted-foreground">
@@ -82,7 +83,7 @@ export function EqualSplit({
       ))}
       {selected.size > 0 && totalCents > 0 && (
         <p className="text-xs text-muted-foreground">
-          {formatCents(Math.round(perPerson), currency, locale)} per person ({selected.size} selected)
+          На человека: {formatCents(Math.round(perPerson), currency, locale)} (выбрано: {selected.size})
         </p>
       )}
     </div>

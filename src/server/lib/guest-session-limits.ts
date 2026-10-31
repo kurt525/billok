@@ -15,7 +15,19 @@ const READ_LIMIT_PER_SESSION = 3000;
 const WINDOW_MS = 60 * 1000;
 
 /** The claim-session changes that take a person token, each budgeted separately. */
-export type ClaimWriteAction = 'claim' | 'edit-name' | 'remove-person' | 'split-item';
+export type ClaimWriteAction =
+  | 'claim'
+  | 'edit-name'
+  | 'remove-person'
+  | 'split-item'
+  | 'personal-tip'
+  | 'payer-sbp-read'
+  | 'payer-sbp-write'
+  | 'payer-sbp-reimbursement'
+  | 'payment-declaration-read'
+  | 'payment-declaration-write'
+  | 'payer-payment-review'
+  | 'payer-payment-verify';
 
 /**
  * Rate limit for the claim-session changes that take a person token: claimItems,

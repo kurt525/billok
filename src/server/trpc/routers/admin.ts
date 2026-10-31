@@ -1,12 +1,6 @@
 import { z } from 'zod';
 import { AppError } from '@/server/lib/app-error';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
-import {
-  getAIProvidersWithFallback,
-  getConfiguredProviderPriority,
-  isProviderConfigured,
-  createProviderByName,
-} from '@/server/ai/registry';
 import { type AdminAction, type PrismaClient, Prisma } from '@/generated/prisma/client';
 import nodemailer from 'nodemailer';
 import fs from 'fs';
@@ -21,36 +15,9 @@ import {
   deleteUnusedReceipts,
   removeReceiptFiles,
 } from '@/server/lib/receipt-cleanup';
-import {
-  checkMeridianHealth,
-  invalidateMeridianHealthCache,
-  sendAuthExpiryEmail,
-} from '@/server/lib/auth-health-poller';
-import {
-  startLogin,
-  submitCode,
-  cancelLogin,
-  logout as logoutMeridian,
-  isLoginInProgress,
-} from '@/server/lib/meridian-login';
-import { clearProviderCache } from '@/server/ai/registry';
-import { getMeridianStartError, startMeridianProxy } from '@/server/ai/providers/meridian';
-import {
-  checkOpenAICodexHealth,
-  invalidateOpenAICodexHealthCache,
-  startLogin as startOpenAICodexLogin,
-  submitCode as submitOpenAICodexCode,
-  cancelLogin as cancelOpenAICodexLogin,
-  logout as logoutOpenAICodex,
-  isLoginInProgress as isOpenAICodexLoginInProgress,
-} from '@/server/lib/openai-codex-login';
-
 import { getBuildInfo } from '@/server/lib/build-info';
 import { REGISTRATION_MODES, readRegistrationMode } from '@/server/lib/registration-mode';
-import { isGuestUploadsForcedOff, readGuestUploadsSetting, saveGuestUploadsSetting } from '@/server/lib/guest-uploads';
-
-// How long a successful Meridian login waits for the proxy start attempt.
-const MERIDIAN_LOGIN_START_WAIT_MS = 15_000;
+import { totalsInGroupCurrency } from '@/server/lib/group-expense-totals';
 
 const serverStartTime = new Date();
 const { version: cachedVersion, commitSha: cachedCommitSha } = getBuildInfo();
@@ -158,44 +125,8 @@ export const adminRouter = createTRPCRouter({
       // disconnected
     }
 
-    // AI provider info
-    let aiProvider = 'unknown';
-    let aiAvailable = false;
-    let aiStatus: 'available' | 'requires_auth' | 'unavailable' = 'unavailable';
-    const authProvidersNeedingLogin: string[] = [];
-    try {
-      const configured = getConfiguredProviderPriority();
-      const providers = await getAIProvidersWithFallback();
-      aiProvider = configured.join(' -> ');
-      aiAvailable = providers.length > 0;
-
-      // Mark OAuth-backed providers that are configured but not currently usable.
-      if (configured.includes('meridian')) {
-        const meridianHealth = await checkMeridianHealth();
-        if (meridianHealth.status !== 'healthy') {
-          authProvidersNeedingLogin.push('meridian');
-        }
-      }
-
-      if (configured.includes('openai-codex')) {
-        const openAICodexHealth = await checkOpenAICodexHealth();
-        if (openAICodexHealth.status === 'auth_expired' || openAICodexHealth.status === 'not_authenticated') {
-          authProvidersNeedingLogin.push('openai-codex');
-        }
-      }
-
-      aiStatus = authProvidersNeedingLogin.length > 0 ? 'requires_auth' : 'available';
-    } catch {
-      aiProvider = process.env.AI_PROVIDER_PRIORITY ?? 'not configured';
-      aiStatus = 'unavailable';
-    }
-
     return {
       dbStatus,
-      aiProvider,
-      aiAvailable,
-      aiStatus,
-      authProvidersNeedingLogin,
       version: cachedVersion,
       commitSha: cachedCommitSha,
       serverStartTime: serverStartTime.toISOString(),
@@ -487,6 +418,7 @@ export const adminRouter = createTRPCRouter({
           select: {
             id: true,
             name: true,
+            currency: true,
             archivedAt: true,
             createdAt: true,
             _count: {
@@ -523,19 +455,21 @@ export const adminRouter = createTRPCRouter({
       const expenseSums =
         groupIds.length > 0
           ? await ctx.db.expense.groupBy({
-              by: ['groupId'],
+              by: ['groupId', 'currency'],
               where: { groupId: { in: groupIds } },
-              _sum: { amount: true },
+              _sum: { amount: true, baseCurrencyAmount: true },
+              _count: { id: true, baseCurrencyAmount: true },
             })
           : [];
-      const sumByGroup = new Map(expenseSums.map((e) => [e.groupId, e._sum.amount ?? 0]));
+      const totals = totalsInGroupCurrency(groups, expenseSums);
 
       const result = groups.map((g) => ({
         id: g.id,
         name: g.name,
         memberCount: g._count.members,
         expenseCount: g._count.expenses,
-        totalAmount: sumByGroup.get(g.id) ?? 0,
+        currency: g.currency,
+        totalAmount: totals.get(g.id) ?? null,
         lastActivity: g.activityLogs[0]?.createdAt ?? g.createdAt,
         isArchived: g.archivedAt !== null,
         createdAt: g.createdAt,
@@ -570,48 +504,6 @@ export const adminRouter = createTRPCRouter({
     await logAdminAction(ctx.db, ctx.user.id, 'GROUP_DELETED', input.groupId, { name: group.name });
 
     return { deleted: true, groupId: input.groupId };
-  }),
-
-  // ─── AI Usage Statistics ─────────────────────────────────
-
-  getAIStats: adminProcedure.query(async ({ ctx }) => {
-    const [total, byStatus, byProvider, last7Days, last30Days] = await Promise.all([
-      ctx.db.receipt.count(),
-      ctx.db.receipt.groupBy({
-        by: ['status'],
-        _count: true,
-      }),
-      ctx.db.receipt.groupBy({
-        by: ['aiProvider'],
-        _count: true,
-        where: { aiProvider: { not: null } },
-      }),
-      ctx.db.receipt.count({
-        where: {
-          createdAt: {
-            gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-          },
-        },
-      }),
-      ctx.db.receipt.count({
-        where: {
-          createdAt: {
-            gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-          },
-        },
-      }),
-    ]);
-
-    return {
-      total,
-      byStatus: Object.fromEntries(byStatus.map((s) => [s.status, s._count])) as Record<string, number>,
-      byProvider: Object.fromEntries(byProvider.map((p) => [p.aiProvider ?? 'unknown', p._count])) as Record<
-        string,
-        number
-      >,
-      last7Days,
-      last30Days,
-    };
   }),
 
   // ─── Registration Control ───────────────────────────────
@@ -805,25 +697,6 @@ export const adminRouter = createTRPCRouter({
     return { success: true };
   }),
 
-  // ─── Guest Receipt Uploads Toggle ───────────────────────
-
-  // `enabled` is the saved toggle; DISABLE_GUEST_UPLOADS overrides it.
-  getGuestUploadsEnabled: adminProcedure.query(async ({ ctx }) => {
-    return { enabled: await readGuestUploadsSetting(ctx.db), forcedOffByEnv: isGuestUploadsForcedOff() };
-  }),
-
-  setGuestUploadsEnabled: adminProcedure.input(z.object({ enabled: z.boolean() })).mutation(async ({ ctx, input }) => {
-    // While the env var locks it, a saved value would only take effect later, unseen.
-    if (isGuestUploadsForcedOff()) {
-      throw new AppError('PRECONDITION_FAILED', 'guestUploadsLockedOff');
-    }
-    await saveGuestUploadsSetting(ctx.db, input.enabled);
-
-    await logAdminAction(ctx.db, ctx.user.id, 'GUEST_UPLOADS_SETTING_CHANGED', null, { enabled: input.enabled });
-
-    return { enabled: input.enabled };
-  }),
-
   // ─── Email Test ──────────────────────────────────────────
 
   sendTestEmail: adminProcedure.mutation(async ({ ctx }) => {
@@ -842,22 +715,22 @@ export const adminRouter = createTRPCRouter({
       },
     });
 
-    const from = process.env.EMAIL_FROM ?? 'ShareTab <noreply@sharetab.local>';
+    const from = process.env.EMAIL_FROM ?? 'BillOK <noreply@billok.ru>';
     const to = ctx.user.email!;
 
     try {
       await transport.sendMail({
         from,
         to,
-        subject: 'ShareTab Test Email',
-        text: `This is a test email from ShareTab admin dashboard.\n\nSent at: ${new Date().toISOString()}\nAdmin: ${ctx.user.email}`,
+        subject: 'Проверка электронной почты BillOK',
+        text: `Это тестовое письмо из панели администратора BillOK.\n\nОтправлено: ${new Date().toISOString()}\nАдминистратор: ${ctx.user.email}`,
         html: `
           <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-            <h2 style="color: #10b981;">ShareTab Test Email</h2>
-            <p>This is a test email from the ShareTab admin dashboard.</p>
+            <h2 style="color: #10b981;">Проверка электронной почты BillOK</h2>
+            <p>Это тестовое письмо из панели администратора BillOK.</p>
             <p style="color: #666; font-size: 14px;">
-              Sent at: ${new Date().toISOString()}<br/>
-              Admin: ${ctx.user.email}
+              Отправлено: ${new Date().toISOString()}<br/>
+              Администратор: ${ctx.user.email}
             </p>
           </div>
         `,
@@ -1055,284 +928,6 @@ export const adminRouter = createTRPCRouter({
         limit: input.limit,
         ...(input.afterId !== undefined ? { afterId: input.afterId } : {}),
       });
-    }),
-
-  // ─── Meridian Auth ──────────────────────────────────────────
-
-  getMeridianAuthStatus: adminProcedure.query(async () => {
-    if (!isProviderConfigured('meridian')) {
-      return { status: 'not_applicable' as const };
-    }
-    const health = await checkMeridianHealth();
-    // A proxy that isn't listening has no health to report; show why its
-    // last start failed instead.
-    const startError = health.status === 'not_running' ? getMeridianStartError() : null;
-    return {
-      ...health,
-      ...(startError ? { error: startError } : {}),
-      loginInProgress: isLoginInProgress(),
-    };
-  }),
-
-  startMeridianLogin: adminProcedure.mutation(async ({ ctx }) => {
-    if (!isProviderConfigured('meridian')) {
-      throw new AppError('PRECONDITION_FAILED', 'meridianNotConfigured');
-    }
-
-    try {
-      const url = await startLogin();
-
-      // Send email with login URL
-      await sendAuthExpiryEmail('Re-authentication initiated from admin dashboard', url);
-
-      await logAdminAction(ctx.db, ctx.user.id, 'MERIDIAN_LOGIN_STARTED', null, {
-        url,
-      });
-
-      return { url };
-    } catch (err) {
-      throw err instanceof Error
-        ? new AppError('INTERNAL_SERVER_ERROR', 'detail', { detail: err.message })
-        : new AppError('INTERNAL_SERVER_ERROR', 'loginStartFailed');
-    }
-  }),
-
-  completeMeridianLogin: adminProcedure
-    .input(z.object({ code: z.string().min(1).max(500) }))
-    .mutation(async ({ ctx, input }) => {
-      try {
-        const result = await submitCode(input.code);
-
-        let proxyError: string | null = null;
-        if (result.success) {
-          clearProviderCache();
-          // Wait (bounded) for the proxy start attempt before answering, then
-          // drop the cached health: the page re-reads the status right after
-          // this returns, and a check that lands before the proxy listens
-          // caches "not running" for 15s.
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          await Promise.race([
-            startMeridianProxy(),
-            new Promise<void>((resolve) => {
-              timer = setTimeout(resolve, MERIDIAN_LOGIN_START_WAIT_MS);
-            }),
-          ]);
-          clearTimeout(timer);
-          invalidateMeridianHealthCache();
-          // The login itself succeeded; report a proxy that still can't start.
-          proxyError = getMeridianStartError();
-        }
-
-        await logAdminAction(
-          ctx.db,
-          ctx.user.id,
-          result.success ? 'MERIDIAN_LOGIN_COMPLETED' : 'MERIDIAN_LOGIN_FAILED',
-          null,
-          { success: result.success, error: result.error, ...(proxyError ? { proxyError } : {}) },
-        );
-
-        return { ...result, ...(proxyError ? { proxyError } : {}) };
-      } catch (err) {
-        throw err instanceof Error
-          ? new AppError('INTERNAL_SERVER_ERROR', 'detail', { detail: err.message })
-          : new AppError('INTERNAL_SERVER_ERROR', 'loginCodeFailed');
-      }
-    }),
-
-  cancelMeridianLogin: adminProcedure.mutation(async ({ ctx }) => {
-    cancelLogin();
-    await logAdminAction(ctx.db, ctx.user.id, 'MERIDIAN_LOGIN_FAILED', null, {
-      reason: 'cancelled',
-    });
-    return { cancelled: true };
-  }),
-
-  logoutMeridian: adminProcedure.mutation(async ({ ctx }) => {
-    if (!isProviderConfigured('meridian')) {
-      throw new AppError('PRECONDITION_FAILED', 'meridianNotConfigured');
-    }
-
-    const result = logoutMeridian();
-    if (!result.success) {
-      throw result.error
-        ? new AppError('INTERNAL_SERVER_ERROR', 'detail', { detail: result.error })
-        : new AppError('INTERNAL_SERVER_ERROR', 'meridianLogoutFailed');
-    }
-
-    clearProviderCache();
-    invalidateMeridianHealthCache();
-    await logAdminAction(ctx.db, ctx.user.id, 'MERIDIAN_LOGOUT', null, {
-      reason: 'logged_out',
-    });
-    return { success: true };
-  }),
-
-  getMeridianNotifyPreference: adminProcedure.query(async ({ ctx }) => {
-    const setting = await ctx.db.systemSetting.findUnique({
-      where: { key: 'meridianNotifyInterval' },
-    });
-    return {
-      interval: (setting?.value ?? 'once') as 'once' | '1h' | '6h' | '24h',
-    };
-  }),
-
-  setMeridianNotifyPreference: adminProcedure
-    .input(
-      z.object({
-        interval: z.enum(['once', '1h', '6h', '24h']),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      await ctx.db.systemSetting.upsert({
-        where: { key: 'meridianNotifyInterval' },
-        update: { value: input.interval },
-        create: { key: 'meridianNotifyInterval', value: input.interval },
-      });
-
-      await logAdminAction(ctx.db, ctx.user.id, 'MERIDIAN_NOTIFY_PREFERENCE_CHANGED', null, {
-        interval: input.interval,
-      });
-
-      return { interval: input.interval };
-    }),
-
-  // ─── OpenAI Codex Auth ─────────────────────────────────────
-
-  getOpenAICodexAuthStatus: adminProcedure.query(async () => {
-    if (!isProviderConfigured('openai-codex')) {
-      return { status: 'not_applicable' as const };
-    }
-    const health = await checkOpenAICodexHealth();
-    return {
-      ...health,
-      loginInProgress: isOpenAICodexLoginInProgress(),
-    };
-  }),
-
-  startOpenAICodexLogin: adminProcedure.mutation(async () => {
-    if (!isProviderConfigured('openai-codex')) {
-      throw new AppError('PRECONDITION_FAILED', 'codexNotConfigured');
-    }
-    return { url: await startOpenAICodexLogin() };
-  }),
-
-  completeOpenAICodexLogin: adminProcedure
-    .input(z.object({ code: z.string().min(1).max(1000) }))
-    .mutation(async ({ input }) => {
-      const result = await submitOpenAICodexCode(input.code);
-      if (result.success) {
-        clearProviderCache();
-        invalidateOpenAICodexHealthCache();
-      }
-      return result;
-    }),
-
-  cancelOpenAICodexLogin: adminProcedure.mutation(async () => {
-    cancelOpenAICodexLogin();
-    return { cancelled: true };
-  }),
-
-  logoutOpenAICodex: adminProcedure.mutation(async () => {
-    if (!isProviderConfigured('openai-codex')) {
-      throw new AppError('PRECONDITION_FAILED', 'codexNotConfigured');
-    }
-
-    const result = logoutOpenAICodex();
-    if (!result.success) {
-      throw result.error
-        ? new AppError('INTERNAL_SERVER_ERROR', 'detail', { detail: result.error })
-        : new AppError('INTERNAL_SERVER_ERROR', 'codexLogoutFailed');
-    }
-
-    clearProviderCache();
-    invalidateOpenAICodexHealthCache();
-    return { success: true };
-  }),
-
-  // ─── AI Provider Testing ─────────────────────────────────
-
-  testAIProvider: adminProcedure
-    .input(
-      z.object({
-        providerName: z.string(),
-        imageBase64: z.string().max(10 * 1024 * 1024),
-        mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp', 'image/gif']),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const start = Date.now();
-      let provider;
-      try {
-        provider = await createProviderByName(input.providerName);
-      } catch (err) {
-        const error =
-          err instanceof Error
-            ? new AppError('BAD_REQUEST', 'detail', { detail: err.message })
-            : new AppError('BAD_REQUEST', 'providerCreateFailed');
-        await logAdminAction(ctx.db, ctx.user.id, 'AI_PROVIDER_TESTED', null, {
-          provider: input.providerName,
-          durationMs: Date.now() - start,
-          success: false,
-          error: error.message,
-        });
-        throw error;
-      }
-
-      const available = await provider.isAvailable();
-      if (!available) {
-        const error = new AppError('PRECONDITION_FAILED', 'providerUnavailable', { provider: input.providerName });
-        await logAdminAction(ctx.db, ctx.user.id, 'AI_PROVIDER_TESTED', null, {
-          provider: input.providerName,
-          durationMs: Date.now() - start,
-          success: false,
-          error: error.message,
-        });
-        throw error;
-      }
-
-      const imageBuffer = Buffer.from(input.imageBase64, 'base64');
-      if (imageBuffer.length > 5 * 1024 * 1024) {
-        const error = new AppError('BAD_REQUEST', 'testImageTooLarge');
-        await logAdminAction(ctx.db, ctx.user.id, 'AI_PROVIDER_TESTED', null, {
-          provider: input.providerName,
-          durationMs: Date.now() - start,
-          success: false,
-          error: error.message,
-        });
-        throw error;
-      }
-
-      try {
-        const result = await provider.extractReceipt(imageBuffer, input.mimeType);
-        const durationMs = Date.now() - start;
-
-        await logAdminAction(ctx.db, ctx.user.id, 'AI_PROVIDER_TESTED', null, {
-          provider: input.providerName,
-          durationMs,
-          success: true,
-        });
-
-        return { result, durationMs };
-      } catch (err) {
-        const durationMs = Date.now() - start;
-        // SERVICE_UNAVAILABLE (503): the provider failed, not ShareTab. Not
-        // BAD_GATEWAY: Cloudflare (and proxies set to intercept errors)
-        // replaces a 502 or 504 body with its own HTML page, hiding this
-        // message.
-        const error =
-          err instanceof Error
-            ? new AppError('SERVICE_UNAVAILABLE', 'detail', { detail: err.message })
-            : new AppError('SERVICE_UNAVAILABLE', 'extractionFailed');
-
-        await logAdminAction(ctx.db, ctx.user.id, 'AI_PROVIDER_TESTED', null, {
-          provider: input.providerName,
-          durationMs,
-          success: false,
-          error: error.message,
-        });
-
-        throw error;
-      }
     }),
 });
 

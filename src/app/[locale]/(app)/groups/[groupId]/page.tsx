@@ -11,9 +11,10 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
-import { Plus, Settings, UserPlus, ArrowRight, Receipt, Handshake, Camera, Tag, Archive, Trash2 } from 'lucide-react';
+import { Plus, Settings, UserPlus, ArrowRight, Receipt, Handshake, Tag, Archive, Trash2 } from 'lucide-react';
 import { Link } from '@/i18n/navigation';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { InviteDialog } from '@/components/groups/invite-dialog';
 import { SettleDialog } from '@/components/groups/settle-dialog';
 import { PaymentsList } from '@/components/groups/payments-list';
@@ -58,7 +59,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
       utils.settlements.list.invalidate({ groupId });
     },
     onError: (err) => {
-      toast.error(err.message);
+      toast.error(localizedTrpcError(err, tc('errors.generic')));
     },
   });
 
@@ -108,13 +109,14 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => setShowInvite(true)}>
+          <Button variant="outline" size="sm" className="min-h-11 min-w-11" onClick={() => setShowInvite(true)}>
             <UserPlus className="mr-2 h-4 w-4" />
             {t('detail.invite')}
           </Button>
           <Button
             variant="outline"
             size="sm"
+            className="min-h-11 min-w-11"
             aria-label={t('settings.title')}
             title={t('settings.title')}
             nativeButton={false}
@@ -217,9 +219,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                 isMyDebt &&
                 to?.venmoUsername &&
                 isValidVenmoHandle(to.venmoUsername);
-              const venmoUrl = showVenmo
-                ? buildVenmoPayUrl(to.venmoUsername!, debt.amount, `ShareTab: ${g.name}`)
-                : null;
+              const venmoUrl = showVenmo ? buildVenmoPayUrl(to.venmoUsername!, debt.amount, `BillOK: ${g.name}`) : null;
               return (
                 <div key={i} className="flex items-center gap-2">
                   <button
@@ -289,7 +289,9 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
             {pendingReceipts.data.map((r) => {
               const summary = (
                 <>
-                  <p className="font-medium">{r.extractedData?.merchantName ?? t('detail.receipt')}</p>
+                  <p className="min-w-0 font-medium [overflow-wrap:anywhere]">
+                    {r.extractedData?.merchantName ?? t('detail.receipt')}
+                  </p>
                   <p className="text-sm text-muted-foreground">
                     {r.extractedData?.date ?? new Date(r.createdAt).toLocaleDateString(locale)}
                     {' · '}
@@ -299,7 +301,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
               );
               return (
                 <Card key={r.id} className={g.archivedAt ? undefined : 'transition-colors hover:bg-muted/50'}>
-                  <CardContent className="flex items-center justify-between py-3">
+                  <CardContent className="flex min-w-0 flex-wrap items-center justify-between gap-2 py-3">
                     {/* An archived group refuses the expense finishing a saved receipt makes; deleting one still works */}
                     {g.archivedAt ? (
                       <div className="flex-1 min-w-0">{summary}</div>
@@ -308,13 +310,13 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                         {summary}
                       </Link>
                     )}
-                    <div className="flex items-center gap-3 ml-3">
-                      <p className="text-lg font-semibold">
+                    <div className="ml-3 flex min-w-0 flex-wrap items-center justify-end gap-2">
+                      <p className="min-w-0 text-lg font-semibold tabular-nums [overflow-wrap:anywhere]">
                         {r.extractedData ? formatCents(r.extractedData.total, g.currency, locale) : '—'}
                       </p>
                       <button
                         type="button"
-                        className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                        className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-destructive"
                         aria-label={t('detail.deleteReceipt')}
                         title={t('detail.deleteReceipt')}
                         onClick={() => setDeleteReceiptId(r.id)}
@@ -336,15 +338,6 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
           <h2 className="text-lg font-semibold">{t('detail.expenses')}</h2>
           {!g.archivedAt && (
             <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                nativeButton={false}
-                render={<Link href={`/groups/${groupId}/scan`} />}
-              >
-                <Camera className="mr-2 h-4 w-4" />
-                {t('detail.scanReceipt')}
-              </Button>
               <Button size="sm" nativeButton={false} render={<Link href={`/groups/${groupId}/expenses/new`} />}>
                 <Plus className="mr-2 h-4 w-4" />
                 {t('detail.addExpense')}

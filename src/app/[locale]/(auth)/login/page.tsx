@@ -76,8 +76,6 @@ function LoginForm() {
   const [redirecting, setRedirecting] = useState(false);
   const [signOutFailed, setSignOutFailed] = useState(false);
   const loginOptions = trpc.auth.getLoginOptions.useQuery();
-  // Quick Split needs uploads; hide its link only once we know guests are refused.
-  const guestUploadStatus = trpc.guest.getUploadStatus.useQuery();
   // Back from the provider's page (e.g. Google's account chooser) can restore
   // this page from the back/forward cache with the buttons still disabled.
   useEffect(() => {
@@ -173,13 +171,21 @@ function LoginForm() {
         <Input
           id="magic-email"
           type="email"
+          autoComplete="email"
+          autoCapitalize="none"
+          spellCheck={false}
+          className="h-11 min-w-0 text-base"
           placeholder={t('emailPlaceholder')}
           value={magicLinkEmail}
           onChange={(e) => setMagicLinkEmail(e.target.value)}
           required
         />
       </div>
-      <Button type="submit" className="w-full rounded-full h-10 text-sm font-medium mt-2" disabled={magicLinkSending}>
+      <Button
+        type="submit"
+        className="w-full rounded-full min-h-11 text-base font-medium mt-2"
+        disabled={magicLinkSending}
+      >
         <Mail className="mr-2 h-4 w-4" />
         {magicLinkSending ? t('magicLinkSending') : t('magicLinkSubmit')}
       </Button>
@@ -239,7 +245,7 @@ function LoginForm() {
                       // rules want its button at least as prominent as other
                       // third-party sign-in buttons.
                       variant={passwordLogin || magicLinkOnly || google ? 'outline' : 'default'}
-                      className="w-full rounded-full h-10 text-sm font-medium"
+                      className="w-full rounded-full min-h-11 text-base font-medium"
                       onClick={() => handleProviderSignIn('oidc')}
                       disabled={redirecting}
                     >
@@ -253,7 +259,7 @@ function LoginForm() {
                       // Always outlined: the primary color belongs to the
                       // password or magic-link form, when there is one.
                       variant="outline"
-                      className="w-full rounded-full h-10 text-sm font-medium"
+                      className="w-full rounded-full min-h-11 text-base font-medium"
                       onClick={() => handleProviderSignIn('google')}
                       disabled={redirecting}
                     >
@@ -278,6 +284,10 @@ function LoginForm() {
                       <Input
                         id="email"
                         type="email"
+                        autoComplete="username"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        className="h-11 min-w-0 text-base"
                         placeholder={t('emailPlaceholder')}
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
@@ -291,7 +301,7 @@ function LoginForm() {
                           <button
                             type="button"
                             onClick={() => setShowMagicLink(true)}
-                            className="text-xs text-primary hover:text-primary/80 transition-colors"
+                            className="inline-flex min-h-11 items-center text-sm text-primary transition-colors hover:text-primary/80"
                           >
                             {t('forgotPassword')}
                           </button>
@@ -300,6 +310,8 @@ function LoginForm() {
                       <Input
                         id="password"
                         type="password"
+                        autoComplete="current-password"
+                        className="h-11 min-w-0 text-base"
                         placeholder={t('passwordPlaceholder')}
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
@@ -309,7 +321,7 @@ function LoginForm() {
                     </div>
                     <Button
                       type="submit"
-                      className="w-full rounded-full h-10 text-sm font-medium mt-2"
+                      className="w-full rounded-full min-h-11 text-base font-medium mt-2"
                       disabled={loading}
                     >
                       {loading ? t('submitting') : t('submit')}
@@ -322,7 +334,7 @@ function LoginForm() {
 
                       <Button
                         variant="outline"
-                        className="w-full rounded-full h-10 text-sm border-primary/20 text-muted-foreground hover:text-foreground hover:border-primary/40"
+                        className="w-full rounded-full min-h-11 text-base border-primary/20 text-muted-foreground hover:text-foreground hover:border-primary/40"
                         onClick={() => setShowMagicLink(true)}
                       >
                         <Mail className="mr-2 h-4 w-4" />
@@ -339,7 +351,7 @@ function LoginForm() {
 
                   <Button
                     variant="outline"
-                    className="w-full rounded-full h-10 text-sm border-primary/20 text-muted-foreground hover:text-foreground hover:border-primary/40"
+                    className="w-full rounded-full min-h-11 text-base border-primary/20 text-muted-foreground hover:text-foreground hover:border-primary/40"
                     onClick={() => setShowMagicLink(false)}
                   >
                     {t('passwordLink')}
@@ -361,14 +373,6 @@ function LoginForm() {
               {t('noAccount')}{' '}
               <Link href={registerHref} className="font-medium text-primary hover:underline">
                 {t('createAccount')}
-              </Link>
-            </p>
-          )}
-          {guestUploadStatus.data?.allowed !== false && (
-            <p className="text-xs text-muted-foreground/80">
-              {t('quickSplit')}{' '}
-              <Link href="/split" className="font-medium text-primary hover:underline">
-                {t('quickSplitLink')}
               </Link>
             </p>
           )}

@@ -4,7 +4,6 @@ import { use, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Link, useRouter } from '@/i18n/navigation';
 import { trpc } from '@/lib/trpc';
-import { COMMON_CURRENCIES } from '@/lib/currencies';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -31,6 +30,7 @@ import { MergePlaceholderDialog } from '@/components/groups/merge-placeholder-di
 import { TransferOwnershipDialog } from '@/components/groups/transfer-ownership-dialog';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 // Details form is a separate component so its state is initialized exactly
 // once from the loaded group data. The page invalidates `groups.get` whenever
@@ -50,11 +50,11 @@ function GroupDetailsForm({
   readOnly: boolean;
 }) {
   const t = useTranslations('groups');
+  const tc = useTranslations('common');
   const utils = trpc.useUtils();
 
   const [name, setName] = useState(initialName);
   const [description, setDescription] = useState(initialDescription);
-  const [currency, setCurrency] = useState(initialCurrency);
 
   const updateGroup = trpc.groups.update.useMutation({
     onSuccess: () => {
@@ -70,7 +70,6 @@ function GroupDetailsForm({
       groupId,
       name: name.trim(),
       description: description || undefined,
-      currency: currency || undefined,
     });
   }
 
@@ -95,21 +94,16 @@ function GroupDetailsForm({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="currency">{t('settings.currency')}</Label>
-            <select
-              id="currency"
-              value={currency}
-              onChange={(e) => setCurrency(e.target.value)}
-              disabled={readOnly}
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            <Label>{t('settings.currency')}</Label>
+            <p
+              className="rounded-lg border border-input px-3 py-2 text-sm text-muted-foreground"
+              data-testid="group-currency-readonly"
             >
-              {COMMON_CURRENCIES.map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.code} - {c.name}
-                </option>
-              ))}
-            </select>
-            {updateGroup.error && <p className="text-xs text-destructive">{updateGroup.error.message}</p>}
+              {initialCurrency === 'RUB' ? 'Российский рубль (₽)' : initialCurrency}
+            </p>
+            {updateGroup.error && (
+              <p className="text-xs text-destructive">{localizedTrpcError(updateGroup.error, tc('errors.generic'))}</p>
+            )}
           </div>
           {!readOnly && (
             <Button type="submit" disabled={updateGroup.isPending}>
@@ -127,6 +121,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
   const { groupId } = use(params);
   const router = useRouter();
   const t = useTranslations('groups');
+  const tc = useTranslations('common');
   const locale = useLocale();
   const group = trpc.groups.get.useQuery({ groupId });
   const utils = trpc.useUtils();
@@ -148,7 +143,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
     onSuccess: () => {
       router.push('/groups');
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   const archiveGroup = trpc.groups.archive.useMutation({
@@ -157,7 +152,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
       utils.groups.listArchived.invalidate();
       router.push('/groups');
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   const unarchiveGroup = trpc.groups.unarchive.useMutation({
@@ -166,7 +161,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
       utils.groups.list.invalidate();
       utils.groups.listArchived.invalidate();
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   const addPlaceholder = trpc.groups.addPlaceholder.useMutation({
@@ -188,7 +183,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
 
   const removeMember = trpc.groups.removeMember.useMutation({
     onSuccess: () => utils.groups.get.invalidate({ groupId }),
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   const leaveGroup = trpc.groups.removeMember.useMutation({
@@ -197,12 +192,14 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
       utils.groups.listArchived.invalidate();
       router.push('/groups');
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   // The server refuses a placeholder name someone in the group already has (#265)
   function placeholderError(e: { message: string; data?: { code?: string } | null | undefined }, name: string) {
-    return e.data?.code === 'CONFLICT' ? t('settings.placeholderNameTaken', { name }) : e.message;
+    return e.data?.code === 'CONFLICT'
+      ? t('settings.placeholderNameTaken', { name })
+      : localizedTrpcError(e, tc('errors.generic'));
   }
 
   function handleAddPlaceholder(e: React.FormEvent) {
@@ -249,9 +246,9 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
       </div>
 
       {group.data.archivedAt && (
-        <div className="flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200">
+        <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200">
           <Archive className="h-5 w-5 shrink-0" />
-          <div className="flex-1">
+          <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
             <p className="font-medium">{t('settings.archived')}</p>
             <p className="text-amber-700 dark:text-amber-300">
               {t('settings.archivedOn', { date: new Date(group.data.archivedAt).toLocaleDateString(locale) })}
@@ -263,6 +260,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
             <Button
               size="sm"
               variant="outline"
+              className="min-h-11 min-w-11 shrink-0 whitespace-normal leading-tight"
               onClick={() => unarchiveGroup.mutate({ groupId })}
               disabled={unarchiveGroup.isPending}
             >
@@ -291,14 +289,19 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm text-muted-foreground">{t('settings.addMemberDescription')}</p>
-            <form onSubmit={handleAddPlaceholder} className="flex gap-2">
+            <form
+              onSubmit={handleAddPlaceholder}
+              className="flex min-w-0 flex-wrap gap-2"
+              data-testid="group-placeholder-form"
+            >
               <Input
                 placeholder={t('settings.namePlaceholder')}
                 value={placeholderName}
                 onChange={(e) => setPlaceholderName(e.target.value)}
+                className="h-11 min-w-[8rem] flex-1 text-base"
                 required
               />
-              <Button type="submit" disabled={addPlaceholder.isPending}>
+              <Button type="submit" className="min-h-11 min-w-11" disabled={addPlaceholder.isPending}>
                 {addPlaceholder.isPending ? t('settings.adding') : t('settings.add')}
               </Button>
             </form>
@@ -316,14 +319,15 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                 {placeholders.map((m) => (
                   <div
                     key={m.user.id}
-                    className="flex items-center justify-between rounded-md border border-dashed p-2"
+                    data-testid="group-placeholder-row"
+                    className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-md border border-dashed p-2"
                   >
                     {editingPlaceholder === m.user.id ? (
-                      <div className="flex flex-1 items-center gap-2">
+                      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                         <Input
                           value={editingName}
                           onChange={(e) => setEditingName(e.target.value)}
-                          className="h-7 text-sm"
+                          className="h-11 min-w-[8rem] flex-1 text-base"
                           autoFocus
                           onKeyDown={(e) => {
                             if (e.key === 'Enter')
@@ -344,7 +348,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                               name: editingName.trim(),
                             })
                           }
-                          className="text-primary hover:text-primary/80"
+                          className="flex size-11 shrink-0 items-center justify-center rounded-md text-primary hover:text-primary/80"
                           disabled={renamePlaceholder.isPending}
                           aria-label={t('settings.saveName')}
                           title={t('settings.saveName')}
@@ -354,7 +358,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                         <button
                           type="button"
                           onClick={() => setEditingPlaceholder(null)}
-                          className="text-muted-foreground hover:text-foreground"
+                          className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
                           aria-label={t('settings.cancelRename')}
                           title={t('settings.cancelRename')}
                         >
@@ -363,13 +367,15 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                       </div>
                     ) : (
                       <>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm">{m.user.placeholderName ?? m.user.name}</span>
+                        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                          <span className="min-w-0 text-sm [overflow-wrap:anywhere]">
+                            {m.user.placeholderName ?? m.user.name}
+                          </span>
                           <Badge variant="outline" className="text-[10px]">
                             {t('settings.pending')}
                           </Badge>
                         </div>
-                        <div className="flex items-center gap-1">
+                        <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
                           {canMerge && (
                             <>
                               <button
@@ -377,7 +383,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                                 aria-label={t('settings.inviteToClaim', { name: m.displayName })}
                                 title={t('settings.inviteToClaim', { name: m.displayName })}
                                 onClick={() => setClaimFor({ id: m.user.id, name: m.displayName })}
-                                className="text-muted-foreground hover:text-foreground"
+                                className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
                               >
                                 <Link2 className="h-3.5 w-3.5" />
                               </button>
@@ -386,7 +392,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                                 aria-label={t('settings.mergeIntoMember', { name: m.displayName })}
                                 title={t('settings.mergeIntoMember', { name: m.displayName })}
                                 onClick={() => setMergeFor({ id: m.user.id, name: m.displayName })}
-                                className="text-muted-foreground hover:text-foreground"
+                                className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
                               >
                                 <Merge className="h-3.5 w-3.5" />
                               </button>
@@ -400,7 +406,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                               setEditingPlaceholder(m.user.id);
                               setEditingName(m.displayName);
                             }}
-                            className="text-muted-foreground hover:text-foreground"
+                            className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
                           >
                             <Pencil className="h-3.5 w-3.5" />
                           </button>
@@ -409,7 +415,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                             aria-label={t('settings.removePlaceholder', { name: m.displayName })}
                             title={t('settings.removePlaceholder', { name: m.displayName })}
                             onClick={() => setRemoveFor({ id: m.user.id, name: m.displayName })}
-                            className="text-muted-foreground hover:text-destructive"
+                            className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-destructive"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>

@@ -4,8 +4,7 @@ import { use, useMemo, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Link, useRouter } from '@/i18n/navigation';
 import { trpc } from '@/lib/trpc';
-import { parseToCents, formatCents } from '@/lib/money';
-import { COMMON_CURRENCIES } from '@/lib/currencies';
+import { parseToCents } from '@/lib/money';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -17,6 +16,7 @@ import { ExactSplit } from '@/components/expenses/exact-split';
 import { PercentageSplit } from '@/components/expenses/percentage-split';
 import { SharesSplit } from '@/components/expenses/shares-split';
 import { ArchivedGroupNotice } from '@/components/groups/archived-group-notice';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 type SplitMode = 'EQUAL' | 'EXACT' | 'PERCENTAGE' | 'SHARES';
 
@@ -37,6 +37,7 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
   const router = useRouter();
   const locale = useLocale();
   const t = useTranslations('expenses');
+  const tc = useTranslations('common');
   const group = trpc.groups.get.useQuery({ groupId });
   // Who tRPC acts as: the impersonated user while an admin impersonates, where
   // useSession() would still report the admin.
@@ -48,14 +49,11 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
   const [paidById, setPaidById] = useState('');
   const [splitMode, setSplitMode] = useState<SplitMode>('EQUAL');
   const [shares, setShares] = useState<ShareEntry[]>([]);
-  const [currency, setCurrency] = useState<string>('');
-  const [manualRate, setManualRate] = useState<string>('');
-  const [useManualRate, setUseManualRate] = useState(false);
-
-  // Initialize currency from group when data loads
-  const groupCurrency = group.data?.currency ?? 'USD';
-  const effectiveCurrency = currency || groupCurrency;
-  const isDifferentCurrency = effectiveCurrency.toUpperCase() !== groupCurrency.toUpperCase();
+  // Existing non-RUB groups must keep their historical amounts unchanged.
+  // Until a safe migration is defined, new entries into such groups are blocked,
+  // rather than silently converting or mixing currencies.
+  const groupCurrency = group.data?.currency ?? 'RUB';
+  const isRubGroup = group.data?.currency?.toUpperCase() === 'RUB';
 
   const splitModes = useMemo(
     () => [
@@ -71,6 +69,9 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
     [t],
   );
 
+  const createManualReceipt = trpc.receipts.createManual.useMutation({
+    onSuccess: ({ receiptId }) => router.push('/groups/' + groupId + '/scan?receiptId=' + receiptId),
+  });
   const createExpense = trpc.expenses.create.useMutation({
     onSuccess: () => {
       router.push(`/groups/${groupId}`);
@@ -86,26 +87,21 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
     [group.data?.members],
   );
 
-  // Until someone picks a payer, default to the current user (when they're in the group),
-  // the same way currency defaults to the group's.
+  // Until someone picks a payer, default to the current user (when they're in the group).
   const currentUserId = profile.data?.id;
   const defaultPaidById = currentUserId && members.some((m) => m.id === currentUserId) ? currentUserId : '';
   const effectivePaidById = paidById || defaultPaidById;
 
   const amountCents = parseToCents(amountStr);
-  const parsedManualRate = parseFloat(manualRate);
-  const manualRateValid = useManualRate && !isNaN(parsedManualRate) && parsedManualRate > 0;
-
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!effectivePaidById || amountCents <= 0 || shares.length === 0) return;
+    if (!isRubGroup || !effectivePaidById || amountCents <= 0 || shares.length === 0) return;
 
     createExpense.mutate({
       groupId,
       title,
       amount: amountCents,
-      currency: effectiveCurrency,
-      ...(isDifferentCurrency && manualRateValid ? { exchangeRate: parsedManualRate } : {}),
+      currency: 'RUB',
       category: category || undefined,
       paidById: effectivePaidById,
       splitMode,
@@ -131,6 +127,39 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
         <h1 className="text-2xl font-bold">{t('new.title')}</h1>
       </div>
 
+      {!isRubGroup && group.data && (
+        <p
+          role="alert"
+          data-testid="rub-only-legacy-warning"
+          className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100"
+        >
+          {t('new.rubOnlyLegacyGroup', { currency: groupCurrency })}
+        </p>
+      )}
+
+      <Card data-testid="manual-group-receipt-entry">
+        <CardHeader>
+          <CardTitle>{t('new.manualReceiptTitle')}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">{t('new.manualReceiptDescription')}</p>
+          <Button
+            type="button"
+            className="min-h-12 w-full"
+            onClick={() => createManualReceipt.mutate({ groupId })}
+            disabled={createManualReceipt.isPending || !isRubGroup}
+            data-testid="create-manual-group-receipt"
+          >
+            {createManualReceipt.isPending ? t('new.creatingManualReceipt') : t('new.createManualReceipt')}
+          </Button>
+          {createManualReceipt.error && (
+            <p role="alert" className="text-sm text-destructive">
+              {localizedTrpcError(createManualReceipt.error, tc('errors.generic'))}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>{t('new.expenseDetails')}</CardTitle>
@@ -148,83 +177,20 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
               />
             </div>
 
-            <div className="grid grid-cols-[1fr_auto] gap-2">
-              <div className="space-y-2">
-                <Label htmlFor="amount">{t('new.amount')}</Label>
-                <Input
-                  id="amount"
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  placeholder={t('new.amountPlaceholder')}
-                  value={amountStr}
-                  onChange={(e) => setAmountStr(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="currency">{t('new.currency')}</Label>
-                <select
-                  id="currency"
-                  value={effectiveCurrency}
-                  onChange={(e) => setCurrency(e.target.value)}
-                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  {COMMON_CURRENCIES.map((c) => (
-                    <option key={c.code} value={c.code}>
-                      {c.code}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div className="space-y-2">
+              <Label htmlFor="amount">{t('new.amount')} (₽)</Label>
+              <Input
+                id="amount"
+                type="text"
+                inputMode="decimal"
+                min="0.01"
+                placeholder={t('new.amountPlaceholder')}
+                value={amountStr}
+                onChange={(e) => setAmountStr(e.target.value)}
+                required
+                className="h-11 min-w-0 text-base"
+              />
             </div>
-
-            {isDifferentCurrency && (
-              <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm dark:border-blue-800 dark:bg-blue-950/50">
-                <p className="text-blue-800 dark:text-blue-200">
-                  {t('new.differentCurrencyNote', {
-                    expenseCurrency: effectiveCurrency,
-                    groupCurrency,
-                  })}
-                </p>
-                <div className="mt-2 flex items-center gap-2">
-                  <label className="flex items-center gap-1.5 text-xs text-blue-700 dark:text-blue-300">
-                    <input
-                      type="checkbox"
-                      checked={useManualRate}
-                      onChange={(e) => setUseManualRate(e.target.checked)}
-                      className="rounded"
-                    />
-                    {t('new.manualRateOverride')}
-                  </label>
-                </div>
-                {useManualRate && (
-                  <div className="mt-2">
-                    <Input
-                      type="number"
-                      step="any"
-                      min="0.000001"
-                      placeholder={t('new.exchangeRatePlaceholder', {
-                        from: effectiveCurrency,
-                        to: groupCurrency,
-                      })}
-                      value={manualRate}
-                      onChange={(e) => setManualRate(e.target.value)}
-                    />
-                    {manualRateValid && amountCents > 0 && (
-                      <p className="mt-1 text-xs text-blue-700 dark:text-blue-300">
-                        {t('new.convertedAmount', {
-                          amount: formatCents(Math.round(amountCents * parsedManualRate), groupCurrency, locale),
-                        })}
-                      </p>
-                    )}
-                  </div>
-                )}
-                {!useManualRate && (
-                  <p className="mt-1 text-xs text-blue-600 dark:text-blue-400">{t('new.autoRateNote')}</p>
-                )}
-              </div>
-            )}
 
             <div className="space-y-2">
               <Label htmlFor="category">{t('new.category')}</Label>
@@ -244,7 +210,7 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
                 value={effectivePaidById}
                 onChange={(e) => setPaidById(e.target.value)}
                 required
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex h-11 min-w-0 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <option value="">{t('new.selectMember')}</option>
                 {members.map((m) => (
@@ -263,7 +229,8 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
                     key={mode.value}
                     type="button"
                     onClick={() => setSplitMode(mode.value)}
-                    className={`rounded-md border p-2 text-left text-sm transition-colors ${
+                    data-testid={`expense-split-mode-${mode.value}`}
+                    className={`min-h-11 min-w-0 rounded-md border p-2 text-left text-sm transition-colors ${
                       splitMode === mode.value ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted'
                     }`}
                   >
@@ -282,7 +249,7 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
                   totalCents={amountCents}
                   onChange={setShares}
                   locale={locale}
-                  currency={effectiveCurrency}
+                  currency="RUB"
                 />
               )}
               {splitMode === 'EXACT' && (
@@ -291,7 +258,7 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
                   totalCents={amountCents}
                   onChange={setShares}
                   locale={locale}
-                  currency={effectiveCurrency}
+                  currency="RUB"
                 />
               )}
               {splitMode === 'PERCENTAGE' && (
@@ -300,7 +267,7 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
                   totalCents={amountCents}
                   onChange={setShares}
                   locale={locale}
-                  currency={effectiveCurrency}
+                  currency="RUB"
                 />
               )}
               {splitMode === 'SHARES' && (
@@ -309,21 +276,21 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
                   totalCents={amountCents}
                   onChange={setShares}
                   locale={locale}
-                  currency={effectiveCurrency}
+                  currency="RUB"
                 />
               )}
             </div>
 
             {createExpense.error && (
               <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                {createExpense.error.message}
+                {localizedTrpcError(createExpense.error, tc('errors.generic'))}
               </div>
             )}
 
             <Button
               type="submit"
-              className="w-full"
-              disabled={createExpense.isPending || amountCents <= 0 || shares.length === 0}
+              className="min-h-11 w-full text-base"
+              disabled={!isRubGroup || createExpense.isPending || amountCents <= 0 || shares.length === 0}
             >
               {createExpense.isPending ? t('new.submitting') : t('new.submit')}
             </Button>

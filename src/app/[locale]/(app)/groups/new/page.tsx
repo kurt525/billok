@@ -7,17 +7,17 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { COMMON_CURRENCIES } from '@/lib/currencies';
 import { trpc } from '@/lib/trpc';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 const EMOJI_OPTIONS = ['💰', '🏠', '✈️', '🍽️', '🎉', '🛒', '🚗', '💼'];
 
 export default function NewGroupPage() {
   const t = useTranslations('groups.new');
+  const tc = useTranslations('common');
   const router = useRouter();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [currency, setCurrency] = useState('USD');
   const [emoji, setEmoji] = useState('💰');
 
   const createGroup = trpc.groups.create.useMutation({
@@ -32,13 +32,13 @@ export default function NewGroupPage() {
     createGroup.mutate({
       name: name.trim(),
       description: description || undefined,
-      currency,
+      currency: 'RUB',
       emoji,
     });
   }
 
   return (
-    <div className="mx-auto max-w-lg">
+    <div className="mx-auto min-w-0 max-w-lg">
       <h1 className="mb-6 text-2xl font-bold">{t('title')}</h1>
       <Card>
         <CardHeader>
@@ -50,6 +50,7 @@ export default function NewGroupPage() {
               <Label htmlFor="name">{t('name')}</Label>
               <Input
                 id="name"
+                className="h-11 min-w-0 text-base"
                 placeholder={t('namePlaceholder')}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -62,6 +63,7 @@ export default function NewGroupPage() {
               <Label htmlFor="description">{t('description')}</Label>
               <Input
                 id="description"
+                className="h-11 min-w-0 text-base"
                 placeholder={t('descriptionPlaceholder')}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
@@ -76,8 +78,10 @@ export default function NewGroupPage() {
                   <button
                     key={e}
                     type="button"
+                    aria-label={e}
+                    aria-pressed={emoji === e}
                     onClick={() => setEmoji(e)}
-                    className={`flex h-10 w-10 items-center justify-center rounded-md border text-lg transition-colors ${
+                    className={`flex size-11 shrink-0 items-center justify-center rounded-md border text-lg transition-colors ${
                       emoji === e ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted'
                     }`}
                   >
@@ -87,29 +91,13 @@ export default function NewGroupPage() {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="currency">{t('currency')}</Label>
-              <select
-                id="currency"
-                value={currency}
-                onChange={(e) => setCurrency(e.target.value)}
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                {COMMON_CURRENCIES.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.code} - {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
             {createGroup.error && (
               <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                {createGroup.error.message}
+                {localizedTrpcError(createGroup.error, tc('errors.generic'))}
               </div>
             )}
 
-            <Button type="submit" className="w-full" disabled={createGroup.isPending}>
+            <Button type="submit" className="min-h-11 w-full text-base" disabled={createGroup.isPending}>
               {createGroup.isPending ? t('submitting') : t('submit')}
             </Button>
           </form>

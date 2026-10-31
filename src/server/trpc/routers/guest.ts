@@ -3,9 +3,8 @@ import { z } from 'zod';
 import { AppError } from '@/server/lib/app-error';
 import { Prisma, GuestSplitStatus } from '@/generated/prisma/client';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
-import { processReceiptImage } from '../../lib/receipt-processor';
 import { logger } from '../../lib/logger';
-import { checkRateLimit, checkTokenRateLimit, refundRateLimit } from '../../lib/rate-limit';
+import { checkRateLimit, checkTokenRateLimit } from '../../lib/rate-limit';
 import { checkClaimWriteRateLimit, checkSessionReadRateLimit } from '../../lib/guest-session-limits';
 import { getClientIp } from '../../lib/client-ip';
 import { guestTransaction } from '../../lib/guest-transaction';
@@ -22,9 +21,11 @@ import {
   parseGuestAssignments,
   validSaveRecords,
 } from '../../lib/json-schemas';
-import { calculateSplitTotals, groupSizeWeights } from '@/lib/split-calculator';
+import { calculateSplitTotals, addPersonalGuestTips, groupSizeWeights } from '@/lib/split-calculator';
 import { normalizeGuestName } from '@/lib/guest-session';
-import { canUseGuestUploads } from '../../lib/guest-uploads';
+import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
+import { MAX_MONEY_CENTS } from '@/lib/money';
+import { normalizeSbpPhone, isSupportedSbpBankId } from '@/lib/sbp-banks';
 import { checkJoinRateLimit } from '../../lib/guest-join-limit';
 import {
   assignPersonIds,
@@ -72,7 +73,7 @@ function toPublicPeople(people: GuestSessionPerson[]) {
 // The claim page's view of the people: public fields plus each person's id, which it uses to
 // target them (their index changes when someone listed before them is removed)
 function toClaimPeople(people: IdentifiedGuestPerson[]) {
-  return people.map((person) => ({ id: person.id, ...toPublicPerson(person) }));
+  return people.map((person) => ({ id: person.id, ...toPublicPerson(person), tipCents: person.tipCents ?? 0 }));
 }
 
 /**
@@ -176,16 +177,128 @@ function cloneAssignments(assignments: { itemIndex: number; personIndices: numbe
   }));
 }
 
+/** Return only a verified non-payer with a positive, reconciled personal debt.
+ * Never authorize using a public share token, creator login or display name.
+ */
+function requireGuestDebtor(
+  split: {
+    status: GuestSplitStatus;
+    people: Prisma.JsonValue;
+    paidByIndex: number;
+    receiptData: Prisma.JsonValue;
+    summary: Prisma.JsonValue | null;
+  },
+  personId: string,
+  personToken: string,
+) {
+  if (split.status !== GuestSplitStatus.FINALIZED) {
+    throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+  }
+  const people = split.people as GuestSessionPerson[];
+  const personIndex = people.findIndex((person) => person.id === personId && person.personToken === personToken);
+  if (personIndex < 0 || personIndex === split.paidByIndex) {
+    throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  }
+  const person = people[personIndex]!;
+  const receipt = split.receiptData as { currency?: string; tax?: number; tip?: number; total?: number };
+  const summary = split.summary as { personIndex: number; total: number; tip: number }[] | null;
+  if (
+    receipt.currency !== 'RUB' ||
+    receipt.tax !== 0 ||
+    receipt.tip !== 0 ||
+    !Number.isSafeInteger(receipt.total) ||
+    receipt.total! < 0 ||
+    !Array.isArray(summary) ||
+    summary.length !== people.length ||
+    !people[split.paidByIndex] ||
+    summary.some(
+      (entry) =>
+        !Number.isSafeInteger(entry.personIndex) ||
+        entry.personIndex < 0 ||
+        entry.personIndex >= people.length ||
+        !Number.isSafeInteger(entry.total) ||
+        entry.total < 0 ||
+        !Number.isSafeInteger(entry.tip) ||
+        entry.tip < 0,
+    ) ||
+    new Set(summary.map((entry) => entry.personIndex)).size !== people.length ||
+    summary.reduce((sum, entry) => sum + entry.total, 0) !==
+      receipt.total! + summary.reduce((sum, entry) => sum + entry.tip, 0)
+  ) {
+    throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  }
+  const due = summary.find((entry) => entry.personIndex === personIndex);
+  if (!due || due.total <= 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  return { people, person, personIndex };
+}
+
+/** Check payer's identity and reconcile the finalized receipt before allowing
+ * payer-only verification. The public share token and creator account are not authority.
+ */
+function requireGuestPayerReview(
+  split: {
+    status: GuestSplitStatus;
+    people: Prisma.JsonValue;
+    paidByIndex: number;
+    receiptData: Prisma.JsonValue;
+    summary: Prisma.JsonValue | null;
+  },
+  payerId: string,
+  payerToken: string,
+) {
+  const people = split.people as GuestSessionPerson[];
+  const payer = people[split.paidByIndex];
+  if (!payer || payer.id !== payerId || payer.personToken !== payerToken) {
+    throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  }
+  if (split.status !== GuestSplitStatus.FINALIZED) {
+    throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+  }
+  const receipt = split.receiptData as { currency?: string; tax?: number; tip?: number; total?: number };
+  const summary = split.summary as { personIndex: number; total: number; tip: number }[] | null;
+  if (
+    receipt.currency !== 'RUB' ||
+    receipt.tax !== 0 ||
+    receipt.tip !== 0 ||
+    !Number.isSafeInteger(receipt.total) ||
+    receipt.total! < 0 ||
+    !Array.isArray(summary) ||
+    summary.length !== people.length ||
+    summary.some(
+      (entry) =>
+        !Number.isSafeInteger(entry.personIndex) ||
+        entry.personIndex < 0 ||
+        entry.personIndex >= people.length ||
+        !Number.isSafeInteger(entry.total) ||
+        entry.total < 0 ||
+        !Number.isSafeInteger(entry.tip) ||
+        entry.tip < 0,
+    ) ||
+    new Set(summary.map((entry) => entry.personIndex)).size !== people.length ||
+    summary.reduce((sum, entry) => sum + entry.total, 0) !==
+      receipt.total! + summary.reduce((sum, entry) => sum + entry.tip, 0)
+  ) {
+    throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  }
+  return { people, summary };
+}
+
 // ─── Shared Zod schemas (Finding #27) ────────────────────────────
-const receiptDataSchema = z.object({
-  merchantName: z.string().optional(),
-  date: z.string().optional(),
-  subtotal: z.number().int(),
-  tax: z.number().int(),
-  tip: z.number().int(),
-  total: z.number().int(),
-  currency: z.string().default('USD'),
-});
+const receiptDataSchema = z
+  .object({
+    merchantName: z.string().optional(),
+    date: z.string().optional(),
+    subtotal: z.number().int(),
+    // Item prices include restaurant taxes; personal tips will be separate.
+    tax: z.number().int().min(0).max(0).default(0),
+    tip: z.number().int().min(0).max(0).default(0),
+    total: z.number().int().min(0),
+    currency: z.string().trim().toUpperCase().pipe(z.literal('RUB')).default('RUB'),
+  })
+  .refine((receipt) => receipt.total === receipt.subtotal, {
+    path: ['total'],
+    message: 'No additional tax or shared tips in a new BillOK receipt',
+  });
 
 const itemSchema = z.object({
   name: z.string(),
@@ -284,7 +397,7 @@ export const guestRouter = createTRPCRouter({
             status: s.status,
             merchantName: receipt?.merchantName as string | undefined,
             total: receipt?.total as number | undefined,
-            currency: (receipt?.currency as string | undefined) ?? 'USD',
+            currency: (receipt?.currency as string | undefined) ?? 'RUB',
             peopleCount: people?.length ?? 0,
             itemCount: items?.length ?? 0,
             createdAt: s.createdAt,
@@ -292,108 +405,6 @@ export const guestRouter = createTRPCRouter({
         }),
         nextCursor,
       };
-    }),
-
-  getUploadStatus: publicProcedure.query(async ({ ctx }) => {
-    return { allowed: await canUseGuestUploads(ctx.db, () => ctx.session?.user?.id) };
-  }),
-
-  processReceipt: publicProcedure
-    .input(z.object({ receiptId: receiptIdSchema, correctionHint: z.string().max(500).optional() }))
-    .mutation(async ({ ctx, input }) => {
-      // Kill switch for unauthenticated AI spend. Checked first so an
-      // anonymous caller on a disabled install does no receipt lookup and
-      // burns no quota.
-      if (!(await canUseGuestUploads(ctx.db, () => ctx.session?.user?.id))) {
-        throw new AppError('FORBIDDEN', 'guestUploadsDisabled');
-      }
-
-      const receipt = await ctx.db.receipt.findUnique({
-        where: { id: input.receiptId },
-      });
-      if (!receipt) {
-        throw new AppError('NOT_FOUND', 'receiptNotFound');
-      }
-      if (!receipt.isGuest) {
-        throw new AppError('NOT_FOUND', 'receiptNotFound');
-      }
-
-      // Quotas, checked only AFTER the receipt is validated as a real guest
-      // receipt so bad receipt ids can't burn budget:
-      //  - per receipt (3/h): bounds reprocessing of a single receipt
-      //  - per IP (20/h): bounds one client across receipts (spoofable headers)
-      //  - global: hard cap on total unauthenticated AI spend regardless
-      // Consumption is atomic (synchronous, single event-loop turn) BEFORE
-      // the processing claim, so concurrent requests cannot all slip past a
-      // non-consuming check; if the claim then fails with CONFLICT, the
-      // consumed attempts are refunded so retries against an in-flight
-      // receipt don't drain any bucket.
-      const ip = getClientIp(ctx.headers);
-      const globalMax = parseInt(process.env.GUEST_AI_GLOBAL_LIMIT ?? '100', 10) || 100;
-      const quotaWindow = 60 * 60 * 1000;
-      const quotas: Array<{ key: string; max: number }> = [
-        { key: `guest-process:${input.receiptId}`, max: 3 },
-        { key: `guest-process-ip:${ip}`, max: 20 },
-        { key: 'guest-process-global', max: globalMax },
-      ];
-      const consumed: string[] = [];
-      const refundConsumed = () => {
-        for (const key of consumed) refundRateLimit(key);
-      };
-      for (const quota of quotas) {
-        if (checkRateLimit(quota.key, quota.max, quotaWindow).allowed) {
-          consumed.push(quota.key);
-        } else {
-          refundConsumed();
-          throw new AppError('TOO_MANY_REQUESTS', 'processingRateLimited');
-        }
-      }
-
-      // Conditional update doubles as a mutex against concurrent processing.
-      // A PROCESSING receipt untouched for 15+ minutes is considered stale
-      // (crashed run) and may be re-claimed. The threshold deliberately
-      // exceeds the worst-case provider pipeline (2 passes x per-provider
-      // timeouts of 30-120s) so a slow-but-live run is never re-claimed.
-      // Old items are replaced atomically inside processReceiptImage.
-      const claimed = await ctx.db.receipt.updateMany({
-        where: {
-          id: input.receiptId,
-          OR: [{ status: { not: 'PROCESSING' } }, { updatedAt: { lt: new Date(Date.now() - 15 * 60 * 1000) } }],
-        },
-        data: { status: 'PROCESSING' },
-      });
-      if (claimed.count === 0) {
-        refundConsumed();
-        throw new AppError('CONFLICT', 'receiptBeingProcessed');
-      }
-
-      try {
-        return await processReceiptImage({
-          db: ctx.db,
-          receiptId: input.receiptId,
-          receipt,
-          ...(input.correctionHint !== undefined ? { correctionHint: input.correctionHint } : {}),
-          logPrefix: 'guest.receipt',
-        });
-      } catch (error) {
-        logger.error('guest.receipt.failed', {
-          receiptId: input.receiptId,
-          error: error instanceof Error ? error.message : 'Unknown',
-        });
-        await ctx.db.receipt.update({
-          where: { id: input.receiptId },
-          data: {
-            status: 'FAILED',
-            rawResponse: {
-              error: error instanceof Error ? error.message : 'Unknown error',
-            } as unknown as Prisma.InputJsonValue,
-          },
-        });
-
-        // Details are logged server-side; never echo raw provider errors
-        // (model output, internal URLs) to unauthenticated guests.
-        throw new AppError('INTERNAL_SERVER_ERROR', 'receiptProcessingFailed');
-      }
     }),
 
   getReceiptItems: publicProcedure.input(z.object({ receiptId: receiptIdSchema })).query(async ({ ctx, input }) => {
@@ -437,14 +448,15 @@ export const guestRouter = createTRPCRouter({
     };
   }),
 
-  createSplit: publicProcedure
+  // Only an active signed-in user may create a bill; existing guest links stay public.
+  createSplit: protectedProcedure
     .input(
       z.object({
         receiptId: receiptIdSchema.optional(),
         receiptData: receiptDataSchema,
         items: z.array(itemSchema).min(1).max(100),
         people: z
-          .array(z.object({ name: z.string() }))
+          .array(z.object({ name: z.string().trim().max(MAX_GUEST_NAME_LENGTH) }))
           .min(1)
           .max(100),
         assignments: z
@@ -456,7 +468,7 @@ export const guestRouter = createTRPCRouter({
           )
           .max(1000),
         paidByIndex: z.number().int().default(0),
-        tipOverride: z.number().int().min(0).optional(),
+        tipOverride: z.never().optional(), // no shared tip override
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -503,13 +515,11 @@ export const guestRouter = createTRPCRouter({
       // Note: second bounds-validation loop removed (Finding #13) — the remap above
       // only produces valid indices via indexMap filtering, making post-remap validation redundant.
 
-      const tip = input.tipOverride ?? input.receiptData.tip;
-
       const summary = calculateSplitTotals({
         items: input.items,
         assignments: remappedAssignments,
-        tax: input.receiptData.tax,
-        tip,
+        tax: 0,
+        tip: 0,
         peopleCount: filteredPeople.length,
       });
 
@@ -529,18 +539,14 @@ export const guestRouter = createTRPCRouter({
         return tx.guestSplit.create({
           data: {
             ...(receiptId !== undefined ? { receiptId, receiptShared: true } : {}),
-            receiptData: {
-              ...input.receiptData,
-              tip,
-              ...(input.tipOverride != null ? { total: input.receiptData.subtotal + input.receiptData.tax + tip } : {}),
-            } as unknown as Prisma.InputJsonValue,
+            receiptData: input.receiptData as unknown as Prisma.InputJsonValue,
             items: input.items as unknown as Prisma.InputJsonValue,
             people: filteredPeople as unknown as Prisma.InputJsonValue,
             assignments: remappedAssignments as unknown as Prisma.InputJsonValue,
             summary: summaryWithNames as unknown as Prisma.InputJsonValue,
             paidByIndex: remappedPaidBy,
             payerVenmoHandle,
-            userId: ctx.session?.user?.id ?? null,
+            userId: ctx.user.id,
             expiresAt: createExpiryDate(),
           },
         });
@@ -611,18 +617,18 @@ export const guestRouter = createTRPCRouter({
 
   // ─── CLAIMING SESSION ENDPOINTS ────────────────────────────
 
-  createClaimSession: publicProcedure
+  createClaimSession: protectedProcedure
     .input(
       z.object({
         receiptId: receiptIdSchema.optional(),
         receiptData: receiptDataSchema,
         items: z.array(itemSchema).min(1).max(100),
-        creatorName: z.string().trim().min(1).max(100),
-        paidByName: z.string().trim().min(1).max(100),
+        creatorName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
+        paidByName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
         // Everyone typed on "Who's splitting?", listed in this order (#263). The creator and the
         // payer are added when it leaves them out, and a name typed twice is listed once, since
         // people join by name.
-        people: z.array(z.string().trim().min(1).max(100)).max(MAX_SESSION_PEOPLE).optional(),
+        people: z.array(z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH)).max(MAX_SESSION_PEOPLE).optional(),
         // Join the creator now and return their identity, so the creator's device already is them
         // when the link is shared (#263). Opt-in because older clients join the creator by name
         // afterwards, which is refused once someone holds the creator's token.
@@ -705,7 +711,7 @@ export const guestRouter = createTRPCRouter({
             paidByIndex,
             payerVenmoHandle: claimPayerVenmoHandle,
             status: GuestSplitStatus.CLAIMING,
-            userId: ctx.session?.user?.id ?? null,
+            userId: ctx.user.id,
             expiresAt: createExpiryDate(),
           },
         });
@@ -726,7 +732,7 @@ export const guestRouter = createTRPCRouter({
     .input(
       z.object({
         token: shareTokenSchema,
-        name: z.string().trim().min(1).max(100),
+        name: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
         groupSize: z.number().int().min(1).max(20).optional(),
         // The token this device stored when it joined: whoever holds it is the caller. Only ever
         // used to find its holder, never given to anyone, so a removed person's old token
@@ -884,7 +890,7 @@ export const guestRouter = createTRPCRouter({
         personToken: z.string().uuid(),
         // Who to rename, by id (see targetIndexOrThrow)
         targetId: personIdSchema,
-        newName: z.string().trim().min(1).max(100),
+        newName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
         groupSize: z.number().int().min(1).max(20).optional(),
       }),
     )
@@ -1049,6 +1055,51 @@ export const guestRouter = createTRPCRouter({
           },
         });
         return { success: true, itemCount: items.length };
+      });
+    }),
+
+  // Every participant chooses only their own voluntary tip. This intentionally
+  // does not yet alter shares or final totals: those are handled with the
+  // subsequent personal-tip settlement and UI stages.
+  setPersonalTip: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        tipCents: z.number().int().min(0).max(MAX_MONEY_CENTS),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('personal-tip', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) {
+          throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+        }
+
+        const people = session.people as GuestSessionPerson[];
+        const personIndex = people.findIndex((person) => person.personToken === input.personToken);
+        if (personIndex < 0 || people[personIndex]?.id !== input.personId) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+
+        // Setting the same amount twice, including the default zero, is a
+        // no-op. Different devices are serialized through guestTransaction.
+        if ((people[personIndex]!.tipCents ?? 0) !== input.tipCents) {
+          const updated = people.map((person, index) =>
+            index === personIndex ? { ...person, tipCents: input.tipCents } : person,
+          );
+          await tx.guestSplit.update({
+            where: { id: session.id },
+            data: { people: updated as unknown as Prisma.InputJsonValue },
+          });
+        }
+        return { success: true, tipCents: input.tipCents };
       });
     }),
 
@@ -1236,7 +1287,7 @@ export const guestRouter = createTRPCRouter({
         // Who is finalizing, by id; must be the holder of personToken
         personId: personIdSchema,
         personToken: z.string().uuid(),
-        tipOverride: z.number().int().min(0).optional(),
+        tipOverride: z.never().optional(), // no shared tip override
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -1268,10 +1319,10 @@ export const guestRouter = createTRPCRouter({
           throw new AppError('PRECONDITION_FAILED', 'itemsUnassigned');
         }
 
-        const tip = input.tipOverride ?? receiptData.tip;
+        const tip = receiptData.tip;
 
         // Each person's groupSize weights the items they share
-        const summary = calculateSplitTotals({
+        const itemShares = calculateSplitTotals({
           items,
           assignments,
           tax: receiptData.tax,
@@ -1279,6 +1330,13 @@ export const guestRouter = createTRPCRouter({
           peopleCount: people.length,
           ...groupSizeWeights(people),
         });
+        let summary: ReturnType<typeof calculateSplitTotals>;
+        try {
+          summary = addPersonalGuestTips(itemShares, people);
+        } catch (error) {
+          if (!(error instanceof RangeError)) throw error;
+          throw new AppError('BAD_REQUEST', 'receiptPersonalTipsInvalid', undefined, { cause: error });
+        }
 
         const summaryWithNames = summary.map((s) => ({
           ...s,
@@ -1291,13 +1349,6 @@ export const guestRouter = createTRPCRouter({
             status: GuestSplitStatus.FINALIZED,
             summary: summaryWithNames as unknown as Prisma.InputJsonValue,
             assignments: assignments as unknown as Prisma.InputJsonValue,
-            ...(input.tipOverride !== undefined && {
-              receiptData: {
-                ...receiptData,
-                tip,
-                total: receiptData.subtotal + receiptData.tax + tip,
-              } as unknown as Prisma.InputJsonValue,
-            }),
           },
         });
 
@@ -1310,6 +1361,264 @@ export const guestRouter = createTRPCRouter({
       // Log only once the transaction has committed; the callback may run more than once.
       logger.info('guest.session.finalized', finalizeLog);
       return { shareToken };
+    }),
+
+  // The declaration is NOT a bank transaction and never means the payer has
+  // received money. A person's own token is needed both to read and to write.
+  getMyPaymentDeclaration: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payment-declaration-read', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const split = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: { expiresAt: true, status: true, people: true, paidByIndex: true, receiptData: true, summary: true },
+      });
+      if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      const { person } = requireGuestDebtor(split, input.personId, input.personToken);
+      return {
+        declaredPaidAt: person.paymentDeclaredAt ?? null,
+        verifiedAt: person.paymentDeclaredAt ? (person.paymentVerifiedAt ?? null) : null,
+      };
+    }),
+
+  markMyPayment: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payment-declaration-write', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const { people, person, personIndex } = requireGuestDebtor(split, input.personId, input.personToken);
+        if (person.paymentDeclaredAt) {
+          // Idempotent when a delayed retry or a second tab sends the same action.
+          return { declaredPaidAt: person.paymentDeclaredAt };
+        }
+        const timestamp = new Date().toISOString();
+        const updated = people.map((entry, index) =>
+          index === personIndex ? { ...entry, paymentDeclaredAt: timestamp } : entry,
+        );
+        await tx.guestSplit.update({
+          where: { id: split.id },
+          data: { people: updated as unknown as Prisma.InputJsonValue },
+        });
+        return { declaredPaidAt: timestamp };
+      });
+    }),
+
+  // Payer-only private overview, including who declared a transfer and who
+  // has had their incoming payment independently verified by the payer.
+  getMyPayerPaymentReview: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-payment-review', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const split = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: { expiresAt: true, status: true, people: true, paidByIndex: true, receiptData: true, summary: true },
+      });
+      if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      const { people, summary } = requireGuestPayerReview(split, input.personId, input.personToken);
+      return {
+        payments: summary
+          .filter((entry) => entry.personIndex !== split.paidByIndex && entry.total > 0)
+          .map((entry) => {
+            const person = people[entry.personIndex]!;
+            return {
+              personId: person.id!,
+              name: person.name,
+              amount: entry.total,
+              declaredPaidAt: person.paymentDeclaredAt ?? null,
+              verifiedAt: person.paymentDeclaredAt ? (person.paymentVerifiedAt ?? null) : null,
+            };
+          }),
+      };
+    }),
+
+  confirmGuestPaymentReceived: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        debtorId: personIdSchema,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-payment-verify', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const { people, summary } = requireGuestPayerReview(split, input.personId, input.personToken);
+        const debtorIndex = people.findIndex((person) => person.id === input.debtorId);
+        if (
+          debtorIndex < 0 ||
+          debtorIndex === split.paidByIndex ||
+          !summary.some((entry) => entry.personIndex === debtorIndex && entry.total > 0)
+        ) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        const debtor = people[debtorIndex]!;
+        // Cannot attest an incoming transfer the debtor never declared.
+        if (!debtor.paymentDeclaredAt) {
+          throw new AppError('BAD_REQUEST', 'paymentNotDeclared');
+        }
+        if (debtor.paymentVerifiedAt) return { verifiedAt: debtor.paymentVerifiedAt };
+        const verifiedAt = new Date().toISOString();
+        const updated = people.map((person, index) =>
+          index === debtorIndex ? { ...person, paymentVerifiedAt: verifiedAt } : person,
+        );
+        await tx.guestSplit.update({
+          where: { id: split.id },
+          data: { people: updated as unknown as Prisma.InputJsonValue },
+        });
+        return { verifiedAt };
+      });
+    }),
+
+  // Read payer contact via a personal token only. The share token on its own
+  // is a public receipt link and MUST NOT return the bank/phone. Use mutation
+  // so the person's secret is sent in the request body, not the URL.
+  getMyPayerSbpContact: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-sbp-read', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const split = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: {
+          expiresAt: true,
+          people: true,
+          paidByIndex: true,
+          payerSbpPhone: true,
+          payerSbpBankId: true,
+        },
+      });
+      if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      const people = split.people as GuestSessionPerson[];
+      const payer = people[split.paidByIndex];
+      if (!payer || payer.id !== input.personId || payer.personToken !== input.personToken) {
+        throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      }
+      return { phone: split.payerSbpPhone, bankId: split.payerSbpBankId };
+    }),
+
+  // A participant may learn the payer's destination only when this finalized
+  // receipt actually requires THEM to reimburse the payer. A public share link,
+  // the creator's account and a different guest's personal token are insufficient.
+  getPayerSbpForReimbursement: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-sbp-reimbursement', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const split = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: {
+          expiresAt: true,
+          status: true,
+          people: true,
+          paidByIndex: true,
+          receiptData: true,
+          summary: true,
+          payerSbpPhone: true,
+          payerSbpBankId: true,
+        },
+      });
+      if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      if (split.status !== GuestSplitStatus.FINALIZED) {
+        throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+      }
+      const people = split.people as GuestSessionPerson[];
+      const personIndex = people.findIndex(
+        (person) => person.id === input.personId && person.personToken === input.personToken,
+      );
+      if (personIndex < 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      if (personIndex === split.paidByIndex) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      const receipt = split.receiptData as { currency?: string; tax?: number; tip?: number; total?: number };
+      const summary = split.summary as { personIndex: number; total: number; tip: number }[] | null;
+      // Fail closed if stale or malformed settlement sums cannot be reconciled.
+      if (
+        receipt.currency !== 'RUB' ||
+        receipt.tax !== 0 ||
+        receipt.tip !== 0 ||
+        !Number.isSafeInteger(receipt.total) ||
+        !Array.isArray(summary) ||
+        summary.length !== people.length ||
+        summary.some(
+          (person) =>
+            !Number.isSafeInteger(person.total) ||
+            person.total < 0 ||
+            !Number.isSafeInteger(person.tip) ||
+            person.tip < 0,
+        ) ||
+        summary.reduce((sum, person) => sum + person.total, 0) !==
+          receipt.total! + summary.reduce((sum, person) => sum + person.tip, 0)
+      ) {
+        throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      }
+      const owed = summary.find((person) => person.personIndex === personIndex);
+      if (!owed || owed.total <= 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      return {
+        phone: split.payerSbpPhone && split.payerSbpBankId ? split.payerSbpPhone : null,
+        bankId: split.payerSbpPhone && split.payerSbpBankId ? split.payerSbpBankId : null,
+      };
+    }),
+
+  // Only the person holding the payer's actual personal token may configure
+  // where reimbursements go, even when the creator is somebody else.
+  setMyPayerSbpContact: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        phone: z.string().max(24).nullable(),
+        bankId: z.string().max(40).nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-sbp-write', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const emptyPhone = input.phone === null || input.phone.trim() === '';
+      const emptyBank = input.bankId === null || input.bankId.trim() === '';
+      if (emptyPhone !== emptyBank) throw new AppError('BAD_REQUEST', 'sbpBankInvalid');
+      const phone = emptyPhone ? null : normalizeSbpPhone(input.phone!);
+      if (!emptyPhone && !phone) throw new AppError('BAD_REQUEST', 'sbpPhoneInvalid');
+      if (!emptyBank && !isSupportedSbpBankId(input.bankId!)) {
+        throw new AppError('BAD_REQUEST', 'sbpBankInvalid');
+      }
+
+      return guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const payer = (split.people as GuestSessionPerson[])[split.paidByIndex];
+        if (!payer || payer.id !== input.personId || payer.personToken !== input.personToken) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        if (split.payerSbpPhone !== phone || split.payerSbpBankId !== (emptyBank ? null : input.bankId)) {
+          await tx.guestSplit.update({
+            where: { id: split.id },
+            data: { payerSbpPhone: phone, payerSbpBankId: emptyBank ? null : input.bankId },
+          });
+        }
+        return { success: true };
+      });
     }),
 
   setPayerVenmoHandle: protectedProcedure

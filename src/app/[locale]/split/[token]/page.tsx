@@ -79,6 +79,9 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
 
   const data = split.data!;
   const currency = data.receiptData.currency;
+  // Saved shares are the definitive settlement, including personal tips.
+  const finalizedTotal = data.summary.reduce((sum, person) => sum + person.total, 0);
+  const personalTipTotal = data.summary.reduce((sum, person) => sum + person.tip, 0) - data.receiptData.tip;
   const paidBy = data.people[data.paidByIndex]?.name ?? t('someone');
   // Weighted the way the totals were, so each person's lines add up to their total
   const weights = groupSizeWeights(data.people);
@@ -87,7 +90,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
     const url = window.location.href;
     const text = t('shareText', {
       merchant: data.receiptData.merchantName ?? t('aReceipt'),
-      total: formatCents(data.receiptData.total, currency, locale),
+      total: formatCents(finalizedTotal, currency, locale),
     });
 
     if (navigator.share) {
@@ -114,7 +117,10 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
   const initials = getInitials;
 
   return (
-    <div className="space-y-6 pb-24" data-testid="split-result">
+    <div
+      className="space-y-6 pb-[calc(7rem+env(safe-area-inset-bottom))] max-[399px]:pb-[calc(11rem+env(safe-area-inset-bottom))]"
+      data-testid="split-result"
+    >
       {/* Header */}
       <div className="text-center space-y-1 pt-4">
         <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
@@ -157,7 +163,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
           <div className="flex justify-between items-center">
             <span className="font-semibold text-lg">{t('totalBill')}</span>
             <span className="text-2xl font-bold text-primary">
-              {formatCents(data.receiptData.total, currency, locale)}
+              <span data-testid="split-result-total">{formatCents(finalizedTotal, currency, locale)}</span>
             </span>
           </div>
         </CardContent>
@@ -177,16 +183,19 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
           return (
             <Card key={idx} data-testid={`person-card-${idx}`}>
               <CardContent className="py-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-3">
+                <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
                     <Avatar className="h-10 w-10">
                       <AvatarFallback className={`text-sm font-semibold ${guestAvatarColor(idx)}`}>
                         {initials(person.name)}
                       </AvatarFallback>
                     </Avatar>
-                    <span className="font-semibold">{person.name}</span>
+                    <span className="min-w-0 font-semibold [overflow-wrap:anywhere]">{person.name}</span>
                   </div>
-                  <span className="text-xl font-bold text-primary" data-testid={`person-total-${idx}`}>
+                  <span
+                    className="min-w-0 text-xl font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
+                    data-testid={`person-total-${idx}`}
+                  >
                     {formatCents(person.total, currency, locale)}
                   </span>
                 </div>
@@ -236,7 +245,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
                       href={buildVenmoPayUrl(
                         venmoHandle,
                         person.total,
-                        `ShareTab: ${data.receiptData.merchantName ?? t('billSplit')}`,
+                        `BillOK: ${data.receiptData.merchantName ?? t('billSplit')}`,
                       )!}
                       target="_blank"
                       rel="noopener noreferrer"
@@ -258,22 +267,49 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
           <CardTitle className="text-base">{t('receiptDetails')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-1 text-sm">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">{t('subtotal')}</span>
-            <span>{formatCents(data.receiptData.subtotal, currency, locale)}</span>
+          <div className="flex justify-between gap-2">
+            <span className="text-muted-foreground">
+              {currency === 'RUB' && data.receiptData.tax === 0 ? t('dishesTotal') : t('subtotal')}
+            </span>
+            <span data-testid="split-result-food-total">
+              {formatCents(data.receiptData.subtotal, currency, locale)}
+            </span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">{t('tax')}</span>
-            <span>{formatCents(data.receiptData.tax, currency, locale)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">{t('tip')}</span>
-            <span>{formatCents(data.receiptData.tip, currency, locale)}</span>
-          </div>
+          {/* Historical receipts may contain upstream charges. New BillOK receipts
+              use tax=0 and tip=0 until each person can choose their own tip. */}
+          {data.receiptData.tax > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('tax')}</span>
+              <span>{formatCents(data.receiptData.tax, currency, locale)}</span>
+            </div>
+          )}
+          {data.receiptData.tip > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('tip')}</span>
+              <span>{formatCents(data.receiptData.tip, currency, locale)}</span>
+            </div>
+          )}
+          {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0 ? (
+            <div className="flex justify-between gap-2">
+              <span className="text-muted-foreground">{t('tipForWaiter')}</span>
+              <span data-testid="split-result-personal-tips">{formatCents(personalTipTotal, currency, locale)}</span>
+            </div>
+          ) : (
+            personalTipTotal > 0 && (
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">{t('tip')}</span>
+                <span data-testid="split-result-personal-tips">{formatCents(personalTipTotal, currency, locale)}</span>
+              </div>
+            )
+          )}
           <Separator />
-          <div className="flex justify-between font-semibold">
-            <span>{t('total')}</span>
-            <span>{formatCents(data.receiptData.total, currency, locale)}</span>
+          <div className="flex justify-between gap-2 font-semibold">
+            <span>
+              {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0
+                ? t('totalWithTips')
+                : t('total')}
+            </span>
+            <span>{formatCents(finalizedTotal, currency, locale)}</span>
           </div>
         </CardContent>
       </Card>
@@ -297,13 +333,25 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
       </div>
 
       {/* Share buttons - sticky bottom */}
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-background border-t">
-        <div className="mx-auto max-w-lg flex gap-2">
-          <Button variant="outline" className="flex-1 h-14" onClick={handleCopy} data-testid="copy-link-btn">
+      <div
+        className="fixed inset-x-0 bottom-0 z-10 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
+        data-testid="split-result-actions"
+      >
+        <div className="mx-auto flex max-w-lg min-w-0 gap-2 max-[399px]:flex-col">
+          <Button
+            variant="outline"
+            className="min-h-14 min-w-0 w-full flex-1 whitespace-normal text-center leading-tight"
+            onClick={handleCopy}
+            data-testid="copy-link-btn"
+          >
             <Copy className="mr-2 h-5 w-5" />
             {t('copyLink')}
           </Button>
-          <Button className="flex-1 h-14" onClick={handleShare} data-testid="share-btn">
+          <Button
+            className="min-h-14 min-w-0 w-full flex-1 whitespace-normal text-center leading-tight"
+            onClick={handleShare}
+            data-testid="share-btn"
+          >
             <Share2 className="mr-2 h-5 w-5" />
             {t('share')}
           </Button>

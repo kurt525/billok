@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog';
 import { Trash2, Loader2, Ban, CheckCircle2, UserCheck, Search, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 type UserSortBy = 'name' | 'email' | 'groupCount' | 'createdAt';
 type UserStatus = 'all' | 'active' | 'suspended' | 'placeholder';
@@ -43,6 +44,7 @@ function SortIcon({
 
 export function UserManagementSection({ currentUserEmail }: { currentUserEmail?: string | null }) {
   const t = useTranslations('admin');
+  const tc = useTranslations('common');
   const locale = useLocale();
   const utils = trpc.useUtils();
 
@@ -83,21 +85,21 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
       utils.admin.getAuditLog.invalidate();
       setDeleteTarget(null);
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const suspendUser = trpc.admin.suspendUser.useMutation({
     onSuccess: () => {
       utils.admin.listUsers.invalidate();
       utils.admin.getAuditLog.invalidate();
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const unsuspendUser = trpc.admin.unsuspendUser.useMutation({
     onSuccess: () => {
       utils.admin.listUsers.invalidate();
       utils.admin.getAuditLog.invalidate();
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -116,14 +118,13 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
         body: JSON.stringify({ userId }),
       });
       if (res.ok) {
-        const [, locale] = window.location.pathname.split('/');
-        window.location.href = locale ? `/${locale}/dashboard` : '/dashboard';
+        // BillOK uses canonical, unprefixed Russian-only URLs.
+        window.location.assign(new URL('/dashboard', window.location.origin).href);
       } else {
-        const data = await res.json().catch(() => null);
-        toast.error(data?.error ?? `Impersonation failed (${res.status})`);
+        toast.error('Не удалось войти от имени пользователя (код ' + res.status + ')');
       }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Impersonation failed');
+    } catch {
+      toast.error('Не удалось войти от имени пользователя');
     } finally {
       setImpersonating(false);
     }
@@ -155,7 +156,7 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
       {/* Filters toolbar */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {/* Status filter buttons */}
-        <div className="flex gap-1">
+        <div className="flex min-w-0 flex-wrap gap-1">
           {statuses.map((s) => (
             <Button
               key={s.value}
@@ -170,7 +171,7 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
         </div>
 
         {/* Search */}
-        <div className="relative min-w-[180px] flex-1">
+        <div className="relative min-w-0 basis-full flex-1 sm:min-w-[180px] sm:basis-auto">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             aria-label={t('users.searchAriaLabel')}

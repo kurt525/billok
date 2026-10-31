@@ -109,9 +109,9 @@ export function GroupOverviewSection() {
 
   return (
     <section>
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">{t('groups.title')}</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary">{t('groups.count', { count: totalCount })}</Badge>
           {totalExpenses != null && <Badge variant="secondary">{t('groups.expenses', { count: totalExpenses })}</Badge>}
           {totalSettlements != null && (
@@ -123,7 +123,7 @@ export function GroupOverviewSection() {
       {/* Filters toolbar */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {/* Status filter buttons */}
-        <div className="flex gap-1">
+        <div className="flex min-w-0 flex-wrap gap-1">
           {statuses.map((s) => (
             <Button
               key={s.value}
@@ -138,7 +138,7 @@ export function GroupOverviewSection() {
         </div>
 
         {/* Search */}
-        <div className="relative min-w-[180px] flex-1">
+        <div className="relative min-w-0 basis-full flex-1 sm:min-w-[180px] sm:basis-auto">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             aria-label={t('groups.searchAriaLabel')}
@@ -213,7 +213,13 @@ export function GroupOverviewSection() {
                         <td className="px-4 py-3 font-medium">{group.name}</td>
                         <td className="px-4 py-3 text-right">{group.memberCount}</td>
                         <td className="px-4 py-3 text-right">{group.expenseCount}</td>
-                        <td className="px-4 py-3 text-right">{formatCents(group.totalAmount, 'USD', locale)}</td>
+                        <td className="px-4 py-3 text-right">
+                          {group.totalAmount == null ? (
+                            <span title={t('groups.totalUnavailable')}>—</span>
+                          ) : (
+                            formatCents(group.totalAmount, group.currency, locale)
+                          )}
+                        </td>
                         <td className="px-4 py-3 text-muted-foreground">
                           {new Date(group.lastActivity).toLocaleDateString(locale)}
                         </td>

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AppError } from './app-error';
+import { MAX_MONEY_CENTS } from '@/lib/money';
 
 export const extractedDataSchema = z
   .object({
@@ -9,7 +10,7 @@ export const extractedDataSchema = z
     tax: z.number().int().min(0).default(0),
     tip: z.number().int().min(0).default(0),
     total: z.number().int().min(0).default(0),
-    currency: z.string().default('USD'),
+    currency: z.string().default('RUB'),
   })
   .passthrough();
 
@@ -45,6 +46,7 @@ export const guestPersonSchema = z.object({
   name: z.string(),
   personToken: z.string().optional(),
   groupSize: z.number().int().min(1).optional(),
+  tipCents: z.number().int().min(0).max(MAX_MONEY_CENTS).optional(),
   join: z.object({ key: z.string(), name: z.string(), expiresAt: z.number() }).optional(),
 });
 

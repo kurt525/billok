@@ -3,8 +3,10 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
-import { formatCents, centsToDecimal, parseToCents } from '@/lib/money';
+import { formatCents, centsToDecimal, parseToCents, isValidMoneyInput, MAX_MONEY_CENTS } from '@/lib/money';
+import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
+import { calculateManualReceiptTotals } from '@/lib/manual-receipt-split';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -15,6 +17,7 @@ import { chipLabels } from '@/lib/avatar';
 import { Check, Users, Pencil, Trash2, Plus, Image as ImageIcon, Scissors, Bookmark } from 'lucide-react';
 import { toast } from 'sonner';
 import { ConfirmDialog } from '@/components/confirm-dialog';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 type Member = { id: string; name: string | null };
 
@@ -35,16 +38,26 @@ export function ItemAssignment({
 }) {
   const locale = useLocale();
   const t = useTranslations('expenses.receipt');
-  const receiptData = trpc.receipts.getReceiptItems.useQuery({ receiptId });
+  const tc = useTranslations('common');
+  const receiptData = trpc.receipts.getReceiptItems.useQuery(
+    { receiptId },
+    {
+      // Guest claims already poll. Group member tips need the same live
+      // visibility across devices; never overwrite unsaved local assignments.
+      refetchInterval: (query) => (query.state.data?.receipt.isManual ? 3_000 : false),
+    },
+  );
   // Who tRPC acts as: the impersonated user while an admin impersonates, where
   // useSession() would still report the admin
   const profile = trpc.auth.getProfile.useQuery();
   const utils = trpc.useUtils();
 
   const [assignments, setAssignments] = useState<Assignments>({});
+  const [partsByItem, setPartsByItem] = useState<Record<string, Record<string, number>>>({});
   const [title, setTitle] = useState('');
   const [paidById, setPaidById] = useState('');
-  const [tipOverride, setTipOverride] = useState<string>('');
+  // This field is tied to the authenticated member, never the selected payer.
+  const [personalTipDraft, setPersonalTipDraft] = useState<string | null>(null);
   const [showImage, setShowImage] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -72,11 +85,11 @@ export function ItemAssignment({
       setEditingItem(null);
       utils.receipts.getReceiptItems.invalidate({ receiptId });
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const deleteItem = trpc.receipts.deleteItem.useMutation({
     onSuccess: () => utils.receipts.getReceiptItems.invalidate({ receiptId }),
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const addItem = trpc.receipts.addItem.useMutation({
     onSuccess: () => {
@@ -84,15 +97,24 @@ export function ItemAssignment({
       setNewItem({ name: '', quantity: '1', totalPrice: '' });
       utils.receipts.getReceiptItems.invalidate({ receiptId });
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const splitItem = trpc.receipts.splitItem.useMutation({
     onSuccess: () => utils.receipts.getReceiptItems.invalidate({ receiptId }),
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const saveForLater = trpc.receipts.saveForLater.useMutation({
     onSuccess: () => onSaveForLater?.(),
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
+  });
+
+  const savePersonalTip = trpc.receipts.setPersonalTip.useMutation({
+    onSuccess: async () => {
+      await utils.receipts.getReceiptItems.invalidate({ receiptId });
+      setPersonalTipDraft(null);
+      toast.success(t('personalTipSaved'));
+    },
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
   });
 
   // Toggle the image. Zoom/pan reset on every toggle (fresh view when
@@ -142,13 +164,18 @@ export function ItemAssignment({
         setPaidById(data.receipt.paidById!);
       }
       const restored: Assignments = {};
+      const restoredParts: Record<string, Record<string, number>> = {};
       for (const item of data.items) {
         if (item.assignments && item.assignments.length > 0) {
           restored[item.id] = new Set(item.assignments.map((a: { userId: string }) => a.userId));
+          restoredParts[item.id] = Object.fromEntries(
+            item.assignments.map((a: { userId: string; shareOfItem: number }) => [a.userId, a.shareOfItem || 1]),
+          );
         }
       }
       if (Object.keys(restored).length > 0) {
         setAssignments(restored);
+        setPartsByItem(restoredParts);
       }
       hasRestoredRef.current = true;
     }
@@ -157,20 +184,35 @@ export function ItemAssignment({
 
   const { receipt, items } = receiptData.data ?? { receipt: null, items: [] };
   const extracted = receipt?.extractedData ?? null;
-  const parsedTip = parseFloat(tipOverride);
-  const tip =
-    extracted && tipOverride !== '' && isFinite(parsedTip) ? Math.round(parsedTip * 100) : (extracted?.tip ?? 0);
   // Until someone picks a payer or a saved one loads, default to the current user (when
   // they're in the group), as Add Expense does (#271, #265)
   const currentUserId = profile.data?.id;
   const defaultPaidById = currentUserId && members.some((m) => m.id === currentUserId) ? currentUserId : '';
   const effectivePaidById = paidById || defaultPaidById;
+  const ownTipCents = currentUserId ? (extracted?.personalTips?.[currentUserId] ?? 0) : 0;
+  const personalTipValue = personalTipDraft ?? centsToDecimal(ownTipCents);
+  const parsedPersonalTip = parseToCents(personalTipValue);
+  const personalTipIsValid =
+    isValidMoneyInput(personalTipValue) &&
+    !/[.,]\d{3,}/.test(personalTipValue) &&
+    parsedPersonalTip >= 0 &&
+    parsedPersonalTip <= MAX_MONEY_CENTS;
+  const canEditOwnTip =
+    receipt?.isManual === true && !!currentUserId && members.some((member) => member.id === currentUserId);
+  function submitPersonalTip() {
+    if (!canEditOwnTip || !personalTipIsValid || parsedPersonalTip === ownTipCents || savePersonalTip.isPending) return;
+    savePersonalTip.mutate({ groupId, receiptId, tipCents: parsedPersonalTip });
+  }
 
   // Note (Finding #29): toggleAssignment and assignAllToEveryone are intentionally
   // duplicated from split/page.tsx. This component uses Record<string, Set<string>>
   // (id-based) while split/page uses Record<number, Set<number>> (index-based).
   // The different key types make a shared abstraction more complex than the duplication.
   function toggleAssignment(itemId: string, userId: string) {
+    setPartsByItem((prev) => ({
+      ...prev,
+      [itemId]: { ...prev[itemId], [userId]: 1 },
+    }));
     setAssignments((prev) => {
       const next = { ...prev };
       const current = new Set(next[itemId] ?? []);
@@ -190,6 +232,7 @@ export function ItemAssignment({
       next[item.id] = new Set(members.map((m) => m.id));
     }
     setAssignments(next);
+    setPartsByItem({});
   }
 
   function startEditing(item: { id: string; name: string; quantity: number; totalPrice: number }) {
@@ -212,8 +255,8 @@ export function ItemAssignment({
       toast.error(t('validationPricePositive'));
       return;
     }
-    const quantity = parseInt(editValues.quantity);
-    if (!Number.isInteger(quantity) || quantity < 1) {
+    const quantity = parseReceiptQuantity(editValues.quantity);
+    if (quantity === null) {
       toast.error(t('validationQtyPositive'));
       return;
     }
@@ -228,8 +271,12 @@ export function ItemAssignment({
 
   function handleAddItem() {
     const totalPrice = parseToCents(newItem.totalPrice);
-    const quantity = parseInt(newItem.quantity) || 1;
-    if (!newItem.name.trim() || totalPrice <= 0 || quantity < 1) return;
+    const quantity = parseReceiptQuantity(newItem.quantity);
+    if (quantity === null) {
+      toast.error(t('validationQtyPositive'));
+      return;
+    }
+    if (!newItem.name.trim() || totalPrice <= 0) return;
     addItem.mutate({
       receiptId,
       name: newItem.name.trim(),
@@ -242,6 +289,25 @@ export function ItemAssignment({
   // Calculate per-person totals using shared calculateSplitTotals (Finding #30).
   // Memoized to avoid recomputation on every render (Finding #36).
   const perPersonTotals = useMemo(() => {
+    if (receipt?.isManual && receipt.creatorId) {
+      const chosen = Object.entries(assignments)
+        .filter(([receiptItemId, userIds]) => userIds.size > 0 && items.some((item) => item.id === receiptItemId))
+        .map(([receiptItemId, userIds]) => ({
+          receiptItemId,
+          people: [...userIds].map((userId) => ({
+            userId,
+            parts: partsByItem[receiptItemId]?.[userId] ?? 1,
+          })),
+        }));
+      if (chosen.some((a) => a.people.some((p) => !Number.isSafeInteger(p.parts) || p.parts < 1 || p.parts > 10000))) {
+        return new Map<string, number>();
+      }
+      return calculateManualReceiptTotals({
+        items: items.filter((item) => chosen.some((a) => a.receiptItemId === item.id)),
+        assignments: chosen,
+        creatorId: receipt.creatorId,
+      });
+    }
     // Build member-id -> index mapping for calculateSplitTotals
     const memberIdToIndex = new Map<string, number>();
     members.forEach((m, i) => memberIdToIndex.set(m.id, i));
@@ -262,8 +328,8 @@ export function ItemAssignment({
     const results = calculateSplitTotals({
       items,
       assignments: assignmentList,
-      tax: extracted?.tax ?? 0,
-      tip,
+      tax: 0,
+      tip: 0,
       peopleCount: members.length,
     });
 
@@ -274,9 +340,15 @@ export function ItemAssignment({
       if (member) totals.set(member.id, r.total);
     }
     return totals;
-  }, [items, assignments, members, extracted, tip]);
-  const assignedItemCount = Object.values(assignments).filter((s) => s.size > 0).length;
-  const allAssigned = items.length > 0 && assignedItemCount === items.length;
+  }, [items, assignments, partsByItem, receipt, members]);
+  const assignedItemCount = items.filter((item) => (assignments[item.id]?.size ?? 0) > 0).length;
+  const partsAreValid = Object.entries(assignments).every(([itemId, users]) =>
+    [...users].every((userId) => {
+      const parts = partsByItem[itemId]?.[userId] ?? 1;
+      return Number.isSafeInteger(parts) && parts >= 1 && parts <= 10000;
+    }),
+  );
+  const allAssigned = items.length > 0 && assignedItemCount === items.length && (!receipt?.isManual || partsAreValid);
 
   // Precompute member initials to avoid recalculation every render (Finding #37)
   const memberInitials = useMemo(
@@ -315,6 +387,9 @@ export function ItemAssignment({
   // After early returns, these are guaranteed non-null
   const safeReceipt = receipt!;
   const safeExtracted = extracted;
+  const subtotal = safeReceipt.isManual
+    ? items.reduce((sum, item) => sum + item.totalPrice, 0)
+    : safeExtracted.subtotal;
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -325,13 +400,16 @@ export function ItemAssignment({
       receiptId,
       title,
       paidById: effectivePaidById,
-      tipOverride:
-        tipOverride !== '' && isFinite(parseFloat(tipOverride)) ? Math.round(parseFloat(tipOverride) * 100) : undefined,
       assignments: Object.entries(assignments)
-        .filter(([, userIds]) => userIds.size > 0)
+        .filter(([itemId, userIds]) => userIds.size > 0 && items.some((item) => item.id === itemId))
         .map(([receiptItemId, userIds]) => ({
           receiptItemId,
           userIds: Array.from(userIds),
+          ...(receipt?.isManual
+            ? {
+                parts: Array.from(userIds).map((userId) => partsByItem[receiptItemId]?.[userId] ?? 1),
+              }
+            : {}),
         })),
     });
   }
@@ -342,16 +420,21 @@ export function ItemAssignment({
       receiptId,
       paidById: effectivePaidById || null,
       assignments: Object.entries(assignments)
-        .filter(([, userIds]) => userIds.size > 0)
+        .filter(([itemId, userIds]) => userIds.size > 0 && items.some((item) => item.id === itemId))
         .map(([receiptItemId, userIds]) => ({
           receiptItemId,
           userIds: Array.from(userIds),
+          ...(receipt?.isManual
+            ? {
+                parts: Array.from(userIds).map((userId) => partsByItem[receiptItemId]?.[userId] ?? 1),
+              }
+            : {}),
         })),
     });
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4" data-testid="item-assignment-form">
+    <form onSubmit={handleSubmit} className="space-y-4 pb-28" data-testid="item-assignment-form">
       {/* Receipt image toggle */}
       {safeReceipt.imagePath && (
         <Button type="button" variant="outline" size="sm" onClick={toggleImage}>
@@ -486,23 +569,80 @@ export function ItemAssignment({
           )}
           <div className="flex justify-between">
             <span className="text-muted-foreground">{t('subtotal')}</span>
-            <span>{formatCents(safeExtracted.subtotal, safeExtracted.currency, locale)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">{t('tax')}</span>
-            <span>{formatCents(safeExtracted.tax, safeExtracted.currency, locale)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">{t('tip')}</span>
-            <span>{formatCents(tip, safeExtracted.currency, locale)}</span>
+            <span>{formatCents(subtotal, safeExtracted.currency, locale)}</span>
           </div>
           <Separator />
           <div className="flex justify-between font-semibold">
             <span>{t('total')}</span>
-            <span>{formatCents(safeExtracted.subtotal + safeExtracted.tax + tip, safeExtracted.currency, locale)}</span>
+            <span>{formatCents(subtotal, safeExtracted.currency, locale)}</span>
           </div>
         </CardContent>
       </Card>
+
+      {/* Tips are owned by the signed-in member, not by the chosen payer or
+          any other person whose items this device might assign. No debt changes yet. */}
+      {canEditOwnTip && (
+        <Card data-testid="group-personal-tip-card">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">{t('personalTipTitle')}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">{t('personalTipDescription')}</p>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="min-w-0 flex-1 space-y-1">
+                <Label htmlFor="group-personal-tip">{t('personalTipAmount')}</Label>
+                <Input
+                  id="group-personal-tip"
+                  type="text"
+                  inputMode="decimal"
+                  className="h-11 min-w-0 text-base"
+                  value={personalTipValue}
+                  onChange={(event) => setPersonalTipDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      submitPersonalTip();
+                    }
+                  }}
+                  aria-invalid={!personalTipIsValid}
+                  data-testid="group-personal-tip-input"
+                />
+              </div>
+              <Button
+                type="button"
+                className="min-h-11"
+                onClick={submitPersonalTip}
+                disabled={!personalTipIsValid || parsedPersonalTip === ownTipCents || savePersonalTip.isPending}
+                data-testid="group-personal-tip-save"
+              >
+                {savePersonalTip.isPending ? t('personalTipSaving') : t('personalTipSave')}
+              </Button>
+            </div>
+            {!personalTipIsValid && (
+              <p className="text-sm text-destructive" role="alert">
+                {t('personalTipInvalid')}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">{t('personalTipPendingTotals')}</p>
+            <div className="space-y-2 border-t pt-3" data-testid="group-personal-tip-list">
+              <p className="text-sm font-medium">{t('personalTipMembersTitle')}</p>
+              {members.map((member) => (
+                <div
+                  key={member.id}
+                  className="flex min-w-0 items-center justify-between gap-2 text-sm"
+                  data-testid={'group-personal-tip-member-' + member.id}
+                >
+                  <span className="min-w-0 truncate">{member.name ?? t('unnamed')}</span>
+                  <span className="shrink-0 tabular-nums">
+                    {formatCents(extracted?.personalTips?.[member.id] ?? 0, 'RUB', locale)}
+                  </span>
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground">{t('personalTipMembersLive')}</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Expense details */}
       <Card>
@@ -535,24 +675,19 @@ export function ItemAssignment({
               ))}
             </select>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="tip">{t('tipOverride')}</Label>
-            <Input
-              id="tip"
-              type="number"
-              step="0.01"
-              min="0"
-              placeholder={t('tipDetected', { amount: formatCents(safeExtracted.tip, safeExtracted.currency, locale) })}
-              value={tipOverride}
-              onChange={(e) => setTipOverride(e.target.value)}
-            />
-          </div>
         </CardContent>
       </Card>
 
       {/* Quick actions */}
-      <div className="flex gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={assignAllToEveryone} data-testid="split-all-btn">
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="min-h-11 whitespace-normal"
+          onClick={assignAllToEveryone}
+          data-testid="split-all-btn"
+        >
           <Users className="mr-2 h-4 w-4" />
           {t('splitAllEqually')}
         </Button>
@@ -560,6 +695,7 @@ export function ItemAssignment({
           type="button"
           variant="outline"
           size="sm"
+          className="min-h-11 whitespace-normal"
           onClick={() => setAddingItem(true)}
           data-testid="add-item-btn"
         >
@@ -581,35 +717,48 @@ export function ItemAssignment({
                 }
               }}
             >
-              <div className="flex gap-2">
+              <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1fr)_4rem_6rem]">
                 <Input
                   placeholder={t('itemNamePlaceholder')}
                   value={newItem.name}
                   onChange={(e) => setNewItem((p) => ({ ...p, name: e.target.value }))}
-                  className="flex-1"
+                  className="col-span-2 h-11 min-w-0 sm:col-span-1"
                 />
                 <Input
                   type="number"
                   placeholder={t('qtyPlaceholder')}
                   value={newItem.quantity}
                   onChange={(e) => setNewItem((p) => ({ ...p, quantity: e.target.value }))}
-                  className="w-16"
+                  inputMode="numeric"
+                  className="h-11 min-w-0"
                   min="1"
                 />
                 <Input
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
                   placeholder={t('pricePlaceholder')}
                   value={newItem.totalPrice}
                   onChange={(e) => setNewItem((p) => ({ ...p, totalPrice: e.target.value }))}
-                  className="w-24"
+                  className="h-11 min-w-0"
                 />
               </div>
               <div className="flex gap-2">
-                <Button type="button" size="sm" disabled={addItem.isPending} onClick={handleAddItem}>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={addItem.isPending}
+                  className="min-h-11"
+                  onClick={handleAddItem}
+                >
                   {addItem.isPending ? t('adding') : t('add')}
                 </Button>
-                <Button type="button" variant="ghost" size="sm" onClick={() => setAddingItem(false)}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="min-h-11"
+                  onClick={() => setAddingItem(false)}
+                >
                   {t('cancel')}
                 </Button>
               </div>
@@ -634,48 +783,61 @@ export function ItemAssignment({
               <CardContent className="py-3">
                 {isEditing ? (
                   <div className="mb-2 space-y-2">
-                    <div className="flex gap-2">
+                    <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1fr)_4rem_6rem]">
                       <Input
                         value={editValues.name}
                         onChange={(e) => setEditValues((p) => ({ ...p, name: e.target.value }))}
-                        className="flex-1"
+                        className="col-span-2 h-11 min-w-0 sm:col-span-1"
                         placeholder={t('itemNamePlaceholder')}
                       />
                       <Input
                         type="number"
                         value={editValues.quantity}
                         onChange={(e) => setEditValues((p) => ({ ...p, quantity: e.target.value }))}
-                        className="w-16"
+                        inputMode="numeric"
+                        className="h-11 min-w-0"
                         placeholder={t('qtyPlaceholder')}
                         min="1"
                       />
                       <Input
-                        type="number"
-                        step="0.01"
+                        type="text"
+                        inputMode="decimal"
                         value={editValues.totalPrice}
                         onChange={(e) => setEditValues((p) => ({ ...p, totalPrice: e.target.value }))}
-                        className="w-24"
+                        className="h-11 min-w-0"
                         placeholder={t('pricePlaceholder')}
                       />
                     </div>
                     <div className="flex gap-1">
-                      <Button type="button" size="sm" onClick={() => saveEdit(item.id)} disabled={updateItem.isPending}>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="min-h-11"
+                        onClick={() => saveEdit(item.id)}
+                        disabled={updateItem.isPending}
+                      >
                         {t('save')}
                       </Button>
-                      <Button type="button" variant="ghost" size="sm" onClick={() => setEditingItem(null)}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="min-h-11"
+                        onClick={() => setEditingItem(null)}
+                      >
                         {t('cancel')}
                       </Button>
                     </div>
                   </div>
                 ) : (
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{item.name}</span>
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1">
+                      <span className="min-w-0 break-words font-medium">{item.name}</span>
                       {item.quantity > 1 && <span className="text-xs text-muted-foreground">x{item.quantity}</span>}
                       <button
                         type="button"
                         onClick={() => startEditing(item)}
-                        className="text-muted-foreground hover:text-foreground"
+                        className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
                         aria-label={t('editItem', { name: item.name })}
                         title={t('editItem', { name: item.name })}
                       >
@@ -684,7 +846,7 @@ export function ItemAssignment({
                       <button
                         type="button"
                         onClick={() => setRemoveItem({ id: item.id, name: item.name })}
-                        className="text-muted-foreground hover:text-destructive"
+                        className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-destructive"
                         aria-label={t('removeItem', { name: item.name })}
                         title={t('removeItem', { name: item.name })}
                       >
@@ -697,7 +859,7 @@ export function ItemAssignment({
                             setSplittingItem(item.id);
                             setSplitQuantity('1');
                           }}
-                          className="text-muted-foreground hover:text-foreground"
+                          className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
                           title={t('split')}
                           aria-label={t('splitAriaLabel', { name: item.name })}
                           data-testid={`split-btn-${item.id}`}
@@ -717,7 +879,7 @@ export function ItemAssignment({
                     const parsed = Number(splitQuantity);
                     const validQty = Number.isSafeInteger(parsed) && parsed >= 1 && parsed < item.quantity;
                     return (
-                      <div className="mb-2 flex items-center gap-2" data-testid="split-form">
+                      <div className="mb-2 flex flex-wrap items-center gap-2" data-testid="split-form">
                         <span className="text-xs text-muted-foreground">{t('splitOff')}</span>
                         <Input
                           type="number"
@@ -725,7 +887,8 @@ export function ItemAssignment({
                           max={item.quantity - 1}
                           value={splitQuantity}
                           onChange={(e) => setSplitQuantity(e.target.value)}
-                          className="w-16 h-7 text-xs"
+                          inputMode="numeric"
+                          className="h-11 w-20 text-base"
                           data-testid="split-qty-input"
                         />
                         <span className="text-xs text-muted-foreground">
@@ -734,7 +897,7 @@ export function ItemAssignment({
                         <Button
                           type="button"
                           size="sm"
-                          className="h-7 text-xs"
+                          className="min-h-11"
                           disabled={splitItem.isPending || !validQty}
                           data-testid="split-submit"
                           onClick={() => {
@@ -749,7 +912,7 @@ export function ItemAssignment({
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="h-7 text-xs"
+                          className="min-h-11"
                           onClick={() => setSplittingItem(null)}
                         >
                           {t('cancel')}
@@ -766,7 +929,7 @@ export function ItemAssignment({
                         type="button"
                         onClick={() => toggleAssignment(item.id, m.id)}
                         data-testid={`member-toggle-${m.id}`}
-                        className={`flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-xs transition-colors ${
+                        className={`flex min-h-11 max-w-full items-center gap-1 rounded-full px-3 py-2 text-sm transition-colors ${
                           isAssigned
                             ? 'bg-primary text-primary-foreground'
                             : 'bg-muted text-muted-foreground hover:bg-muted/80'
@@ -787,11 +950,49 @@ export function ItemAssignment({
                     );
                   })}
                 </div>
+                {receipt?.isManual && assigned.size > 0 && (
+                  <div className="mt-3 space-y-2" data-testid={'portions-for-' + item.id}>
+                    <p className="text-xs text-muted-foreground">{t('partsHint')}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {members
+                        .filter((m) => assigned.has(m.id))
+                        .map((m) => (
+                          <div key={m.id} className="min-w-0 space-y-1">
+                            <Label htmlFor={'parts-' + item.id + '-' + m.id} className="text-xs">
+                              {t('partsFor', { name: m.name ?? t('unnamed') })}
+                            </Label>
+                            <Input
+                              id={'parts-' + item.id + '-' + m.id}
+                              data-testid={'item-parts-' + item.id + '-' + m.id}
+                              type="number"
+                              inputMode="numeric"
+                              min={1}
+                              max={10000}
+                              step={1}
+                              className="h-11 min-w-0"
+                              value={partsByItem[item.id]?.[m.id] ?? 1}
+                              onChange={(e) =>
+                                setPartsByItem((prev) => ({
+                                  ...prev,
+                                  [item.id]: {
+                                    ...prev[item.id],
+                                    [m.id]: e.target.value === '' ? 0 : Number(e.target.value),
+                                  },
+                                }))
+                              }
+                            />
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           );
         })}
       </div>
+
+      {receipt?.isManual && <p className="text-xs text-muted-foreground">{t('roundingCreator')}</p>}
 
       {/* Per-person summary */}
       {perPersonTotals.size > 0 && (
@@ -815,12 +1016,14 @@ export function ItemAssignment({
       )}
 
       {createExpense.error && (
-        <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{createExpense.error.message}</div>
+        <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          {localizedTrpcError(createExpense.error, tc('errors.generic'))}
+        </div>
       )}
 
       <Button
         type="submit"
-        className="w-full"
+        className="min-h-11 w-full"
         disabled={createExpense.isPending || !allAssigned || !effectivePaidById}
         data-testid="create-expense-btn"
       >
@@ -835,9 +1038,9 @@ export function ItemAssignment({
         <Button
           type="button"
           variant="outline"
-          className="w-full"
+          className="min-h-11 w-full"
           onClick={handleSaveForLater}
-          disabled={saveForLater.isPending}
+          disabled={saveForLater.isPending || (receipt?.isManual && !partsAreValid)}
           data-testid="save-for-later-btn"
         >
           <Bookmark className="mr-2 h-4 w-4" />

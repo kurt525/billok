@@ -1,5 +1,11 @@
 import { describe, test, expect } from 'vitest';
-import { calculateClaimTotals, calculateSplitTotals, groupSizeWeights, personItemShares } from './split-calculator';
+import {
+  addPersonalGuestTips,
+  calculateClaimTotals,
+  calculateSplitTotals,
+  groupSizeWeights,
+  personItemShares,
+} from './split-calculator';
 
 describe('calculateSplitTotals', () => {
   test('splits single item between two people equally', () => {
@@ -500,5 +506,52 @@ describe('groupSizeWeights', () => {
 
   test('weights everyone by group size once someone is a group', () => {
     expect(groupSizeWeights([{ groupSize: 1 }, {}, { groupSize: 3 }])).toEqual({ personWeights: [1, 1, 3] });
+  });
+});
+
+describe('BillOK voluntary personal guest tips', () => {
+  const shares = calculateSplitTotals({
+    items: [{ totalPrice: 101 }],
+    assignments: [{ itemIndex: 0, personIndices: [0, 1] }],
+    tax: 0,
+    tip: 0,
+    peopleCount: 3,
+  });
+
+  test('adds only the chosen tips of guests who share the food', () => {
+    const participatingShares = calculateSplitTotals({
+      items: [{ totalPrice: 101 }],
+      assignments: [{ itemIndex: 0, personIndices: [0, 1, 2] }],
+      tax: 0,
+      tip: 0,
+      peopleCount: 3,
+    });
+    const actual = addPersonalGuestTips(participatingShares, [{ tipCents: 125 }, { tipCents: 0 }, { tipCents: 35 }]);
+    expect(actual).toEqual([
+      { personIndex: 0, itemTotal: 34, tax: 0, tip: 125, total: 159 },
+      { personIndex: 1, itemTotal: 34, tax: 0, tip: 0, total: 34 },
+      { personIndex: 2, itemTotal: 33, tax: 0, tip: 35, total: 68 },
+    ]);
+    expect(actual.reduce((sum, value) => sum + value.total, 0)).toBe(261);
+    expect(participatingShares[0]!.tip).toBe(0);
+  });
+
+  test('refuses tip-only guests with no assigned positions', () => {
+    expect(() => addPersonalGuestTips(shares, [{ tipCents: 125 }, {}, { tipCents: 35 }])).toThrow(RangeError);
+    expect(addPersonalGuestTips(shares, [{ tipCents: 125 }, {}, { tipCents: 0 }])).toHaveLength(2);
+  });
+
+  test('missing and zero tips preserve prices and rounding', () => {
+    expect(addPersonalGuestTips(shares, [{}, { tipCents: 0 }, {}])).toEqual(shares);
+  });
+
+  test('rejects overflow across individual tip and food even if each amount fits int4', () => {
+    expect(() => addPersonalGuestTips(shares, [{ tipCents: 2_147_483_647 }, {}, {}])).toThrow(RangeError);
+  });
+
+  test('refuses invalid stored tip and invalid participant index', () => {
+    expect(() => addPersonalGuestTips(shares, [{ tipCents: -1 }, {}, {}])).toThrow(RangeError);
+    expect(() => addPersonalGuestTips(shares, [{ tipCents: 1.5 }, {}, {}])).toThrow(RangeError);
+    expect(() => addPersonalGuestTips(shares, [])).toThrow(RangeError);
   });
 });

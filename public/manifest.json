@@ -1,8 +1,8 @@
 {
-  "name": "ShareTab",
-  "short_name": "ShareTab",
-  "description": "Self-hosted expense splitting with AI receipt scanning",
-  "start_url": "/dashboard",
+  "name": "BillOK",
+  "short_name": "BillOK",
+  "description": "Разделение общего чека и расчёт переводов между участниками",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#18181b",
@@ -20,5 +20,8 @@
       "type": "image/png",
       "purpose": "any maskable"
     }
-  ]
+  ],
+  "id": "/",
+  "scope": "/",
+  "lang": "ru-RU"
 }

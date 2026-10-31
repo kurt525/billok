@@ -22,6 +22,7 @@
     "selectMember": "Select member",
     "backToGroup": "Back to group",
     "expenseDetails": "Expense details",
+    "rubOnlyLegacyGroup": "This group uses the previous currency {currency}. New expenses and receipts are temporarily unavailable; existing amounts have not changed.",
     "currency": "Currency",
     "differentCurrencyNote": "This expense is in {expenseCurrency}, but the group uses {groupCurrency}. The amount will be auto-converted.",
     "manualRateOverride": "Set exchange rate manually",
@@ -35,6 +36,7 @@
   "edit": {
     "title": "Edit Expense",
     "backToExpense": "Back to expense",
+    "rubOnlyLegacyExpense": "This expense ({expenseCurrency}) or its group ({groupCurrency}) uses a previous currency. Editing is temporarily unavailable; stored amounts remain unchanged.",
     "itemSplitWarning": "This expense was created from a receipt scan (ITEM split). Editing will convert it to a standard split mode.",
     "submit": "Save Changes",
     "submitting": "Saving...",
@@ -57,7 +59,16 @@
     "exchangeRate": "Rate: 1 {from} = {rate} {to}",
     "notFound": "Expense not found",
     "notFoundDescription": "This expense doesn't exist or has been deleted.",
-    "backToGroup": "Back to Group"
+    "backToGroup": "Back to Group",
+    "waiterTipSummary": "Tips for the waiter",
+    "dishesTotal": "Dish total",
+    "tipForWaiter": "Total voluntary tips for the waiter",
+    "totalWithTips": "Total including tips",
+    "initialReimbursements": "Reimbursements to the payer for this receipt",
+    "initialReimbursementsHint": "Original amounts only; previously recorded payments and other group expenses are not deducted here.",
+    "payerOwnShare": "Payer’s own share (no payment to oneself)",
+    "memberReimburses": "{name} reimburses the payer",
+    "reimbursementsTotal": "Total reimbursement from others"
   },
   "scan": {
     "title": "Scan Receipt",
@@ -117,7 +128,7 @@
     "removeDescription": "It's taken off this receipt, along with who it's assigned to.",
     "remove": "Remove",
     "splitAriaLabel": "Split {name} into separate line",
-    "perPersonTotals": "Per-person totals",
+    "perPersonTotals": "Dish costs per member (excluding tips)",
     "creatingExpense": "Creating expense...",
     "assignAllItems": "Assign all items ({remaining} remaining)",
     "createExpense": "Create Expense from Receipt",
@@ -129,7 +140,17 @@
     "validationNameRequired": "Item name is required.",
     "validationPricePositive": "Price must be greater than zero.",
     "validationQtyPositive": "Quantity must be a positive whole number.",
-    "receiptImageAlt": "Receipt"
+    "receiptImageAlt": "Receipt",
+    "personalTipTitle": "My voluntary tip",
+    "personalTipDescription": "Only you choose how much to tip. You may choose 0 RUB. You cannot change another person’s tip.",
+    "personalTipAmount": "My tip, RUB",
+    "personalTipSave": "Save my tip",
+    "personalTipSaving": "Saving…",
+    "personalTipSaved": "My tip saved",
+    "personalTipInvalid": "Enter 0 or more, with at most two decimal places.",
+    "personalTipPendingTotals": "The table below shows dish costs only. Saved personal tips are added to each member’s share when the receipt is finalized.",
+    "personalTipMembersTitle": "Participant tips",
+    "personalTipMembersLive": "Saved amounts update automatically. Each member can change only their own tip."
   },
   "splits": {
     "selectAll": "Select all",

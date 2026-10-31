@@ -16,7 +16,7 @@ vi.mock('next-auth', () => ({ default: nextAuth }));
 vi.mock('@auth/prisma-adapter', () => ({ PrismaAdapter: vi.fn(() => ({})) }));
 vi.mock('next-auth/providers/credentials', () => ({ default: vi.fn(() => ({ id: 'credentials' })) }));
 vi.mock('next-auth/providers/google', () => ({ default: google }));
-vi.mock('next-auth/providers/nodemailer', () => ({ default: vi.fn(() => ({ id: 'nodemailer' })) }));
+vi.mock('next-auth/providers/nodemailer', () => ({ default: vi.fn((options) => ({ id: 'nodemailer', ...options })) }));
 vi.mock('bcryptjs', () => ({ default: { compare: vi.fn() } }));
 vi.mock('./db', () => ({ db }));
 vi.mock('./lib/logger', () => ({ logger }));
@@ -95,6 +95,16 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+});
+
+describe('Magic-link email localization', () => {
+  test('replaces the Auth.js English verification email with the Russian sender', async () => {
+    const config = await loadAuth({ EMAIL_SERVER_HOST: 'smtp.example.test' });
+    const provider = config.providers.find((p) => p.id === 'nodemailer');
+    expect(provider).toBeDefined();
+    expect(typeof provider?.sendVerificationRequest).toBe('function');
+    expect(provider?.from).toBe('BillOK <noreply@billok.ru>');
+  });
 });
 
 describe('Google provider registration', () => {

@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { AppError } from '@/server/lib/app-error';
 import { createTRPCRouter, groupMemberProcedure } from '../init';
 import { SplitMode } from '@/generated/prisma/client';
-import { getExchangeRate, convertCents } from '../../lib/exchange-rates';
 import { MAX_MONEY_CENTS } from '@/lib/money';
 import { stripUndefined } from '../../lib/strip-undefined';
 import { lockActiveGroup } from '../../lib/group-balances';
@@ -20,8 +19,6 @@ const expenseSharesArraySchema = z
   .refine((shares) => new Set(shares.map((s) => s.userId)).size === shares.length, {
     message: 'Duplicate user in shares',
   });
-
-const exchangeRateSchema = z.number().positive().finite().max(1_000_000);
 
 export const expensesRouter = createTRPCRouter({
   list: groupMemberProcedure
@@ -86,8 +83,10 @@ export const expensesRouter = createTRPCRouter({
           .length(3)
           .regex(/^[a-zA-Z]{3}$/)
           .transform((c) => c.toUpperCase())
-          .default('USD'),
-        exchangeRate: exchangeRateSchema.optional(), // manual override
+          .pipe(z.literal('RUB'))
+          .default('RUB'),
+        // Reject rather than silently ignore a legacy manual-rate override.
+        exchangeRate: z.never().optional(),
         category: z.string().max(50).optional(),
         expenseDate: z.string().datetime().optional(),
         paidById: z.string(),
@@ -107,38 +106,28 @@ export const expensesRouter = createTRPCRouter({
         throw new AppError('BAD_REQUEST', 'archivedAddExpense');
       }
 
-      // Validate shares sum equals total (in expense's original currency)
+      if (group && group.currency.toUpperCase() !== 'RUB') {
+        throw new AppError('BAD_REQUEST', 'rubOnlyGroup');
+      }
+
+      // Validate shares sum equals total in kopecks.
       const sharesSum = input.shares.reduce((sum, s) => sum + s.amount, 0);
       if (sharesSum !== input.amount) {
         throw new AppError('BAD_REQUEST', 'sharesSumMismatch', { sum: sharesSum, amount: input.amount });
       }
 
-      // Currency conversion: compute base currency amount if currencies differ
-      let exchangeRate: number | null = null;
-      let baseCurrencyAmount: number | null = null;
-
-      const groupCurrency = group?.currency ?? 'USD';
-      if (input.currency.toUpperCase() !== groupCurrency.toUpperCase()) {
-        if (input.exchangeRate) {
-          // Manual override
-          exchangeRate = input.exchangeRate;
-        } else {
-          // Auto-fetch from frankfurter.app
-          const dateStr = input.expenseDate
-            ? input.expenseDate.slice(0, 10) // YYYY-MM-DD from ISO string
-            : undefined;
-          exchangeRate = await getExchangeRate(input.currency, groupCurrency, dateStr);
-        }
-
-        if (exchangeRate === null) {
-          throw new AppError('BAD_REQUEST', 'exchangeRateUnavailable');
-        }
-
-        baseCurrencyAmount = convertCents(input.amount, exchangeRate);
-      }
-
       const expense = await ctx.db.$transaction(async (tx) => {
         await lockActiveGroup(tx, input.groupId, 'archivedAddExpense');
+
+        // Re-check under the group row lock so a concurrent change cannot
+        // insert a RUB expense into a group whose currency has changed.
+        const lockedGroup = await tx.group.findUnique({
+          where: { id: input.groupId },
+          select: { currency: true },
+        });
+        if (!lockedGroup || lockedGroup.currency.toUpperCase() !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'rubOnlyGroup');
+        }
 
         // Validate paidById is a member of the group (after the lock, so someone
         // leaving meanwhile is either gone or waits for this, #279). A placeholder
@@ -165,9 +154,9 @@ export const expensesRouter = createTRPCRouter({
             title: input.title,
             ...(input.description !== undefined ? { description: input.description } : {}),
             amount: input.amount,
-            currency: input.currency,
-            exchangeRate: exchangeRate ?? 1.0,
-            baseCurrencyAmount,
+            currency: 'RUB',
+            exchangeRate: 1.0,
+            baseCurrencyAmount: null,
             ...(input.category !== undefined ? { category: input.category } : {}),
             expenseDate: input.expenseDate ? new Date(input.expenseDate) : new Date(),
             paidById: input.paidById,
@@ -213,13 +202,9 @@ export const expensesRouter = createTRPCRouter({
           title: z.string().min(1).max(200).optional(),
           description: z.string().max(1000).optional(),
           amount: z.number().int().positive().max(MAX_MONEY_CENTS).optional(),
-          currency: z
-            .string()
-            .length(3)
-            .regex(/^[a-zA-Z]{3}$/)
-            .transform((c) => c.toUpperCase())
-            .optional(),
-          exchangeRate: exchangeRateSchema.optional(), // manual override
+          // Reject attempts to change the currency or pass a manual rate.
+          currency: z.never().optional(),
+          exchangeRate: z.never().optional(),
           category: z.string().max(50).optional(),
           expenseDate: z.string().datetime().optional(),
           paidById: z.string().optional(),
@@ -232,7 +217,7 @@ export const expensesRouter = createTRPCRouter({
         }),
     )
     .mutation(async ({ ctx, input }) => {
-      // Refuse an archived group before the checks and rate lookup below;
+      // Refuse an archived group before currency and membership checks;
       // lockActiveGroup in the transaction is the check that holds (#289)
       const groupCheck = await ctx.db.group.findUnique({
         where: { id: input.groupId },
@@ -254,8 +239,11 @@ export const expensesRouter = createTRPCRouter({
       if (!isOwnerOrAdmin && !isCreatorOrPayer) {
         throw new AppError('FORBIDDEN', 'onlyCreatorEditsExpense');
       }
+      if (groupCheck?.currency.toUpperCase() !== 'RUB' || existing.currency.toUpperCase() !== 'RUB') {
+        throw new AppError('BAD_REQUEST', 'rubOnlyExpense');
+      }
 
-      const { groupId, expenseId, shares, currency: inputCurrency, exchangeRate: inputExchangeRate, ...data } = input;
+      const { groupId, expenseId, shares, ...data } = input;
 
       if (shares) {
         const expectedAmount = data.amount ?? existing.amount;
@@ -265,34 +253,12 @@ export const expensesRouter = createTRPCRouter({
         }
       }
 
-      // Recompute currency conversion if currency or amount changed
-      const effectiveCurrency = inputCurrency ?? existing.currency;
-      const effectiveAmount = data.amount ?? existing.amount;
-      const groupCurrency = groupCheck?.currency ?? 'USD';
-      let newExchangeRate: number | null = existing.exchangeRate;
-      let newBaseCurrencyAmount: number | null = existing.baseCurrencyAmount;
-
-      if (effectiveCurrency.toUpperCase() !== groupCurrency.toUpperCase()) {
-        if (inputExchangeRate) {
-          newExchangeRate = inputExchangeRate;
-        } else if (inputCurrency || data.amount || data.expenseDate) {
-          // Currency, amount, or date changed -- re-fetch rate
-          const dateStr = (data.expenseDate ?? existing.expenseDate.toISOString()).slice(0, 10);
-          const fetched = await getExchangeRate(effectiveCurrency, groupCurrency, dateStr);
-          if (fetched === null) {
-            throw new AppError('BAD_REQUEST', 'exchangeRateUnavailable');
-          }
-          newExchangeRate = fetched;
-        }
-        newBaseCurrencyAmount = newExchangeRate ? convertCents(effectiveAmount, newExchangeRate) : null;
-      } else {
-        // Same currency as group -- clear conversion fields
-        newExchangeRate = 1.0;
-        newBaseCurrencyAmount = null;
-      }
-
       const expense = await ctx.db.$transaction(async (tx) => {
         await lockActiveGroup(tx, groupId, 'archivedEditExpense');
+        const lockedGroup = await tx.group.findUnique({ where: { id: groupId }, select: { currency: true } });
+        if (!lockedGroup || lockedGroup.currency.toUpperCase() !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'rubOnlyExpense');
+        }
 
         // Validate a new payer and the shares' people are members (after the lock,
         // so someone leaving meanwhile is either gone or waits for this, #279). A
@@ -301,8 +267,11 @@ export const expensesRouter = createTRPCRouter({
         // someone else, but isn't put in a part they didn't have (#284). Who has
         // which part is read under the expense's row lock, so two edits at once
         // can't each check against what the other is replacing.
-        const [stored] = await tx.$queryRaw<{ paidById: string }[]>`
-          SELECT "paidById" FROM "Expense" WHERE "id" = ${expenseId} FOR NO KEY UPDATE`;
+        const [stored] = await tx.$queryRaw<{ paidById: string; currency: string }[]>`
+          SELECT "paidById", "currency" FROM "Expense" WHERE "id" = ${expenseId} FOR NO KEY UPDATE`;
+        if (!stored || stored.currency?.toUpperCase() !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'rubOnlyExpense');
+        }
         const storedShareIds = (await tx.expenseShare.findMany({ where: { expenseId }, select: { userId: true } })).map(
           (s) => s.userId,
         );
@@ -349,9 +318,9 @@ export const expensesRouter = createTRPCRouter({
           where: { id: expenseId },
           data: {
             ...stripUndefined(data),
-            ...(inputCurrency ? { currency: inputCurrency } : {}),
-            exchangeRate: newExchangeRate ?? 1.0,
-            baseCurrencyAmount: newBaseCurrencyAmount,
+            currency: 'RUB',
+            exchangeRate: 1.0,
+            baseCurrencyAmount: null,
             ...(data.expenseDate ? { expenseDate: new Date(data.expenseDate) } : {}),
           },
           include: { shares: true },

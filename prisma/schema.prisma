@@ -47,6 +47,22 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
+// Registration email verification. Never persist the secret from the email link.
+// Unlike Auth.js VerificationToken, this belongs to an unverified password account.
+model EmailVerificationRequest {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique @db.VarChar(64)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+}
+
 // ─── CORE MODELS ───────────────────────────────────────────
 
 model User {
@@ -56,9 +72,11 @@ model User {
   emailVerified   DateTime?
   passwordHash    String?
   image           String?
-  defaultCurrency String    @default("USD")
-  locale          String    @default("en")
+  defaultCurrency String    @default("RUB")
+  locale          String    @default("ru")
   venmoUsername   String?
+  sbpPhone        String? // normalized Russian number; no SMS validation
+  sbpBankId       String? // selected bank ID, not a verified account
   suspendedAt     DateTime?
   isPlaceholder   Boolean   @default(false)
   placeholderName String?
@@ -66,6 +84,7 @@ model User {
 
   accounts        Account[]
   sessions        Session[]
+  emailVerificationRequests EmailVerificationRequest[]
   groupMembers    GroupMember[]
   expensesPaid    Expense[]          @relation("PaidBy")
   expensesAdded   Expense[]          @relation("AddedBy")
@@ -75,6 +94,7 @@ model User {
   activityLogs    ActivityLog[]
   adminAuditLogs  AdminAuditLog[] @relation("AdminAuditLogs")
   systemInvitesUsed SystemInvite[] @relation("SystemInviteUsedBy")
+  systemInvitesReserved SystemInvite[] @relation("SystemInviteReservedBy")
   uploadedReceipts Receipt[] @relation("UploadedReceipts")
   guestSplits      GuestSplit[] @relation("GuestSplits")
   groupInvitesCreated GroupInvite[] @relation("GroupInvitesCreated")
@@ -87,7 +107,7 @@ model Group {
   id            String  @id @default(cuid())
   name          String
   description   String? @db.Text
-  currency      String  @default("USD")
+  currency      String  @default("RUB")
   emoji         String? @default("💰")
   simplifyDebts Boolean @default(true)
   archivedAt    DateTime?
@@ -159,7 +179,7 @@ model Expense {
   title       String
   description String?   @db.Text
   amount      Int       // total in cents (in expense currency)
-  currency    String    @default("USD")
+  currency    String    @default("RUB")
   exchangeRate        Float   @default(1.0) // rate: 1 unit of expense currency = X units of group currency
   baseCurrencyAmount  Int?    // amount converted to group currency (cents); null = same currency
   category    String?
@@ -207,7 +227,7 @@ enum SplitMode {
   ITEM
 }
 
-// ─── RECEIPTS & AI ─────────────────────────────────────────
+// ─── MANUAL RECEIPTS ─────────────────────────────────────────
 
 model Receipt {
   id            String        @id @default(cuid())
@@ -216,8 +236,6 @@ model Receipt {
   mimeType      String
   fileSize      Int
   status        ReceiptStatus @default(PENDING)
-  aiProvider    String?
-  rawResponse   Json?
   extractedData Json?
   groupId       String?
   savedById     String?
@@ -278,7 +296,7 @@ model Settlement {
   fromId   String
   toId     String
   amount   Int     // cents (in settlement currency)
-  currency String  @default("USD")
+  currency String  @default("RUB")
   exchangeRate        Float   @default(1.0) // rate: 1 unit of settlement currency = X units of group currency
   baseCurrencyAmount  Int?    // amount converted to group currency (cents); null = same currency
   note     String?
@@ -392,10 +410,17 @@ model SystemInvite {
   usedAt    DateTime?
   expiresAt DateTime?
   revokedAt DateTime?
+  // A reservation is not a consumption: claim usedById/usedAt only after email verification.
+  reservedById String?
+  reservedUntil DateTime?
 
   usedBy User? @relation("SystemInviteUsedBy", fields: [usedById], references: [id], onDelete: SetNull)
+  reservedBy User? @relation("SystemInviteReservedBy", fields: [reservedById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
+
+  @@index([reservedUntil])
+  @@index([reservedById])
 }
 
 enum GuestSplitStatus {
@@ -420,6 +445,9 @@ model GuestSplit {
   summary     Json?    // [{name, itemTotal, tax, tip, total}]
   paidByIndex      Int              @default(0)
   payerVenmoHandle String?
+  // Confidential payer-selected SBP destination; not part of the public guest receipt.
+  payerSbpPhone    String?
+  payerSbpBankId   String?
   status           GuestSplitStatus @default(FINALIZED)
   userId           String?
   createdBy   User?    @relation("GuestSplits", fields: [userId], references: [id], onDelete: SetNull)

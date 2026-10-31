@@ -10,6 +10,7 @@ import { parseAuthConfig } from '../../lib/auth-config';
 import { readRegistrationMode } from '../../lib/registration-mode';
 import { findUsersByEmail } from '../../lib/user-email';
 import { Prisma } from '@/generated/prisma/client';
+import { isSupportedSbpBankId, normalizeSbpPhone, SBP_BANKS } from '@/lib/sbp-banks';
 
 export const authRouter = createTRPCRouter({
   getSession: publicProcedure.query(({ ctx }) => {
@@ -164,6 +165,8 @@ export const authRouter = createTRPCRouter({
         name: true,
         email: true,
         venmoUsername: true,
+        sbpPhone: true,
+        sbpBankId: true,
         locale: true,
         defaultCurrency: true,
         passwordHash: true,
@@ -183,11 +186,35 @@ export const authRouter = createTRPCRouter({
         defaultCurrency: z.string().length(3).optional(),
         locale: z.enum(locales).optional(),
         venmoUsername: z.string().max(50).nullable().optional(),
+        sbpPhone: z.string().max(24).nullable().optional(),
+        sbpBankId: z.string().max(40).nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const phone =
+        input.sbpPhone === undefined || input.sbpPhone === null || input.sbpPhone.trim() === ''
+          ? null
+          : normalizeSbpPhone(input.sbpPhone);
+      if (input.sbpPhone && input.sbpPhone.trim() && !phone) {
+        throw new AppError('BAD_REQUEST', 'sbpPhoneInvalid');
+      }
+      if (input.sbpBankId && !isSupportedSbpBankId(input.sbpBankId)) {
+        // An old profile can retain an existing bank that disappeared from the
+        // registry, but cannot newly select it (or an unknown bank ID).
+        const retired = SBP_BANKS.some((bank) => bank.id === input.sbpBankId && bank.active === false);
+        if (!retired) throw new AppError('BAD_REQUEST', 'sbpBankInvalid');
+        const previous = await ctx.db.user.findUnique({
+          where: { id: ctx.user.id },
+          select: { sbpBankId: true },
+        });
+        if (previous?.sbpBankId !== input.sbpBankId) {
+          throw new AppError('BAD_REQUEST', 'sbpBankInvalid');
+        }
+      }
       const data = {
         ...stripUndefined(input),
+        ...(input.sbpPhone !== undefined ? { sbpPhone: phone } : {}),
+        ...(input.sbpBankId !== undefined ? { sbpBankId: input.sbpBankId || null } : {}),
         ...(input.venmoUsername !== undefined ? { venmoUsername: input.venmoUsername?.trim() || null } : {}),
       };
       const user = await ctx.db.user.update({
@@ -200,6 +227,8 @@ export const authRouter = createTRPCRouter({
         email: user.email,
         locale: user.locale,
         venmoUsername: user.venmoUsername,
+        sbpPhone: user.sbpPhone,
+        sbpBankId: user.sbpBankId,
       };
     }),
 });

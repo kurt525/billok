@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily BillOK SBP registry review (08:20 MSK)
+
+[Timer]
+OnCalendar=*-*-* 05:20:00 UTC
+AccuracySec=1min
+Persistent=true
+Unit=billok-sbp-catalog-sync.service
+
+[Install]
+WantedBy=timers.target

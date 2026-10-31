@@ -216,6 +216,47 @@ describe('names are trimmed', () => {
   });
 });
 
+describe('auth.updateProfile SBP details', () => {
+  test('saves normalized phone and selected bank for signed-in user', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.update.mockResolvedValue({
+      id: 'u1',
+      name: 'Ada',
+      sbpPhone: '+79991234567',
+      sbpBankId: 'tbank',
+    });
+    const api = await caller({ user: { id: 'u1' } });
+    const updated = await api.updateProfile({ sbpPhone: '8 (999) 123-45-67', sbpBankId: 'tbank' });
+    expect(mockDb.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'u1' }, data: { sbpPhone: '+79991234567', sbpBankId: 'tbank' } }),
+    );
+    expect(updated).toMatchObject({ sbpPhone: '+79991234567', sbpBankId: 'tbank' });
+  });
+
+  test('invalid phone and unknown bank never reach the database update', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    const api = await caller({ user: { id: 'u1' } });
+    await expect(api.updateProfile({ sbpPhone: '+15551234567' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(api.updateProfile({ sbpBankId: 'fake-bank' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.user.update).not.toHaveBeenCalled();
+  });
+
+  test('both fields can be cleared and anonymous updates are rejected', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.update.mockResolvedValue({ id: 'u1', sbpPhone: null, sbpBankId: null });
+    const signedIn = await caller({ user: { id: 'u1' } });
+    await signedIn.updateProfile({ sbpPhone: '', sbpBankId: null });
+    expect(mockDb.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { sbpPhone: null, sbpBankId: null } }),
+    );
+    mockDb.user.update.mockClear();
+    await expect((await caller()).updateProfile({ sbpPhone: '+79991234567' })).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
+    expect(mockDb.user.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('password login enabled', () => {
   test('getRegistrationMode returns the admin setting', async () => {
     mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'invite-only' });

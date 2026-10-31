@@ -3,12 +3,11 @@ import { AppError } from '@/server/lib/app-error';
 import { Prisma } from '@/generated/prisma/client';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { createTRPCRouter, protectedProcedure, groupMemberProcedure } from '../init';
-import { processReceiptImage } from '../../lib/receipt-processor';
-import { logger } from '../../lib/logger';
 import { parseExtractedData } from '../../lib/json-schemas';
-import { getExchangeRate, convertCents } from '../../lib/exchange-rates';
 import { stripUndefined } from '../../lib/strip-undefined';
 import { lockActiveGroup } from '../../lib/group-balances';
+import { calculateManualReceiptTotals, calculateTotalsWithPersonalTips } from '@/lib/manual-receipt-split';
+import { MAX_MONEY_CENTS } from '@/lib/money';
 import { deleteUnusedSplitReceipts, removeReceiptFiles } from '../../lib/receipt-cleanup';
 
 /**
@@ -42,94 +41,36 @@ async function verifyReceiptAccess(
 }
 
 export const receiptsRouter = createTRPCRouter({
-  processReceipt: protectedProcedure
-    .input(
-      z.object({
-        receiptId: z.string(),
-        groupId: z.string().optional(),
-        correctionHint: z.string().max(500).optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const receipt = await verifyReceiptAccess(ctx.db, input.receiptId, ctx.user.id);
-      if (!receipt) {
-        throw new AppError('NOT_FOUND', 'receiptNotFound');
+  // Manual group receipts reuse ReceiptItem and ReceiptItemAssignment; never require OCR.
+  createManual: groupMemberProcedure.input(z.object({ groupId: z.string() })).mutation(async ({ ctx, input }) => {
+    return ctx.db.$transaction(async (tx) => {
+      await lockActiveGroup(tx, input.groupId, 'archivedAddExpense');
+      // Guard direct API calls as well as the RUB-only mobile form. This read
+      // follows the group row lock, so a concurrent currency change cannot
+      // slip between validation and creating the manual receipt.
+      const group = await tx.group.findUnique({
+        where: { id: input.groupId },
+        select: { currency: true },
+      });
+      if (!group || group.currency.toUpperCase() !== 'RUB') {
+        throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
       }
-
-      if (input.groupId) {
-        const membership = await ctx.db.groupMember.findUnique({
-          where: {
-            userId_groupId: {
-              userId: ctx.user.id,
-              groupId: input.groupId,
-            },
-          },
-        });
-        if (!membership || membership.removedAt) {
-          throw new AppError('FORBIDDEN', 'notGroupMember');
-        }
-      }
-
-      // Note: old items are NOT deleted here — processReceiptImage handles
-      // delete + recreate atomically, so if the AI provider fails the old items remain.
-
-      // Conditional update doubles as a mutex: a receipt already PROCESSING
-      // is rejected so concurrent calls can't interleave delete/recreate.
-      // A PROCESSING receipt untouched for 15+ minutes is considered stale
-      // (crashed run) and may be re-claimed. The threshold deliberately
-      // exceeds the worst-case provider pipeline (2 passes x per-provider
-      // timeouts of 30-120s) so a slow-but-live run is never re-claimed.
-      // It also claims it only while it's still in the group the access check above found it
-      // in: deleting it from the pending list takes it off the group and keeps it while a
-      // claim session uses it (#318), and this update, queued behind that delete's row lock,
-      // would otherwise put it back
-      const claimed = await ctx.db.receipt.updateMany({
-        where: {
-          id: input.receiptId,
-          groupId: receipt.groupId,
-          OR: [{ status: { not: 'PROCESSING' } }, { updatedAt: { lt: new Date(Date.now() - 15 * 60 * 1000) } }],
-        },
+      const receipt = await tx.receipt.create({
         data: {
-          status: 'PROCESSING',
-          ...(input.groupId ? { groupId: input.groupId, savedById: ctx.user.id } : {}),
+          groupId: input.groupId,
+          uploadedById: ctx.user.id,
+          savedById: ctx.user.id,
+          imagePath: '',
+          originalName: 'billok-manual',
+          mimeType: 'application/x-billok-manual',
+          fileSize: 0,
+          status: 'COMPLETED',
+          extractedData: { merchantName: '', subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' },
         },
       });
-      if (claimed.count === 0) {
-        const now = await ctx.db.receipt.findUnique({ where: { id: input.receiptId }, select: { groupId: true } });
-        throw new AppError(
-          'CONFLICT',
-          now?.groupId === receipt.groupId ? 'receiptBeingProcessed' : 'receiptRemovedFromGroup',
-        );
-      }
-
-      try {
-        return await processReceiptImage({
-          db: ctx.db,
-          receiptId: input.receiptId,
-          receipt,
-          ...(input.correctionHint !== undefined ? { correctionHint: input.correctionHint } : {}),
-          logPrefix: 'receipt',
-        });
-      } catch (error) {
-        logger.error('receipt.failed', {
-          receiptId: input.receiptId,
-          error: error instanceof Error ? error.message : 'Unknown',
-        });
-        await ctx.db.receipt.update({
-          where: { id: input.receiptId },
-          data: {
-            status: 'FAILED',
-            rawResponse: {
-              error: error instanceof Error ? error.message : 'Unknown error',
-            } as unknown as Prisma.InputJsonValue,
-          },
-        });
-
-        // Details are logged and stored in rawResponse; don't echo raw
-        // provider/internal errors to the client.
-        throw new AppError('INTERNAL_SERVER_ERROR', 'receiptProcessingFailed');
-      }
-    }),
+      return { receiptId: receipt.id };
+    });
+  }),
 
   getReceiptItems: protectedProcedure.input(z.object({ receiptId: z.string() })).query(async ({ ctx, input }) => {
     const receipt = await verifyReceiptAccess(ctx.db, input.receiptId, ctx.user.id, {
@@ -156,6 +97,8 @@ export const receiptsRouter = createTRPCRouter({
         id: receiptWithItems.id,
         status: receiptWithItems.status,
         imagePath: receiptWithItems.imagePath,
+        isManual: receiptWithItems.originalName === 'billok-manual',
+        creatorId: receiptWithItems.uploadedById,
         paidById: receiptWithItems.paidById,
         extractedData: receiptWithItems.extractedData as {
           merchantName?: string;
@@ -165,11 +108,85 @@ export const receiptsRouter = createTRPCRouter({
           tip: number;
           total: number;
           currency: string;
+          personalTips?: Record<string, number>;
         } | null,
       },
       items: receiptWithItems.items as ReceiptItem[],
     };
   }),
+
+  // One voluntary RUB tip per registered participant, stored alongside this
+  // unfinalized manual receipt. Separate from dish prices and all expense debts
+  // until the subsequent personal-tip settlement stage.
+  setPersonalTip: groupMemberProcedure
+    .input(
+      z.object({
+        groupId: z.string(),
+        receiptId: z.string(),
+        tipCents: z.number().int().min(0).max(MAX_MONEY_CENTS),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.$transaction(async (tx) => {
+        // Serialize updates of the SAME receipt so two members can independently
+        // save tips without replacing each other's extractedData.personalTips.
+        // No group row lock: this mutation does not change balances or membership.
+        const [locked] = await tx.$queryRaw<{ id: string }[]>`
+          SELECT "id" FROM "Receipt" WHERE "id" = ${input.receiptId} FOR UPDATE`;
+        if (!locked) throw new AppError('NOT_FOUND');
+
+        const receipt = await tx.receipt.findUnique({ where: { id: input.receiptId } });
+        if (!receipt || receipt.groupId !== input.groupId) {
+          throw new AppError('NOT_FOUND');
+        }
+        if (receipt.status !== 'COMPLETED' || receipt.originalName !== 'billok-manual') {
+          throw new AppError('BAD_REQUEST', 'receiptNotReady');
+        }
+
+        const [group, member, expense] = await Promise.all([
+          tx.group.findUnique({
+            where: { id: input.groupId },
+            select: { currency: true, archivedAt: true },
+          }),
+          tx.groupMember.findUnique({
+            where: { userId_groupId: { userId: ctx.user.id, groupId: input.groupId } },
+          }),
+          tx.expense.findUnique({ where: { receiptId: input.receiptId } }),
+        ]);
+        if (!member || member.removedAt) throw new AppError('FORBIDDEN');
+        if (!group || group.archivedAt) {
+          throw new AppError('BAD_REQUEST', 'archivedAddExpense');
+        }
+        if (group.currency.toUpperCase() !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+        }
+        if (expense) {
+          throw new AppError('BAD_REQUEST', 'receiptAlreadyHasExpense');
+        }
+
+        const extracted = parseExtractedData(receipt.extractedData);
+        if (extracted.currency.toUpperCase() !== 'RUB' || extracted.tax !== 0 || extracted.tip !== 0) {
+          throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+        }
+        const storedTips = extracted.personalTips;
+        const tips =
+          storedTips && typeof storedTips === 'object' && !Array.isArray(storedTips)
+            ? (storedTips as Record<string, number>)
+            : {};
+        if ((tips[ctx.user.id] ?? 0) !== input.tipCents) {
+          await tx.receipt.update({
+            where: { id: input.receiptId },
+            data: {
+              extractedData: {
+                ...extracted,
+                personalTips: { ...tips, [ctx.user.id]: input.tipCents },
+              } as Prisma.InputJsonValue,
+            },
+          });
+        }
+        return { success: true, tipCents: input.tipCents };
+      });
+    }),
 
   updateItem: protectedProcedure
     .input(
@@ -308,70 +325,6 @@ export const receiptsRouter = createTRPCRouter({
       });
     }),
 
-  updateExtractedData: protectedProcedure
-    .input(
-      z.object({
-        receiptId: z.string(),
-        tax: z.number().int().min(0).optional(),
-        tip: z.number().int().min(0).optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const receipt = await verifyReceiptAccess(ctx.db, input.receiptId, ctx.user.id);
-
-      const current = (receipt.extractedData ?? {}) as Record<string, unknown>;
-      const updated = {
-        ...current,
-        ...(input.tax !== undefined ? { tax: input.tax } : {}),
-        ...(input.tip !== undefined ? { tip: input.tip } : {}),
-      };
-
-      await ctx.db.receipt.update({
-        where: { id: input.receiptId },
-        data: { extractedData: updated as unknown as Prisma.InputJsonValue },
-      });
-      return { success: true };
-    }),
-
-  retryProcessing: protectedProcedure.input(z.object({ receiptId: z.string() })).mutation(async ({ ctx, input }) => {
-    const receipt = await verifyReceiptAccess(ctx.db, input.receiptId, ctx.user.id);
-
-    // Reset status to PROCESSING and re-run extraction; conditional update
-    // rejects concurrent reprocessing of the same receipt. A PROCESSING
-    // receipt untouched for 15+ minutes is stale and may be re-claimed
-    // (threshold exceeds the worst-case provider pipeline duration).
-    const claimed = await ctx.db.receipt.updateMany({
-      where: {
-        id: input.receiptId,
-        OR: [{ status: { not: 'PROCESSING' } }, { updatedAt: { lt: new Date(Date.now() - 15 * 60 * 1000) } }],
-      },
-      data: { status: 'PROCESSING' },
-    });
-    if (claimed.count === 0) {
-      throw new AppError('CONFLICT', 'receiptBeingProcessed');
-    }
-
-    try {
-      return await processReceiptImage({
-        db: ctx.db,
-        receiptId: input.receiptId,
-        receipt: { imagePath: receipt.imagePath, mimeType: receipt.mimeType },
-        logPrefix: 'receipt.retry',
-      });
-    } catch (error) {
-      await ctx.db.receipt.update({
-        where: { id: input.receiptId },
-        data: {
-          status: 'FAILED',
-          rawResponse: {
-            error: error instanceof Error ? error.message : 'Unknown error',
-          } as unknown as Prisma.InputJsonValue,
-        },
-      });
-      throw new AppError('INTERNAL_SERVER_ERROR', 'reprocessingFailed');
-    }
-  }),
-
   assignItemsAndCreateExpense: groupMemberProcedure
     .input(
       z.object({
@@ -379,21 +332,25 @@ export const receiptsRouter = createTRPCRouter({
         receiptId: z.string(),
         title: z.string().min(1).max(200),
         paidById: z.string(),
-        tipOverride: z.number().int().min(0).optional(),
+        tipOverride: z.never().optional(), // shared tips are not part of BillOK receipts
         assignments: z.array(
           z.object({
             receiptItemId: z.string(),
             userIds: z.array(z.string()).min(1),
+            parts: z.array(z.number().int().min(1).max(10000)).optional(),
           }),
         ),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      // Refuse an archived group before the checks and rate lookup below;
+      // Refuse an archived group before receipt checks;
       // lockActiveGroup in the transaction is the check that holds (#289)
       const group = await ctx.db.group.findUnique({ where: { id: input.groupId } });
       if (group?.archivedAt) {
         throw new AppError('BAD_REQUEST', 'archivedCreateExpense');
+      }
+      if (!group || group.currency.toUpperCase() !== 'RUB') {
+        throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
       }
 
       const receipt = await ctx.db.receipt.findUnique({
@@ -418,9 +375,32 @@ export const receiptsRouter = createTRPCRouter({
       }
 
       const extractedData = parseExtractedData(receipt.extractedData);
+      if (extractedData.currency.toUpperCase() !== 'RUB') {
+        throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+      }
+      if (receipt.originalName === 'billok-manual') {
+        const itemIds = new Set(receipt.items.map((item) => item.id));
+        const assigned = input.assignments.map((assignment) => assignment.receiptItemId);
+        if (
+          !itemIds.size ||
+          input.assignments.length !== itemIds.size ||
+          new Set(assigned).size !== itemIds.size ||
+          assigned.some((id) => !itemIds.has(id)) ||
+          input.assignments.some(
+            (a) =>
+              new Set(a.userIds).size !== a.userIds.length ||
+              (a.parts !== undefined && a.parts.length !== a.userIds.length),
+          )
+        ) {
+          throw new AppError('BAD_REQUEST', 'receiptNotReady');
+        }
+      }
 
-      const tax = extractedData.tax;
-      const tip = input.tipOverride ?? extractedData.tip;
+      // Prices already include restaurant taxes. Additional tax and common
+      // tips are not supported; personal voluntary tips are a separate step.
+      if (extractedData.tax !== 0 || extractedData.tip !== 0) {
+        throw new AppError('BAD_REQUEST', 'receiptExtraChargesNotSupported');
+      }
 
       // Build item map and verify all referenced items belong to this receipt
       const itemMap = new Map(receipt.items.map((item) => [item.id, item]));
@@ -433,84 +413,72 @@ export const receiptsRouter = createTRPCRouter({
       // Calculate per-user item subtotals
       const userSubtotals = new Map<string, number>();
 
-      for (const assignment of input.assignments) {
-        const item = itemMap.get(assignment.receiptItemId)!;
+      if (receipt.originalName !== 'billok-manual')
+        for (const assignment of input.assignments) {
+          const item = itemMap.get(assignment.receiptItemId)!;
 
-        const perPerson = Math.floor(item.totalPrice / assignment.userIds.length);
-        const remainder = item.totalPrice - perPerson * assignment.userIds.length;
+          const perPerson = Math.floor(item.totalPrice / assignment.userIds.length);
+          const remainder = item.totalPrice - perPerson * assignment.userIds.length;
 
-        for (const [i, userId] of assignment.userIds.entries()) {
-          const amount = perPerson + (i < remainder ? 1 : 0);
-          userSubtotals.set(userId, (userSubtotals.get(userId) ?? 0) + amount);
+          for (const [i, userId] of assignment.userIds.entries()) {
+            const amount = perPerson + (i < remainder ? 1 : 0);
+            userSubtotals.set(userId, (userSubtotals.get(userId) ?? 0) + amount);
+          }
         }
-      }
 
-      // Proportionally distribute tax and tip using receipt subtotal as denominator.
-      // This ensures each assigned item gets its fair share of tax/tip relative to
-      // the full receipt subtotal, even when not all items are assigned.
-      const actualSubtotal = Array.from(userSubtotals.values()).reduce((a, b) => a + b, 0);
-      const receiptSubtotal = extractedData.subtotal > 0 ? extractedData.subtotal : actualSubtotal;
-      const totalAmount = actualSubtotal + tax + tip;
+      // Every item is charged at its displayed price without extra tax or a
+      // shared tip. Integer kopeck rounding for manual portions is unchanged.
+      const totalAmount =
+        receipt.originalName === 'billok-manual'
+          ? receipt.items.reduce((sum, item) => sum + item.totalPrice, 0)
+          : [...userSubtotals.values()].reduce((sum, amount) => sum + amount, 0);
 
-      const userTotals = new Map<string, number>();
-      let allocatedTotal = 0;
-      const userEntries = Array.from(userSubtotals.entries());
-
-      for (const [i, [userId, itemTotal]] of userEntries.entries()) {
-        const proportion = receiptSubtotal > 0 ? itemTotal / receiptSubtotal : 0;
-
-        let userTax: number;
-        let userTip: number;
-
-        if (i === userEntries.length - 1) {
-          // Last user gets remainder to prevent off-by-one
-          const alreadyAllocated = allocatedTotal;
-          const userTotal = totalAmount - alreadyAllocated;
-          userTotals.set(userId, userTotal);
-          allocatedTotal += userTotal;
-        } else {
-          userTax = Math.round(tax * proportion);
-          userTip = Math.round(tip * proportion);
-          const userTotal = itemTotal + userTax + userTip;
-          userTotals.set(userId, userTotal);
-          allocatedTotal += userTotal;
-        }
-      }
+      const userTotals =
+        receipt.originalName === 'billok-manual'
+          ? calculateManualReceiptTotals({
+              items: receipt.items,
+              assignments: input.assignments.map((a) => ({
+                receiptItemId: a.receiptItemId,
+                people: a.userIds.map((userId, i) => ({ userId, parts: a.parts?.[i] ?? 1 })),
+              })),
+              creatorId: receipt.uploadedById ?? ctx.user.id,
+            })
+          : userSubtotals;
 
       // Save assignments in a single batch (replaces N×M individual upserts)
       const assignmentData = input.assignments.flatMap((a) =>
-        a.userIds.map((userId) => ({
+        a.userIds.map((userId, i) => ({
           receiptItemId: a.receiptItemId,
           userId,
+          shareOfItem: a.parts?.[i] ?? 1,
         })),
       );
-
-      // Currency conversion for receipt expenses
-      const rawCurrency = extractedData.currency;
-      const isValidIso = rawCurrency && /^[a-zA-Z]{3}$/.test(rawCurrency);
-      const receiptCurrency = (isValidIso ? rawCurrency : group!.currency).toUpperCase();
-      const groupCurrency = group!.currency.toUpperCase();
-      let exchangeRate: number | null = null;
-      let baseCurrencyAmount: number | null = null;
-
-      if (receiptCurrency !== groupCurrency) {
-        const receiptDate = extractedData.date?.slice(0, 10);
-        exchangeRate = await getExchangeRate(receiptCurrency, groupCurrency, receiptDate);
-        if (exchangeRate === null) {
-          throw new AppError('BAD_REQUEST', 'receiptExchangeRateUnavailable');
-        }
-        baseCurrencyAmount = convertCents(totalAmount, exchangeRate);
-      }
 
       // All writes in a single transaction for atomicity
       const expense = await ctx.db.$transaction(async (tx) => {
         await lockActiveGroup(tx, input.groupId, 'archivedCreateExpense');
+        // Recheck the RUB-only invariant under the group row lock.
+        const lockedGroup = await tx.group.findUnique({
+          where: { id: input.groupId },
+          select: { currency: true },
+        });
+        if (!lockedGroup || lockedGroup.currency.toUpperCase() !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+        }
 
         // Deleting the receipt from the pending list takes it off the group, and keeps it while
         // a claim session uses it (#318). Under its lock, that either waits for this expense
         // (and is refused) or finished first and is seen here
-        const [current] = await tx.$queryRaw<{ groupId: string | null }[]>`
-          SELECT "groupId" FROM "Receipt" WHERE "id" = ${input.receiptId} FOR SHARE`;
+        // A manual receipt's personal tips can be updated by other members.
+        // FOR UPDATE serializes finalization with receipts.setPersonalTip,
+        // which takes the same row lock before changing extractedData.
+        // Other receipt types keep the previous, weaker FOR SHARE lock.
+        const [current] =
+          receipt.originalName === 'billok-manual'
+            ? await tx.$queryRaw<{ groupId: string | null }[]>`
+                SELECT "groupId" FROM "Receipt" WHERE "id" = ${input.receiptId} FOR UPDATE`
+            : await tx.$queryRaw<{ groupId: string | null }[]>`
+                SELECT "groupId" FROM "Receipt" WHERE "id" = ${input.receiptId} FOR SHARE`;
         if (!current || current.groupId !== receipt.groupId) {
           throw new AppError('CONFLICT', 'receiptRemovedFromGroup');
         }
@@ -534,20 +502,70 @@ export const receiptsRouter = createTRPCRouter({
           }
         }
 
+        // The receipt was locked BEFORE this read. Never use the snapshot
+        // fetched outside the transaction: tips might have changed meanwhile.
+        // Both expense.amount and the shares must reflect one coherent version.
+        let finalTotalAmount = totalAmount;
+        let finalUserTotals = userTotals;
+        if (receipt.originalName === 'billok-manual') {
+          const currentReceipt = await tx.receipt.findUnique({
+            where: { id: input.receiptId },
+            select: { groupId: true, status: true, originalName: true, extractedData: true },
+          });
+          if (
+            !currentReceipt ||
+            currentReceipt.groupId !== receipt.groupId ||
+            currentReceipt.status !== 'COMPLETED' ||
+            currentReceipt.originalName !== 'billok-manual'
+          ) {
+            throw new AppError('CONFLICT', 'receiptRemovedFromGroup');
+          }
+          const currentData = parseExtractedData(currentReceipt.extractedData);
+          if (currentData.currency.toUpperCase() !== 'RUB') {
+            throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+          }
+          if (currentData.tax !== 0 || currentData.tip !== 0) {
+            throw new AppError('BAD_REQUEST', 'receiptExtraChargesNotSupported');
+          }
+
+          try {
+            const consumingIds = new Set(input.assignments.flatMap((assignment) => assignment.userIds));
+            const totals = calculateTotalsWithPersonalTips(
+              userTotals,
+              currentData.personalTips,
+              memberIds,
+              consumingIds,
+            );
+            if (totals.itemTotal !== totalAmount) {
+              throw new RangeError('Receipt item shares do not reconcile');
+            }
+            finalTotalAmount = totals.total;
+            finalUserTotals = totals.userTotals;
+          } catch (error) {
+            if (!(error instanceof RangeError)) throw error;
+            throw new AppError('BAD_REQUEST', 'receiptPersonalTipsInvalid', undefined, { cause: error });
+          }
+        }
+
+        // Remaining kopecks may belong to the creator who consumed nothing.
+        for (const userId of finalUserTotals.keys()) {
+          if (!memberIds.has(userId)) throw new AppError('BAD_REQUEST', 'assigneeNotMember');
+        }
+
         const exp = await tx.expense.create({
           data: {
             groupId: input.groupId,
             title: input.title,
-            amount: totalAmount,
-            currency: receiptCurrency,
-            exchangeRate: exchangeRate ?? 1.0,
-            baseCurrencyAmount,
+            amount: finalTotalAmount,
+            currency: 'RUB',
+            exchangeRate: 1.0,
+            baseCurrencyAmount: null,
             splitMode: 'ITEM',
             paidById: input.paidById,
             addedById: ctx.user.id,
             receiptId: input.receiptId,
             shares: {
-              create: Array.from(userTotals.entries()).map(([userId, amount]) => ({
+              create: Array.from(finalUserTotals.entries()).map(([userId, amount]) => ({
                 userId,
                 amount,
               })),
@@ -570,7 +588,7 @@ export const receiptsRouter = createTRPCRouter({
             userId: ctx.user.id,
             type: 'EXPENSE_CREATED',
             entityId: exp.id,
-            metadata: { title: input.title, amount: totalAmount, fromReceipt: true },
+            metadata: { title: input.title, amount: finalTotalAmount, fromReceipt: true },
           },
         });
 
@@ -591,6 +609,7 @@ export const receiptsRouter = createTRPCRouter({
             z.object({
               receiptItemId: z.string(),
               userIds: z.array(z.string()).max(100),
+              parts: z.array(z.number().int().min(1).max(10000)).optional(),
             }),
           )
           .max(200)
@@ -601,6 +620,16 @@ export const receiptsRouter = createTRPCRouter({
       await verifyReceiptAccess(ctx.db, input.receiptId, ctx.user.id);
 
       await ctx.db.$transaction(async (tx) => {
+        // Keep group-before-receipt lock order, matching expense finalization.
+        await lockActiveGroup(tx, input.groupId, 'archivedAddExpense');
+        const group = await tx.group.findUnique({
+          where: { id: input.groupId },
+          select: { currency: true },
+        });
+        if (!group || group.currency.toUpperCase() !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+        }
+
         // Deleting it from the pending list takes it off the group and keeps it while a claim
         // session uses it (#318). Under its lock, that either waits for this save or is seen
         // here, and the access check above runs again on what the delete left
@@ -608,6 +637,9 @@ export const receiptsRouter = createTRPCRouter({
         const receipt = await verifyReceiptAccess(tx, input.receiptId, ctx.user.id);
         if (receipt.status !== 'COMPLETED') {
           throw new AppError('BAD_REQUEST', 'receiptNotProcessed');
+        }
+        if (parseExtractedData(receipt.extractedData).currency.toUpperCase() !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
         }
         // Check it's not already linked to an expense
         const existing = await tx.expense.findUnique({
@@ -653,6 +685,10 @@ export const receiptsRouter = createTRPCRouter({
           },
         });
 
+        if (input.assignments?.some((a) => a.parts && a.parts.length !== a.userIds.length)) {
+          throw new AppError('BAD_REQUEST', 'receiptNotReady');
+        }
+
         // Save partial assignments if provided (empty array clears existing)
         if (input.assignments) {
           // Validate that all receiptItemIds belong to this receipt
@@ -679,9 +715,9 @@ export const receiptsRouter = createTRPCRouter({
 
           // Create new assignments
           const seenAssignments = new Set<string>();
-          const assignmentData: { receiptItemId: string; userId: string }[] = [];
+          const assignmentData: { receiptItemId: string; userId: string; shareOfItem: number }[] = [];
           for (const assignment of input.assignments) {
-            for (const userId of assignment.userIds) {
+            for (const [i, userId] of assignment.userIds.entries()) {
               const key = `${assignment.receiptItemId}\u0000${userId}`;
               if (seenAssignments.has(key)) {
                 continue;
@@ -690,6 +726,7 @@ export const receiptsRouter = createTRPCRouter({
               assignmentData.push({
                 receiptItemId: assignment.receiptItemId,
                 userId,
+                shareOfItem: assignment.parts?.[i] ?? 1,
               });
             }
           }

@@ -69,7 +69,7 @@ async function main() {
       name: 'Apartment',
       description: 'Monthly shared expenses',
       emoji: '🏠',
-      currency: 'USD',
+      currency: 'RUB',
       members: {
         create: [
           { userId: alice.id, role: 'OWNER' },
@@ -153,7 +153,7 @@ async function main() {
       name: 'Japan Trip',
       description: 'Vacation expenses',
       emoji: '✈️',
-      currency: 'USD',
+      currency: 'RUB',
       members: {
         create: [
           { userId: alice.id, role: 'OWNER' },
@@ -209,7 +209,7 @@ async function main() {
       name: 'Test Admin Group',
       description: 'For e2e admin tests',
       emoji: '🧪',
-      currency: 'USD',
+      currency: 'RUB',
       members: {
         create: [
           { userId: alice.id, role: 'OWNER' },

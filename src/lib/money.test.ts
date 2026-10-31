@@ -1,31 +1,31 @@
 import { describe, test, expect } from 'vitest';
-import { formatCents, parseToCents, centsToDecimal } from './money';
+import { formatCents, parseToCents, centsToDecimal, isValidMoneyInput } from './money';
 
 describe('formatCents', () => {
   test('formats whole dollar amounts', () => {
-    expect(formatCents(1000)).toBe('$10.00');
-    expect(formatCents(100)).toBe('$1.00');
-    expect(formatCents(0)).toBe('$0.00');
+    expect(formatCents(1000, 'USD', 'en-US')).toBe('$10.00');
+    expect(formatCents(100, 'USD', 'en-US')).toBe('$1.00');
+    expect(formatCents(0, 'USD', 'en-US')).toBe('$0.00');
   });
 
   test('formats cents correctly', () => {
-    expect(formatCents(1299)).toBe('$12.99');
-    expect(formatCents(1)).toBe('$0.01');
-    expect(formatCents(50)).toBe('$0.50');
+    expect(formatCents(1299, 'USD', 'en-US')).toBe('$12.99');
+    expect(formatCents(1, 'USD', 'en-US')).toBe('$0.01');
+    expect(formatCents(50, 'USD', 'en-US')).toBe('$0.50');
   });
 
   test('formats large amounts', () => {
-    expect(formatCents(10000000)).toBe('$100,000.00');
-    expect(formatCents(999999)).toBe('$9,999.99');
+    expect(formatCents(10000000, 'USD', 'en-US')).toBe('$100,000.00');
+    expect(formatCents(999999, 'USD', 'en-US')).toBe('$9,999.99');
   });
 
   test('formats negative amounts', () => {
-    expect(formatCents(-1299)).toBe('-$12.99');
+    expect(formatCents(-1299, 'USD', 'en-US')).toBe('-$12.99');
   });
 
   test('respects currency parameter', () => {
-    expect(formatCents(1000, 'EUR')).toBe('€10.00');
-    expect(formatCents(1000, 'GBP')).toBe('£10.00');
+    expect(formatCents(1000, 'EUR', 'en-US')).toBe('€10.00');
+    expect(formatCents(1000, 'GBP', 'en-US')).toBe('£10.00');
   });
 
   test('formats JPY without decimals', () => {
@@ -38,8 +38,15 @@ describe('formatCents', () => {
     expect(result).toContain('1.234,56');
   });
 
+  test('Russian-only BillOK defaults to rubles and keeps kopecks', () => {
+    const result = formatCents(1299).replace(/[  ]/g, ' ');
+    expect(result).toBe('12,99 ₽');
+    expect(formatCents(1).replace(/[  ]/g, ' ')).toBe('0,01 ₽');
+    expect(formatCents(-1299).replace(/[  ]/g, ' ')).toBe('-12,99 ₽');
+  });
+
   test('defaults to configured app locale when not specified', () => {
-    expect(formatCents(1299, 'USD')).toBe('$12.99');
+    expect(formatCents(1299, 'USD').replace(/[  ]/g, ' ')).toBe('12,99 $');
     expect(formatCents(1299, 'USD', 'en-US')).toBe('$12.99');
   });
 
@@ -96,15 +103,41 @@ describe('parseToCents', () => {
     expect(parseToCents('0.50')).toBe(50);
   });
 
-  test('truncates beyond two decimal places', () => {
-    expect(parseToCents('12.999')).toBe(1299);
-    expect(parseToCents('12.994')).toBe(1299);
-    expect(parseToCents('0.005')).toBe(0);
+  test('accepts Russian commas and separated thousands without losing kopecks', () => {
+    expect(parseToCents('12,50')).toBe(1250);
+    expect(parseToCents('0,01')).toBe(1);
+    expect(parseToCents('1 234,56')).toBe(123456);
+    expect(parseToCents('1\u00a0234,56')).toBe(123456);
+    expect(parseToCents('1\u202f234,56')).toBe(123456);
+    expect(parseToCents('-12,50')).toBe(-1250);
+    expect(parseToCents('12,50')).toBe(parseToCents('12.50'));
+    expect(formatCents(parseToCents('1 234,56')).replace(/[\u00a0\u202f]/g, ' ')).toBe('1 234,56 ₽');
   });
 
-  test('avoids floating-point corruption', () => {
-    expect(parseToCents('1.005')).toBe(100);
-    expect(parseToCents('2.675')).toBe(267);
+  test('can distinguish a valid zero-kopeck amount from invalid entered text', () => {
+    expect(isValidMoneyInput('0,00')).toBe(true);
+    expect(isValidMoneyInput('1 234,50')).toBe(true);
+    expect(isValidMoneyInput('не сумма')).toBe(false);
+  });
+
+  test('rejects ambiguous or malformed grouping instead of misinterpreting a receipt', () => {
+    expect(parseToCents('12,50,00')).toBe(0);
+    expect(parseToCents('1 23,45')).toBe(0);
+    expect(parseToCents('1.234,56')).toBe(0);
+    expect(parseToCents('12 руб')).toBe(0);
+  });
+
+  test('rounds monetary values half-up to the nearest kopeck', () => {
+    expect(parseToCents('12.999')).toBe(1300);
+    expect(parseToCents('12,994')).toBe(1299);
+    expect(parseToCents('12,995')).toBe(1300);
+    expect(parseToCents('0,005')).toBe(1);
+    expect(parseToCents('-0,005')).toBe(-1);
+  });
+
+  test('avoids floating-point corruption in decimal rounding', () => {
+    expect(parseToCents('1.005')).toBe(101);
+    expect(parseToCents('2.675')).toBe(268);
     expect(parseToCents('1.15')).toBe(115);
   });
 

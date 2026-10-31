@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from 'next-intl';
 import { Link, useRouter } from '@/i18n/navigation';
 import { trpc } from '@/lib/trpc';
 import { formatCents } from '@/lib/money';
+import { manualExpenseBreakdown } from '@/lib/manual-expense-breakdown';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -12,6 +13,7 @@ import { Separator } from '@/components/ui/separator';
 import { ArrowLeft, Trash2, Pencil } from 'lucide-react';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 
 export default function ExpenseDetailPage({ params }: { params: Promise<{ groupId: string; expenseId: string }> }) {
@@ -19,13 +21,20 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
   const locale = useLocale();
   const router = useRouter();
   const t = useTranslations('expenses');
+  const tc = useTranslations('common');
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const expense = trpc.expenses.get.useQuery({ groupId, expenseId });
+  // The original positions and recorded personal tips remain on the receipt.
+  // Non-receipt expenses incur no extra fetch or tip display.
+  const receiptItems = trpc.receipts.getReceiptItems.useQuery(
+    { receiptId: expense.data?.receiptId ?? '' },
+    { enabled: !!expense.data?.receiptId },
+  );
   const group = trpc.groups.get.useQuery({ groupId });
   const deleteExpense = trpc.expenses.delete.useMutation({
     onSuccess: () => router.push(`/groups/${groupId}`),
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
 
   if (expense.isLoading) return <LoadingSpinner />;
@@ -50,8 +59,16 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
     SHARES: t('new.splitShares'),
     ITEM: t('detail.splitByItem'),
   } satisfies Record<typeof e.splitMode, string>;
-  const groupCurrency = group.data?.currency ?? 'USD';
+  const groupCurrency = group.data?.currency ?? 'RUB';
   const isCurrencyConverted = e.baseCurrencyAmount != null && e.currency.toUpperCase() !== groupCurrency.toUpperCase();
+  const manualSummary =
+    receiptItems.data?.receipt.isManual && e.receiptId === receiptItems.data.receipt.id
+      ? manualExpenseBreakdown({
+          receipt: receiptItems.data.receipt,
+          items: receiptItems.data.items,
+          expense: e,
+        })
+      : null;
 
   return (
     <div className="mx-auto max-w-lg space-y-6">
@@ -117,6 +134,63 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
             <>
               <Separator />
               <p className="text-sm">{e.description}</p>
+            </>
+          )}
+
+          {manualSummary && (
+            <>
+              <Separator />
+              <div className="space-y-2 text-sm" data-testid="manual-group-payer-summary">
+                <p className="font-semibold">{t('detail.waiterTipSummary')}</p>
+                <div className="flex min-w-0 justify-between gap-3">
+                  <span className="text-muted-foreground">{t('detail.dishesTotal')}</span>
+                  <span className="shrink-0 tabular-nums" data-testid="group-finalized-food-total">
+                    {formatCents(manualSummary.foodTotal, 'RUB', locale)}
+                  </span>
+                </div>
+                <div className="flex min-w-0 justify-between gap-3">
+                  <span className="text-muted-foreground">{t('detail.tipForWaiter')}</span>
+                  <span className="shrink-0 tabular-nums" data-testid="group-finalized-tip-total">
+                    {formatCents(manualSummary.tipTotal, 'RUB', locale)}
+                  </span>
+                </div>
+                <div className="flex min-w-0 justify-between gap-3 font-semibold">
+                  <span>{t('detail.totalWithTips')}</span>
+                  <span className="shrink-0 tabular-nums" data-testid="group-finalized-grand-total">
+                    {formatCents(manualSummary.total, 'RUB', locale)}
+                  </span>
+                </div>
+                <Separator />
+                <p className="font-medium">{t('detail.initialReimbursements')}</p>
+                <p className="text-xs text-muted-foreground">{t('detail.initialReimbursementsHint')}</p>
+                <div className="flex min-w-0 justify-between gap-3">
+                  <span className="text-muted-foreground">{t('detail.payerOwnShare')}</span>
+                  <span className="shrink-0 tabular-nums" data-testid="group-payer-own-share">
+                    {formatCents(manualSummary.payerShare, 'RUB', locale)}
+                  </span>
+                </div>
+                {manualSummary.reimbursements.map((reimbursement) => {
+                  const member = e.shares.find((share) => share.userId === reimbursement.fromId);
+                  return (
+                    <div
+                      key={reimbursement.fromId}
+                      className="flex min-w-0 justify-between gap-3"
+                      data-testid={'group-payer-reimbursement-' + reimbursement.fromId}
+                    >
+                      <span className="min-w-0 truncate">
+                        {t('detail.memberReimburses', { name: member?.user.name ?? t('detail.unknown') })}
+                      </span>
+                      <span className="shrink-0 tabular-nums">{formatCents(reimbursement.amount, 'RUB', locale)}</span>
+                    </div>
+                  );
+                })}
+                <div className="flex min-w-0 justify-between gap-3 font-semibold">
+                  <span>{t('detail.reimbursementsTotal')}</span>
+                  <span className="shrink-0 tabular-nums" data-testid="group-payer-reimbursements-total">
+                    {formatCents(manualSummary.reimbursementTotal, 'RUB', locale)}
+                  </span>
+                </div>
+              </div>
             </>
           )}
 

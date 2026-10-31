@@ -29,8 +29,6 @@ async function caller() {
 const scannedReceipt = {
   id: 'r1',
   imagePath: '/app/uploads/u1/receipt.jpg',
-  aiProvider: 'openai-codex',
-  rawResponse: { error: 'upstream provider error text' },
 };
 
 beforeEach(() => {
@@ -49,7 +47,7 @@ beforeEach(() => {
 });
 
 describe('expenses.get (#280)', () => {
-  test("doesn't return the receipt row (its provider, raw response and image path)", async () => {
+  test("doesn't return private receipt metadata or image path", async () => {
     const api = await caller();
     const expense = await api.get({ groupId: 'g1', expenseId: 'e1' });
     expect(expense).not.toHaveProperty('receipt');
@@ -69,13 +67,14 @@ describe('a group archived while a change was on its way (#289)', () => {
     paidById: 'u1',
     addedById: 'u1',
     amount: 1000,
-    currency: 'USD',
+    currency: 'RUB',
     exchangeRate: 1,
     baseCurrencyAmount: null,
     expenseDate: new Date('2026-10-01T00:00:00Z'),
   };
   const newExpense = {
     groupId: 'g1',
+    currency: 'RUB', // Creation now accepts only rubles.
     title: 'Dinner',
     amount: 1000,
     paidById: 'u1',
@@ -85,7 +84,7 @@ describe('a group archived while a change was on its way (#289)', () => {
 
   beforeEach(() => {
     // The early check still sees the group active...
-    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'USD' });
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'RUB' });
     // ...but by the time the transaction locks its row, it's archived
     mockDb.$queryRaw.mockResolvedValue([{ archivedAt: new Date() }]);
     mockDb.expense.findUnique.mockResolvedValue(ownExpense);
@@ -93,6 +92,69 @@ describe('a group archived while a change was on its way (#289)', () => {
     mockDb.groupMember.count.mockResolvedValue(1);
     mockDb.expenseShare.findMany.mockResolvedValue([]);
     mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => unknown) => fn(mockDb));
+  });
+
+  test('rejects other currencies before writing or looking up any exchange rate', async () => {
+    const api = await caller();
+    await expect(api.create({ ...newExpense, currency: 'USD' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(api.create({ ...newExpense, currency: 'eur' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('rejects a manual exchange rate even when the currency is RUB', async () => {
+    const api = await caller();
+    // Cast only in this negative test: TypeScript already rejects this legacy
+    // field, but the server must also reject a malformed HTTP payload.
+    const invalidRequest = { ...newExpense, exchangeRate: 2 } as unknown as Parameters<typeof api.create>[0];
+    await expect(api.create(invalidRequest)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects adding a RUB expense into a legacy non-RUB group', async () => {
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'USD' });
+    const api = await caller();
+    await expect(api.create(newExpense)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'New expenses are allowed only in groups using RUB.',
+    });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('does not create if the currency changes before the group row lock', async () => {
+    mockDb.group.findUnique
+      .mockResolvedValueOnce({ archivedAt: null, currency: 'RUB' })
+      .mockResolvedValueOnce({ currency: 'USD' });
+    mockDb.$queryRaw.mockResolvedValue([{ archivedAt: null }]);
+    const api = await caller();
+    await expect(api.create(newExpense)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.$queryRaw).toHaveBeenCalledOnce();
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+
+  test('creates a normal RUB expense without any conversion and defaults omitted currency', async () => {
+    mockDb.$queryRaw.mockResolvedValue([{ archivedAt: null }]);
+    mockDb.expense.create.mockResolvedValue({ id: 'e2', shares: [] });
+    const api = await caller();
+    await api.create({
+      groupId: newExpense.groupId,
+      title: newExpense.title,
+      amount: newExpense.amount,
+      paidById: newExpense.paidById,
+      splitMode: newExpense.splitMode,
+      shares: newExpense.shares,
+    });
+    expect(mockDb.expense.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          amount: 1000,
+          currency: 'RUB',
+          exchangeRate: 1,
+          baseCurrencyAmount: null,
+        }),
+      }),
+    );
   });
 
   test('create refuses, writing nothing', async () => {
@@ -153,7 +215,9 @@ describe('a group archived while a change was on its way (#289)', () => {
   });
 
   test('update checks its people are members inside the transaction, after the lock', async () => {
-    mockDb.$queryRaw.mockResolvedValue([{ archivedAt: null }]);
+    mockDb.$queryRaw.mockImplementation(async (strings: string[]) =>
+      strings.join('?').includes('FROM "Expense"') ? [{ paidById: 'u1', currency: 'RUB' }] : [{ archivedAt: null }],
+    );
     mockDb.expense.update.mockResolvedValue({ id: 'e1' });
     const api = await caller();
     await api.update({
@@ -184,7 +248,7 @@ describe('editing an expense a removed placeholder is in', () => {
     paidById: 'hal',
     addedById: 'u1',
     amount: 1000,
-    currency: 'USD',
+    currency: 'RUB',
     exchangeRate: 1,
     baseCurrencyAmount: null,
     expenseDate: new Date('2026-10-01T00:00:00Z'),
@@ -192,9 +256,9 @@ describe('editing an expense a removed placeholder is in', () => {
   const update = { groupId: 'g1', expenseId: 'e1', amount: 1000 };
 
   beforeEach(() => {
-    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'USD' });
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'RUB' });
     mockDb.$queryRaw.mockImplementation(async (strings: string[]) =>
-      strings.join('?').includes('FROM "Expense"') ? [{ paidById: 'hal' }] : [{ archivedAt: null }],
+      strings.join('?').includes('FROM "Expense"') ? [{ paidById: 'hal', currency: 'RUB' }] : [{ archivedAt: null }],
     );
     // As the edit started; the row read under the lock says who's in it now
     mockDb.expense.findUnique.mockResolvedValue({ ...halPaid, paidById: 'u1' });
@@ -242,5 +306,93 @@ describe('editing an expense a removed placeholder is in', () => {
     expect(mockDb.groupMember.count).toHaveBeenCalledWith({
       where: { groupId: 'g1', userId: { in: ['hal'] }, OR: [{ removedAt: null }, { userId: { in: ['hal', 'u1'] } }] },
     });
+  });
+});
+
+describe('RUB-only expense editing API', () => {
+  const ownExpense = {
+    id: 'e1',
+    groupId: 'g1',
+    paidById: 'u1',
+    addedById: 'u1',
+    amount: 1000,
+    currency: 'RUB',
+    exchangeRate: 1,
+    baseCurrencyAmount: null,
+    expenseDate: new Date('2026-10-01T00:00:00Z'),
+  };
+
+  beforeEach(() => {
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'RUB' });
+    mockDb.expense.findUnique.mockResolvedValue(ownExpense);
+    mockDb.$queryRaw.mockImplementation(async (strings: string[]) =>
+      strings.join('?').includes('FROM "Expense"') ? [{ paidById: 'u1', currency: 'RUB' }] : [{ archivedAt: null }],
+    );
+    mockDb.expenseShare.findMany.mockResolvedValue([{ userId: 'u1' }]);
+    mockDb.groupMember.count.mockResolvedValue(1);
+    mockDb.expense.update.mockResolvedValue({ id: 'e1' });
+    mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => unknown) => fn(mockDb));
+  });
+
+  test('rejects currency changes and manual rates at the API boundary', async () => {
+    const api = await caller();
+    for (const invalid of [{ currency: 'USD' }, { currency: 'RUB' }, { exchangeRate: 1.5 }]) {
+      const payload = { groupId: 'g1', expenseId: 'e1', ...invalid } as unknown as Parameters<typeof api.update>[0];
+      await expect(api.update(payload)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.expense.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects editing a foreign-currency group or historical foreign-currency expense', async () => {
+    const api = await caller();
+    mockDb.group.findUnique.mockResolvedValueOnce({ archivedAt: null, currency: 'USD' });
+    await expect(api.update({ groupId: 'g1', expenseId: 'e1', title: 'Dinner' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message:
+        'Editing is available only for expenses and groups in RUB. Existing amounts in other currencies are unchanged.',
+    });
+    mockDb.expense.findUnique.mockResolvedValueOnce({ ...ownExpense, currency: 'USD' });
+    await expect(api.update({ groupId: 'g1', expenseId: 'e1', title: 'Dinner' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('rechecks group currency under transaction lock', async () => {
+    mockDb.group.findUnique
+      .mockResolvedValueOnce({ archivedAt: null, currency: 'RUB' })
+      .mockResolvedValueOnce({ currency: 'EUR' });
+    const api = await caller();
+    await expect(api.update({ groupId: 'g1', expenseId: 'e1', title: 'Dinner' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.$queryRaw).toHaveBeenCalledOnce();
+    expect(mockDb.expense.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects currency changing after the expense row lock', async () => {
+    mockDb.$queryRaw.mockImplementation(async (strings: string[]) =>
+      strings.join('?').includes('FROM "Expense"') ? [{ paidById: 'u1', currency: 'USD' }] : [{ archivedAt: null }],
+    );
+    const api = await caller();
+    await expect(api.update({ groupId: 'g1', expenseId: 'e1', title: 'Dinner' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.expense.update).not.toHaveBeenCalled();
+  });
+
+  test('edits a RUB amount and shares without calling FX or changing their currency', async () => {
+    const api = await caller();
+    await api.update({ groupId: 'g1', expenseId: 'e1', amount: 2345, shares: [{ userId: 'u1', amount: 2345 }] });
+    expect(mockDb.expense.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ amount: 2345, currency: 'RUB', exchangeRate: 1, baseCurrencyAmount: null }),
+      }),
+    );
+    expect(mockDb.expenseShare.createMany).toHaveBeenCalledWith({
+      data: [{ expenseId: 'e1', userId: 'u1', amount: 2345, shares: 1 }],
+    });
+    expect(mockDb.activityLog.create).toHaveBeenCalledOnce();
   });
 });
