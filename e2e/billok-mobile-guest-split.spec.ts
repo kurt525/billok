@@ -536,7 +536,30 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // Strictly require ONE visible review, not merely the first matching node:
     // two visible payer reviews would still fail this regression.
     const payerReview = otherPage.getByTestId('guest-payer-payment-review').filter({ visible: true });
-    await expect(payerReview).toHaveCount(1, { timeout: 15_000 });
+    try {
+      await expect(payerReview).toHaveCount(1, { timeout: 15_000 });
+    } catch (error) {
+      // Diagnose retained Next.js route trees without relaxing the requirement
+      // of exactly one visible private review. Do not log personal access tokens.
+      const diagnostic = await otherPage.evaluate(() => {
+        const mains = [...document.querySelectorAll('main')];
+        const reviews = [...document.querySelectorAll<HTMLElement>('[data-testid="guest-payer-payment-review"]')];
+        return {
+          mainCount: mains.length,
+          visibleReviewCount: reviews.filter((el) => el.getClientRects().length > 0).length,
+          reviews: reviews.map((el) => ({
+            mainIndex: mains.indexOf(el.closest('main')!),
+            visible: el.getClientRects().length > 0,
+            paymentRowCount: el.querySelectorAll('[data-testid^="guest-payer-payment-"]').length,
+            verifyButtonCount: el.querySelectorAll('button').length,
+            ancestorTags: [el.parentElement, el.parentElement?.parentElement, el.closest('main')]
+              .filter((ancestor): ancestor is HTMLElement => ancestor instanceof HTMLElement)
+              .map((ancestor) => ancestor.tagName + ':' + (ancestor.getAttribute('data-testid') ?? '')),
+          })),
+        };
+      });
+      throw new Error('Multiple payer review DOM nodes: ' + JSON.stringify(diagnostic) + '\\n' + String(error));
+    }
     await expect(payerReview).toBeVisible();
     const annaPayment = payerReview.getByTestId('guest-payer-payment-' + anna.personId);
     await expect(annaPayment).toContainText('4,59');
