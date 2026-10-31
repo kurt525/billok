@@ -139,6 +139,28 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
     }
   }
 
+  // Rotate an enlarged-text phone from portrait to landscape and back,
+  // then simulate the shortened viewport left above the Android keyboard.
+  // Resizing must not hide the share controls or expand the receipt sideways.
+  for (const [width, height] of [
+    [360, 720],
+    [720, 360],
+    [360, 360],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    await fitsPhone(page);
+    await expect(page.getByTestId('person-card-1')).toContainText(longGuestName);
+    for (const button of [page.getByTestId('copy-link-btn'), page.getByTestId('share-btn')]) {
+      const rect = await button.boundingBox();
+      expect(rect, 'Share action at ' + width + 'x' + height).not.toBeNull();
+      expect(rect!.height).toBeGreaterThanOrEqual(44);
+      expect(rect!.x).toBeGreaterThanOrEqual(0);
+      expect(rect!.x + rect!.width).toBeLessThanOrEqual(width);
+      expect(rect!.y).toBeGreaterThanOrEqual(0);
+      expect(rect!.y + rect!.height).toBeLessThanOrEqual(height);
+    }
+  }
+
   // Simulate the shorter visual height left above an Android soft keyboard:
   // both sharing actions must stay inside the visible viewport and remain tappable.
   await page.setViewportSize({ width: 320, height: 360 });
