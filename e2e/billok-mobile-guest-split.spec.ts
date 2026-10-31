@@ -453,7 +453,32 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(payerPhone).toBeVisible({ timeout: 15_000 });
     await payerPhone.fill('8 (999) 123-45-67');
     await otherPage.getByTestId('guest-payer-sbp-search').fill('Озон Банк');
-    await otherPage.getByTestId('guest-payer-sbp-bank-100000000273').click();
+
+    // The payer can choose a bank and save SBP details on Galaxy S23 and
+    // unfolded Android widths even with enlarged text and a short viewport.
+    await otherPage.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const sbpBank = otherPage.getByTestId('guest-payer-sbp-bank-100000000273');
+    for (const width of [360, 430, 480, 600, 720]) {
+      await otherPage.setViewportSize({ width, height: 380 });
+      await fitsPhone(otherPage);
+      for (const target of [
+        payerPhone,
+        otherPage.getByTestId('guest-payer-sbp-search'),
+        sbpBank,
+        otherPage.getByTestId('guest-payer-sbp-save'),
+        otherPage.getByTestId('guest-payer-sbp-clear'),
+      ]) {
+        await target.scrollIntoViewIfNeeded();
+        const bounds = await target.boundingBox();
+        expect(bounds, 'SBP action at ' + width + 'px').not.toBeNull();
+        expect(bounds!.height).toBeGreaterThanOrEqual(44);
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      }
+    }
+    await otherPage.setViewportSize({ width: 320, height: 800 });
+    await sbpBank.click();
+    await expect(sbpBank.locator('input')).toBeChecked();
     await otherPage.getByTestId('guest-payer-sbp-save').click();
     await expect(otherPage.getByText('Реквизиты сохранены')).toBeVisible();
 
