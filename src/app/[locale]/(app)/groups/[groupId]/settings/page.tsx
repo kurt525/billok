@@ -288,7 +288,11 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm text-muted-foreground">{t('settings.addMemberDescription')}</p>
-            <form onSubmit={handleAddPlaceholder} className="flex min-w-0 flex-wrap gap-2">
+            <form
+              onSubmit={handleAddPlaceholder}
+              className="flex min-w-0 flex-wrap gap-2"
+              data-testid="group-placeholder-form"
+            >
               <Input
                 placeholder={t('settings.namePlaceholder')}
                 value={placeholderName}
@@ -314,6 +318,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                 {placeholders.map((m) => (
                   <div
                     key={m.user.id}
+                    data-testid="group-placeholder-row"
                     className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-md border border-dashed p-2"
                   >
                     {editingPlaceholder === m.user.id ? (

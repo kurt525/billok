@@ -175,6 +175,56 @@ test('mobile app stays centered and scroll-free horizontally at 430–720px with
   await expect(page.locator('select#currency')).toHaveCount(0);
   await noHorizontalOverflow(page, 480);
 
+  // Mobile group administration: create and rename a real placeholder member.
+  // Test an unbroken name, a large Android font and a keyboard-height viewport.
+  const placeholderForm = page.getByTestId('group-placeholder-form');
+  await expect(placeholderForm).toBeVisible();
+  const placeholderInput = placeholderForm.locator('input');
+  const addPlaceholder = placeholderForm.getByRole('button', { name: 'Добавить', exact: true });
+  await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+  for (const width of [360, 430, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await noHorizontalOverflow(page, width);
+    for (const control of [placeholderInput, addPlaceholder]) {
+      await control.scrollIntoViewIfNeeded();
+      await expect(control).toBeInViewport();
+      const bounds = await control.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.height).toBeGreaterThanOrEqual(44);
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    }
+  }
+  const placeholderName = 'Александр'.repeat(4);
+  await placeholderInput.fill(placeholderName);
+  await addPlaceholder.click();
+  const placeholderRow = page.getByTestId('group-placeholder-row');
+  await expect(placeholderRow).toContainText(placeholderName, { timeout: 15_000 });
+  for (const width of [360, 430, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await noHorizontalOverflow(page, width);
+    const bounds = await placeholderRow.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    for (const action of await placeholderRow.locator('button').all()) {
+      const actionBounds = await action.boundingBox();
+      expect(actionBounds).not.toBeNull();
+      expect(actionBounds!.width).toBeGreaterThanOrEqual(44);
+      expect(actionBounds!.height).toBeGreaterThanOrEqual(44);
+      expect(actionBounds!.x + actionBounds!.width).toBeLessThanOrEqual(width);
+    }
+  }
+  await placeholderRow.getByRole('button', { name: 'Переименовать участника ' + placeholderName }).click();
+  const renameInput = placeholderRow.locator('input').first();
+  await expect(renameInput).toBeVisible();
+  expect((await renameInput.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await renameInput.fill('Александр тест');
+  await placeholderRow.getByRole('button', { name: 'Сохранить имя' }).click();
+  await expect(placeholderRow).toContainText('Александр тест', { timeout: 15_000 });
+  await noHorizontalOverflow(page, 720);
+  await page.setViewportSize({ width: 480, height: 800 });
+
   // No forex selectors or exchange-rate forms for new group expenses.
   await page.goto(groupUrl + '/expenses/new', { waitUntil: 'networkidle' });
   await expect(page.getByLabel('Сумма (₽)')).toBeVisible();
