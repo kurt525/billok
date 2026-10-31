@@ -14,7 +14,6 @@ import { OIDC_PROVIDER_ID, checkOidcSignIn, mapOidcProfile } from './lib/oidc-si
 import { authorizePasswordLogin } from './lib/password-login';
 import { readEmailVerified } from './lib/sign-in-identity';
 import { findUserByEmail } from './lib/user-email';
-import { readRegistrationMode } from './lib/registration-mode';
 import { sendRussianSignInEmail } from './lib/magic-link-email';
 
 const authConfig = parseAuthConfig(process.env);
@@ -154,11 +153,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           return '/login?error=RegistrationEmailUnverified';
         }
 
-        // In invite-only/closed mode neither a magic link nor an external
-        // provider may auto-create an account without an invitation.
-        // Existing users retain their sign-in methods, including legacy ones.
-        if (matchedUsers.length === 0 && (await readRegistrationMode(db)) !== 'open') {
-          return '/login?error=RegistrationInviteRequired';
+        // Magic Link, Google and OIDC are sign-in methods ONLY. Never create
+        // a user from a provider, regardless of the registration setting or
+        // the address suffix. New accounts require auth.register, an invite,
+        // .ru/.su and the registration-email confirmation flow.
+        if (matchedUsers.length === 0) {
+          return '/login?error=RegistrationAccountRequired';
         }
       }
 

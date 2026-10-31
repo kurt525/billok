@@ -87,7 +87,9 @@ const OIDC_ENV = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  db.$queryRaw.mockResolvedValue([]);
+  db.$queryRaw.mockResolvedValue([
+    { email: 'existing@mail.ru', registrationEmailVerificationRequired: false, emailVerified: null },
+  ]);
   db.systemSetting.findUnique.mockResolvedValue({ value: 'open' });
   // clearAllMocks keeps implementations, so a test's rejection can't reach the next one.
   authMock.mockResolvedValue(null);
@@ -179,19 +181,26 @@ describe('signIn callback', () => {
     },
   );
 
-  test('invite-only mode prevents sign-in providers from creating accounts without codes; existing users still work', async () => {
+  test('Magic Link, Google and OIDC never register accounts even when registration is open', async () => {
     const config = await loadAuth({ ...GOOGLE_ENV, ...OIDC_ENV, EMAIL_SERVER_HOST: 'smtp.example.test' });
-    db.systemSetting.findUnique.mockResolvedValue({ value: 'invite-only' });
+    db.$queryRaw.mockResolvedValue([]);
 
-    for (const provider of ['nodemailer', 'google', 'oidc']) {
-      expect(
-        await config.callbacks.signIn({
-          user: { email: 'unknown@mail.ru' },
-          account: { provider, providerAccountId: 'new-user' },
-        }),
-      ).toBe('/login?error=RegistrationInviteRequired');
+    for (const mode of ['open', 'invite-only', 'closed']) {
+      db.systemSetting.findUnique.mockResolvedValue({ value: mode });
+      for (const provider of ['nodemailer', 'google', 'oidc']) {
+        expect(
+          await config.callbacks.signIn({
+            user: { email: 'new-user@mail.ru' },
+            account: { provider, providerAccountId: 'new-user' },
+          }),
+        ).toBe('/login?error=RegistrationAccountRequired');
+      }
     }
+    expect(checkGoogleSignIn).not.toHaveBeenCalled();
+    expect(checkOidcSignIn).not.toHaveBeenCalled();
 
+    // No regression: existing users can keep signing in with enabled providers,
+    // including historical accounts that have emailVerified=null.
     db.$queryRaw.mockResolvedValue([
       { email: 'legacy@mail.ru', registrationEmailVerificationRequired: false, emailVerified: null },
     ]);

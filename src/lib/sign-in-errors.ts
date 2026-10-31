@@ -42,7 +42,7 @@ const ERROR_KEYS = new Map<string, SignInErrorKey>([
   ['OAuthAccountNotLinked', 'accountNotLinked'],
   ['Verification', 'linkExpired'],
   ['RegistrationEmailUnverified', 'pendingEmailConfirmation'],
-  ['RegistrationInviteRequired', 'registrationDisabled'],
+  ['RegistrationAccountRequired', 'registrationDisabled'],
 ]);
 
 /**
