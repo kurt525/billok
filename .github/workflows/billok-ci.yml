@@ -116,6 +116,8 @@ jobs:
             sleep 1
           done
           npx prisma db push
+          # One real-PostgreSQL race check for single-use email confirmation.
+          npx tsx scripts/qa-registration-confirmation-postgres.ts
           # Create only disposable fixtures for authenticated mobile flows.
           npm run db:seed
           BILLOK_QA_FIXTURES=1 npx tsx e2e/seed-mobile-receipt.ts > "$RUNNER_TEMP/billok-mobile-receipt.env"
