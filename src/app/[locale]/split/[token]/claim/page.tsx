@@ -1943,7 +1943,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
       {/* Per-person totals */}
       {(splitTotals.people.length > 0 || splitTotals.unclaimed) && (
-        <div className="space-y-3">
+        <div className="w-full min-w-0 max-w-full space-y-3">
           <h3 className="font-semibold text-base">{t('perPersonTotals')}</h3>
           {splitTotals.people.map((person) => {
             const personName =
@@ -1991,15 +1991,17 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           })}
           {/* Items nobody has claimed yet, with their share of tax and tip, so the totals above don't look final */}
           {splitTotals.unclaimed && (
-            <Card data-testid="unclaimed-total">
-              <CardContent className="py-3">
-                <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-3">
+            <Card className="w-full min-w-0 max-w-full" data-testid="unclaimed-total">
+              <CardContent className="min-w-0 py-3">
+                <div className="flex min-w-0 max-w-full flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 max-w-full flex-wrap items-center gap-3">
                     <div
-                      className="h-8 w-8 rounded-full border-2 border-dashed border-muted-foreground/40"
+                      className="h-8 w-8 shrink-0 rounded-full border-2 border-dashed border-muted-foreground/40"
                       aria-hidden="true"
                     />
-                    <span className="min-w-0 font-medium text-muted-foreground">{t('unclaimed')}</span>
+                    <span className="min-w-0 font-medium text-muted-foreground [overflow-wrap:anywhere]">
+                      {t('unclaimed')}
+                    </span>
                   </div>
                   <span className="min-w-0 text-lg font-bold text-muted-foreground [overflow-wrap:anywhere]">
                     {formatCents(splitTotals.unclaimed.total, currency, locale)}

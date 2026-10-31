@@ -63,6 +63,15 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
     expect(claim).toContain("otherClaimants.map((pi) => data.people[pi]?.name ?? '?').join(', ')");
   });
 
+  it('keeps the guest unclaimed total inside the mobile column with large Android text', () => {
+    const claim = source('src/app/[locale]/split/[token]/claim/page.tsx');
+    expect(claim).toContain('data-testid="unclaimed-total"');
+    expect(claim).toContain('<Card className="w-full min-w-0 max-w-full" data-testid="unclaimed-total">');
+    expect(claim).toContain('flex min-w-0 max-w-full flex-wrap items-center justify-between gap-2');
+    expect(claim).toContain('h-8 w-8 shrink-0 rounded-full border-2 border-dashed');
+    expect(claim).toContain('min-w-0 font-medium text-muted-foreground [overflow-wrap:anywhere]');
+  });
+
   it('keeps rare admin clean-up controls touch-sized with wrapping titles on mobile', () => {
     const admin = source('src/app/[locale]/(app)/admin/page.tsx');
     expect(admin.match(/<CardTitle className="flex flex-wrap items-center justify-between gap-2">/g)).toHaveLength(2);
