@@ -27,6 +27,8 @@ const BOB = {
   image: null,
   locale: 'en',
   passwordHash: 'hash',
+  registrationEmailVerificationRequired: false,
+  emailVerified: null as Date | null,
 };
 
 function usersFound(rows: (typeof BOB)[]) {
@@ -44,6 +46,22 @@ describe('authorizePasswordLogin', () => {
     await expect(
       authorizePasswordLogin({ email: 'bob@EXAMPLE.com', password: 'password123' }, new Headers()),
     ).resolves.toEqual({ id: 'bob', name: 'Bob', email: 'Bob@example.com', image: null, locale: 'en' });
+  });
+
+  test('denies an unverified new registration but retains legacy password login', async () => {
+    usersFound([{ ...BOB, registrationEmailVerificationRequired: true, emailVerified: null }]);
+    await expect(
+      authorizePasswordLogin({ email: 'bob@example.com', password: 'password123' }, new Headers()),
+    ).resolves.toBeNull();
+    expect(logger.warn).toHaveBeenCalledWith('auth.login_failed', {
+      email: 'bob@example.com',
+      reason: 'registration_email_unverified',
+    });
+
+    usersFound([{ ...BOB, registrationEmailVerificationRequired: false, emailVerified: null }]);
+    await expect(
+      authorizePasswordLogin({ email: 'bob@example.com', password: 'password123' }, new Headers()),
+    ).resolves.toMatchObject({ id: BOB.id });
   });
 
   test('case variants share one per-email rate-limit bucket', async () => {

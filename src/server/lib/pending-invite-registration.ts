@@ -23,6 +23,7 @@ export async function createPendingInviteRegistration(
           email: input.email,
           passwordHash: input.passwordHash,
           emailVerified: null,
+          registrationEmailVerificationRequired: true,
         },
       })
       .catch((error: unknown) => {

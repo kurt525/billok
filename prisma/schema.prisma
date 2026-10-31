@@ -70,6 +70,8 @@ model User {
   name            String?
   email           String    @unique
   emailVerified   DateTime?
+  // New invited accounts need confirmation; default false preserves legacy sign-ins.
+  registrationEmailVerificationRequired Boolean @default(false)
   passwordHash    String?
   image           String?
   defaultCurrency String    @default("RUB")
