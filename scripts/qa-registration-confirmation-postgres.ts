@@ -9,6 +9,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../src/generated/prisma/client';
 import { createEmailVerificationToken } from '../src/server/lib/email-verification-token';
 import { confirmRegistrationEmail } from '../src/server/lib/registration-email-confirmation';
+import { createPendingInviteRegistration } from '../src/server/lib/pending-invite-registration';
 
 async function main(): Promise<void> {
   const url = process.env.DATABASE_URL;
@@ -22,14 +23,22 @@ async function main(): Promise<void> {
   let userId: string | null = null;
 
   try {
-    const user = await db.user.create({
-      data: { name: 'Проверка подтверждения', email: 'ci-confirm-' + suffix + '@billok.ru' },
+    await db.systemInvite.create({ data: { code: inviteCode } });
+    const user = await createPendingInviteRegistration(db, {
+      name: 'Проверка подтверждения',
+      email: 'ci-confirm-' + suffix + '@billok.ru',
+      passwordHash: 'qa-only-not-a-real-password-hash',
+      inviteCode,
+      now,
     });
     userId = user.id;
 
-    await db.systemInvite.create({
-      data: { code: inviteCode, reservedById: user.id, reservedUntil: expiresAt },
-    });
+    const pending = await db.user.findUniqueOrThrow({ where: { id: user.id } });
+    const reserved = await db.systemInvite.findUniqueOrThrow({ where: { code: inviteCode } });
+    assert.equal(pending.emailVerified, null, 'account stays unverified before confirmation');
+    assert.equal(reserved.reservedById, user.id, 'invitation is reserved for this account');
+    assert.equal(reserved.usedById, null, 'registration must not consume invitation');
+
     await db.emailVerificationRequest.create({
       data: { userId: user.id, tokenHash, expiresAt },
     });
