@@ -92,6 +92,18 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
     expect(group).toContain('type="submit" className="min-h-11 min-w-11" disabled={addPlaceholder.isPending}');
   });
 
+  it('keeps pending receipt deletion touch-sized and receipt details wrapped on phones', () => {
+    const group = source('src/app/[locale]/(app)/groups/[groupId]/page.tsx');
+    expect(group).toContain('flex min-w-0 flex-wrap items-center justify-between gap-2 py-3');
+    expect(group).toContain('min-w-0 font-medium [overflow-wrap:anywhere]');
+    expect(group).toContain('ml-3 flex min-w-0 flex-wrap items-center justify-end gap-2');
+    expect(group).toContain(
+      'flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-destructive',
+    );
+    expect(group).toContain("aria-label={t('detail.deleteReceipt')}");
+    expect(group).toContain('onClick={() => setDeleteReceiptId(r.id)}');
+  });
+
   it('keeps both guest header navigation links at least 44px high', () => {
     const header = source('src/app/[locale]/split/layout.tsx');
     expect(header).toContain('inline-flex min-h-11 items-center gap-2');

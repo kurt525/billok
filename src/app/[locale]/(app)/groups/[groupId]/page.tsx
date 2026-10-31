@@ -289,7 +289,9 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
             {pendingReceipts.data.map((r) => {
               const summary = (
                 <>
-                  <p className="font-medium">{r.extractedData?.merchantName ?? t('detail.receipt')}</p>
+                  <p className="min-w-0 font-medium [overflow-wrap:anywhere]">
+                    {r.extractedData?.merchantName ?? t('detail.receipt')}
+                  </p>
                   <p className="text-sm text-muted-foreground">
                     {r.extractedData?.date ?? new Date(r.createdAt).toLocaleDateString(locale)}
                     {' · '}
@@ -299,7 +301,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
               );
               return (
                 <Card key={r.id} className={g.archivedAt ? undefined : 'transition-colors hover:bg-muted/50'}>
-                  <CardContent className="flex items-center justify-between py-3">
+                  <CardContent className="flex min-w-0 flex-wrap items-center justify-between gap-2 py-3">
                     {/* An archived group refuses the expense finishing a saved receipt makes; deleting one still works */}
                     {g.archivedAt ? (
                       <div className="flex-1 min-w-0">{summary}</div>
@@ -308,13 +310,13 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                         {summary}
                       </Link>
                     )}
-                    <div className="flex items-center gap-3 ml-3">
-                      <p className="text-lg font-semibold">
+                    <div className="ml-3 flex min-w-0 flex-wrap items-center justify-end gap-2">
+                      <p className="min-w-0 text-lg font-semibold tabular-nums [overflow-wrap:anywhere]">
                         {r.extractedData ? formatCents(r.extractedData.total, g.currency, locale) : '—'}
                       </p>
                       <button
                         type="button"
-                        className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                        className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-destructive"
                         aria-label={t('detail.deleteReceipt')}
                         title={t('detail.deleteReceipt')}
                         onClick={() => setDeleteReceiptId(r.id)}
