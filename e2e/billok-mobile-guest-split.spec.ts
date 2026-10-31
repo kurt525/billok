@@ -52,6 +52,61 @@ async function payerReviewDomDiagnostic(page: Page) {
   });
 }
 
+/**
+ * Monitor every real animation frame with duplicate payer review DOM, not
+ * just snapshots after Playwright actions. This is test-only instrumentation,
+ * scoped to the payer's browser document and reset on every hard reload.
+ */
+async function monitorPayerReviewDuplicates(page: Page) {
+  await page.addInitScript(() => {
+    type DuplicateFrame = { count: number; mainCount: number; reactAttached: boolean[] };
+    const monitored = window as Window & { __billokDuplicateReviewFrame?: DuplicateFrame };
+    let scheduled = false;
+    const check = () => {
+      if (scheduled || monitored.__billokDuplicateReviewFrame) return;
+      const panels = [...document.querySelectorAll<HTMLElement>('[data-testid="guest-payer-payment-review"]')];
+      if (panels.filter((panel) => panel.getClientRects().length > 0).length <= 1) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        const visible = [
+          ...document.querySelectorAll<HTMLElement>('[data-testid="guest-payer-payment-review"]'),
+        ].filter((panel) => panel.getClientRects().length > 0);
+        if (visible.length > 1 && !monitored.__billokDuplicateReviewFrame) {
+          monitored.__billokDuplicateReviewFrame = {
+            count: visible.length,
+            mainCount: document.querySelectorAll('main').length,
+            reactAttached: visible.map((panel) => Object.keys(panel).some((key) => key.startsWith('__reactFiber$'))),
+          };
+        }
+      });
+    };
+    new MutationObserver(check).observe(document, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['style', 'class', 'hidden'],
+    });
+  });
+}
+
+async function requireNoPaintedPayerReviewDuplicates(page: Page) {
+  const duplicate = await page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __billokDuplicateReviewFrame?: { count: number; mainCount: number; reactAttached: boolean[] };
+        }
+      ).__billokDuplicateReviewFrame ?? null,
+  );
+  if (duplicate) {
+    const diagnostic = await payerReviewDomDiagnostic(page);
+    throw new Error(
+      'Multiple visible payer reviews persisted to an animation frame: ' + JSON.stringify({ duplicate, diagnostic }),
+    );
+  }
+}
+
 test.use({ viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
 
 test('authenticated manual receipt: add, edit, allocate, share with a second anonymous device', async ({
@@ -467,6 +522,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     expect(session.summary.reduce((sum: number, person: { total: number }) => sum + person.total, 0)).toBe(1201);
 
     const otherPage = await otherDevice.newPage();
+    await monitorPayerReviewDuplicates(otherPage);
     await otherPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
     await expect(otherPage.getByTestId('finalized-bill-total')).toContainText('12,01', { timeout: 15_000 });
     // Boris pays but did not create the receipt: his 3.34 RUB is not reimbursed.
@@ -544,6 +600,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // should not toast about declarations that existed before it loaded.
     const livePayerReview = otherPage.getByTestId('guest-payer-payment-review').filter({ visible: true });
     await expect(livePayerReview).toHaveCount(1, { timeout: 15_000 });
+    await requireNoPaintedPayerReviewDuplicates(otherPage);
     await expect(livePayerReview.getByTestId('guest-payer-payment-' + anna.personId)).toContainText(
       'Ожидается отметка участника',
     );
@@ -663,6 +720,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(payerReview.getByTestId('guest-payer-payment-' + anna.personId)).toContainText(
       'Поступление проверено',
     );
+    await requireNoPaintedPayerReviewDuplicates(otherPage);
     await expect(page.getByTestId('guest-payer-payment-review')).toHaveCount(0);
     const publicStatus = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     expect(JSON.stringify(publicStatus)).not.toContain('paymentVerifiedAt');
