@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PrismaClient } from '@/generated/prisma/client';
 import { hashEmailVerificationToken } from './email-verification-token';
 import { confirmRegistrationEmail } from './registration-email-confirmation';
 
@@ -74,7 +73,12 @@ describe('atomic registration email confirmation', () => {
       }),
     );
     expect(cleanupGate).toHaveBeenCalledExactlyOnceWith(db);
-    expect(vi.mocked(db.$transaction).mock.invocationCallOrder[0]).toBeLessThan(cleanupGate.mock.invocationCallOrder[0]);
+    const [transactionOrder] = vi.mocked(db.$transaction).mock.invocationCallOrder;
+    const [cleanupOrder] = cleanupGate.mock.invocationCallOrder;
+    if (transactionOrder === undefined || cleanupOrder === undefined) {
+      throw new Error('Expected confirmation transaction and cleanup');
+    }
+    expect(transactionOrder).toBeLessThan(cleanupOrder);
   });
 
   it.each(['', 'bad', '!'.repeat(43)])('rejects a malformed token without database writes', async (invalid) => {
@@ -86,11 +90,19 @@ describe('atomic registration email confirmation', () => {
 
   it('rejects expired and consumed links, including the exact expiry boundary', async () => {
     const { db, tx } = fixture();
-    tx.emailVerificationRequest.findUnique.mockResolvedValueOnce({
-      id: 'request-1', userId: 'user-1', consumedAt: null, expiresAt: now,
-    }).mockResolvedValueOnce({
-      id: 'request-1', userId: 'user-1', consumedAt: now, expiresAt,
-    });
+    tx.emailVerificationRequest.findUnique
+      .mockResolvedValueOnce({
+        id: 'request-1',
+        userId: 'user-1',
+        consumedAt: null,
+        expiresAt: now,
+      })
+      .mockResolvedValueOnce({
+        id: 'request-1',
+        userId: 'user-1',
+        consumedAt: now,
+        expiresAt,
+      });
     expect(await confirmRegistrationEmail(db, token, now)).toBe(false);
     expect(await confirmRegistrationEmail(db, token, now)).toBe(false);
     expect(tx.systemInvite.findFirst).not.toHaveBeenCalled();
