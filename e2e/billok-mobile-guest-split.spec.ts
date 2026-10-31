@@ -519,7 +519,28 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     const victorPayment = payerReview.getByTestId('guest-payer-payment-' + victor.personId);
     await expect(victorPayment).toContainText('Ожидается отметка участника');
     await expect(payerReview.getByTestId('guest-payer-verify-' + victor.personId)).toHaveCount(0);
-    await payerReview.getByTestId('guest-payer-verify-' + anna.personId).click();
+
+    // A real payer must be able to verify a declared transfer on a wide
+    // Android display or Galaxy S23 with enlarged text and a short viewport.
+    await otherPage.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const verifyAnna = payerReview.getByTestId('guest-payer-verify-' + anna.personId);
+    for (const width of [360, 430, 720]) {
+      await otherPage.setViewportSize({ width, height: 380 });
+      await expect(payerReview).toHaveCount(1);
+      await fitsPhone(otherPage);
+      const reviewBounds = await payerReview.boundingBox();
+      expect(reviewBounds).not.toBeNull();
+      expect(reviewBounds!.x).toBeGreaterThanOrEqual(0);
+      expect(reviewBounds!.x + reviewBounds!.width).toBeLessThanOrEqual(width);
+      await verifyAnna.scrollIntoViewIfNeeded();
+      await expect(verifyAnna).toBeInViewport();
+      const buttonBounds = await verifyAnna.boundingBox();
+      expect(buttonBounds).not.toBeNull();
+      expect(buttonBounds!.height).toBeGreaterThanOrEqual(44);
+      expect(buttonBounds!.x).toBeGreaterThanOrEqual(0);
+      expect(buttonBounds!.x + buttonBounds!.width).toBeLessThanOrEqual(width);
+    }
+    await verifyAnna.click();
     await expect(annaPayment).toContainText('Поступление проверено');
     await expect(payerReview.getByTestId('guest-payer-verify-' + anna.personId)).toHaveCount(0);
     // The debtor learns the independent payer verification without reloading.
