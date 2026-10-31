@@ -14,6 +14,23 @@ describe('payer review hydration safety', () => {
   });
 });
 
+describe('distinct React keys for guest payment cards', () => {
+  it('does not reuse a person token as identical keys for adjacent private cards', () => {
+    const source = readFileSync(join(process.cwd(), 'src/app/[locale]/split/[token]/claim/page.tsx'), 'utf8');
+    expect(source).not.toContain('key={personToken}');
+    const expected = [
+      ['GuestPayerPaymentReview', 'payer-review'],
+      ['GuestPayerSbpForm', 'payer-sbp'],
+      ['GuestSbpReimbursementDetails', 'reimbursement-details'],
+      ['GuestPaymentDeclaration', 'payment-declaration'],
+    ];
+    for (const [component, prefix] of expected) {
+      const matcher = new RegExp('<' + component + '\\s+key=\\{\\x60' + prefix + ':\\$\\{personToken\\}\\x60\\}', 's');
+      expect(source, component + ' must have its own React key namespace').toMatch(matcher);
+    }
+  });
+});
+
 describe('one active payer review across retained route trees', () => {
   it('keeps only the newest mounted review active and promotes the previous on unmount', () => {
     const registry = createLatestActiveMountRegistry();

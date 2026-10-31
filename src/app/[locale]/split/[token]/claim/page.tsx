@@ -1143,11 +1143,21 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         )}
 
         {payerReimbursements && payerSummary && myPersonId && personToken && (
-          <GuestPayerPaymentReview key={personToken} token={token} personId={myPersonId} personToken={personToken} />
+          <GuestPayerPaymentReview
+            key={`payer-review:${personToken}`}
+            token={token}
+            personId={myPersonId}
+            personToken={personToken}
+          />
         )}
 
         {payerReimbursements && payerSummary && myPersonId && personToken && (
-          <GuestPayerSbpForm key={personToken} token={token} personId={myPersonId} personToken={personToken} />
+          <GuestPayerSbpForm
+            key={`payer-sbp:${personToken}`}
+            token={token}
+            personId={myPersonId}
+            personToken={personToken}
+          />
         )}
 
         {/* The participant's own receipt amount is not a verified SBP payment.
@@ -1178,7 +1188,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               </Button>
               {myPersonId && personToken && (
                 <GuestSbpReimbursementDetails
-                  key={personToken}
+                  key={`reimbursement-details:${personToken}`}
                   token={token}
                   personId={myPersonId}
                   personToken={personToken}
@@ -1186,7 +1196,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               )}
               {myPersonId && personToken && (
                 <GuestPaymentDeclaration
-                  key={personToken}
+                  key={`payment-declaration:${personToken}`}
                   token={token}
                   personId={myPersonId}
                   personToken={personToken}
