@@ -33,3 +33,15 @@ export function createLatestActiveMountRegistry() {
 
   return { isActive, subscribe };
 }
+
+// App Router can hydrate two copies of the same module. Document-level
+// ownership is shared across bundles but isolated between tabs and requests.
+type ActiveRegistry = ReturnType<typeof createLatestActiveMountRegistry>;
+type RegistryHost = { __billokActivePayerReviewRegistry?: ActiveRegistry };
+
+export function getDocumentActiveMountRegistry(
+  host: RegistryHost | undefined = typeof document === 'undefined' ? undefined : document,
+): ActiveRegistry {
+  if (!host) return createLatestActiveMountRegistry();
+  return (host.__billokActivePayerReviewRegistry ??= createLatestActiveMountRegistry());
+}

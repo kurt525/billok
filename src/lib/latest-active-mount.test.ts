@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createLatestActiveMountRegistry } from './latest-active-mount';
+import { createLatestActiveMountRegistry, getDocumentActiveMountRegistry } from './latest-active-mount';
 
 describe('one active payer review across retained route trees', () => {
   it('keeps only the newest mounted review active and promotes the previous on unmount', () => {
@@ -38,5 +38,33 @@ describe('one active payer review across retained route trees', () => {
     stopAnna();
     expect(registry.isActive('receipt:boris', replacement)).toBe(false);
     expect(registry.isActive('receipt:anna', anna)).toBe(false);
+  });
+});
+
+describe('shared payer review ownership between independently loaded client modules', () => {
+  it('uses one owner per payer across copies of the same document', () => {
+    const currentDocument = {};
+    const firstModule = getDocumentActiveMountRegistry(currentDocument);
+    const secondModule = getDocumentActiveMountRegistry(currentDocument);
+    expect(firstModule).toBe(secondModule);
+    const previous = Symbol('old route');
+    const next = Symbol('new route');
+    const stopPrevious = firstModule.subscribe('receipt:payer', previous, () => {});
+    const stopNext = secondModule.subscribe('receipt:payer', next, () => {});
+    expect(firstModule.isActive('receipt:payer', previous)).toBe(false);
+    expect(secondModule.isActive('receipt:payer', next)).toBe(true);
+    stopNext();
+    expect(firstModule.isActive('receipt:payer', previous)).toBe(true);
+    stopPrevious();
+  });
+
+  it('keeps the registry isolated per browser document', () => {
+    const first = getDocumentActiveMountRegistry({});
+    const second = getDocumentActiveMountRegistry({});
+    expect(first).not.toBe(second);
+    const id = Symbol('private payer');
+    const dispose = first.subscribe('receipt:payer', id, () => {});
+    expect(second.isActive('receipt:payer', id)).toBe(false);
+    dispose();
   });
 });
