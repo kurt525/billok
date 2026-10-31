@@ -597,7 +597,29 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(debtorNotice).toHaveCount(1, { timeout: 15_000 });
     await expect(debtorNotice).toBeVisible();
     await otherPage.reload({ waitUntil: 'networkidle' });
-    await expect(payerReview).toHaveCount(1, { timeout: 15_000 });
+    try {
+      await expect(payerReview).toHaveCount(1, { timeout: 15_000 });
+    } catch (error) {
+      // The second payer review failure used to bypass the initial DOM
+      // diagnostic. Capture safe structural data, never session credentials.
+      const diagnostic = await otherPage.evaluate(() => {
+        const mains = [...document.querySelectorAll('main')];
+        return {
+          mainCount: mains.length,
+          reviews: [...document.querySelectorAll<HTMLElement>('[data-testid="guest-payer-payment-review"]')].map(
+            (el) => ({
+              mainIndex: mains.indexOf(el.closest('main')!),
+              visible: el.getClientRects().length > 0,
+              verifyButtonCount: el.querySelectorAll('button').length,
+              parentTag: el.parentElement?.tagName ?? null,
+            }),
+          ),
+        };
+      });
+      throw new Error(
+        'Duplicate payer review after verification reload: ' + JSON.stringify(diagnostic) + '\\n' + String(error),
+      );
+    }
     await expect(payerReview.getByTestId('guest-payer-payment-' + anna.personId)).toContainText(
       'Поступление проверено',
       {

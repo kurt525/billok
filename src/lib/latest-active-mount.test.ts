@@ -22,6 +22,21 @@ describe('one active payer review across retained route trees', () => {
     expect(registry.isActive('receipt:payer', oldId)).toBe(false);
   });
 
+  it('prevents a retained payer identity from showing a second review for the same receipt', () => {
+    const registry = createLatestActiveMountRegistry();
+    const olderIdentity = Symbol('previous payer identity');
+    const latestIdentity = Symbol('current payer identity');
+    // The owner key is the receipt token, never the person ID or personal token.
+    const receiptToken = 'one-receipt-token';
+    const stopPrevious = registry.subscribe(receiptToken, olderIdentity, () => {});
+    const stopLatest = registry.subscribe(receiptToken, latestIdentity, () => {});
+    expect(registry.isActive(receiptToken, olderIdentity)).toBe(false);
+    expect(registry.isActive(receiptToken, latestIdentity)).toBe(true);
+    stopPrevious();
+    expect(registry.isActive(receiptToken, latestIdentity)).toBe(true);
+    stopLatest();
+  });
+
   it('keeps different payer identities separate while cleaning up old owners', () => {
     const registry = createLatestActiveMountRegistry();
     const boris = Symbol('boris');

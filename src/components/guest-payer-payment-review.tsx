@@ -44,7 +44,9 @@ export function GuestPayerPaymentReview({
   const readPayments = read.mutateAsync;
   const activePayerReviews = getDocumentActiveMountRegistry();
   const [mountId] = useState(() => Symbol('payer-review'));
-  const activeReviewKey = [token, personId, personToken].join(':');
+  // Each receipt has exactly one payer. A retained route with an older
+  // personal identity must not render a second private review for this receipt.
+  const activeReviewKey = token;
   const subscribeToActiveReview = useCallback(
     (onChange: () => void) => activePayerReviews.subscribe(activeReviewKey, mountId, onChange),
     [activePayerReviews, activeReviewKey, mountId],
