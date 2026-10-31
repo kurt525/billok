@@ -288,14 +288,15 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm text-muted-foreground">{t('settings.addMemberDescription')}</p>
-            <form onSubmit={handleAddPlaceholder} className="flex gap-2">
+            <form onSubmit={handleAddPlaceholder} className="flex min-w-0 flex-wrap gap-2">
               <Input
                 placeholder={t('settings.namePlaceholder')}
                 value={placeholderName}
                 onChange={(e) => setPlaceholderName(e.target.value)}
+                className="h-11 min-w-[8rem] flex-1 text-base"
                 required
               />
-              <Button type="submit" disabled={addPlaceholder.isPending}>
+              <Button type="submit" className="min-h-11 min-w-11" disabled={addPlaceholder.isPending}>
                 {addPlaceholder.isPending ? t('settings.adding') : t('settings.add')}
               </Button>
             </form>

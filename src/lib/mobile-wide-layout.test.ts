@@ -82,6 +82,14 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
     expect(group).toContain('flex min-w-0 flex-wrap items-center justify-end gap-1');
   });
 
+  it('keeps adding placeholder members mobile-friendly at 320px with large text', () => {
+    const group = source('src/app/[locale]/(app)/groups/[groupId]/settings/page.tsx');
+    expect(group).toContain('onSubmit={handleAddPlaceholder} className="flex min-w-0 flex-wrap gap-2"');
+    expect(group).toContain('onChange={(e) => setPlaceholderName(e.target.value)}');
+    expect(group).toContain('className="h-11 min-w-[8rem] flex-1 text-base"');
+    expect(group).toContain('type="submit" className="min-h-11 min-w-11" disabled={addPlaceholder.isPending}');
+  });
+
   it('keeps both guest header navigation links at least 44px high', () => {
     const header = source('src/app/[locale]/split/layout.tsx');
     expect(header).toContain('inline-flex min-h-11 items-center gap-2');
