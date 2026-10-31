@@ -40,8 +40,9 @@ type ActiveRegistry = ReturnType<typeof createLatestActiveMountRegistry>;
 type RegistryHost = { __billokActivePayerReviewRegistry?: ActiveRegistry };
 
 export function getDocumentActiveMountRegistry(
-  host: RegistryHost | undefined = typeof document === 'undefined' ? undefined : document,
+  host: object | undefined = typeof document === 'undefined' ? undefined : document,
 ): ActiveRegistry {
   if (!host) return createLatestActiveMountRegistry();
-  return (host.__billokActivePayerReviewRegistry ??= createLatestActiveMountRegistry());
+  const registryHost = host as RegistryHost;
+  return (registryHost.__billokActivePayerReviewRegistry ??= createLatestActiveMountRegistry());
 }
