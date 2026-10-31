@@ -10,54 +10,61 @@ import { PrismaClient } from '../src/generated/prisma/client';
 import { createEmailVerificationToken } from '../src/server/lib/email-verification-token';
 import { confirmRegistrationEmail } from '../src/server/lib/registration-email-confirmation';
 
-const url = process.env.DATABASE_URL;
-if (!url) throw new Error('QA PostgreSQL DATABASE_URL is required');
+async function main(): Promise<void> {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error('QA PostgreSQL DATABASE_URL is required');
 
-const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
-const now = new Date();
-const suffix = randomBytes(9).toString('hex');
-const inviteCode = 'ci-confirm-' + suffix;
-const { token, tokenHash, expiresAt } = createEmailVerificationToken(now);
-let userId: string | null = null;
+  const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
+  const now = new Date();
+  const suffix = randomBytes(9).toString('hex');
+  const inviteCode = 'ci-confirm-' + suffix;
+  const { token, tokenHash, expiresAt } = createEmailVerificationToken(now);
+  let userId: string | null = null;
 
-try {
-  const user = await db.user.create({
-    data: { name: 'Проверка подтверждения', email: 'ci-confirm-' + suffix + '@billok.ru' },
-  });
-  userId = user.id;
+  try {
+    const user = await db.user.create({
+      data: { name: 'Проверка подтверждения', email: 'ci-confirm-' + suffix + '@billok.ru' },
+    });
+    userId = user.id;
 
-  await db.systemInvite.create({
-    data: { code: inviteCode, reservedById: user.id, reservedUntil: expiresAt },
-  });
-  await db.emailVerificationRequest.create({
-    data: { userId: user.id, tokenHash, expiresAt },
-  });
+    await db.systemInvite.create({
+      data: { code: inviteCode, reservedById: user.id, reservedUntil: expiresAt },
+    });
+    await db.emailVerificationRequest.create({
+      data: { userId: user.id, tokenHash, expiresAt },
+    });
 
-  // Two requests race for the same token. Exactly one may complete.
-  const answers = await Promise.all([
-    confirmRegistrationEmail(db, token, now),
-    confirmRegistrationEmail(db, token, now),
-  ]);
-  assert.deepEqual(answers.sort(), [false, true], 'only one concurrent confirmation may succeed');
+    // Two requests race for the same token. Exactly one may complete.
+    const answers = await Promise.all([
+      confirmRegistrationEmail(db, token, now),
+      confirmRegistrationEmail(db, token, now),
+    ]);
+    assert.deepEqual(answers.sort(), [false, true], 'only one concurrent confirmation may succeed');
 
-  const [account, invite, verification] = await Promise.all([
-    db.user.findUniqueOrThrow({ where: { id: user.id } }),
-    db.systemInvite.findUniqueOrThrow({ where: { code: inviteCode } }),
-    db.emailVerificationRequest.findUniqueOrThrow({ where: { tokenHash } }),
-  ]);
-  assert.ok(account.emailVerified, 'email is verified');
-  assert.equal(invite.usedById, user.id, 'only the owner redeemed the invitation');
-  assert.ok(invite.usedAt, 'invitation marked used');
-  assert.equal(invite.reservedById, null, 'reservation released after redemption');
-  assert.ok(verification.consumedAt, 'verification token consumed');
+    const [account, invite, verification] = await Promise.all([
+      db.user.findUniqueOrThrow({ where: { id: user.id } }),
+      db.systemInvite.findUniqueOrThrow({ where: { code: inviteCode } }),
+      db.emailVerificationRequest.findUniqueOrThrow({ where: { tokenHash } }),
+    ]);
+    assert.ok(account.emailVerified, 'email is verified');
+    assert.equal(invite.usedById, user.id, 'only the owner redeemed the invitation');
+    assert.ok(invite.usedAt, 'invitation marked used');
+    assert.equal(invite.reservedById, null, 'reservation released after redemption');
+    assert.ok(verification.consumedAt, 'verification token consumed');
 
-  assert.equal(await confirmRegistrationEmail(db, token, now), false, 'replayed link must not verify twice');
-  console.log('POSTGRES_REGISTRATION_CONFIRMATION=PASS');
-} finally {
-  if (userId) {
-    await db.emailVerificationRequest.deleteMany({ where: { userId } });
-    await db.systemInvite.deleteMany({ where: { code: inviteCode } });
-    await db.user.deleteMany({ where: { id: userId } });
+    assert.equal(await confirmRegistrationEmail(db, token, now), false, 'replayed link must not verify twice');
+    console.log('POSTGRES_REGISTRATION_CONFIRMATION=PASS');
+  } finally {
+    if (userId) {
+      await db.emailVerificationRequest.deleteMany({ where: { userId } });
+      await db.systemInvite.deleteMany({ where: { code: inviteCode } });
+      await db.user.deleteMany({ where: { id: userId } });
+    }
+    await db.$disconnect();
   }
-  await db.$disconnect();
 }
+
+void main().catch((error: unknown) => {
+  console.error(error);
+  process.exitCode = 1;
+});
