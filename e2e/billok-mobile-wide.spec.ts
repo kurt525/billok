@@ -170,6 +170,25 @@ test('mobile app stays centered and scroll-free horizontally at 430–720px with
   await expect(page).toHaveURL(/\/groups\/[^/]+$/, { timeout: 20000 });
   await expect(page.getByText('Поездка — тест широкого экрана').first()).toBeVisible();
   const groupUrl = new URL(page.url()).pathname;
+  // Group header actions must stay tappable on large and unfolded Android
+  // screens, even with larger system text and reduced visual viewport.
+  const invite = page.getByRole('button', { name: 'Пригласить', exact: true });
+  const groupSettings = page.locator('a[href="' + groupUrl + '/settings"]');
+  await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+  for (const width of [360, 430, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await noHorizontalOverflow(page, width);
+    for (const control of [invite, groupSettings]) {
+      await expect(control).toBeVisible();
+      const bounds = await control.boundingBox();
+      expect(bounds, 'Group header action at ' + width + 'px').not.toBeNull();
+      expect(bounds!.width).toBeGreaterThanOrEqual(44);
+      expect(bounds!.height).toBeGreaterThanOrEqual(44);
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    }
+  }
+  await page.setViewportSize({ width: 480, height: 800 });
   await page.goto(groupUrl + '/settings', { waitUntil: 'networkidle' });
   await expect(page.getByTestId('group-currency-readonly')).toHaveText('Российский рубль (₽)');
   await expect(page.locator('select#currency')).toHaveCount(0);

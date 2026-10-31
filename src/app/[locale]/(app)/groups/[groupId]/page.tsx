@@ -109,13 +109,14 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => setShowInvite(true)}>
+          <Button variant="outline" size="sm" className="min-h-11 min-w-11" onClick={() => setShowInvite(true)}>
             <UserPlus className="mr-2 h-4 w-4" />
             {t('detail.invite')}
           </Button>
           <Button
             variant="outline"
             size="sm"
+            className="min-h-11 min-w-11"
             aria-label={t('settings.title')}
             title={t('settings.title')}
             nativeButton={false}
