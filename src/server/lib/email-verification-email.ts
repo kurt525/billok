@@ -1,3 +1,6 @@
+import nodemailer from 'nodemailer';
+import type { SMTPTransportOptions } from 'nodemailer';
+
 /**
  * The message for registration email confirmation (not an Auth.js sign-in link).
  * Keep template generation independent of SMTP delivery or database writes.
@@ -51,4 +54,23 @@ export function russianRegistrationVerificationEmail(url: string) {
       '</div>',
     ].join('\n'),
   };
+}
+
+/** Use the SMTP transport and sender already configured for BillOK. */
+export async function sendRussianRegistrationVerificationEmail(input: {
+  to: string;
+  url: string;
+  from: string;
+  server: SMTPTransportOptions;
+}): Promise<void> {
+  const message = russianRegistrationVerificationEmail(input.url);
+  const transport = nodemailer.createTransport(input.server);
+  const delivery = await transport.sendMail({ from: input.from, to: input.to, ...message });
+  if (
+    delivery.rejected?.length ||
+    delivery.pending?.length ||
+    (delivery.accepted && !delivery.accepted.includes(input.to))
+  ) {
+    throw new Error('Не удалось отправить письмо подтверждения BillOK');
+  }
 }
