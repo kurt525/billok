@@ -35,7 +35,7 @@ describe('expired registration confirmation cleanup', () => {
     expect(deleteMany).toHaveBeenCalledExactlyOnceWith({
       where: { expiresAt: { lte: now } },
     });
-    expect(updateMany.mock.invocationCallOrder[0]).toBeLessThan(deleteMany.mock.invocationCallOrder[0]!);
+    expect(updateMany.mock.invocationCallOrder[0]!).toBeLessThan(deleteMany.mock.invocationCallOrder[0]!);
   });
 
   it('is safe to repeat after everything eligible has already been removed', async () => {
