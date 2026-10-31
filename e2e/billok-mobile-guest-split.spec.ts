@@ -622,12 +622,27 @@ test('anonymous mobile participant can join a long-name slot and edit it with to
     expect((await nameEdit.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await fitsPhone(page);
 
+    // The unclaimed remainder has to fit even when the system font is large,
+    // before this participant assigns any share of the receipt.
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const unclaimedTotal = page.getByTestId('unclaimed-total');
+    for (const width of [360, 430, 720]) {
+      await page.setViewportSize({ width, height: 380 });
+      await expect(unclaimedTotal).toBeVisible();
+      const rect = await unclaimedTotal.boundingBox();
+      expect(rect, 'Unclaimed remainder at ' + width + 'px').not.toBeNull();
+      expect(rect!.x).toBeGreaterThanOrEqual(0);
+      expect(rect!.x + rect!.width).toBeLessThanOrEqual(width);
+      const contentOverflow = await unclaimedTotal.evaluate((element) => element.scrollWidth - element.clientWidth);
+      expect(contentOverflow).toBeLessThanOrEqual(1);
+      await fitsPhone(page);
+    }
+
     // The save action contains the full 40-character name. With Android text
     // scaling it must wrap rather than extending beyond the phone viewport.
     await page.getByTestId('claim-item-0').click();
     const saveClaims = page.getByTestId('save-claims-btn');
     await expect(saveClaims).toContainText(longName);
-    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
     for (const width of [360, 430, 720]) {
       await page.setViewportSize({ width, height: 380 });
       const editForm = nameEdit.locator('xpath=ancestor::form');

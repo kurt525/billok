@@ -1983,20 +1983,20 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           {splitTotals.unclaimed && (
             <Card data-testid="unclaimed-total">
               <CardContent className="py-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
+                <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-3">
                     <div
                       className="h-8 w-8 rounded-full border-2 border-dashed border-muted-foreground/40"
                       aria-hidden="true"
                     />
-                    <span className="font-medium text-muted-foreground">{t('unclaimed')}</span>
+                    <span className="min-w-0 font-medium text-muted-foreground">{t('unclaimed')}</span>
                   </div>
-                  <span className="text-lg font-bold text-muted-foreground">
+                  <span className="min-w-0 text-lg font-bold text-muted-foreground [overflow-wrap:anywhere]">
                     {formatCents(splitTotals.unclaimed.total, currency, locale)}
                   </span>
                 </div>
                 {(splitTotals.unclaimed.tax > 0 || splitTotals.unclaimed.tip > 0) && (
-                  <div className="ml-11 mt-1 flex gap-3 text-xs text-muted-foreground">
+                  <div className="ml-11 mt-1 flex flex-wrap gap-3 text-xs text-muted-foreground">
                     <span>
                       {t('items', { amount: formatCents(splitTotals.unclaimed.itemTotal, currency, locale) })}
                     </span>
