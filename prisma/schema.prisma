@@ -94,6 +94,7 @@ model User {
   activityLogs    ActivityLog[]
   adminAuditLogs  AdminAuditLog[] @relation("AdminAuditLogs")
   systemInvitesUsed SystemInvite[] @relation("SystemInviteUsedBy")
+  systemInvitesReserved SystemInvite[] @relation("SystemInviteReservedBy")
   uploadedReceipts Receipt[] @relation("UploadedReceipts")
   guestSplits      GuestSplit[] @relation("GuestSplits")
   groupInvitesCreated GroupInvite[] @relation("GroupInvitesCreated")
@@ -409,10 +410,17 @@ model SystemInvite {
   usedAt    DateTime?
   expiresAt DateTime?
   revokedAt DateTime?
+  // A reservation is not a consumption: claim usedById/usedAt only after email verification.
+  reservedById String?
+  reservedUntil DateTime?
 
   usedBy User? @relation("SystemInviteUsedBy", fields: [usedById], references: [id], onDelete: SetNull)
+  reservedBy User? @relation("SystemInviteReservedBy", fields: [reservedById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
+
+  @@index([reservedUntil])
+  @@index([reservedById])
 }
 
 enum GuestSplitStatus {
