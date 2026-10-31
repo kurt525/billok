@@ -56,6 +56,13 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
     expect(settings).toContain('description: description || undefined');
   });
 
+  it('wraps unbroken names of other claimants without expanding the receipt on large-font phones', () => {
+    const claim = source('src/app/[locale]/split/[token]/claim/page.tsx');
+    expect(claim).toContain('mt-1 flex min-w-0 flex-wrap items-center gap-1');
+    expect(claim).toContain('min-w-0 flex-1 text-xs text-muted-foreground [overflow-wrap:anywhere]');
+    expect(claim).toContain("otherClaimants.map((pi) => data.people[pi]?.name ?? '?').join(', ')");
+  });
+
   it('keeps both guest header navigation links at least 44px high', () => {
     const header = source('src/app/[locale]/split/layout.tsx');
     expect(header).toContain('inline-flex min-h-11 items-center gap-2');

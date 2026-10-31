@@ -1906,7 +1906,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
                       {/* Other claimants */}
                       {otherClaimants.length > 0 && (
-                        <div className="flex items-center gap-1 mt-1">
+                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
                           <span className="text-xs text-muted-foreground">{t('alsoClaimedBy')}</span>
                           <div className="flex -space-x-1">
                             {otherClaimants.map((pi) => (
@@ -1917,7 +1917,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                               </Avatar>
                             ))}
                           </div>
-                          <span className="text-xs text-muted-foreground">
+                          <span className="min-w-0 flex-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
                             {otherClaimants.map((pi) => data.people[pi]?.name ?? '?').join(', ')}
                           </span>
                         </div>
