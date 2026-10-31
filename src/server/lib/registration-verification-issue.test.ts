@@ -35,7 +35,8 @@ describe('persist-and-send registration confirmation', () => {
     const result = await issueRegistrationVerification(input);
 
     expect(create).toHaveBeenCalledOnce();
-    const record = create.mock.calls[0][0];
+    const record = create.mock.calls[0]?.[0];
+    if (!record) throw new Error('Database create was not called with a request');
     expect(record).toEqual({
       data: {
         userId: input.userId,
@@ -45,7 +46,8 @@ describe('persist-and-send registration confirmation', () => {
       select: { id: true },
     });
     expect(sendEmail).toHaveBeenCalledOnce();
-    const sent = sendEmail.mock.calls[0][0];
+    const sent = sendEmail.mock.calls[0]?.[0];
+    if (!sent) throw new Error('SMTP was not called with a message');
     expect(sent.to).toBe(input.email);
     expect(sent.from).toBe(input.from);
     expect(sent.server).toBe(input.server);
@@ -53,7 +55,7 @@ describe('persist-and-send registration confirmation', () => {
     expect(record.data.tokenHash).not.toBe(new URL(sent.url).searchParams.get('token'));
     expect(Object.keys(record.data).sort()).toEqual(['expiresAt', 'tokenHash', 'userId']);
     expect(result.expiresAt).toEqual(record.data.expiresAt);
-    expect(create.mock.invocationCallOrder[0]).toBeLessThan(sendEmail.mock.invocationCallOrder[0]);
+    expect(create.mock.invocationCallOrder[0]!).toBeLessThan(sendEmail.mock.invocationCallOrder[0]!);
     expect(deleteMany).not.toHaveBeenCalled();
   });
 
@@ -70,8 +72,8 @@ describe('persist-and-send registration confirmation', () => {
     expect(deleteMany).toHaveBeenCalledWith({
       where: { id: 'verification-request-1', userId: input.userId, consumedAt: null },
     });
-    expect(create.mock.invocationCallOrder[0]).toBeLessThan(sendEmail.mock.invocationCallOrder[0]);
-    expect(sendEmail.mock.invocationCallOrder[0]).toBeLessThan(deleteMany.mock.invocationCallOrder[0]);
+    expect(create.mock.invocationCallOrder[0]!).toBeLessThan(sendEmail.mock.invocationCallOrder[0]!);
+    expect(sendEmail.mock.invocationCallOrder[0]!).toBeLessThan(deleteMany.mock.invocationCallOrder[0]!);
   });
 
   it('does not replace the original SMTP error if cleanup fails', async () => {
