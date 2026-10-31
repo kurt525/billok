@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { formatCents } from '@/lib/money';
@@ -17,9 +17,6 @@ type PaymentRow = {
   declaredPaidAt: string | null;
   verifiedAt: string | null;
 };
-
-// One review per payer, even across different hydrated client module copies.
-const inactiveOnServer = () => false;
 
 /** Shows the payer only the receipt's outstanding, declared and verified transfers.
  * The data is never included in guest.getSession or the public receipt link.
@@ -44,18 +41,24 @@ export function GuestPayerPaymentReview({
   const readPayments = read.mutateAsync;
   const activePayerReviews = getDocumentActiveMountRegistry();
   const [mountId] = useState(() => Symbol('payer-review'));
-  // Each receipt has exactly one payer. A retained route with an older
-  // personal identity must not render a second private review for this receipt.
-  const activeReviewKey = token;
-  const subscribeToActiveReview = useCallback(
-    (onChange: () => void) => activePayerReviews.subscribe(activeReviewKey, mountId, onChange),
-    [activePayerReviews, activeReviewKey, mountId],
-  );
-  const getActiveReviewSnapshot = useCallback(
-    () => activePayerReviews.isActive(activeReviewKey, mountId),
-    [activePayerReviews, activeReviewKey, mountId],
-  );
-  const isActiveReview = useSyncExternalStore(subscribeToActiveReview, getActiveReviewSnapshot, inactiveOnServer);
+  // Never subscribe/update an external store during React hydration. The
+  // private card starts absent in both server HTML and the first client render;
+  // ownership is acquired in an effect after React commits the component.
+  const [isActiveReview, setIsActiveReview] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    const onOwnershipChanged = () => {
+      if (mounted) setIsActiveReview(activePayerReviews.isActive(token, mountId));
+    };
+    // Each receipt has exactly one payer, including if an older Next.js route
+    // remains mounted. The shared document registry transfers ownership.
+    const unsubscribe = activePayerReviews.subscribe(token, mountId, onOwnershipChanged);
+    onOwnershipChanged();
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, [activePayerReviews, token, mountId]);
 
   useEffect(() => {
     if (!isActiveReview) return;

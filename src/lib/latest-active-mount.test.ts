@@ -1,5 +1,18 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createLatestActiveMountRegistry, getDocumentActiveMountRegistry } from './latest-active-mount';
+
+describe('payer review hydration safety', () => {
+  it('registers the private card only after the component commits', () => {
+    const component = readFileSync(join(process.cwd(), 'src/components/guest-payer-payment-review.tsx'), 'utf8');
+    expect(component).not.toContain('useSyncExternalStore');
+    expect(component).toContain('const [isActiveReview, setIsActiveReview] = useState(false)');
+    expect(component).toContain('activePayerReviews.subscribe(token, mountId, onOwnershipChanged)');
+    expect(component).toContain('mounted = false;');
+    expect(component).toContain('unsubscribe();');
+  });
+});
 
 describe('one active payer review across retained route trees', () => {
   it('keeps only the newest mounted review active and promotes the previous on unmount', () => {
