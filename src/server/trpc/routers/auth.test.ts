@@ -5,6 +5,8 @@ vi.mock('next/headers', () => ({
   cookies: vi.fn().mockResolvedValue({ get: vi.fn().mockReturnValue(null) }),
 }));
 vi.mock('@/server/auth', () => ({ auth: vi.fn() }));
+const { cleanupGate } = vi.hoisted(() => ({ cleanupGate: vi.fn() }));
+vi.mock('../../lib/registration-cleanup-trigger', () => ({ runRegistrationCleanupIfDue: cleanupGate }));
 vi.mock('bcryptjs', () => ({
   default: { hash: vi.fn().mockResolvedValue('hashed'), compare: vi.fn() },
 }));
@@ -40,6 +42,7 @@ function stubEnv(env: Record<string, string>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  cleanupGate.mockResolvedValue(undefined);
   // Start from a clean auth env regardless of the developer's .env
   for (const key of [
     ...Object.keys(OIDC_ENV),
@@ -100,6 +103,7 @@ describe('password login disabled', () => {
     expect(mockDb.systemSetting.findUnique).not.toHaveBeenCalled();
     expect(mockDb.user.findUnique).not.toHaveBeenCalled();
     expect(mockDb.$transaction).not.toHaveBeenCalled();
+    expect(cleanupGate).not.toHaveBeenCalled();
   });
 
   test('getRegistrationMode reports closed regardless of the admin setting', async () => {
@@ -119,6 +123,7 @@ describe('auth.register duplicate check', () => {
       api.register({ name: 'Mallory', email: 'bob@example.com', password: 'password123' }),
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(mockDb.$transaction).not.toHaveBeenCalled();
+    expect(cleanupGate).toHaveBeenCalledExactlyOnceWith(mockDb);
   });
 
   // Two sign-ups for case variants of one address can both pass the check

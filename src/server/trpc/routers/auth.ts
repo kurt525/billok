@@ -8,6 +8,7 @@ import { locales } from '@/i18n/routing';
 import { stripUndefined } from '../../lib/strip-undefined';
 import { parseAuthConfig } from '../../lib/auth-config';
 import { readRegistrationMode } from '../../lib/registration-mode';
+import { runRegistrationCleanupIfDue } from '../../lib/registration-cleanup-trigger';
 import { findUsersByEmail } from '../../lib/user-email';
 import { Prisma } from '@/generated/prisma/client';
 import { isSupportedSbpBankId, normalizeSbpPhone, SBP_BANKS } from '@/lib/sbp-banks';
@@ -66,6 +67,10 @@ export const authRouter = createTRPCRouter({
       if (mode === 'closed') {
         throw new AppError('FORBIDDEN', 'registrationClosed');
       }
+
+      // Best-effort hourly cleanup; never blocks registration on a database
+      // cleanup error, and never consumes an unused invitation.
+      await runRegistrationCleanupIfDue(ctx.db);
 
       if (mode === 'invite-only') {
         if (!input.inviteCode) {
