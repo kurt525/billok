@@ -85,6 +85,35 @@ for (const width of widths) {
   });
 }
 
+test.describe('mail waiting screen on wide mobile viewports', () => {
+  test.use({ viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
+
+  test('stays usable with large Android text and a short viewport, and returns to login', async ({ page }) => {
+    await page.goto('/verify-request', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const backToLogin = page.getByRole('link', { name: 'Вернуться ко входу' });
+
+    for (const width of [320, 360, 430, 480, 600, 720]) {
+      await page.setViewportSize({ width, height: 320 });
+      await expect(page.getByText('Проверьте почту', { exact: true })).toBeVisible();
+      await backToLogin.scrollIntoViewIfNeeded();
+      await expect(backToLogin).toBeInViewport();
+
+      const bounds = await backToLogin.boundingBox();
+      expect(bounds, 'return to login at ' + width + 'px').not.toBeNull();
+      expect(bounds!.height).toBeGreaterThanOrEqual(44);
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+      expect(documentWidth, 'horizontal overflow at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+    }
+
+    await backToLogin.click();
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByText('С возвращением!', { exact: true })).toBeVisible();
+  });
+});
+
 test('root and legacy language links reach canonical Russian pages without redirect loops', async ({ page }) => {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page).toHaveURL(/\/login$/);
