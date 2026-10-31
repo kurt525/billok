@@ -5,8 +5,9 @@ vi.mock('next/headers', () => ({
   cookies: vi.fn().mockResolvedValue({ get: vi.fn().mockReturnValue(null) }),
 }));
 vi.mock('@/server/auth', () => ({ auth: vi.fn() }));
-const { cleanupGate } = vi.hoisted(() => ({ cleanupGate: vi.fn() }));
+const { cleanupGate, confirmationGate } = vi.hoisted(() => ({ cleanupGate: vi.fn(), confirmationGate: vi.fn() }));
 vi.mock('../../lib/registration-cleanup-trigger', () => ({ runRegistrationCleanupIfDue: cleanupGate }));
+vi.mock('../../lib/registration-email-confirmation', () => ({ confirmRegistrationEmail: confirmationGate }));
 vi.mock('bcryptjs', () => ({
   default: { hash: vi.fn().mockResolvedValue('hashed'), compare: vi.fn() },
 }));
@@ -30,9 +31,9 @@ const OIDC_ENV = {
   OIDC_DISPLAY_NAME: 'Authentik',
 };
 
-async function caller(session: { user: { id: string } } | null = null) {
+async function caller(session: { user: { id: string } } | null = null, headers = new Headers()) {
   const { authRouter } = await import('./auth');
-  const ctx = { session, db: mockDb, headers: new Headers(), impersonating: null };
+  const ctx = { session, db: mockDb, headers, impersonating: null };
   return authRouter.createCaller(ctx as unknown as Parameters<typeof authRouter.createCaller>[0]);
 }
 
@@ -43,6 +44,7 @@ function stubEnv(env: Record<string, string>) {
 beforeEach(() => {
   vi.clearAllMocks();
   cleanupGate.mockResolvedValue(undefined);
+  confirmationGate.mockResolvedValue(true);
   // Start from a clean auth env regardless of the developer's .env
   for (const key of [
     ...Object.keys(OIDC_ENV),
@@ -87,6 +89,41 @@ describe('auth.getLoginOptions', () => {
     stubEnv({ GOOGLE_CLIENT_ID: 'id.apps.googleusercontent.com' });
     const api = await caller();
     expect((await api.getLoginOptions()).google).toBe(false);
+  });
+});
+
+describe('auth.confirmEmail', () => {
+  const token = 'A'.repeat(43);
+
+  test('confirms through the transactional service without signing in or returning tokens', async () => {
+    const api = await caller();
+    const response = await api.confirmEmail({ token });
+    expect(response).toEqual({ verified: true });
+    expect(confirmationGate).toHaveBeenCalledExactlyOnceWith(mockDb, token);
+    expect(JSON.stringify(response)).not.toContain(token);
+  });
+
+  test('returns the same error for missing, consumed or expired links', async () => {
+    confirmationGate.mockResolvedValue(false);
+    const api = await caller();
+    await expect(api.confirmEmail({ token })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(confirmationGate).toHaveBeenCalledExactlyOnceWith(mockDb, token);
+  });
+
+  test('rejects empty input before reaching the confirmation service', async () => {
+    const api = await caller();
+    await expect(api.confirmEmail({ token: '' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(confirmationGate).not.toHaveBeenCalled();
+  });
+
+  test('limits repeated confirmation attempts before calling the service', async () => {
+    vi.stubEnv('EMAIL_CONFIRM_RATE_LIMIT_MAX', '2');
+    const headers = new Headers({ 'x-real-ip': '192.0.2.146' });
+    const api = await caller(null, headers);
+    await api.confirmEmail({ token });
+    await api.confirmEmail({ token });
+    await expect(api.confirmEmail({ token })).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
+    expect(confirmationGate).toHaveBeenCalledTimes(2);
   });
 });
 

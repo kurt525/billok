@@ -9,6 +9,7 @@ import { stripUndefined } from '../../lib/strip-undefined';
 import { parseAuthConfig } from '../../lib/auth-config';
 import { readRegistrationMode } from '../../lib/registration-mode';
 import { runRegistrationCleanupIfDue } from '../../lib/registration-cleanup-trigger';
+import { confirmRegistrationEmail } from '../../lib/registration-email-confirmation';
 import { findUsersByEmail } from '../../lib/user-email';
 import { Prisma } from '@/generated/prisma/client';
 import { isSupportedSbpBankId, normalizeSbpPhone, SBP_BANKS } from '@/lib/sbp-banks';
@@ -131,6 +132,25 @@ export const authRouter = createTRPCRouter({
       });
 
       return { id: user.id, name: user.name, email: user.email };
+    }),
+
+  // A POST mutation prevents mail scanners from consuming links on GET.
+  confirmEmail: publicProcedure
+    .input(z.object({ token: z.string().min(1).max(128) }))
+    .mutation(async ({ ctx, input }) => {
+      const ip = getClientIp(ctx.headers);
+      const maxAttempts = parsePositiveInt(process.env.EMAIL_CONFIRM_RATE_LIMIT_MAX, 10);
+      if (!checkRateLimit(`confirm-registration-email:${ip}`, maxAttempts, 60 * 60 * 1000).allowed) {
+        throw new AppError('TOO_MANY_REQUESTS', 'emailVerificationRateLimited');
+      }
+
+      // Atomic, single-use verification and reservation redemption.
+      // No automatic sign-in, new registration policy or deploy.
+      const verified = await confirmRegistrationEmail(ctx.db, input.token);
+      if (!verified) {
+        throw new AppError('BAD_REQUEST', 'emailVerificationLinkInvalid');
+      }
+      return { verified: true };
     }),
 
   changePassword: protectedProcedure
