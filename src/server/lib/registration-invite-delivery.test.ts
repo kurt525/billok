@@ -1,15 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@/generated/prisma/client';
 
-const { deliver } = vi.hoisted(() => ({ deliver: vi.fn() }));
+const { deliver, pendingRegistration } = vi.hoisted(() => ({ deliver: vi.fn(), pendingRegistration: vi.fn() }));
+vi.mock('./pending-invite-registration', () => ({ createPendingInviteRegistration: pendingRegistration }));
 vi.mock('./registration-verification-issue', () => ({ issueRegistrationVerification: deliver }));
 
-import { issueReservedInviteVerification } from './registration-invite-delivery';
+import {
+  createAndDeliverPendingInviteRegistration,
+  issueReservedInviteVerification,
+} from './registration-invite-delivery';
 
 const updateMany = vi.fn();
+const deletePendingUser = vi.fn();
 const db = {
   systemInvite: { updateMany },
   emailVerificationRequest: {},
+  user: { deleteMany: deletePendingUser },
 } as unknown as Pick<PrismaClient, 'emailVerificationRequest' | 'systemInvite'>;
 
 const input = {
@@ -26,6 +32,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   deliver.mockResolvedValue({ expiresAt: new Date('2026-10-31T10:30:00.000Z') });
   updateMany.mockResolvedValue({ count: 1 });
+  deletePendingUser.mockResolvedValue({ count: 1 });
+  pendingRegistration.mockResolvedValue({ id: input.userId, name: 'Тест', email: input.email });
 });
 
 describe('confirmation delivery for reserved invitations', () => {
@@ -64,5 +72,26 @@ describe('confirmation delivery for reserved invitations', () => {
     expect(updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ reservedById: input.userId }) }),
     );
+  });
+});
+
+describe('SMTP failure compensation after pending registration', () => {
+  it('releases the invite and removes only the newly created unverified account so its email is reusable', async () => {
+    deliver.mockRejectedValueOnce(new Error('SMTP rejected'));
+    await expect(
+      createAndDeliverPendingInviteRegistration({
+        ...input,
+        db: db as PrismaClient,
+        name: 'Тест',
+        passwordHash: 'only-for-test',
+      }),
+    ).rejects.toThrow('SMTP rejected');
+
+    expect(pendingRegistration).toHaveBeenCalledOnce();
+    expect(updateMany).toHaveBeenCalledOnce();
+    expect(deletePendingUser).toHaveBeenCalledExactlyOnceWith({
+      where: { id: input.userId, emailVerified: null },
+    });
+    expect(updateMany.mock.invocationCallOrder[0]).toBeLessThan(deletePendingUser.mock.invocationCallOrder[0]!);
   });
 });

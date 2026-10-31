@@ -8,7 +8,7 @@ import { reserveSystemInvite } from './invite-reservation';
  *
  * Not yet wired into auth.register: the caller must first enforce the
  * .ru/.su email policy and registration mode; SMTP delivery and error
- * compensation will be wired in separate, reviewable stages.
+ * compensation are implemented by createAndDeliverPendingInviteRegistration.
  */
 export async function createPendingInviteRegistration(
   db: PrismaClient,
