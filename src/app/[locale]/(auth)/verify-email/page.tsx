@@ -58,7 +58,9 @@ function VerificationContent() {
         <div className="mx-auto mb-3 flex size-12 items-center justify-center rounded-full bg-primary/10">
           {success ? <CheckCircle2 className="size-6 text-primary" /> : <MailCheck className="size-6 text-primary" />}
         </div>
-        <CardTitle className="text-2xl">{t('title')}</CardTitle>
+        <CardTitle className="text-2xl" role="heading" aria-level={1}>
+          {t('title')}
+        </CardTitle>
         <CardDescription>{t('description')}</CardDescription>
       </CardHeader>
       <CardContent className="min-w-0 space-y-5 text-center">
