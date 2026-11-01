@@ -75,7 +75,32 @@ describe('confirmation delivery for reserved invitations', () => {
   });
 });
 
-describe('SMTP failure compensation after pending registration', () => {
+describe('pending registration delivery and SMTP failure compensation', () => {
+  it('sends a confirmation email without consuming the reserved invite or activating the account', async () => {
+    const result = await createAndDeliverPendingInviteRegistration({
+      ...input,
+      db: db as PrismaClient,
+      name: 'Тест',
+      passwordHash: 'only-for-test',
+    });
+
+    expect(result).toEqual({
+      email: input.email,
+      expiresAt: new Date('2026-10-31T10:30:00.000Z'),
+    });
+    expect(pendingRegistration).toHaveBeenCalledExactlyOnceWith(db, {
+      name: 'Тест',
+      email: input.email,
+      passwordHash: 'only-for-test',
+      inviteCode: input.inviteCode,
+    });
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(input);
+    // No early invite redemption, release, deletion, or sign-in is performed
+    // by the delivery service. Only confirmation may redeem the invitation.
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(deletePendingUser).not.toHaveBeenCalled();
+  });
+
   it('releases the invite and removes only the newly created unverified account so its email is reusable', async () => {
     deliver.mockRejectedValueOnce(new Error('SMTP rejected'));
     await expect(
