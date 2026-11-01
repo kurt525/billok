@@ -12,7 +12,8 @@ export function preparePasswordResetLink(siteOrigin: string, now: Date = new Dat
   url.pathname = '/reset-password';
   url.searchParams.set('token', token);
   return {
-    url: url.toString(), tokenHash: hashPasswordResetToken(token),
+    url: url.toString(),
+    tokenHash: hashPasswordResetToken(token),
     expiresAt: new Date(now.getTime() + PASSWORD_RESET_TTL_MS),
   };
 }

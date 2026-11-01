@@ -429,7 +429,6 @@ test('mobile confirmation recovery handles concurrent taps and network errors at
   }
 });
 
-
 test('password recovery mobile request and one-time reset feedback', async ({ page }) => {
   test.setTimeout(75_000);
   let requests = 0;
@@ -437,7 +436,8 @@ test('password recovery mobile request and one-time reset feedback', async ({ pa
   await page.route('**/api/trpc/auth.requestPasswordReset*', async (route) => {
     requests++;
     await route.fulfill({
-      status: 200, contentType: 'application/json',
+      status: 200,
+      contentType: 'application/json',
       body: JSON.stringify([{ result: { data: { json: { accepted: true } } } }]),
     });
   });
@@ -452,16 +452,29 @@ test('password recovery mobile request and one-time reset feedback', async ({ pa
   await expect(page.getByTestId('reset-password-form')).toHaveCount(0);
   await page.route('**/api/trpc/auth.resetPassword*', async (route) => {
     redeems++;
-    await route.fulfill(redeems === 1 ? {
-      status: 200, contentType: 'application/json',
-      body: JSON.stringify([{ result: { data: { json: { success: true } } } }]),
-    } : {
-      status: 400, contentType: 'application/json',
-      body: JSON.stringify([{ error: { json: {
-        message: 'Link invalid', code: -32600,
-        data: { code: 'BAD_REQUEST', httpStatus: 400, path: 'auth.resetPassword' },
-      } } }]),
-    });
+    await route.fulfill(
+      redeems === 1
+        ? {
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify([{ result: { data: { json: { success: true } } } }]),
+          }
+        : {
+            status: 400,
+            contentType: 'application/json',
+            body: JSON.stringify([
+              {
+                error: {
+                  json: {
+                    message: 'Link invalid',
+                    code: -32600,
+                    data: { code: 'BAD_REQUEST', httpStatus: 400, path: 'auth.resetPassword' },
+                  },
+                },
+              },
+            ]),
+          },
+    );
   });
   await page.goto('/reset-password?token=' + 'A'.repeat(43), { waitUntil: 'networkidle' });
   await page.getByLabel('Новый пароль', { exact: true }).fill('example-password-123');

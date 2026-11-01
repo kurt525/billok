@@ -11,7 +11,11 @@ import { Link } from '@/i18n/navigation';
 import { trpc } from '@/lib/trpc';
 
 export default function ResetPasswordPage() {
-  return <Suspense><ResetPasswordForm /></Suspense>;
+  return (
+    <Suspense>
+      <ResetPasswordForm />
+    </Suspense>
+  );
 }
 
 function ResetPasswordForm() {
@@ -26,16 +30,25 @@ function ResetPasswordForm() {
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!valid || reset.isPending || status === 'success' || status === 'invalid') return;
-    if (password !== repeat) { setStatus('failure'); return; }
+    if (password !== repeat) {
+      setStatus('failure');
+      return;
+    }
     setStatus('idle');
     try {
       await reset.mutateAsync({ token, newPassword: password });
-      setPassword(''); setRepeat(''); setStatus('success');
+      setPassword('');
+      setRepeat('');
+      setStatus('success');
       window.history.replaceState(window.history.state, '', window.location.pathname);
     } catch (error: unknown) {
       // Both already-used and expired links receive the same safe rejection.
-      if (error && typeof error === 'object' && 'data' in error &&
-        (error as { data?: { code?: string } }).data?.code === 'BAD_REQUEST') {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'data' in error &&
+        (error as { data?: { code?: string } }).data?.code === 'BAD_REQUEST'
+      ) {
         setStatus('invalid');
       } else {
         setStatus('failure');
@@ -50,23 +63,55 @@ function ResetPasswordForm() {
         <CardDescription>{t('resetDescription')}</CardDescription>
       </CardHeader>
       <CardContent className="min-w-0 space-y-5">
-        {status === 'success' ? <p role="status">{t('success')}</p> :
-          !valid || status === 'invalid' ? <p role="alert" className="text-sm text-destructive">{t('invalid')}</p> :
+        {status === 'success' ? (
+          <p role="status">{t('success')}</p>
+        ) : !valid || status === 'invalid' ? (
+          <p role="alert" className="text-sm text-destructive">
+            {t('invalid')}
+          </p>
+        ) : (
           <form onSubmit={submit} className="min-w-0 space-y-3" data-testid="reset-password-form">
             <Label htmlFor="reset-new-password">{t('password')}</Label>
-            <Input id="reset-new-password" type="password" autoComplete="new-password" minLength={8}
-              required maxLength={100} className="h-11 min-w-0 text-base" value={password}
-              onChange={(e) => setPassword(e.target.value)} />
+            <Input
+              id="reset-new-password"
+              type="password"
+              autoComplete="new-password"
+              minLength={8}
+              required
+              maxLength={100}
+              className="h-11 min-w-0 text-base"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
             <Label htmlFor="reset-repeat-password">{t('repeatPassword')}</Label>
-            <Input id="reset-repeat-password" type="password" autoComplete="new-password" minLength={8}
-              required maxLength={100} className="h-11 min-w-0 text-base" value={repeat}
-              onChange={(e) => setRepeat(e.target.value)} />
-            <Button type="submit" className="min-h-11 w-full whitespace-normal rounded-full text-base"
-              disabled={reset.isPending}>{reset.isPending ? t('saving') : t('save')}</Button>
-            {status === 'failure' && <p role="alert" className="text-sm text-destructive">{t('failure')}</p>}
+            <Input
+              id="reset-repeat-password"
+              type="password"
+              autoComplete="new-password"
+              minLength={8}
+              required
+              maxLength={100}
+              className="h-11 min-w-0 text-base"
+              value={repeat}
+              onChange={(e) => setRepeat(e.target.value)}
+            />
+            <Button
+              type="submit"
+              className="min-h-11 w-full whitespace-normal rounded-full text-base"
+              disabled={reset.isPending}
+            >
+              {reset.isPending ? t('saving') : t('save')}
+            </Button>
+            {status === 'failure' && (
+              <p role="alert" className="text-sm text-destructive">
+                {t('failure')}
+              </p>
+            )}
           </form>
-        }
-        <Link href="/login" className="inline-flex min-h-11 items-center text-primary underline">{t('backToLogin')}</Link>
+        )}
+        <Link href="/login" className="inline-flex min-h-11 items-center text-primary underline">
+          {t('backToLogin')}
+        </Link>
       </CardContent>
     </Card>
   );

@@ -36,17 +36,42 @@ export default function ForgotPasswordPage() {
       <CardContent className="min-w-0 space-y-5">
         <form className="min-w-0 space-y-3" onSubmit={send} data-testid="forgot-password-form">
           <Label htmlFor="reset-email">{t('email')}</Label>
-          <Input id="reset-email" type="email" autoComplete="email" required maxLength={254}
-            autoCapitalize="none" spellCheck={false} className="h-11 min-w-0 text-base"
-            value={email} onChange={(e) => { setEmail(e.target.value); setStatus('idle'); }} />
-          <Button className="min-h-11 w-full whitespace-normal rounded-full text-base"
-            disabled={request.isPending} type="submit">
+          <Input
+            id="reset-email"
+            type="email"
+            autoComplete="email"
+            required
+            maxLength={254}
+            autoCapitalize="none"
+            spellCheck={false}
+            className="h-11 min-w-0 text-base"
+            value={email}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              setStatus('idle');
+            }}
+          />
+          <Button
+            className="min-h-11 w-full whitespace-normal rounded-full text-base"
+            disabled={request.isPending}
+            type="submit"
+          >
             {request.isPending ? t('sending') : t('send')}
           </Button>
         </form>
-        {status === 'accepted' && <p role="status" className="break-words text-sm">{t('accepted')}</p>}
-        {status === 'failed' && <p role="alert" className="break-words text-sm text-destructive">{t('networkError')}</p>}
-        <Link href="/login" className="inline-flex min-h-11 items-center text-primary underline">{t('backToLogin')}</Link>
+        {status === 'accepted' && (
+          <p role="status" className="break-words text-sm">
+            {t('accepted')}
+          </p>
+        )}
+        {status === 'failed' && (
+          <p role="alert" className="break-words text-sm text-destructive">
+            {t('networkError')}
+          </p>
+        )}
+        <Link href="/login" className="inline-flex min-h-11 items-center text-primary underline">
+          {t('backToLogin')}
+        </Link>
       </CardContent>
     </Card>
   );

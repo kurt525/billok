@@ -297,7 +297,10 @@ function LoginForm() {
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <Label htmlFor="password">{t('password')}</Label>
-                        <Link href="/forgot-password" className="inline-flex min-h-11 items-center text-sm text-primary transition-colors hover:text-primary/80">
+                        <Link
+                          href="/forgot-password"
+                          className="inline-flex min-h-11 items-center text-sm text-primary transition-colors hover:text-primary/80"
+                        >
                           {t('forgotPassword')}
                         </Link>
                       </div>

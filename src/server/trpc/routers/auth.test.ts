@@ -5,18 +5,25 @@ vi.mock('next/headers', () => ({
   cookies: vi.fn().mockResolvedValue({ get: vi.fn().mockReturnValue(null) }),
 }));
 vi.mock('@/server/auth', () => ({ auth: vi.fn() }));
-const { cleanupGate, confirmationGate, signupGate, resendLimiter, resendEligibility, resendDelivery, resetIssue, resetRedeem } = vi.hoisted(
-  () => ({
-    cleanupGate: vi.fn(),
-    confirmationGate: vi.fn(),
-    signupGate: vi.fn(),
-    resendLimiter: vi.fn(),
-    resendEligibility: vi.fn(),
-    resendDelivery: vi.fn(),
-    resetIssue: vi.fn(),
-    resetRedeem: vi.fn(),
-  }),
-);
+const {
+  cleanupGate,
+  confirmationGate,
+  signupGate,
+  resendLimiter,
+  resendEligibility,
+  resendDelivery,
+  resetIssue,
+  resetRedeem,
+} = vi.hoisted(() => ({
+  cleanupGate: vi.fn(),
+  confirmationGate: vi.fn(),
+  signupGate: vi.fn(),
+  resendLimiter: vi.fn(),
+  resendEligibility: vi.fn(),
+  resendDelivery: vi.fn(),
+  resetIssue: vi.fn(),
+  resetRedeem: vi.fn(),
+}));
 vi.mock('../../lib/registration-cleanup-trigger', () => ({ runRegistrationCleanupIfDue: cleanupGate }));
 vi.mock('../../lib/registration-email-confirmation', () => ({ confirmRegistrationEmail: confirmationGate }));
 vi.mock('../../lib/registration-invite-delivery', () => ({ createAndDeliverPendingInviteRegistration: signupGate }));
@@ -26,7 +33,10 @@ vi.mock('../../lib/registration-resend-rate-limit', async (importOriginal) => ({
 }));
 vi.mock('../../lib/registration-resend-eligibility', () => ({ findPendingRegistrationForResend: resendEligibility }));
 vi.mock('../../lib/registration-resend-delivery', () => ({ deliverPendingVerificationResend: resendDelivery }));
-vi.mock('../../lib/password-reset-service', () => ({ issuePasswordReset: resetIssue, redeemPasswordReset: resetRedeem }));
+vi.mock('../../lib/password-reset-service', () => ({
+  issuePasswordReset: resetIssue,
+  redeemPasswordReset: resetRedeem,
+}));
 vi.mock('bcryptjs', () => ({
   default: { hash: vi.fn().mockResolvedValue('hashed'), compare: vi.fn() },
 }));
@@ -172,11 +182,13 @@ describe('password reset public API', () => {
   test('refuses invalid, expired or reused links without creating a session', async () => {
     const api = await caller();
     resetRedeem.mockResolvedValueOnce(false);
-    await expect(api.resetPassword({ token: 'A'.repeat(43), newPassword: 'new-password-123' }))
-      .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(api.resetPassword({ token: 'A'.repeat(43), newPassword: 'new-password-123' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
     expect(mockDb.user.create).not.toHaveBeenCalled();
-    await expect(api.resetPassword({ token: 'A'.repeat(43), newPassword: 'new-password-123' }))
-      .resolves.toEqual({ success: true });
+    await expect(api.resetPassword({ token: 'A'.repeat(43), newPassword: 'new-password-123' })).resolves.toEqual({
+      success: true,
+    });
   });
 });
 

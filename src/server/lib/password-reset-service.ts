@@ -7,7 +7,11 @@ import { preparePasswordResetLink, hashPasswordResetToken } from './password-res
 import { sendRussianPasswordResetEmail } from './password-reset-email';
 
 export async function issuePasswordReset(input: {
-  db: PrismaClient; email: string; siteOrigin: string; from: string; server: SMTPTransportOptions;
+  db: PrismaClient;
+  email: string;
+  siteOrigin: string;
+  from: string;
+  server: SMTPTransportOptions;
 }): Promise<void> {
   const users = await findUsersByEmail(input.db, input.email);
   if (users.length !== 1) return;
@@ -33,8 +37,10 @@ export async function issuePasswordReset(input: {
   try {
     await input.db.passwordResetRequest.updateMany({
       where: {
-        userId: user.id, id: { not: request.id },
-        createdAt: { lt: request.createdAt }, consumedAt: null,
+        userId: user.id,
+        id: { not: request.id },
+        createdAt: { lt: request.createdAt },
+        consumedAt: null,
       },
       data: { consumedAt: new Date() },
     });
@@ -47,7 +53,10 @@ class ConcurrentPasswordReset extends Error {}
 
 /** Consume a token and update the password atomically, with rollback on any conflict. */
 export async function redeemPasswordReset(
-  db: Pick<PrismaClient, '$transaction'>, token: string, newPassword: string, now: Date = new Date(),
+  db: Pick<PrismaClient, '$transaction'>,
+  token: string,
+  newPassword: string,
+  now: Date = new Date(),
 ): Promise<boolean> {
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return false;
   try {
@@ -72,8 +81,10 @@ export async function redeemPasswordReset(
       const updated = await tx.user.updateMany({
         where: {
           id: request.userId,
-          emailVerified: { not: null }, passwordHash: { not: null },
-          suspendedAt: null, isPlaceholder: false,
+          emailVerified: { not: null },
+          passwordHash: { not: null },
+          suspendedAt: null,
+          isPlaceholder: false,
         },
         data: { passwordHash: hash },
       });
