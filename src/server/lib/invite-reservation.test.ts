@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@/generated/prisma/client';
-import { reserveSystemInvite } from './invite-reservation';
+import { renewOwnedSystemInvite, reserveSystemInvite } from './invite-reservation';
 
 const now = new Date('2026-10-31T10:00:00.000Z');
 
@@ -68,5 +68,39 @@ describe('atomic single-use invite reservation', () => {
     expect(outcome).toEqual([true, false]);
     expect(existing.reservedById).toBe('first');
     expect(existing.usedAt).toBeNull();
+  });
+});
+
+describe('extension of a pending invitation reservation', () => {
+  it('extends only this unverified user own nonconsumed, nonrevoked and unexpired invite', async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const db = { systemInvite: { updateMany } } as unknown as Pick<PrismaClient, 'systemInvite'>;
+
+    await expect(renewOwnedSystemInvite(db, { code: 'invite-1', userId: 'pending-1', now })).resolves.toBe(true);
+    expect(updateMany).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        code: 'invite-1',
+        reservedById: 'pending-1',
+        reservedUntil: { not: null },
+        reservedBy: {
+          is: { id: 'pending-1', emailVerified: null, registrationEmailVerificationRequired: true },
+        },
+        usedById: null,
+        usedAt: null,
+        revokedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+      data: { reservedUntil: new Date('2026-10-31T10:30:00.000Z') },
+    });
+    expect(updateMany.mock.lastCall?.[0]?.data).not.toHaveProperty('usedAt');
+    expect(updateMany.mock.lastCall?.[0]?.data).not.toHaveProperty('usedById');
+    expect(updateMany.mock.lastCall?.[0]?.data).not.toHaveProperty('reservedById');
+  });
+
+  it('does not renew a reservation when the database rejects its ownership or validity', async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 0 });
+    const db = { systemInvite: { updateMany } } as unknown as Pick<PrismaClient, 'systemInvite'>;
+    await expect(renewOwnedSystemInvite(db, { code: 'claimed', userId: 'other', now })).resolves.toBe(false);
+    expect(updateMany).toHaveBeenCalledTimes(1);
   });
 });

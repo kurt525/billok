@@ -30,3 +30,34 @@ export async function reserveSystemInvite(
   });
   return result.count === 1;
 }
+
+/**
+ * Extend ONLY an existing invitation reservation owned by the same pending
+ * invite-only account. Never reactivate used/revoked/expired invites or
+ * reassign an invitation that was released or claimed by somebody else.
+ *
+ * This is an internal primitive, not a public resend endpoint. The caller
+ * must enforce independent rate limits and generic non-enumerating responses.
+ */
+export async function renewOwnedSystemInvite(
+  db: Pick<PrismaClient, 'systemInvite'>,
+  input: { code: string; userId: string; now?: Date },
+): Promise<boolean> {
+  const now = input.now ?? new Date();
+  const result = await db.systemInvite.updateMany({
+    where: {
+      code: input.code,
+      reservedById: input.userId,
+      reservedUntil: { not: null },
+      reservedBy: {
+        is: { id: input.userId, emailVerified: null, registrationEmailVerificationRequired: true },
+      },
+      usedById: null,
+      usedAt: null,
+      revokedAt: null,
+      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+    },
+    data: { reservedUntil: new Date(now.getTime() + EMAIL_VERIFICATION_TOKEN_TTL_MS) },
+  });
+  return result.count === 1;
+}
