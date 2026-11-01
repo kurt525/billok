@@ -146,6 +146,43 @@ test('invited mobile signup waits for email confirmation without automatic sign-
   }
 });
 
+// Malformed or missing email confirmation links are never sent to the API.
+// Retain a safe, usable Russian recovery screen on narrow and wide phones.
+test('malformed email confirmation link shows a Russian error without consuming a token', async ({ page }) => {
+  test.setTimeout(45_000);
+  let confirmations = 0;
+  await page.route('**/api/trpc/auth.confirmEmail*', async (route) => {
+    confirmations++;
+    await route.abort();
+  });
+
+  await page.goto('/verify-email?token=invalid', { waitUntil: 'networkidle' });
+  const error = page.getByRole('alert');
+  await expect(error).toContainText('Ссылка недействительна, уже использована или срок её действия истёк.');
+  await expect(page.getByRole('button', { name: 'Подтвердить адрес' })).toHaveCount(0);
+  expect(confirmations, 'invalid link must not consume or send a token').toBe(0);
+
+  await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+  const login = page.getByRole('link', { name: 'Перейти ко входу' });
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 320 });
+    await expect(error).toBeVisible();
+    await login.scrollIntoViewIfNeeded();
+    await expect(login).toBeInViewport();
+    const box = await login.boundingBox();
+    expect(box, 'login link at ' + width + 'px').not.toBeNull();
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+    const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(scrollWidth, 'horizontal overflow at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+  }
+
+  expect(confirmations).toBe(0);
+  await login.click();
+  await expect(page).toHaveURL(/\/login$/);
+});
+
 // Security-relevant UI check: email scanners can render GET links, so only an
 // explicit button click may consume the one-time confirmation token.
 test('registration email link requires a tap before POST confirmation', async ({ page }) => {
