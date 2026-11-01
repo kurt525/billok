@@ -428,3 +428,61 @@ test('mobile confirmation recovery handles concurrent taps and network errors at
     expect(overflow, 'horizontal overflow at ' + width + ' CSS px').toBeLessThanOrEqual(1);
   }
 });
+
+
+test('password recovery mobile request and one-time reset feedback', async ({ page }) => {
+  test.setTimeout(75_000);
+  let requests = 0;
+  let redeems = 0;
+  await page.route('**/api/trpc/auth.requestPasswordReset*', async (route) => {
+    requests++;
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify([{ result: { data: { json: { accepted: true } } } }]),
+    });
+  });
+  await page.goto('/forgot-password', { waitUntil: 'networkidle' });
+  await page.getByLabel('Электронная почта').fill('unknown@mail.ru');
+  await page.getByRole('button', { name: 'Получить ссылку' }).click();
+  await expect(page.getByRole('status')).toContainText('Если для этого адреса доступно восстановление');
+  expect(requests).toBe(1);
+
+  await page.goto('/reset-password?token=bad', { waitUntil: 'networkidle' });
+  await expect(page.getByRole('alert')).toContainText('Ссылка недействительна');
+  await expect(page.getByTestId('reset-password-form')).toHaveCount(0);
+  await page.route('**/api/trpc/auth.resetPassword*', async (route) => {
+    redeems++;
+    await route.fulfill(redeems === 1 ? {
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify([{ result: { data: { json: { success: true } } } }]),
+    } : {
+      status: 400, contentType: 'application/json',
+      body: JSON.stringify([{ error: { json: {
+        message: 'Link invalid', code: -32600,
+        data: { code: 'BAD_REQUEST', httpStatus: 400, path: 'auth.resetPassword' },
+      } } }]),
+    });
+  });
+  await page.goto('/reset-password?token=' + 'A'.repeat(43), { waitUntil: 'networkidle' });
+  await page.getByLabel('Новый пароль', { exact: true }).fill('example-password-123');
+  await page.getByLabel('Повторите новый пароль').fill('example-password-123');
+  await page.getByRole('button', { name: 'Сменить пароль' }).click();
+  await expect(page.getByRole('status')).toContainText('Пароль изменён');
+  expect(redeems).toBe(1);
+  await expect(page).toHaveURL(/\/reset-password$/);
+  await page.goto('/reset-password?token=' + 'A'.repeat(43), { waitUntil: 'networkidle' });
+  await page.getByLabel('Новый пароль', { exact: true }).fill('example-password-123');
+  await page.getByLabel('Повторите новый пароль').fill('example-password-123');
+  await page.getByRole('button', { name: 'Сменить пароль' }).click();
+  await expect(page.getByRole('alert')).toContainText('Ссылка недействительна');
+  expect(redeems).toBe(2);
+
+  await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 340 });
+    const back = page.getByRole('link', { name: 'Вернуться ко входу' });
+    await back.scrollIntoViewIfNeeded();
+    expect((await back.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+  }
+});

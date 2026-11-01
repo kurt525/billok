@@ -5,7 +5,7 @@ vi.mock('next/headers', () => ({
   cookies: vi.fn().mockResolvedValue({ get: vi.fn().mockReturnValue(null) }),
 }));
 vi.mock('@/server/auth', () => ({ auth: vi.fn() }));
-const { cleanupGate, confirmationGate, signupGate, resendLimiter, resendEligibility, resendDelivery } = vi.hoisted(
+const { cleanupGate, confirmationGate, signupGate, resendLimiter, resendEligibility, resendDelivery, resetIssue, resetRedeem } = vi.hoisted(
   () => ({
     cleanupGate: vi.fn(),
     confirmationGate: vi.fn(),
@@ -13,6 +13,8 @@ const { cleanupGate, confirmationGate, signupGate, resendLimiter, resendEligibil
     resendLimiter: vi.fn(),
     resendEligibility: vi.fn(),
     resendDelivery: vi.fn(),
+    resetIssue: vi.fn(),
+    resetRedeem: vi.fn(),
   }),
 );
 vi.mock('../../lib/registration-cleanup-trigger', () => ({ runRegistrationCleanupIfDue: cleanupGate }));
@@ -24,6 +26,7 @@ vi.mock('../../lib/registration-resend-rate-limit', async (importOriginal) => ({
 }));
 vi.mock('../../lib/registration-resend-eligibility', () => ({ findPendingRegistrationForResend: resendEligibility }));
 vi.mock('../../lib/registration-resend-delivery', () => ({ deliverPendingVerificationResend: resendDelivery }));
+vi.mock('../../lib/password-reset-service', () => ({ issuePasswordReset: resetIssue, redeemPasswordReset: resetRedeem }));
 vi.mock('bcryptjs', () => ({
   default: { hash: vi.fn().mockResolvedValue('hashed'), compare: vi.fn() },
 }));
@@ -63,6 +66,8 @@ beforeEach(() => {
   confirmationGate.mockResolvedValue(true);
   signupGate.mockResolvedValue({ email: 'ada@mail.ru', expiresAt: new Date('2026-11-01T12:30:00Z') });
   resendLimiter.mockReturnValue(true);
+  resetIssue.mockResolvedValue(undefined);
+  resetRedeem.mockResolvedValue(true);
   resendEligibility.mockResolvedValue(null);
   resendDelivery.mockResolvedValue({ requestId: 'replacement-1', expiresAt: new Date('2026-11-01T12:30:00Z') });
   vi.stubEnv('REGISTER_RATE_LIMIT_MAX', '9999');
@@ -150,6 +155,28 @@ describe('auth.confirmEmail', () => {
     await api.confirmEmail({ token });
     await expect(api.confirmEmail({ token })).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
     expect(confirmationGate).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('password reset public API', () => {
+  const email = 'member@mail.ru';
+  test('returns the same acknowledgement for eligible, unknown and SMTP failures', async () => {
+    const api = await caller();
+    const unknown = await api.requestPasswordReset({ email });
+    expect(unknown).toEqual({ accepted: true });
+    resetIssue.mockRejectedValueOnce(new Error('mail unavailable'));
+    const failed = await api.requestPasswordReset({ email });
+    expect(failed).toEqual(unknown);
+  });
+
+  test('refuses invalid, expired or reused links without creating a session', async () => {
+    const api = await caller();
+    resetRedeem.mockResolvedValueOnce(false);
+    await expect(api.resetPassword({ token: 'A'.repeat(43), newPassword: 'new-password-123' }))
+      .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.user.create).not.toHaveBeenCalled();
+    await expect(api.resetPassword({ token: 'A'.repeat(43), newPassword: 'new-password-123' }))
+      .resolves.toEqual({ success: true });
   });
 });
 

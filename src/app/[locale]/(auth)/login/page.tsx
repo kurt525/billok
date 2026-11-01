@@ -297,15 +297,9 @@ function LoginForm() {
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <Label htmlFor="password">{t('password')}</Label>
-                        {magicLinkEnabled && (
-                          <button
-                            type="button"
-                            onClick={() => setShowMagicLink(true)}
-                            className="inline-flex min-h-11 items-center text-sm text-primary transition-colors hover:text-primary/80"
-                          >
-                            {t('forgotPassword')}
-                          </button>
-                        )}
+                        <Link href="/forgot-password" className="inline-flex min-h-11 items-center text-sm text-primary transition-colors hover:text-primary/80">
+                          {t('forgotPassword')}
+                        </Link>
                       </div>
                       <Input
                         id="password"

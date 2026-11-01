@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { AppError } from '@/server/lib/app-error';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
@@ -19,6 +20,8 @@ import {
 } from '../../lib/registration-resend-rate-limit';
 import { findPendingRegistrationForResend } from '../../lib/registration-resend-eligibility';
 import { deliverPendingVerificationResend } from '../../lib/registration-resend-delivery';
+import { issuePasswordReset, redeemPasswordReset } from '../../lib/password-reset-service';
+import { hashPasswordResetToken } from '../../lib/password-reset-token';
 import { isSupportedSbpBankId, normalizeSbpPhone, SBP_BANKS } from '@/lib/sbp-banks';
 
 export const authRouter = createTRPCRouter({
@@ -180,6 +183,45 @@ export const authRouter = createTRPCRouter({
         // Never expose SMTP, account or invitation errors to the caller.
       }
       return acknowledgement;
+    }),
+
+  requestPasswordReset: publicProcedure
+    .input(z.object({ email: z.string().email().max(254) }))
+    .mutation(async ({ ctx, input }) => {
+      const response = { accepted: true as const };
+      const hour = 60 * 60 * 1000;
+      if (!checkRateLimit('auth:password-reset:global', 600, hour).allowed) return response;
+      const ip = getClientIp(ctx.headers);
+      if (!checkRateLimit('auth:password-reset:ip:' + ip, 5, hour).allowed) return response;
+      const emailHash = createHash('sha256').update(input.email.trim().toLowerCase()).digest('hex');
+      if (!checkRateLimit('auth:password-reset:email:' + emailHash, 3, hour).allowed) return response;
+      if (!isAllowedRegistrationEmailDomain(input.email)) return response;
+      try {
+        const config = readRegistrationEmailConfig(process.env);
+        await issuePasswordReset({ db: ctx.db, email: input.email, ...config });
+      } catch {
+        // Preserve the same public acknowledgement for unknown accounts,
+        // absent SMTP configuration and storage/delivery failures.
+      }
+      return response;
+    }),
+
+  resetPassword: publicProcedure
+    .input(z.object({ token: z.string().length(43), newPassword: z.string().min(8).max(100) }))
+    .mutation(async ({ ctx, input }) => {
+      const hour = 60 * 60 * 1000;
+      const ip = getClientIp(ctx.headers);
+      const digest = hashPasswordResetToken(input.token);
+      if (
+        !checkRateLimit('auth:password-reset-redeem:global', 1000, hour).allowed ||
+        !checkRateLimit('auth:password-reset-redeem:ip:' + ip, 20, hour).allowed ||
+        !checkRateLimit('auth:password-reset-redeem:token:' + digest, 5, hour).allowed
+      ) {
+        throw new AppError('TOO_MANY_REQUESTS', 'passwordResetRateLimited');
+      }
+      const success = await redeemPasswordReset(ctx.db, input.token, input.newPassword);
+      if (!success) throw new AppError('BAD_REQUEST', 'passwordResetLinkInvalid');
+      return { success: true as const };
     }),
 
   changePassword: protectedProcedure
