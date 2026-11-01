@@ -923,9 +923,13 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
       await page.setViewportSize({ width, height: 360 });
       const card = page.getByTestId('claim-item-' + ownPart);
       await fitsPhone(page);
-      await card.scrollIntoViewIfNeeded();
-      // A vertical jump must not leave the document horizontally scrolled.
-      await page.evaluate(() => window.scrollTo(0, window.scrollY));
+      // Move only vertically, like a person scrolling the receipt. Playwright's
+      // scrollIntoViewIfNeeded can scroll nested horizontal containers while
+      // resizing a mobile viewport, shifting the element despite scrollX=0.
+      await card.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        window.scrollTo({ left: 0, top: Math.max(0, window.scrollY + bounds.top - 16), behavior: 'instant' });
+      });
       const rect = await card.boundingBox();
       expect(rect).not.toBeNull();
       expect(rect!.height).toBeGreaterThanOrEqual(44);
@@ -934,6 +938,21 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
         viewport: document.documentElement.clientWidth,
         documentWidth: document.documentElement.scrollWidth,
         mainX: element.closest('main')?.getBoundingClientRect().x ?? null,
+        ancestors: (() => {
+          const result: { tag: string; left: number; scrollLeft: number; scrollWidth: number; clientWidth: number }[] =
+            [];
+          for (let parent = element.parentElement; parent && result.length < 12; parent = parent.parentElement) {
+            const rect = parent.getBoundingClientRect();
+            result.push({
+              tag: parent.tagName,
+              left: Math.round(rect.left),
+              scrollLeft: parent.scrollLeft,
+              scrollWidth: parent.scrollWidth,
+              clientWidth: parent.clientWidth,
+            });
+          }
+          return result;
+        })(),
       }));
       expect(rect!.x, 'Card left edge at ' + width + 'px: ' + JSON.stringify(geometry)).toBeGreaterThanOrEqual(0);
       expect(rect!.x + rect!.width, 'Card right edge at ' + width + 'px').toBeLessThanOrEqual(width);
