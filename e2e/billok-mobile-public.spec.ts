@@ -442,12 +442,15 @@ test('password recovery mobile request and one-time reset feedback', async ({ pa
     });
   });
   await page.goto('/forgot-password', { waitUntil: 'networkidle' });
+  await expect(page).toHaveURL(/\/forgot-password$/);
+  await expect(page.getByTestId('forgot-password-form')).toBeVisible();
   await page.getByLabel('Электронная почта').fill('unknown@mail.ru');
   await page.getByRole('button', { name: 'Получить ссылку' }).click();
   await expect(page.getByRole('status')).toContainText('Если для этого адреса доступно восстановление');
   expect(requests).toBe(1);
 
   await page.goto('/reset-password?token=bad', { waitUntil: 'networkidle' });
+  await expect(page).toHaveURL(/\/reset-password\?token=bad$/);
   await expect(page.getByRole('alert')).toContainText('Ссылка недействительна');
   await expect(page.getByTestId('reset-password-form')).toHaveCount(0);
   await page.route('**/api/trpc/auth.resetPassword*', async (route) => {

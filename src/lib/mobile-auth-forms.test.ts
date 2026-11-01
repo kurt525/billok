@@ -66,6 +66,18 @@ describe('Mobile authentication and verification forms', () => {
     expect(register).not.toContain('initialEmail={password}');
   });
 
+  it('exposes both password recovery screens without an authenticated session', () => {
+    const middleware = source('src/middleware.ts');
+    const forgot = source('src/app/[locale]/(auth)/forgot-password/page.tsx');
+    const reset = source('src/app/[locale]/(auth)/reset-password/page.tsx');
+    expect(middleware).toContain("'/forgot-password'");
+    expect(middleware).toContain("'/reset-password'");
+    expect(forgot).toContain('requestPasswordReset.useMutation()');
+    expect(reset).toContain('resetPassword.useMutation()');
+    expect(forgot).toContain('min-h-11 w-full');
+    expect(reset).toContain('min-h-11 w-full');
+  });
+
   it('keeps the confirmation email page back action tappable', () => {
     const verify = source('src/app/[locale]/(auth)/verify-request/page.tsx');
     expect(verify).toContain('inline-flex min-h-11 items-center justify-center');
