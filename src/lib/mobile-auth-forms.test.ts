@@ -37,6 +37,24 @@ describe('Mobile authentication and verification forms', () => {
     expect(register).toContain('confirmationPendingDescription');
   });
 
+  it('keeps the generic resend email form touch accessible without exposing account existence', () => {
+    const form = source('src/components/auth/registration-email-resend-form.tsx');
+    expect(form).toContain('resendRegistrationVerification.useMutation()');
+    expect(form).toContain('type="email"');
+    expect(form).toContain('maxLength={254}');
+    expect(form).toContain('autoComplete="email"');
+    expect(form).toContain('min-h-11 w-full');
+    expect(form).toContain('disabled={resend.isPending}');
+    expect(form).toContain('role="status"');
+    expect(form).toContain('role="alert"');
+    expect(form).not.toContain('inviteCode');
+    const messages = JSON.parse(source('messages/ru/auth.json')) as {
+      resendVerification: { accepted: string };
+    };
+    expect(messages.resendVerification.accepted).toContain('Если для этого адреса');
+    expect(messages.resendVerification.accepted).toContain('«Спам»');
+  });
+
   it('keeps the confirmation email page back action tappable', () => {
     const verify = source('src/app/[locale]/(auth)/verify-request/page.tsx');
     expect(verify).toContain('inline-flex min-h-11 items-center justify-center');
