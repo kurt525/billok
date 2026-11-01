@@ -76,7 +76,7 @@ function ProfileForm({
         <Label htmlFor="name">{t('profile.name')}</Label>
         <Input
           id="name"
-          autoComplete="name"
+          autoComplete="off"
           maxLength={100}
           className="h-11 min-w-0 text-base"
           value={name}
