@@ -451,7 +451,7 @@ test('password recovery mobile request and one-time reset feedback', async ({ pa
 
   await page.goto('/reset-password?token=bad', { waitUntil: 'networkidle' });
   await expect(page).toHaveURL(/\/reset-password\?token=bad$/);
-  await expect(page.getByRole('alert')).toContainText('Ссылка недействительна');
+  await expect(page.locator('p[role="alert"]')).toContainText('Ссылка недействительна');
   await expect(page.getByTestId('reset-password-form')).toHaveCount(0);
   await page.route('**/api/trpc/auth.resetPassword*', async (route) => {
     redeems++;
@@ -490,7 +490,7 @@ test('password recovery mobile request and one-time reset feedback', async ({ pa
   await page.getByLabel('Новый пароль', { exact: true }).fill('example-password-123');
   await page.getByLabel('Повторите новый пароль').fill('example-password-123');
   await page.getByRole('button', { name: 'Сменить пароль' }).click();
-  await expect(page.getByRole('alert')).toContainText('Ссылка недействительна');
+  await expect(page.locator('p[role="alert"]')).toContainText('Ссылка недействительна');
   expect(redeems).toBe(2);
 
   await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
