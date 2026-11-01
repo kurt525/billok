@@ -81,7 +81,7 @@ describe('extension of a pending invitation reservation', () => {
       where: {
         code: 'invite-1',
         reservedById: 'pending-1',
-        reservedUntil: { not: null },
+        reservedUntil: { gt: now },
         reservedBy: {
           is: { id: 'pending-1', emailVerified: null, registrationEmailVerificationRequired: true },
         },
@@ -102,5 +102,38 @@ describe('extension of a pending invitation reservation', () => {
     const db = { systemInvite: { updateMany } } as unknown as Pick<PrismaClient, 'systemInvite'>;
     await expect(renewOwnedSystemInvite(db, { code: 'claimed', userId: 'other', now })).resolves.toBe(false);
     expect(updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed after cleanup, after another claim or at the lease expiry boundary', async () => {
+    const future = new Date('2026-10-31T10:10:00.000Z');
+    const cases = [
+      { name: 'cleaned', reservedById: null, reservedUntil: null },
+      { name: 'reclaimed', reservedById: 'another-account', reservedUntil: future },
+      { name: 'expired', reservedById: 'pending-1', reservedUntil: now },
+    ];
+
+    for (const scenario of cases) {
+      // A database-style conditional UPDATE must never resurrect an expired
+      // lease or overwrite a reservation belonging to another account.
+      const existing = { reservedById: scenario.reservedById, reservedUntil: scenario.reservedUntil };
+      const updateMany = vi.fn().mockImplementation(async ({ where, data }) => {
+        const eligible =
+          existing.reservedById === where.reservedById &&
+          existing.reservedUntil !== null &&
+          existing.reservedUntil > where.reservedUntil.gt;
+        if (!eligible) return { count: 0 };
+        existing.reservedUntil = data.reservedUntil;
+        return { count: 1 };
+      });
+      const db = { systemInvite: { updateMany } } as unknown as Pick<PrismaClient, 'systemInvite'>;
+      await expect(renewOwnedSystemInvite(db, { code: 'invite-1', userId: 'pending-1', now })).resolves.toBe(false);
+      expect(existing.reservedById, scenario.name).toBe(scenario.reservedById);
+      expect(existing.reservedUntil, scenario.name).toEqual(scenario.reservedUntil);
+      expect(updateMany).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ reservedById: 'pending-1', reservedUntil: { gt: now } }),
+        }),
+      );
+    }
   });
 });

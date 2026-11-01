@@ -48,7 +48,9 @@ export async function renewOwnedSystemInvite(
     where: {
       code: input.code,
       reservedById: input.userId,
-      reservedUntil: { not: null },
+      // A freed or already-expired lease cannot be resurrected for a
+      // pending account: another registrant may have claimed the code.
+      reservedUntil: { gt: now },
       reservedBy: {
         is: { id: input.userId, emailVerified: null, registrationEmailVerificationRequired: true },
       },
