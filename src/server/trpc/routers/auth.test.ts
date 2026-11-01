@@ -18,7 +18,10 @@ const { cleanupGate, confirmationGate, signupGate, resendLimiter, resendEligibil
 vi.mock('../../lib/registration-cleanup-trigger', () => ({ runRegistrationCleanupIfDue: cleanupGate }));
 vi.mock('../../lib/registration-email-confirmation', () => ({ confirmRegistrationEmail: confirmationGate }));
 vi.mock('../../lib/registration-invite-delivery', () => ({ createAndDeliverPendingInviteRegistration: signupGate }));
-vi.mock('../../lib/registration-resend-rate-limit', () => ({ allowRegistrationVerificationResend: resendLimiter }));
+vi.mock('../../lib/registration-resend-rate-limit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/registration-resend-rate-limit')>()),
+  allowRegistrationVerificationResend: resendLimiter,
+}));
 vi.mock('../../lib/registration-resend-eligibility', () => ({ findPendingRegistrationForResend: resendEligibility }));
 vi.mock('../../lib/registration-resend-delivery', () => ({ deliverPendingVerificationResend: resendDelivery }));
 vi.mock('bcryptjs', () => ({
@@ -212,6 +215,45 @@ describe('auth.resendRegistrationVerification', () => {
     const api = await caller();
     await expect(api.resendRegistrationVerification({ email })).resolves.toEqual({ accepted: true });
     expect(resendEligibility).not.toHaveBeenCalled();
+    expect(resendDelivery).not.toHaveBeenCalled();
+  });
+
+  test('one overlapping resend per case-insensitive email gets the same public acknowledgement', async () => {
+    stubEnv(config);
+    resendEligibility.mockResolvedValue(pending);
+
+    let completeDelivery!: () => void;
+    const delivery = new Promise<void>((resolve) => {
+      completeDelivery = resolve;
+    });
+    resendDelivery.mockImplementationOnce(() => delivery);
+
+    const api = await caller(null, new Headers({ 'x-real-ip': '192.0.2.238' }));
+    const first = api.resendRegistrationVerification({ email });
+    await vi.waitFor(() => expect(resendDelivery).toHaveBeenCalledOnce());
+
+    const overlapping = await api.resendRegistrationVerification({ email: 'PERSON@MAIL.RU' });
+    expect(overlapping).toEqual({ accepted: true });
+    expect(resendDelivery).toHaveBeenCalledTimes(1);
+
+    completeDelivery();
+    await expect(first).resolves.toEqual(overlapping);
+    await expect(api.resendRegistrationVerification({ email })).resolves.toEqual(overlapping);
+    expect(resendDelivery).toHaveBeenCalledTimes(2);
+    expect(mockDb.user.create).not.toHaveBeenCalled();
+    expect(mockDb.user.update).not.toHaveBeenCalled();
+  });
+
+  test('database errors and ineligible accounts have indistinguishable responses', async () => {
+    stubEnv(config);
+    const api = await caller();
+    const missing = await api.resendRegistrationVerification({ email });
+    resendEligibility.mockRejectedValueOnce(new Error('database unavailable'));
+    const failed = await api.resendRegistrationVerification({ email });
+    resendEligibility.mockResolvedValueOnce(null);
+    const unavailable = await api.resendRegistrationVerification({ email });
+    expect(failed).toEqual(missing);
+    expect(unavailable).toEqual(missing);
     expect(resendDelivery).not.toHaveBeenCalled();
   });
 

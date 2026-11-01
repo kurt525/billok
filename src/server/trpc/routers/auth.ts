@@ -13,7 +13,10 @@ import { confirmRegistrationEmail } from '../../lib/registration-email-confirmat
 import { findUsersByEmail } from '../../lib/user-email';
 import { isAllowedRegistrationEmailDomain } from '../../lib/registration-email-domain';
 import { createAndDeliverPendingInviteRegistration } from '../../lib/registration-invite-delivery';
-import { allowRegistrationVerificationResend } from '../../lib/registration-resend-rate-limit';
+import {
+  allowRegistrationVerificationResend,
+  runExclusiveRegistrationVerificationResend,
+} from '../../lib/registration-resend-rate-limit';
 import { findPendingRegistrationForResend } from '../../lib/registration-resend-eligibility';
 import { deliverPendingVerificationResend } from '../../lib/registration-resend-delivery';
 import { isSupportedSbpBankId, normalizeSbpPhone, SBP_BANKS } from '@/lib/sbp-banks';
@@ -159,16 +162,20 @@ export const authRouter = createTRPCRouter({
       }
 
       try {
-        const pending = await findPendingRegistrationForResend(ctx.db, input.email);
-        if (pending) {
-          await deliverPendingVerificationResend({
-            db: ctx.db,
-            userId: pending.userId,
-            inviteCode: pending.inviteCode,
-            email: pending.email,
-            ...emailConfig,
-          });
-        }
+        // The limiter is checked first. Overlapping requests for the same
+        // normalized address share one in-process SMTP operation.
+        await runExclusiveRegistrationVerificationResend(input.email, async () => {
+          const pending = await findPendingRegistrationForResend(ctx.db, input.email);
+          if (pending) {
+            await deliverPendingVerificationResend({
+              db: ctx.db,
+              userId: pending.userId,
+              inviteCode: pending.inviteCode,
+              email: pending.email,
+              ...emailConfig,
+            });
+          }
+        });
       } catch {
         // Never expose SMTP, account or invitation errors to the caller.
       }

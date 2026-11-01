@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { rateLimit } = vi.hoisted(() => ({ rateLimit: vi.fn() }));
 vi.mock('./rate-limit', () => ({ checkRateLimit: rateLimit }));
 
-import { allowRegistrationVerificationResend } from './registration-resend-rate-limit';
+import {
+  allowRegistrationVerificationResend,
+  runExclusiveRegistrationVerificationResend,
+} from './registration-resend-rate-limit';
 
 const HOUR_MS = 60 * 60 * 1000;
 const emailHash = createHash('sha256').update('person@mail.ru').digest('hex');
@@ -48,5 +51,39 @@ describe('registration email resend budget', () => {
       false,
     );
     expect(rateLimit).toHaveBeenNthCalledWith(3, 'auth:registration-resend:email:' + emailHash, 3, HOUR_MS);
+  });
+});
+
+describe('in-process concurrent registration resend suppression', () => {
+  it('coalesces case-insensitive overlapping requests and releases the key after success', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const firstWork = vi.fn(() => pending);
+    const secondWork = vi.fn(async () => undefined);
+
+    const first = runExclusiveRegistrationVerificationResend('Person@MAIL.RU', firstWork);
+    await runExclusiveRegistrationVerificationResend('person@mail.ru', secondWork);
+    expect(firstWork).toHaveBeenCalledOnce();
+    expect(secondWork).not.toHaveBeenCalled();
+
+    release();
+    await first;
+    await runExclusiveRegistrationVerificationResend('person@mail.ru', secondWork);
+    expect(secondWork).toHaveBeenCalledOnce();
+  });
+
+  it('releases a held address on a failed delivery without locking unrelated email', async () => {
+    const failed = vi.fn(async () => {
+      throw new Error('SMTP unavailable');
+    });
+    const unrelated = vi.fn(async () => undefined);
+    await expect(runExclusiveRegistrationVerificationResend('person@mail.ru', failed)).rejects.toThrow(
+      'SMTP unavailable',
+    );
+    await runExclusiveRegistrationVerificationResend('other@mail.su', unrelated);
+    await runExclusiveRegistrationVerificationResend('person@mail.ru', unrelated);
+    expect(unrelated).toHaveBeenCalledTimes(2);
   });
 });
