@@ -157,7 +157,7 @@ test('malformed email confirmation link shows a Russian error without consuming 
   });
 
   await page.goto('/verify-email?token=invalid', { waitUntil: 'networkidle' });
-  const error = page.getByRole('alert');
+  const error = page.getByRole('alert').filter({ hasText: 'Ссылка недействительна' });
   await expect(error).toContainText('Ссылка недействительна, уже использована или срок её действия истёк.');
   await expect(page.getByRole('button', { name: 'Подтвердить адрес' })).toHaveCount(0);
   expect(confirmations, 'invalid link must not consume or send a token').toBe(0);
