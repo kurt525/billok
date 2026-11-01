@@ -183,6 +183,61 @@ test('malformed email confirmation link shows a Russian error without consuming 
   await expect(page).toHaveURL(/\/login$/);
 });
 
+// Expired and already-consumed links share one BAD_REQUEST from the server.
+// Confirm only after a user tap; never retry a one-time token automatically.
+test('expired or used email confirmation link shows a safe Russian error without retrying', async ({ page }) => {
+  test.setTimeout(45_000);
+  const token = 'C'.repeat(43);
+  let confirmations = 0;
+  await page.route('**/api/trpc/auth.confirmEmail*', async (route) => {
+    confirmations++;
+    expect(route.request().method()).toBe('POST');
+    await route.fulfill({
+      status: 400,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          error: {
+            json: {
+              message: 'Email confirmation link is invalid',
+              code: -32600,
+              data: { code: 'BAD_REQUEST', httpStatus: 400, path: 'auth.confirmEmail' },
+            },
+          },
+        },
+      ]),
+    });
+  });
+
+  await page.setViewportSize({ width: 320, height: 700 });
+  await page.goto('/verify-email?token=' + token, { waitUntil: 'networkidle' });
+  expect(confirmations, 'opening a used link must not submit it').toBe(0);
+  const confirm = page.getByRole('button', { name: 'Подтвердить адрес' });
+  await expect(confirm).toBeVisible();
+  await confirm.click();
+
+  const invalid = page.getByRole('alert').filter({ hasText: 'Ссылка недействительна' });
+  await expect(invalid).toContainText(
+    'Ссылка недействительна, уже использована или срок её действия истёк. Запросите новую ссылку.',
+  );
+  await expect(page.getByRole('button', { name: /Подтвердить адрес|Повторить подтверждение/ })).toHaveCount(0);
+  expect(confirmations, 'an invalid token must be submitted once, never retried').toBe(1);
+  await expect(page.getByRole('status')).toHaveCount(0);
+
+  await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+  const login = page.getByRole('link', { name: 'Перейти ко входу' });
+  for (const width of [320, 430, 720]) {
+    await page.setViewportSize({ width, height: 320 });
+    await expect(invalid).toBeVisible();
+    await login.scrollIntoViewIfNeeded();
+    await expect(login).toBeInViewport();
+    expect((await login.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(documentWidth).toBeLessThanOrEqual(width + 1);
+  }
+  expect(confirmations).toBe(1);
+});
+
 // Security-relevant UI check: email scanners can render GET links, so only an
 // explicit button click may consume the one-time confirmation token.
 test('registration email link requires a tap before POST confirmation', async ({ page }) => {
