@@ -122,6 +122,39 @@ jobs:
           npm run db:seed
           BILLOK_QA_FIXTURES=1 npx tsx e2e/seed-mobile-receipt.ts > "$RUNNER_TEMP/billok-mobile-receipt.env"
           cat "$RUNNER_TEMP/billok-mobile-receipt.env" >> "$GITHUB_ENV"
+      - name: Start isolated QA SMTP and seed invited auth fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This is a short-lived loopback STARTTLS service with no external mail.
+          cert_dir="$(mktemp -d "$RUNNER_TEMP/billok-qa-mail-XXXXXX")"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' \
+            -keyout "$cert_dir/key.pem" -out "$cert_dir/cert.pem" >/dev/null 2>&1
+          smtp_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+          http_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+          test "$smtp_port" != "$http_port"
+          export BILLOK_QA_SMTP_PORT="$smtp_port"
+          export BILLOK_QA_MAIL_HTTP_PORT="$http_port"
+          export BILLOK_QA_TLS_KEY="$cert_dir/key.pem"
+          export BILLOK_QA_TLS_CERT="$cert_dir/cert.pem"
+          echo "BILLOK_QA_SMTP_PORT=$smtp_port" >> "$GITHUB_ENV"
+          echo "BILLOK_QA_MAIL_HTTP_PORT=$http_port" >> "$GITHUB_ENV"
+          echo "NODE_EXTRA_CA_CERTS=$cert_dir/cert.pem" >> "$GITHUB_ENV"
+          setsid node scripts/qa-smtp-mailbox.mjs \
+            > "$RUNNER_TEMP/billok-qa-mail.log" 2>&1 < /dev/null &
+          echo "BILLOK_QA_SMTP_PID=$!" >> "$GITHUB_ENV"
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:$http_port/health" >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          if [[ "$ready" != 1 ]]; then
+            cat "$RUNNER_TEMP/billok-qa-mail.log"
+            exit 1
+          fi
+          BILLOK_QA_FIXTURES=1 npx tsx e2e/seed-mobile-auth-journey.ts >> "$GITHUB_ENV"
+
       # The browser suite checks exactly the same optimized React/Next.js
       # rendering mode used by the released website, not dev/Turbopack route
       # trees which can remain mounted during transitions.
@@ -149,6 +182,12 @@ jobs:
           echo "UPLOAD_DIR=$UPLOAD_DIR" >> "$GITHUB_ENV"
           export ADMIN_EMAIL="alice@example.com"
           echo "ADMIN_EMAIL=$ADMIN_EMAIL" >> "$GITHUB_ENV"
+          # Disposable QA-only SMTP; production mail settings are unchanged.
+          export EMAIL_SERVER_HOST=127.0.0.1
+          export EMAIL_SERVER_PORT="$BILLOK_QA_SMTP_PORT"
+          export EMAIL_SERVER_USER=billok-qa
+          export EMAIL_SERVER_PASSWORD=qa-local-only
+          export EMAIL_FROM=noreply@billok.ru
           # Only this isolated, disposable mobile QA server uses shared seed
           # accounts. Six independent specs log in as Alice in <15 minutes,
           # exceeding the production per-email limit (5). Next.js also
@@ -183,12 +222,18 @@ jobs:
           # Trusted-branch-only runner; Playwright container has its own browser libraries.
           docker run --rm --network host --ipc=host \
             -e "BASE_URL=http://127.0.0.1:$BILLOK_QA_PORT" -e CI=1 \
+            -e "BILLOK_QA_MAILBOX_URL=http://127.0.0.1:$BILLOK_QA_MAIL_HTTP_PORT" \
+            -e "BILLOK_QA_AUTH_INVITE_RU=$BILLOK_QA_AUTH_INVITE_RU" \
+            -e "BILLOK_QA_AUTH_INVITE_SU=$BILLOK_QA_AUTH_INVITE_SU" \
+            -e "BILLOK_QA_EXPIRED_CONFIRM=$BILLOK_QA_EXPIRED_CONFIRM" \
+            -e "BILLOK_QA_EXPIRED_RESET=$BILLOK_QA_EXPIRED_RESET" \
             -e "BILLOK_MOBILE_RECEIPT_ID=$BILLOK_MOBILE_RECEIPT_ID" \
             -e "BILLOK_MOBILE_GROUP_ID=$BILLOK_MOBILE_GROUP_ID" \
             -v "$GITHUB_WORKSPACE:/work:ro" -w /work \
             mcr.microsoft.com/playwright:v1.64.1-noble \
             node /work/node_modules/@playwright/test/cli.js test \
               e2e/billok-mobile-public.spec.ts \
+              e2e/billok-mobile-auth-journey.spec.ts \
               e2e/billok-mobile-authenticated.spec.ts \
               e2e/billok-mobile-wide.spec.ts \
               e2e/billok-mobile-receipt-actions.spec.ts \
@@ -201,6 +246,9 @@ jobs:
         run: |
           if [[ -n "${BILLOK_QA_PID:-}" ]]; then
             kill -- "-$BILLOK_QA_PID" 2>/dev/null || true
+          if [[ -n "${BILLOK_QA_SMTP_PID:-}" ]]; then
+            kill -- "-$BILLOK_QA_SMTP_PID" 2>/dev/null || true
+          fi
           fi
           if [[ -n "${BILLOK_QA_DB_CONTAINER:-}" ]]; then
             docker rm -f "$BILLOK_QA_DB_CONTAINER" >/dev/null 2>&1 || true
