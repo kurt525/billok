@@ -245,6 +245,43 @@ test('mobile SBP profile persists phone and selected bank without verification c
   await expect(page.getByTestId('sbp-bank-radio-100000000273')).toBeChecked();
   await checkPhoneLayout(page, 320);
 
+  // Complete mobile profile acceptance: real name editing and contact data,
+  // persistence through the profile API, enlarged Android font, short keyboard
+  // viewport, touch targets, and all expected phone/foldable widths.
+  const name = page.locator('#name');
+  const originalName = await name.inputValue();
+  const changedName = 'Участник BillOK ' + 'ОченьДлинноеИмя'.repeat(4);
+  expect(changedName.length).toBeLessThanOrEqual(100);
+  await name.fill(changedName);
+  await page.getByTestId('sbp-phone-input').fill('8 (999) 123-45-67');
+  await page.getByTestId('save-profile-btn').click();
+  await expect(page.getByText('Профиль обновлён!')).toBeVisible();
+  await page.reload({ waitUntil: 'networkidle' });
+  await expect(page.locator('#name')).toHaveValue(changedName);
+  await expect(page.getByTestId('sbp-phone-input')).toHaveValue('+79991234567');
+  await expect(page.locator('#email')).toBeDisabled();
+
+  await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 360 });
+    const profileName = page.locator('#name');
+    const profilePhone = page.getByTestId('sbp-phone-input');
+    const save = page.getByTestId('save-profile-btn');
+    for (const field of [profileName, profilePhone]) {
+      await field.focus();
+      await field.scrollIntoViewIfNeeded();
+      await expect(field).toBeInViewport();
+      expect((await field.boundingBox())!.height, 'input touch height at ' + width).toBeGreaterThanOrEqual(44);
+    }
+    await save.scrollIntoViewIfNeeded();
+    await expect(save).toBeInViewport();
+    const saveBounds = await save.boundingBox();
+    expect(saveBounds!.height, 'save touch height at ' + width).toBeGreaterThanOrEqual(44);
+    expect(saveBounds!.width, 'save touch width at ' + width).toBeGreaterThanOrEqual(44);
+    await checkPhoneLayout(page, width);
+  }
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.locator('#name').fill(originalName);
   // Leave the disposable CI account as it was before this test.
   await page.getByTestId('sbp-phone-input').fill('');
   await page.getByTestId('sbp-bank-option-none').click();
