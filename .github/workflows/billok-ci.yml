@@ -92,6 +92,8 @@ jobs:
           echo "$node_bin" >> "$GITHUB_PATH"
       - name: Install application dependencies
         run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Verify disposable QA mail MIME decoding
+        run: node --import tsx --test scripts/qa-smtp-links.test.mjs
       - name: Generate Prisma client
         run: npx prisma generate
       - name: Start isolated temporary PostgreSQL
@@ -246,9 +248,9 @@ jobs:
         run: |
           if [[ -n "${BILLOK_QA_PID:-}" ]]; then
             kill -- "-$BILLOK_QA_PID" 2>/dev/null || true
+          fi
           if [[ -n "${BILLOK_QA_SMTP_PID:-}" ]]; then
             kill -- "-$BILLOK_QA_SMTP_PID" 2>/dev/null || true
-          fi
           fi
           if [[ -n "${BILLOK_QA_DB_CONTAINER:-}" ]]; then
             docker rm -f "$BILLOK_QA_DB_CONTAINER" >/dev/null 2>&1 || true

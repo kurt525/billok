@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import net from 'node:net';
 import tls from 'node:tls';
 import http from 'node:http';
+import { linksInMessage } from './qa-smtp-links.mjs';
 
 const smtpPort = Number(process.env.BILLOK_QA_SMTP_PORT);
 const httpPort = Number(process.env.BILLOK_QA_MAIL_HTTP_PORT);
@@ -22,18 +23,6 @@ const secureContext = tls.createSecureContext({
 const messages = [];
 const maxMessages = 60;
 const maxMessageBytes = 120_000;
-
-function linksInMessage(raw) {
-  // Undo quoted-printable soft-wrap and encoding; never log raw tokens.
-  const unfolded = raw
-    .replace(/=\r?\n/g, '')
-    .replace(/=3D/gi, '=')
-    .replace(/&amp;/gi, '&');
-  const matches = unfolded.match(
-    /https?:\/\/(?:127\.0\.0\.1|localhost):\d+\/(?:verify-email|reset-password)\?token=[A-Za-z0-9_-]{43}/g,
-  );
-  return [...new Set(matches ?? [])];
-}
 
 const smtp = net.createServer((initialSocket) => {
   const state = { secure: false, loggedIn: false, data: false, bytes: 0, lines: [], recipient: '', authStage: '' };
