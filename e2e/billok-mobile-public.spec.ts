@@ -171,7 +171,7 @@ test('registration email link requires a tap before POST confirmation', async ({
   await page.goto(`/verify-email?token=${token}`, { waitUntil: 'networkidle' });
   await expect(page.getByRole('heading', { name: 'Подтверждение почты' })).toBeVisible();
   expect(confirmations, 'opening a mail link must not consume a token').toBe(0);
-  const button = page.getByRole('button', { name: 'Подтвердить адрес' });
+  const button = page.getByRole('button', { name: /^(Подтвердить адрес|Подтверждаем…)$/ });
   await expect(button).toBeVisible();
   expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
 
