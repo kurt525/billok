@@ -5,14 +5,22 @@ vi.mock('next/headers', () => ({
   cookies: vi.fn().mockResolvedValue({ get: vi.fn().mockReturnValue(null) }),
 }));
 vi.mock('@/server/auth', () => ({ auth: vi.fn() }));
-const { cleanupGate, confirmationGate, signupGate } = vi.hoisted(() => ({
-  cleanupGate: vi.fn(),
-  confirmationGate: vi.fn(),
-  signupGate: vi.fn(),
-}));
+const { cleanupGate, confirmationGate, signupGate, resendLimiter, resendEligibility, resendDelivery } = vi.hoisted(
+  () => ({
+    cleanupGate: vi.fn(),
+    confirmationGate: vi.fn(),
+    signupGate: vi.fn(),
+    resendLimiter: vi.fn(),
+    resendEligibility: vi.fn(),
+    resendDelivery: vi.fn(),
+  }),
+);
 vi.mock('../../lib/registration-cleanup-trigger', () => ({ runRegistrationCleanupIfDue: cleanupGate }));
 vi.mock('../../lib/registration-email-confirmation', () => ({ confirmRegistrationEmail: confirmationGate }));
 vi.mock('../../lib/registration-invite-delivery', () => ({ createAndDeliverPendingInviteRegistration: signupGate }));
+vi.mock('../../lib/registration-resend-rate-limit', () => ({ allowRegistrationVerificationResend: resendLimiter }));
+vi.mock('../../lib/registration-resend-eligibility', () => ({ findPendingRegistrationForResend: resendEligibility }));
+vi.mock('../../lib/registration-resend-delivery', () => ({ deliverPendingVerificationResend: resendDelivery }));
 vi.mock('bcryptjs', () => ({
   default: { hash: vi.fn().mockResolvedValue('hashed'), compare: vi.fn() },
 }));
@@ -51,6 +59,9 @@ beforeEach(() => {
   cleanupGate.mockResolvedValue(undefined);
   confirmationGate.mockResolvedValue(true);
   signupGate.mockResolvedValue({ email: 'ada@mail.ru', expiresAt: new Date('2026-11-01T12:30:00Z') });
+  resendLimiter.mockReturnValue(true);
+  resendEligibility.mockResolvedValue(null);
+  resendDelivery.mockResolvedValue({ requestId: 'replacement-1', expiresAt: new Date('2026-11-01T12:30:00Z') });
   vi.stubEnv('REGISTER_RATE_LIMIT_MAX', '9999');
   // Start from a clean auth env regardless of the developer's .env
   for (const key of [
@@ -136,6 +147,83 @@ describe('auth.confirmEmail', () => {
     await api.confirmEmail({ token });
     await expect(api.confirmEmail({ token })).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
     expect(confirmationGate).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('auth.resendRegistrationVerification', () => {
+  const email = 'person@mail.ru';
+  const pending = { userId: 'pending-1', inviteCode: 'my-invite', email };
+  const config = {
+    NEXTAUTH_URL: 'https://billok.ru',
+    EMAIL_SERVER_HOST: 'smtp.reg.ru',
+    EMAIL_SERVER_PORT: '465',
+    EMAIL_SERVER_USER: 'noreply@billok.ru',
+    EMAIL_SERVER_PASSWORD: 'smtp-test-only',
+    EMAIL_FROM: 'BillOK <noreply@billok.ru>',
+  };
+
+  test('returns the same acknowledgement for unknown and eligible addresses', async () => {
+    stubEnv(config);
+    const api = await caller();
+    const unknown = await api.resendRegistrationVerification({ email });
+    expect(unknown).toEqual({ accepted: true });
+    expect(resendDelivery).not.toHaveBeenCalled();
+
+    resendEligibility.mockResolvedValueOnce(pending);
+    const eligible = await api.resendRegistrationVerification({ email });
+    expect(eligible).toEqual(unknown);
+    expect(resendDelivery).toHaveBeenCalledExactlyOnceWith({
+      db: mockDb,
+      ...pending,
+      siteOrigin: 'https://billok.ru',
+      from: config.EMAIL_FROM,
+      server: {
+        host: 'smtp.reg.ru',
+        port: 465,
+        secure: true,
+        requireTLS: false,
+        auth: { user: config.EMAIL_SERVER_USER, pass: config.EMAIL_SERVER_PASSWORD },
+      },
+    });
+    expect(JSON.stringify(eligible)).not.toContain('my-invite');
+    expect(JSON.stringify(eligible)).not.toContain(email);
+  });
+
+  test('does not look up accounts when the rate limit is exceeded', async () => {
+    stubEnv(config);
+    resendLimiter.mockReturnValueOnce(false);
+    const api = await caller();
+    await expect(api.resendRegistrationVerification({ email })).resolves.toEqual({ accepted: true });
+    expect(resendEligibility).not.toHaveBeenCalled();
+    expect(resendDelivery).not.toHaveBeenCalled();
+  });
+
+  test('skips delivery for disallowed domain endings', async () => {
+    stubEnv(config);
+    const api = await caller();
+    await expect(api.resendRegistrationVerification({ email: 'person@example.com' })).resolves.toEqual({
+      accepted: true,
+    });
+    expect(resendEligibility).not.toHaveBeenCalled();
+    expect(resendDelivery).not.toHaveBeenCalled();
+  });
+
+  test('does not look up accounts or send without SMTP configuration', async () => {
+    const api = await caller();
+    await expect(api.resendRegistrationVerification({ email })).resolves.toEqual({ accepted: true });
+    expect(resendEligibility).not.toHaveBeenCalled();
+    expect(resendDelivery).not.toHaveBeenCalled();
+  });
+
+  test('does not disclose SMTP failures or create an authenticated session', async () => {
+    stubEnv(config);
+    resendEligibility.mockResolvedValueOnce(pending);
+    resendDelivery.mockRejectedValueOnce(new Error('SMTP failure'));
+    const api = await caller();
+    await expect(api.resendRegistrationVerification({ email })).resolves.toEqual({ accepted: true });
+    expect(resendDelivery).toHaveBeenCalledOnce();
+    expect(mockDb.user.create).not.toHaveBeenCalled();
+    expect(mockDb.user.update).not.toHaveBeenCalled();
   });
 });
 

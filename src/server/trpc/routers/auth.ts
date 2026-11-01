@@ -13,6 +13,9 @@ import { confirmRegistrationEmail } from '../../lib/registration-email-confirmat
 import { findUsersByEmail } from '../../lib/user-email';
 import { isAllowedRegistrationEmailDomain } from '../../lib/registration-email-domain';
 import { createAndDeliverPendingInviteRegistration } from '../../lib/registration-invite-delivery';
+import { allowRegistrationVerificationResend } from '../../lib/registration-resend-rate-limit';
+import { findPendingRegistrationForResend } from '../../lib/registration-resend-eligibility';
+import { deliverPendingVerificationResend } from '../../lib/registration-resend-delivery';
 import { isSupportedSbpBankId, normalizeSbpPhone, SBP_BANKS } from '@/lib/sbp-banks';
 
 export const authRouter = createTRPCRouter({
@@ -135,6 +138,41 @@ export const authRouter = createTRPCRouter({
         throw new AppError('BAD_REQUEST', 'emailVerificationLinkInvalid');
       }
       return { verified: true };
+    }),
+
+  // Return the same acknowledgement for unknown, verified and rate-limited
+  // addresses; never reveal user, invitation or token information.
+  resendRegistrationVerification: publicProcedure
+    .input(z.object({ email: z.string().email().max(254) }))
+    .mutation(async ({ ctx, input }) => {
+      const acknowledgement = { accepted: true as const };
+      if (!allowRegistrationVerificationResend(ctx.headers, input.email)) return acknowledgement;
+      if (!isAllowedRegistrationEmailDomain(input.email) || !parseAuthConfig(process.env).passwordLogin) {
+        return acknowledgement;
+      }
+
+      let emailConfig: ReturnType<typeof readRegistrationEmailConfig>;
+      try {
+        emailConfig = readRegistrationEmailConfig(process.env);
+      } catch {
+        return acknowledgement;
+      }
+
+      try {
+        const pending = await findPendingRegistrationForResend(ctx.db, input.email);
+        if (pending) {
+          await deliverPendingVerificationResend({
+            db: ctx.db,
+            userId: pending.userId,
+            inviteCode: pending.inviteCode,
+            email: pending.email,
+            ...emailConfig,
+          });
+        }
+      } catch {
+        // Never expose SMTP, account or invitation errors to the caller.
+      }
+      return acknowledgement;
     }),
 
   changePassword: protectedProcedure
