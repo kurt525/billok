@@ -7,6 +7,7 @@ import { useSearchParams } from 'next/navigation';
 import { CheckCircle2, MailCheck, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { RegistrationEmailResendForm } from '@/components/auth/registration-email-resend-form';
 import { Link } from '@/i18n/navigation';
 import { trpc } from '@/lib/trpc';
 
@@ -69,9 +70,12 @@ function VerificationContent() {
             {t('success')}
           </p>
         ) : expired ? (
-          <p role="alert" className="rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
-            {t('invalid')}
-          </p>
+          <div className="min-w-0 space-y-4">
+            <p role="alert" className="rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
+              {t('invalid')}
+            </p>
+            <RegistrationEmailResendForm />
+          </div>
         ) : (
           <>
             {retry && (

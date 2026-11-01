@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
+import { RegistrationEmailResendForm } from '@/components/auth/registration-email-resend-form';
 import { Separator } from '@/components/ui/separator';
 import { Receipt } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
@@ -145,6 +146,7 @@ function RegisterForm() {
             <p className="text-base font-semibold">{t('confirmationPendingTitle')}</p>
             <p className="break-words text-sm">{t('confirmationPendingDescription', { email: confirmationEmail })}</p>
             <p className="text-sm text-muted-foreground">{t('confirmationPendingSpamHint')}</p>
+            <RegistrationEmailResendForm initialEmail={confirmationEmail} />
             <Link href={loginHref} className="inline-flex min-h-11 items-center font-medium text-primary underline">
               {t('signIn')}
             </Link>

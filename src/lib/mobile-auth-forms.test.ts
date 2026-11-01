@@ -55,6 +55,17 @@ describe('Mobile authentication and verification forms', () => {
     expect(messages.resendVerification.accepted).toContain('«Спам»');
   });
 
+  it('offers the protected resend form only for invalid links and pending registration', () => {
+    const verify = source('src/app/[locale]/(auth)/verify-email/page.tsx');
+    const register = source('src/app/[locale]/(auth)/register/page.tsx');
+    expect(verify).toContain(') : expired ? (');
+    expect(verify).toContain('<RegistrationEmailResendForm />');
+    expect(verify.indexOf('<RegistrationEmailResendForm />')).toBeLessThan(verify.indexOf("{t('backToLogin')}"));
+    expect(register).toContain('<RegistrationEmailResendForm initialEmail={confirmationEmail} />');
+    expect(register).toContain("setPassword('')");
+    expect(register).not.toContain('initialEmail={password}');
+  });
+
   it('keeps the confirmation email page back action tappable', () => {
     const verify = source('src/app/[locale]/(auth)/verify-request/page.tsx');
     expect(verify).toContain('inline-flex min-h-11 items-center justify-center');

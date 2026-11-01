@@ -128,7 +128,10 @@ test('invited mobile signup waits for email confirmation without automatic sign-
   await expect(pending).toContainText('Проверьте электронную почту');
   await expect(pending).toContainText(email);
   await expect(pending).toContainText('30 минут');
-  await expect(page.locator('form')).toHaveCount(0);
+  const resendForm = page.getByTestId('registration-resend-form');
+  await expect(resendForm).toBeVisible();
+  await expect(resendForm.getByLabel('Электронная почта для регистрации')).toHaveValue(email);
+  await expect(page.locator('form')).toHaveCount(1);
   await expect(page).toHaveURL(/\/register$/);
   expect(registrations).toBe(1);
   expect(credentialsSignIns, 'a pending registration must not start a credentials session').toBe(0);
@@ -144,6 +147,22 @@ test('invited mobile signup waits for email confirmation without automatic sign-
     const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
     expect(documentWidth).toBeLessThanOrEqual(width + 1);
   }
+
+  let resendRequests = 0;
+  await page.route('**/api/trpc/auth.resendRegistrationVerification*', async (route) => {
+    resendRequests++;
+    expect(route.request().method()).toBe('POST');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{ result: { data: { json: { accepted: true } } } }]),
+    });
+  });
+  await resendForm.getByRole('button', { name: 'Запросить новую ссылку' }).click();
+  await expect(resendForm.getByRole('status')).toContainText('Если для этого адреса доступно подтверждение');
+  expect(resendRequests).toBe(1);
+  expect(credentialsSignIns).toBe(0);
+  await expect(page).toHaveURL(/\/register$/);
 });
 
 // Malformed or missing email confirmation links are never sent to the API.
@@ -341,4 +360,71 @@ test('internal Russian legacy routes still enforce authentication', async ({ pag
   await page.goto('/ru/admin', { waitUntil: 'domcontentloaded' });
   await expect(page).toHaveURL(/\/login\?callbackUrl=/);
   await expect(page.locator('html')).toHaveAttribute('lang', 'ru');
+});
+
+// Reusing the same safe resend form on expired/invalid links: mobile viewport,
+// pending request suppression, success acknowledgement and network error.
+test('mobile confirmation recovery handles concurrent taps and network errors at 320–720px', async ({ page }) => {
+  test.setTimeout(80_000);
+  let requestCount = 0;
+  let confirmCount = 0;
+  let releaseDelivery!: () => void;
+  const deliveryGate = new Promise<void>((resolve) => {
+    releaseDelivery = resolve;
+  });
+  await page.route('**/api/trpc/auth.confirmEmail*', async (route) => {
+    confirmCount++;
+    await route.abort();
+  });
+  const resendPattern = '**/api/trpc/auth.resendRegistrationVerification*';
+  await page.route(resendPattern, async (route) => {
+    requestCount++;
+    expect(route.request().method()).toBe('POST');
+    await deliveryGate;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{ result: { data: { json: { accepted: true } } } }]),
+    });
+  });
+  await page.setViewportSize({ width: 320, height: 700 });
+  await page.goto('/verify-email?token=invalid', { waitUntil: 'networkidle' });
+  const form = page.getByTestId('registration-resend-form');
+  const email = form.getByLabel('Электронная почта для регистрации');
+  const submit = form.getByRole('button', { name: 'Запросить новую ссылку' });
+  await expect(form).toBeVisible();
+  await email.fill('someone@mail.ru');
+  await submit.click();
+  await expect(form.getByRole('button', { name: 'Отправляем запрос…' })).toBeDisabled();
+  await email.press('Enter');
+  expect(requestCount).toBe(1);
+
+  releaseDelivery();
+  await expect(form.getByRole('status')).toContainText('Если для этого адреса доступно подтверждение');
+  expect(requestCount).toBe(1);
+  expect(confirmCount).toBe(0);
+  await expect(page.getByRole('button', { name: 'Подтвердить адрес' })).toHaveCount(0);
+
+  // A failed connection is distinct from a generic success acknowledgement,
+  // and does not reveal whether the address is registered.
+  await page.unroute(resendPattern);
+  await page.route(resendPattern, async (route) => {
+    requestCount++;
+    await route.abort('failed');
+  });
+  await form.getByRole('button', { name: 'Запросить новую ссылку' }).click();
+  await expect(form.getByRole('alert')).toContainText('Не удалось выполнить запрос');
+  expect(requestCount).toBe(2);
+
+  await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 320 });
+    await email.scrollIntoViewIfNeeded();
+    expect((await email.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await submit.scrollIntoViewIfNeeded();
+    expect((await submit.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await expect(submit).toBeInViewport();
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+    expect(overflow, 'horizontal overflow at ' + width + ' CSS px').toBeLessThanOrEqual(1);
+  }
 });
