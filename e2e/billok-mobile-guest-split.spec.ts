@@ -881,25 +881,24 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
     await page.getByTestId('rejoin-person-1').click();
     await expect(page.getByTestId('claim-item-0')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('claim-item-0')).toContainText('Пицца');
-    await page.getByTestId('split-claim-item-0').click();
-    const parts = page.getByTestId('split-qty-input-0');
-    await expect(parts).toHaveValue('1');
-    expect((await parts.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-    await page.getByTestId('claim-item-0').getByRole('button', { name: 'Разделить', exact: true }).click();
-    await expect(page.getByTestId('claim-item-1')).toBeVisible({ timeout: 15_000 });
-
+    // createClaimSession expands quantity=3 into three independent claimable
+    // rows. Guests select exactly the portion they consumed; the split
+    // control is intentionally hidden once each row has quantity=1.
     const afterSplit = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
-    expect(afterSplit.items).toHaveLength(2);
-    const ownPart = afterSplit.items.findIndex(
-      (item: { quantity: number; totalPrice: number }) => item.quantity === 1 && item.totalPrice === 300,
-    );
-    expect(ownPart).toBeGreaterThanOrEqual(0);
-    const otherPart = ownPart === 0 ? 1 : 0;
-    expect(afterSplit.items[otherPart]).toMatchObject({ quantity: 2, totalPrice: 600 });
+    expect(afterSplit.items).toHaveLength(3);
+    for (const [index, item] of afterSplit.items.entries()) {
+      expect(item).toMatchObject({ name: 'Пицца', quantity: 1, totalPrice: 300 });
+      await expect(page.getByTestId('claim-item-' + index)).toBeVisible();
+      await expect(page.getByTestId('claim-item-' + index)).toHaveAttribute('aria-pressed', 'false');
+      await expect(page.getByTestId('split-claim-item-' + index)).toHaveCount(0);
+    }
 
+    const ownPart = 0;
     await page.getByTestId('claim-item-' + ownPart).click();
     await expect(page.getByTestId('claim-item-' + ownPart)).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByTestId('claim-item-' + otherPart)).toHaveAttribute('aria-pressed', 'false');
+    for (const otherPart of [1, 2]) {
+      await expect(page.getByTestId('claim-item-' + otherPart)).toHaveAttribute('aria-pressed', 'false');
+    }
     const save = page.getByTestId('save-claims-btn');
     await expect(save).toBeEnabled();
     await save.click();
@@ -909,7 +908,9 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
     await expect(page.getByTestId('claim-item-' + ownPart)).toHaveAttribute('aria-pressed', 'true', {
       timeout: 15_000,
     });
-    await expect(page.getByTestId('claim-item-' + otherPart)).toHaveAttribute('aria-pressed', 'false');
+    for (const otherPart of [1, 2]) {
+      await expect(page.getByTestId('claim-item-' + otherPart)).toHaveAttribute('aria-pressed', 'false');
+    }
     const saved = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     const guestIndex = saved.people.findIndex((person: { name: string }) => person.name === 'Илья');
     expect(guestIndex).toBeGreaterThanOrEqual(0);
