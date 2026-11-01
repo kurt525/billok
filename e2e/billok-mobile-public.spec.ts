@@ -149,12 +149,18 @@ test('invited mobile signup waits for email confirmation without automatic sign-
 // Security-relevant UI check: email scanners can render GET links, so only an
 // explicit button click may consume the one-time confirmation token.
 test('registration email link requires a tap before POST confirmation', async ({ page }) => {
+  test.setTimeout(60_000);
   await page.setViewportSize({ width: 320, height: 700 });
   const token = 'A'.repeat(43);
   let confirmations = 0;
+  let releaseConfirmation: () => void = () => {};
+  const confirmationDelay = new Promise<void>((resolve) => {
+    releaseConfirmation = resolve;
+  });
   await page.route('**/api/trpc/auth.confirmEmail*', async (route) => {
     confirmations++;
     expect(route.request().method()).toBe('POST');
+    await confirmationDelay;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -170,11 +176,37 @@ test('registration email link requires a tap before POST confirmation', async ({
   expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
 
   await button.click();
-  await expect(page.getByText('Адрес электронной почты подтверждён. Теперь можно войти в аккаунт.')).toBeVisible();
+  await expect(button).toBeDisabled();
+  await expect(button).toHaveText('Подтверждаем…');
   expect(confirmations).toBe(1);
+  releaseConfirmation();
+
+  await expect(page.getByRole('status')).toContainText(
+    'Адрес электронной почты подтверждён. Теперь можно войти в аккаунт.',
+  );
   await expect(page).toHaveURL(/\/verify-email$/);
-  const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
-  expect(documentWidth).toBeLessThanOrEqual(321);
+
+  // One successful confirmation stays readable with a larger Android font and
+  // short viewport at every required mobile width, including 720 CSS px.
+  await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+  const back = page.getByRole('link', { name: 'Перейти ко входу' });
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 320 });
+    await expect(page.getByRole('status')).toBeVisible();
+    await back.scrollIntoViewIfNeeded();
+    await expect(back).toBeInViewport();
+    const bounds = await back.boundingBox();
+    expect(bounds, 'login link at ' + width + 'px').not.toBeNull();
+    expect(bounds!.height).toBeGreaterThanOrEqual(44);
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(documentWidth, 'horizontal overflow at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+  }
+
+  await back.click();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByText('С возвращением!', { exact: true })).toBeVisible();
 });
 
 test.describe('mail waiting screen on wide mobile viewports', () => {
