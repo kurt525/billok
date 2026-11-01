@@ -85,6 +85,67 @@ for (const width of widths) {
   });
 }
 
+// The public registration mutation returns a pending account, not a session.
+// Stub transport only: the disposable Chromium database and SMTP are untouched.
+test('invited mobile signup waits for email confirmation without automatic sign-in', async ({ page }) => {
+  test.setTimeout(45_000);
+  const email = 'registration-mobile@mail.ru';
+  const inviteCode = 'INVITE-MOBILE-TEST';
+  let registrations = 0;
+  let credentialsSignIns = 0;
+
+  page.on('request', (request) => {
+    if (request.url().includes('/api/auth/callback/credentials')) credentialsSignIns++;
+  });
+
+  await page.route('**/api/trpc/auth.getRegistrationMode*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{ result: { data: { json: { mode: 'invite-only' } } } }]),
+    });
+  });
+
+  await page.route('**/api/trpc/auth.register*', async (route) => {
+    registrations++;
+    expect(route.request().method()).toBe('POST');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{ result: { data: { json: { email, verificationRequired: true } } } }]),
+    });
+  });
+
+  await page.setViewportSize({ width: 320, height: 700 });
+  await page.goto('/register', { waitUntil: 'networkidle' });
+  await page.getByLabel('Имя').fill('Участник');
+  await page.getByLabel('Электронная почта').fill(email);
+  await page.getByLabel('Пароль').fill('testpass123');
+  await page.getByLabel('Код приглашения').fill(inviteCode);
+  await page.getByRole('button', { name: 'Зарегистрироваться' }).click();
+
+  const pending = page.getByRole('status');
+  await expect(pending).toContainText('Проверьте электронную почту');
+  await expect(pending).toContainText(email);
+  await expect(pending).toContainText('30 минут');
+  await expect(page.locator('form')).toHaveCount(0);
+  await expect(page).toHaveURL(/\/register$/);
+  expect(registrations).toBe(1);
+  expect(credentialsSignIns, 'a pending registration must not start a credentials session').toBe(0);
+
+  for (const width of [320, 430]) {
+    await page.setViewportSize({ width, height: 320 });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const link = pending.getByRole('link', { name: 'Войти' });
+    await link.scrollIntoViewIfNeeded();
+    await expect(link).toBeInViewport();
+    const bounds = await link.boundingBox();
+    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+    const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(documentWidth).toBeLessThanOrEqual(width + 1);
+  }
+});
+
 // Security-relevant UI check: email scanners can render GET links, so only an
 // explicit button click may consume the one-time confirmation token.
 test('registration email link requires a tap before POST confirmation', async ({ page }) => {
