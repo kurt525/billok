@@ -49,6 +49,20 @@ describe('atomic registration email confirmation', () => {
       where: { tokenHash: hashEmailVerificationToken(token) },
       select: { id: true, userId: true, consumedAt: true, expiresAt: true },
     });
+    // A token never activates an account merely because its invite once
+    // existed: it must still be reserved for this user and unrevoked,
+    // unconsumed and unexpired at the confirmation instant.
+    expect(tx.systemInvite.findFirst).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        reservedById: 'user-1',
+        reservedUntil: { gt: now },
+        usedById: null,
+        usedAt: null,
+        revokedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+      select: { code: true },
+    });
     expect(tx.emailVerificationRequest.updateMany).toHaveBeenCalledWith({
       where: { id: 'request-1', userId: 'user-1', consumedAt: null, expiresAt: { gt: now } },
       data: { consumedAt: now },
