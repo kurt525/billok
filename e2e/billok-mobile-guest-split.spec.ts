@@ -858,3 +858,79 @@ test('anonymous mobile participant can join a long-name slot and edit it with to
     await owner.dispose();
   }
 });
+
+test('anonymous mobile guest selects a partial portion and keeps it after reopening', async ({ page }) => {
+  test.setTimeout(95_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  let token: string | undefined;
+  try {
+    const created = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Пицца на компанию', subtotal: 900, tax: 0, tip: 0, total: 900, currency: 'RUB' },
+      items: [{ name: 'Пицца', quantity: 3, unitPrice: 300, totalPrice: 900 }],
+      people: ['Анна', 'Илья'],
+      creatorName: 'Анна',
+      paidByName: 'Анна',
+    });
+    const body = await created.text();
+    expect(created.ok(), body).toBe(true);
+    token = JSON.parse(body).result.data.json.shareToken as string;
+
+    await page.setViewportSize({ width: 320, height: 460 });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('claim-join-form')).toBeVisible();
+    await page.getByTestId('rejoin-person-1').click();
+    await expect(page.getByTestId('claim-item-0')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('claim-item-0')).toContainText('Пицца');
+    await page.getByTestId('split-claim-item-0').click();
+    const parts = page.getByTestId('split-qty-input-0');
+    await expect(parts).toHaveValue('1');
+    expect((await parts.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await page.getByTestId('claim-item-0').getByRole('button', { name: 'Разделить', exact: true }).click();
+    await expect(page.getByTestId('claim-item-1')).toBeVisible({ timeout: 15_000 });
+
+    const afterSplit = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(afterSplit.items).toHaveLength(2);
+    const ownPart = afterSplit.items.findIndex(
+      (item: { quantity: number; totalPrice: number }) => item.quantity === 1 && item.totalPrice === 300,
+    );
+    expect(ownPart).toBeGreaterThanOrEqual(0);
+    const otherPart = ownPart === 0 ? 1 : 0;
+    expect(afterSplit.items[otherPart]).toMatchObject({ quantity: 2, totalPrice: 600 });
+
+    await page.getByTestId('claim-item-' + ownPart).click();
+    await expect(page.getByTestId('claim-item-' + ownPart)).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('claim-item-' + otherPart)).toHaveAttribute('aria-pressed', 'false');
+    const save = page.getByTestId('save-claims-btn');
+    await expect(save).toBeEnabled();
+    await save.click();
+    await expect(save).toBeDisabled({ timeout: 15_000 });
+
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.getByTestId('claim-item-' + ownPart)).toHaveAttribute('aria-pressed', 'true', {
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId('claim-item-' + otherPart)).toHaveAttribute('aria-pressed', 'false');
+    const saved = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const guestIndex = saved.people.findIndex((person: { name: string }) => person.name === 'Илья');
+    expect(guestIndex).toBeGreaterThanOrEqual(0);
+    expect(saved.assignments.filter((a: { personIndices: number[] }) => a.personIndices.includes(guestIndex))).toEqual([
+      { itemIndex: ownPart, personIndices: [guestIndex] },
+    ]);
+
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    for (const width of [320, 360, 430, 480, 600, 720]) {
+      await page.setViewportSize({ width, height: 360 });
+      const card = page.getByTestId('claim-item-' + ownPart);
+      await card.scrollIntoViewIfNeeded();
+      const rect = await card.boundingBox();
+      expect(rect).not.toBeNull();
+      expect(rect!.height).toBeGreaterThanOrEqual(44);
+      expect(rect!.x).toBeGreaterThanOrEqual(0);
+      expect(rect!.x + rect!.width).toBeLessThanOrEqual(width);
+      await fitsPhone(page);
+    }
+  } finally {
+    if (token) await trpcMutation(owner, 'guest.expireSession', { token });
+    await owner.dispose();
+  }
+});
