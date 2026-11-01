@@ -3,6 +3,7 @@ import type { PrismaClient } from '@/generated/prisma/client';
 import { logger } from './logger';
 import { sendRussianRegistrationVerificationEmail } from './email-verification-email';
 import { preparePendingVerificationResend } from './registration-resend-preparation';
+import { finalizePendingVerificationResend } from './registration-resend-finalization';
 
 /**
  * Deliver a newly prepared one-time confirmation link only to a pre-vetted
@@ -49,7 +50,21 @@ export async function deliverPendingVerificationResend(input: {
     throw error;
   }
 
-  // Finalization of older tokens is a separate step after SMTP success.
+  // The message was accepted by SMTP. Only now may older unused links be
+  // retired; never turn this best-effort step into another email delivery.
+  // A concurrent successful confirmation is handled by the conditional
+  // unverified-account predicate in the finalizer.
+  try {
+    await finalizePendingVerificationResend(input.db, {
+      userId: input.userId,
+      requestId: prepared.requestId,
+    });
+  } catch {
+    // SMTP already accepted the message: keep the new link valid and do not
+    // report failure to callers that could repeatedly trigger fresh emails.
+    logger.error('auth.registration_resend_finalization_failed', { requestId: prepared.requestId });
+  }
+
   // Deliberately do not return the secret confirmation URL.
   return { requestId: prepared.requestId, expiresAt: prepared.expiresAt };
 }

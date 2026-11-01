@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@/generated/prisma/client';
 
-const { prepare, send, logError } = vi.hoisted(() => ({
+const { prepare, send, finalize, logError } = vi.hoisted(() => ({
   prepare: vi.fn(),
   send: vi.fn(),
+  finalize: vi.fn(),
   logError: vi.fn(),
 }));
 vi.mock('./registration-resend-preparation', () => ({ preparePendingVerificationResend: prepare }));
+vi.mock('./registration-resend-finalization', () => ({ finalizePendingVerificationResend: finalize }));
 vi.mock('./email-verification-email', () => ({ sendRussianRegistrationVerificationEmail: send }));
 vi.mock('./logger', () => ({ logger: { error: logError } }));
 
@@ -33,6 +35,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   prepare.mockResolvedValue({ requestId: 'replacement-1', url, expiresAt: now });
   send.mockResolvedValue(undefined);
+  finalize.mockResolvedValue(2);
   deleteMany.mockResolvedValue({ count: 1 });
 });
 
@@ -51,6 +54,11 @@ describe('resend delivery without invalidating previous confirmation links', () 
       server: input.server,
     });
     expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(send.mock.invocationCallOrder[0]!);
+    expect(finalize).toHaveBeenCalledExactlyOnceWith(db, {
+      userId: 'pending-1',
+      requestId: 'replacement-1',
+    });
+    expect(send.mock.invocationCallOrder[0]).toBeLessThan(finalize.mock.invocationCallOrder[0]!);
     expect(response).toEqual({ requestId: 'replacement-1', expiresAt: now });
     expect(JSON.stringify(response)).not.toContain('token=');
     expect(deleteMany).not.toHaveBeenCalled();
@@ -60,6 +68,7 @@ describe('resend delivery without invalidating previous confirmation links', () 
     prepare.mockResolvedValueOnce(null);
     await expect(deliverPendingVerificationResend(input)).resolves.toBeNull();
     expect(send).not.toHaveBeenCalled();
+    expect(finalize).not.toHaveBeenCalled();
     expect(deleteMany).not.toHaveBeenCalled();
   });
 
@@ -71,6 +80,7 @@ describe('resend delivery without invalidating previous confirmation links', () 
     });
     expect(send.mock.invocationCallOrder[0]).toBeLessThan(deleteMany.mock.invocationCallOrder[0]!);
     expect(db.$transaction).not.toHaveBeenCalled();
+    expect(finalize).not.toHaveBeenCalled();
     expect(logError).not.toHaveBeenCalled();
   });
 
@@ -79,6 +89,24 @@ describe('resend delivery without invalidating previous confirmation links', () 
     deleteMany.mockRejectedValueOnce(new Error('Database unavailable'));
     await expect(deliverPendingVerificationResend(input)).rejects.toThrow('Original SMTP error');
     expect(logError).toHaveBeenCalledExactlyOnceWith('auth.registration_resend_token_cleanup_failed', {
+      requestId: 'replacement-1',
+    });
+    expect(finalize).not.toHaveBeenCalled();
+    expect(JSON.stringify(logError.mock.calls)).not.toContain(url);
+    expect(JSON.stringify(logError.mock.calls)).not.toContain(input.email);
+  });
+
+  it('does not resend or discard a delivered link when finalization fails', async () => {
+    finalize.mockRejectedValueOnce(new Error('Database unavailable'));
+    const result = await deliverPendingVerificationResend(input);
+    expect(result).toEqual({ requestId: 'replacement-1', expiresAt: now });
+    expect(send).toHaveBeenCalledOnce();
+    expect(finalize).toHaveBeenCalledExactlyOnceWith(db, {
+      userId: 'pending-1',
+      requestId: 'replacement-1',
+    });
+    expect(deleteMany).not.toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledExactlyOnceWith('auth.registration_resend_finalization_failed', {
       requestId: 'replacement-1',
     });
     expect(JSON.stringify(logError.mock.calls)).not.toContain(url);
