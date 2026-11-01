@@ -1498,7 +1498,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       ? new Set<number>()
       : withEdits(baseClaimsMap.get(personIndex) ?? new Set<number>(), localEdits.get(personIndex));
   return (
-    <div className="space-y-6 pb-[calc(10rem+env(safe-area-inset-bottom))]">
+    <div className="w-full min-w-0 max-w-full space-y-6 pb-[calc(10rem+env(safe-area-inset-bottom))]">
       {/* Header */}
       <div className="text-center space-y-1 pt-4">
         <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
@@ -1766,7 +1766,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       </div>
 
       {/* Items to claim */}
-      <div className="space-y-3">
+      <div className="w-full min-w-0 max-w-full space-y-3">
         <h3 className="font-semibold text-base">
           {t('tapToClaim')}
           {hasUnsavedChanges && (
@@ -1787,7 +1787,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             sortPosition > 0 && claimedByAnyone.has(idx) && !claimedByAnyone.has(sortedItemIndices[sortPosition - 1]!);
 
           return (
-            <div key={idx}>
+            <div key={idx} className="w-full min-w-0 max-w-full">
               {isFirstClaimed && (
                 <div className="flex items-center gap-2 py-1">
                   <div className="flex-1 h-px bg-border" />
@@ -1806,7 +1806,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                     toggleClaim(idx);
                   }
                 }}
-                className={`cursor-pointer transition-all ${
+                className={`w-full min-w-0 max-w-full cursor-pointer transition-all ${
                   isClaimed ? 'ring-2 ring-primary bg-primary/5' : 'hover:bg-muted/50'
                 }`}
                 onClick={() => toggleClaim(idx)}

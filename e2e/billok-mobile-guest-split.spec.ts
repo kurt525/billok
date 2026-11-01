@@ -922,12 +922,21 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
     for (const width of [320, 360, 430, 480, 600, 720]) {
       await page.setViewportSize({ width, height: 360 });
       const card = page.getByTestId('claim-item-' + ownPart);
+      await fitsPhone(page);
       await card.scrollIntoViewIfNeeded();
+      // A vertical jump must not leave the document horizontally scrolled.
+      await page.evaluate(() => window.scrollTo(0, window.scrollY));
       const rect = await card.boundingBox();
       expect(rect).not.toBeNull();
       expect(rect!.height).toBeGreaterThanOrEqual(44);
-      expect(rect!.x).toBeGreaterThanOrEqual(0);
-      expect(rect!.x + rect!.width).toBeLessThanOrEqual(width);
+      const geometry = await card.evaluate((element) => ({
+        scrollX: window.scrollX,
+        viewport: document.documentElement.clientWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        mainX: element.closest('main')?.getBoundingClientRect().x ?? null,
+      }));
+      expect(rect!.x, 'Card left edge at ' + width + 'px: ' + JSON.stringify(geometry)).toBeGreaterThanOrEqual(0);
+      expect(rect!.x + rect!.width, 'Card right edge at ' + width + 'px').toBeLessThanOrEqual(width);
       await fitsPhone(page);
     }
   } finally {
