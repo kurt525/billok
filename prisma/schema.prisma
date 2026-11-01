@@ -49,6 +49,21 @@ model VerificationToken {
 
 // Registration email verification. Never persist the secret from the email link.
 // Unlike Auth.js VerificationToken, this belongs to an unverified password account.
+// Dedicated reset links: neither Auth.js sign-in nor registration verification.
+model PasswordResetRequest {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique @db.VarChar(64)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+}
+
 model EmailVerificationRequest {
   id         String    @id @default(cuid())
   userId     String
@@ -87,6 +102,7 @@ model User {
   accounts        Account[]
   sessions        Session[]
   emailVerificationRequests EmailVerificationRequest[]
+  passwordResetRequests PasswordResetRequest[]
   groupMembers    GroupMember[]
   expensesPaid    Expense[]          @relation("PaidBy")
   expensesAdded   Expense[]          @relation("AddedBy")
