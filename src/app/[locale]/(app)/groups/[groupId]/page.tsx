@@ -99,7 +99,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 flex-1 items-start gap-4">
+        <div className="flex w-full min-w-0 basis-full items-start gap-4 sm:w-auto sm:flex-1 sm:basis-auto">
           <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-accent">
             <span className="text-4xl leading-none">{g.emoji}</span>
           </div>
