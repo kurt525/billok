@@ -321,6 +321,16 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
         })}
       </p>
 
+      {/* Return to the participant's private settlement view. The shared
+          summary contains no personal payment controls or identity token. */}
+      <Link
+        href={'/split/' + token + '/claim'}
+        className="flex min-h-11 w-full min-w-0 items-center justify-center rounded-lg border px-4 py-2 text-center text-sm font-medium text-primary [overflow-wrap:anywhere] hover:bg-muted"
+        data-testid="split-result-back-to-claim"
+      >
+        Вернуться к своему чеку
+      </Link>
+
       {/* CTA */}
       <div className="text-center">
         <Link href="/split" className="text-sm font-medium text-primary hover:underline">

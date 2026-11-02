@@ -505,6 +505,27 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(page.getByTestId('guest-personal-reimbursement')).toBeVisible();
     await expect(page.getByTestId('guest-personal-reimbursement')).toContainText('Борис');
     await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('4,59');
+
+    // The public summary must not replace this guest's private settlement.
+    // Navigation in both directions preserves their own total and payer.
+    await page.getByRole('link', { name: 'Посмотреть итоги' }).click();
+    await expect(page.getByTestId('split-result')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('split-result-total')).toContainText('12,01');
+    await expect(page.getByTestId('split-result-food-total')).toContainText('10,01');
+    await expect(page.getByTestId('split-result-personal-tips')).toContainText('2,00');
+    const backToClaim = page.getByTestId('split-result-back-to-claim');
+    await expect(backToClaim).toBeVisible();
+    expect((await backToClaim.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await backToClaim.click();
+    await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('4,59', {
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId('guest-personal-reimbursement')).toContainText('Борис');
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.getByTestId('finalized-bill-total')).toContainText('12,01', { timeout: 15_000 });
+    await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('4,59');
+    await fitsPhone(page);
+
     // A participant can copy the exact RUB amount (with comma and kopecks)
     // to paste into their bank app; this does not report a payment.
     await page.evaluate(() => {
