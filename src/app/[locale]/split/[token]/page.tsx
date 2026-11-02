@@ -121,6 +121,19 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
       className="space-y-6 pb-[calc(7rem+env(safe-area-inset-bottom))] max-[399px]:pb-[calc(11rem+env(safe-area-inset-bottom))]"
       data-testid="split-result"
     >
+      {/* Keep the private-claim return action ahead of long breakdowns. The
+          sticky header and footer can fully cover a link near page bottom
+          when the visible Android viewport is only 380 CSS px tall. */}
+      {/* Return to the participant's private settlement view. The shared
+          summary contains no personal payment controls or identity token. */}
+      <Link
+        href={'/split/' + token + '/claim'}
+        className="flex min-h-11 w-full min-w-0 items-center justify-center rounded-lg border px-4 py-2 text-center text-sm font-medium text-primary [overflow-wrap:anywhere] hover:bg-muted"
+        data-testid="split-result-back-to-claim"
+      >
+        Вернуться к своему чеку
+      </Link>
+
       {/* Header */}
       <div className="text-center space-y-1 pt-4">
         <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
@@ -320,16 +333,6 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
           date: format.dateTime(new Date(data.expiresAt), { dateStyle: 'long' }),
         })}
       </p>
-
-      {/* Return to the participant's private settlement view. The shared
-          summary contains no personal payment controls or identity token. */}
-      <Link
-        href={'/split/' + token + '/claim'}
-        className="flex min-h-11 w-full min-w-0 items-center justify-center rounded-lg border px-4 py-2 text-center text-sm font-medium text-primary [overflow-wrap:anywhere] hover:bg-muted"
-        data-testid="split-result-back-to-claim"
-      >
-        Вернуться к своему чеку
-      </Link>
 
       {/* CTA */}
       <div className="text-center">
