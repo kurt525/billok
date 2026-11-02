@@ -423,6 +423,45 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
     await page.reload();
     await expect(page.getByTestId('personal-tip-input')).toHaveValue('0.00', { timeout: 15_000 });
     await fitsPhone(page);
+
+    // 1.4.15.11.5.1: a shortened viewport approximates the space left
+    // when the Android keyboard is open, while large font is enabled.
+    // Both the editor and the sticky action bar must stay usable by touch.
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    for (const [width, value, savedValue] of [
+      [320, '0,01', '0.01'],
+      [360, '0,02', '0.02'],
+    ] as const) {
+      await page.setViewportSize({ width, height: 320 });
+      const tipInput = page.getByTestId('personal-tip-input');
+      const tipSave = page.getByTestId('personal-tip-save');
+      await tipInput.fill(value);
+      await expect(tipInput).toBeFocused();
+      await expect(tipSave).toBeEnabled();
+      for (const testId of ['personal-tip-input', 'personal-tip-save', 'claim-actions', 'save-claims-btn']) {
+        const bounds = await page.getByTestId(testId).evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return { left: rect.left, right: rect.right, height: rect.height };
+        });
+        expect(bounds.left, testId + ' left at ' + width + 'px').toBeGreaterThanOrEqual(0);
+        expect(bounds.right, testId + ' right at ' + width + 'px').toBeLessThanOrEqual(width);
+        expect(bounds.height, testId + ' touch height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      }
+      await fitsPhone(page);
+      await tipSave.click();
+      await expect(tipInput).toHaveValue(savedValue, { timeout: 15_000 });
+      await expect(tipSave).toBeDisabled();
+      await fitsPhone(page);
+    }
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.getByTestId('personal-tip-input')).toHaveValue('0.02', { timeout: 15_000 });
+    const afterKeyboard = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(
+      afterKeyboard.people.map((person: { name: string; tipCents: number }) => [person.name, person.tipCents]),
+    ).toEqual([
+      ['Анна', 2],
+      ['Борис', 1],
+    ]);
   } finally {
     await second.close();
     await owner.dispose();
