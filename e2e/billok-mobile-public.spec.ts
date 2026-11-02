@@ -289,13 +289,16 @@ test('registration email link requires a tap before POST confirmation', async ({
   await button.click();
   await expect(button).toBeDisabled();
   await expect(button).toHaveText('Подтверждаем…');
-  expect(confirmations).toBe(1);
+  // React sets the pending state before the POST reaches the route handler.
+  // Keep the exactly-one-request contract, but wait for the network boundary.
+  await expect.poll(() => confirmations, { timeout: 10_000 }).toBe(1);
   releaseConfirmation();
 
   await expect(page.getByRole('status')).toContainText(
     'Адрес электронной почты подтверждён. Теперь можно войти в аккаунт.',
   );
   await expect(page).toHaveURL(/\/verify-email$/);
+  expect(confirmations, 'email confirmation must be sent exactly once').toBe(1);
 
   // One successful confirmation stays readable with a larger Android font and
   // short viewport at every required mobile width, including 720 CSS px.

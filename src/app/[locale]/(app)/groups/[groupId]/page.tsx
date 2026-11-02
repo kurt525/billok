@@ -103,8 +103,8 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
           <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-accent">
             <span className="text-4xl leading-none">{g.emoji}</span>
           </div>
-          <div className="min-w-0 flex-1">
-            <h1 className="text-2xl font-bold leading-tight [overflow-wrap:anywhere]">{g.name}</h1>
+          <div className="min-w-0 flex-1 pr-2">
+            <h1 className="max-w-full break-all text-2xl font-bold leading-tight [overflow-wrap:anywhere]">{g.name}</h1>
             {g.description && (
               <p className="mt-0.5 text-sm text-muted-foreground [overflow-wrap:anywhere]">{g.description}</p>
             )}

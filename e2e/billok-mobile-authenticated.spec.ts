@@ -15,10 +15,20 @@ async function checkPhoneLayout(page: Page, width: number, allowInnerTables = fa
         return rect.width > 0 && (rect.left < -2 || rect.right > innerWidth + 2);
       })
       .slice(0, 8)
-      .map((el) => ({ tag: el.tagName, label: (el.textContent ?? '').trim().slice(0, 45) })),
+      .map((el) => ({
+        tag: el.tagName,
+        testId: el.getAttribute('data-testid'),
+        left: Math.round(el.getBoundingClientRect().left * 10) / 10,
+        right: Math.round(el.getBoundingClientRect().right * 10) / 10,
+        label: (el.textContent ?? '').trim().slice(0, 30),
+      })),
   }));
-  expect(result.viewport).toBe(width);
-  expect(result.document).toBeLessThanOrEqual(width + 1);
+  // Include precise DOM overflow evidence when mobile visualViewport sizing
+  // rounds to an extra pixel; do not accept a wider viewport as passing.
+  expect(result.viewport, 'Viewport expanded on ' + width + 'px: ' + JSON.stringify(result)).toBe(width);
+  expect(result.document, 'Document expanded on ' + width + 'px: ' + JSON.stringify(result)).toBeLessThanOrEqual(
+    width + 1,
+  );
   if (!allowInnerTables) expect(result.clipped).toEqual([]);
 }
 
