@@ -49,7 +49,7 @@ import {
   type SaveReload,
 } from '@/lib/claim-save';
 import { calculateClaimTotals, groupSizeWeights } from '@/lib/split-calculator';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
@@ -1290,10 +1290,16 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
         {/* Actions */}
         <div className="space-y-3">
-          <Button className="w-full" nativeButton={false} render={<Link href={`/split/${token}`} />}>
+          <Link
+            href={'/split/' + token}
+            className={buttonVariants({
+              className: 'min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center leading-tight',
+            })}
+            data-testid="guest-view-summary-link"
+          >
             <ArrowRight className="mr-2 h-4 w-4" />
             {t('viewSummary')}
-          </Button>
+          </Link>
           <Button variant="outline" className="w-full" onClick={copyResultLink} data-testid="copy-link-btn">
             <Link2 className="mr-2 h-4 w-4" />
             {t('copyLink')}
