@@ -401,11 +401,24 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
     await visitorTip.fill('3,50');
     await visitor.getByTestId('personal-tip-save').click();
     await expect(visitorTip).toHaveValue('3.50', { timeout: 15_000 });
+    await expect(visitor.getByTestId('personal-tip-save')).toBeDisabled();
+    await visitor.reload({ waitUntil: 'networkidle' });
+    await expect(visitorTip).toHaveValue('3.50', { timeout: 15_000 });
+
+    // The minimum positive tip is one kopeck. Editing Boris's amount from
+    // another mobile device must never change Anna's saved zero tip.
+    await visitorTip.fill('0,01');
+    await expect(visitor.getByTestId('personal-tip-save')).toBeEnabled();
+    await visitor.getByTestId('personal-tip-save').click();
+    await expect(visitorTip).toHaveValue('0.01', { timeout: 15_000 });
+    await visitor.reload({ waitUntil: 'networkidle' });
+    await expect(visitorTip).toHaveValue('0.01', { timeout: 15_000 });
+    await fitsPhone(visitor);
 
     const state = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     expect(state.people.map((person: { name: string; tipCents: number }) => [person.name, person.tipCents])).toEqual([
       ['Анна', 0],
-      ['Борис', 350],
+      ['Борис', 1],
     ]);
     await page.reload();
     await expect(page.getByTestId('personal-tip-input')).toHaveValue('0.00', { timeout: 15_000 });
