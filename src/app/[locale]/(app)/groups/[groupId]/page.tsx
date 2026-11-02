@@ -336,11 +336,16 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
 
       {/* Expenses */}
       <div>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">{t('detail.expenses')}</h2>
+        <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-2">
+          <h2 className="min-w-0 text-lg font-semibold">{t('detail.expenses')}</h2>
           {!g.archivedAt && (
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" nativeButton={false} render={<Link href={`/groups/${groupId}/expenses/new`} />}>
+            <div className="flex min-w-0 max-w-full flex-wrap gap-2">
+              <Button
+                size="sm"
+                className="min-h-11 min-w-0 max-w-full whitespace-normal text-center"
+                nativeButton={false}
+                render={<Link href={`/groups/${groupId}/expenses/new`} />}
+              >
                 <Plus className="mr-2 h-4 w-4" />
                 {t('detail.addExpense')}
               </Button>
