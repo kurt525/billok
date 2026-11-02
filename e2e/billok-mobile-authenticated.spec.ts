@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { createTestGroup, users } from './helpers';
 
 // Only against the disposable seed database created by the Mobile Chromium CI job.
 const widths = [320, 360, 393, 412] as const;
@@ -287,4 +288,51 @@ test('mobile SBP profile persists phone and selected bank without verification c
   await page.getByTestId('sbp-bank-option-none').click();
   await page.getByTestId('save-profile-btn').click();
   await expect(page.getByText('Профиль обновлён!')).toBeVisible();
+});
+
+test('long group history links stay readable and open on all mobile widths', async ({ page }) => {
+  test.setTimeout(125_000);
+  const longName = 'СемейнаяГруппа'.repeat(6);
+  expect(longName.length).toBeLessThanOrEqual(100);
+  const testGroup = await createTestGroup(users.alice.email, users.alice.password, [], longName);
+  try {
+    await signInAsSeedAdmin(page);
+    for (const width of [320, 360, 430, 480, 600, 720]) {
+      await page.setViewportSize({ width, height: 380 });
+      await page.goto('/groups', { waitUntil: 'networkidle' });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      const historyLink = page.locator('a[href="/groups/' + testGroup.groupId + '"]');
+      await expect(historyLink).toBeVisible({ timeout: 15_000 });
+      const name = historyLink.getByText(longName, { exact: true });
+      await expect(name).toBeVisible();
+      const nameSizes = await name.evaluate((el) => ({
+        client: el.clientWidth,
+        content: el.scrollWidth,
+      }));
+      expect(nameSizes.content, 'Full group name at ' + width + 'px').toBeLessThanOrEqual(nameSizes.client + 1);
+      const linkBounds = await historyLink.boundingBox();
+      expect(linkBounds).not.toBeNull();
+      expect(linkBounds!.height).toBeGreaterThanOrEqual(44);
+      expect(linkBounds!.x).toBeGreaterThanOrEqual(0);
+      expect(linkBounds!.x + linkBounds!.width).toBeLessThanOrEqual(width);
+      await checkPhoneLayout(page, width);
+      await historyLink.click();
+      await expect(page).toHaveURL(new RegExp('/groups/' + testGroup.groupId + '$'));
+      const heading = page.getByRole('heading', { name: longName });
+      await expect(heading).toBeVisible({ timeout: 15_000 });
+      const headingSizes = await heading.evaluate((el) => ({
+        client: el.clientWidth,
+        content: el.scrollWidth,
+      }));
+      expect(headingSizes.content, 'Full group heading at ' + width + 'px').toBeLessThanOrEqual(
+        headingSizes.client + 1,
+      );
+      await checkPhoneLayout(page, width);
+      await page.goBack({ waitUntil: 'networkidle' });
+      await expect(historyLink).toBeVisible({ timeout: 15_000 });
+      await checkPhoneLayout(page, width);
+    }
+  } finally {
+    await testGroup.dispose();
+  }
 });
