@@ -1300,7 +1300,12 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             <ArrowRight className="mr-2 h-4 w-4" />
             {t('viewSummary')}
           </Link>
-          <Button variant="outline" className="w-full" onClick={copyResultLink} data-testid="copy-link-btn">
+          <Button
+            variant="outline"
+            className="min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center leading-tight"
+            onClick={copyResultLink}
+            data-testid="copy-link-btn"
+          >
             <Link2 className="mr-2 h-4 w-4" />
             {t('copyLink')}
           </Button>

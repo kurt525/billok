@@ -565,6 +565,54 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('4,59');
     await fitsPhone(page);
 
+    // 1.4.15.11.5.2: mobile end-to-end acceptance for the finalized receipt.
+    // Hard reload at each width avoids carrying stale mobile viewport offsets.
+    for (const width of [320, 360, 430, 480, 600, 720]) {
+      await page.setViewportSize({ width, height: 380 });
+      await page.reload({ waitUntil: 'networkidle' });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      await expect(page.getByTestId('finalized-bill-total')).toContainText('12,01', { timeout: 15_000 });
+      await expect(page.getByTestId('finalized-food-total')).toContainText('10,01');
+      await expect(page.getByTestId('finalized-waiter-tip-total')).toContainText('2,00');
+      await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('4,59');
+      await expect(page.getByTestId('guest-personal-reimbursement')).toContainText('Борис');
+      await fitsPhone(page);
+      for (const testId of ['guest-view-summary-link', 'copy-link-btn', 'personal-link-btn']) {
+        const bounds = await page.getByTestId(testId).evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return { left: rect.left, right: rect.right, height: rect.height };
+        });
+        expect(bounds.left, testId + ' left at ' + width + 'px').toBeGreaterThanOrEqual(0);
+        expect(bounds.right, testId + ' right at ' + width + 'px').toBeLessThanOrEqual(width);
+        expect(bounds.height, testId + ' touch height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      }
+
+      await page.getByTestId('guest-view-summary-link').click();
+      await expect(page.getByTestId('split-result')).toBeVisible({ timeout: 15_000 });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      await expect(page.getByTestId('split-result-total')).toContainText('12,01');
+      await expect(page.getByTestId('split-result-food-total')).toContainText('10,01');
+      await expect(page.getByTestId('split-result-personal-tips')).toContainText('2,00');
+      await fitsPhone(page);
+      for (const testId of ['split-result-back-to-claim', 'copy-link-btn', 'share-btn']) {
+        const bounds = await page.getByTestId(testId).evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return { left: rect.left, right: rect.right, height: rect.height };
+        });
+        expect(bounds.left, testId + ' left at ' + width + 'px').toBeGreaterThanOrEqual(0);
+        expect(bounds.right, testId + ' right at ' + width + 'px').toBeLessThanOrEqual(width);
+        expect(bounds.height, testId + ' touch height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      }
+      await page.getByTestId('split-result-back-to-claim').click();
+      await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('4,59', {
+        timeout: 15_000,
+      });
+      await expect(page.getByTestId('guest-personal-reimbursement')).toContainText('Борис');
+      await fitsPhone(page);
+    }
+    // Restore a normal font before testing the remaining payment workflow.
+    await page.reload({ waitUntil: 'networkidle' });
+
     // A participant can copy the exact RUB amount (with comma and kopecks)
     // to paste into their bank app; this does not report a payment.
     await page.evaluate(() => {
