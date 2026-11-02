@@ -268,19 +268,27 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
   // The creator's own history must fit small phones, and the delete action
   // must be reachable without relying on a mouse or accidentally deleting.
   const receiptToken = new URL(shareUrl).pathname.split('/').at(-1);
-  for (const width of [320, 412]) {
+  for (const width of [320, 360, 430, 480, 600, 720]) {
     await page.setViewportSize({ width, height: 460 });
     await page.goto('/splits', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
     await expect(page.getByTestId('splits-page')).toBeVisible();
+    const historyLink = page.locator('a[href$="/split/' + receiptToken + '"]');
     const historyCard = page.locator('[data-testid^="split-card-"]').filter({
-      has: page.locator('a[href$="/split/' + receiptToken + '"]'),
+      has: historyLink,
     });
     await expect(historyCard).toBeVisible();
     await expect(historyCard).toContainText('Ужин в кафе');
     await fitsPhone(page);
     const cardRect = await historyCard.boundingBox();
+    expect(cardRect).not.toBeNull();
     expect(cardRect!.x).toBeGreaterThanOrEqual(0);
     expect(cardRect!.x + cardRect!.width).toBeLessThanOrEqual(width);
+    const linkRect = await historyLink.boundingBox();
+    expect(linkRect).not.toBeNull();
+    expect(linkRect!.height).toBeGreaterThanOrEqual(44);
+    expect(linkRect!.x).toBeGreaterThanOrEqual(0);
+    expect(linkRect!.x + linkRect!.width).toBeLessThanOrEqual(width);
     const remove = historyCard.locator('button[aria-label]');
     expect((await remove.boundingBox())!.width).toBeGreaterThanOrEqual(44);
     expect((await remove.boundingBox())!.height).toBeGreaterThanOrEqual(44);
@@ -303,6 +311,14 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
       await page.setViewportSize({ width: 320, height: 460 });
       await expect(historyCard).toBeVisible();
     }
+
+    // Open the finalized saved receipt from history with a real touch click.
+    // This must work on all six widths, not just by typing the public URL.
+    await historyLink.click();
+    await expect(page).toHaveURL(new RegExp('/split/' + receiptToken + '$'));
+    await expect(page.getByTestId('split-result')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('person-card-1')).toContainText(longGuestName);
+    await fitsPhone(page);
   }
 
   const otherDevice = await browser.newContext({
