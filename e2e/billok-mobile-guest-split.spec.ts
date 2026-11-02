@@ -918,44 +918,48 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
       { itemIndex: ownPart, personIndices: [guestIndex] },
     ]);
 
-    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    // Treat each viewport as a fresh phone launch. Resizing an already
+    // scrolled mobile-emulated page can retain a visual-viewport offset
+    // which makes Playwright boundingBox report false negative x values.
     for (const width of [320, 360, 430, 480, 600, 720]) {
       await page.setViewportSize({ width, height: 360 });
+      await page.reload({ waitUntil: 'networkidle' });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
       const card = page.getByTestId('claim-item-' + ownPart);
+      await expect(card).toHaveAttribute('aria-pressed', 'true', { timeout: 15_000 });
       await fitsPhone(page);
-      // Move only vertically, like a person scrolling the receipt. Playwright's
-      // scrollIntoViewIfNeeded can scroll nested horizontal containers while
-      // resizing a mobile viewport, shifting the element despite scrollX=0.
-      await card.evaluate((element) => {
-        const bounds = element.getBoundingClientRect();
-        window.scrollTo({ left: 0, top: Math.max(0, window.scrollY + bounds.top - 16), behavior: 'instant' });
+
+      // The DOM rectangle is measured against the actual visual viewport,
+      // rather than mixing Playwright's mobile boundingBox coordinate space
+      // with the page's CSS-layout viewport.
+      const geometry = await card.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const visual = window.visualViewport;
+        const visibleLeft = visual?.offsetLeft ?? 0;
+        const visibleWidth = visual?.width ?? document.documentElement.clientWidth;
+        return {
+          cardLeft: rect.left,
+          cardRight: rect.right,
+          cardHeight: rect.height,
+          visibleLeft,
+          visibleRight: visibleLeft + visibleWidth,
+          visualScale: visual?.scale ?? 1,
+          documentWidth: document.documentElement.scrollWidth,
+          viewportWidth: document.documentElement.clientWidth,
+          scrollX: window.scrollX,
+          mainLeft: element.closest('main')?.getBoundingClientRect().left ?? null,
+        };
       });
-      const rect = await card.boundingBox();
-      expect(rect).not.toBeNull();
-      expect(rect!.height).toBeGreaterThanOrEqual(44);
-      const geometry = await card.evaluate((element) => ({
-        scrollX: window.scrollX,
-        viewport: document.documentElement.clientWidth,
-        documentWidth: document.documentElement.scrollWidth,
-        mainX: element.closest('main')?.getBoundingClientRect().x ?? null,
-        ancestors: (() => {
-          const result: { tag: string; left: number; scrollLeft: number; scrollWidth: number; clientWidth: number }[] =
-            [];
-          for (let parent = element.parentElement; parent && result.length < 12; parent = parent.parentElement) {
-            const rect = parent.getBoundingClientRect();
-            result.push({
-              tag: parent.tagName,
-              left: Math.round(rect.left),
-              scrollLeft: parent.scrollLeft,
-              scrollWidth: parent.scrollWidth,
-              clientWidth: parent.clientWidth,
-            });
-          }
-          return result;
-        })(),
-      }));
-      expect(rect!.x, 'Card left edge at ' + width + 'px: ' + JSON.stringify(geometry)).toBeGreaterThanOrEqual(0);
-      expect(rect!.x + rect!.width, 'Card right edge at ' + width + 'px').toBeLessThanOrEqual(width);
+      expect(geometry.cardHeight, 'Touch height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(
+        geometry.cardLeft - geometry.visibleLeft,
+        'Card is clipped at left on ' + width + 'px: ' + JSON.stringify(geometry),
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        geometry.visibleRight - geometry.cardRight,
+        'Card is clipped at right on ' + width + 'px: ' + JSON.stringify(geometry),
+      ).toBeGreaterThanOrEqual(0);
+      expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewportWidth + 1);
       await fitsPhone(page);
     }
   } finally {
