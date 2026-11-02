@@ -974,6 +974,15 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
         geometry.visibleRight - geometry.cardRight,
         'Card is clipped at right on ' + width + 'px: ' + JSON.stringify(geometry),
       ).toBeGreaterThanOrEqual(0);
+      for (const testId of ['personal-link-btn', 'claim-actions', 'save-claims-btn']) {
+        const bounds = await page.getByTestId(testId).evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return { left: rect.left, right: rect.right, height: rect.height };
+        });
+        expect(bounds.left, testId + ' left at ' + width + 'px').toBeGreaterThanOrEqual(0);
+        expect(bounds.right, testId + ' right at ' + width + 'px').toBeLessThanOrEqual(width);
+        expect(bounds.height, testId + ' touch height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      }
       expect(
         geometry.documentWidth,
         'Document overflow on ' + width + 'px: ' + JSON.stringify(geometry),

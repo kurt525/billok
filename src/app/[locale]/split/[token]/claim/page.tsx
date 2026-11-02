@@ -1011,7 +1011,14 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // This person's own link for their other devices (joined or finalized view), with the
   // warning shown before anything is sent
   const personalLinkButton = personToken && (
-    <Button type="button" variant="outline" size="sm" onClick={sharePersonalLink} data-testid="personal-link-btn">
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={sharePersonalLink}
+      className="min-h-11 w-full min-w-0 max-w-full whitespace-normal [overflow-wrap:anywhere] text-center leading-tight sm:w-auto"
+      data-testid="personal-link-btn"
+    >
       <MonitorSmartphone className="mr-2 h-4 w-4" />
       {t('continueOnAnotherDevice')}
     </Button>
@@ -2043,10 +2050,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
       {/* Save button - sticky bottom */}
       <div
-        className="fixed inset-x-0 bottom-0 z-10 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
+        className="fixed inset-x-0 bottom-0 z-10 box-border w-screen min-w-0 max-w-[100vw] max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
         data-testid="claim-actions"
       >
-        <div className="mx-auto max-w-lg">
+        <div className="mx-auto w-full min-w-0 max-w-lg">
           {/* Finalize button -- only when no unsaved changes and all items claimed */}
           {!hasAnyUnsavedChanges &&
             personToken &&
