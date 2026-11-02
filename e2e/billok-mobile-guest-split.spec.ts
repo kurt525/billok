@@ -948,6 +948,21 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
           viewportWidth: document.documentElement.clientWidth,
           scrollX: window.scrollX,
           mainLeft: element.closest('main')?.getBoundingClientRect().left ?? null,
+          // Structural diagnostics only: no labels, URLs, tokens or user data.
+          overflowingElements: [...document.querySelectorAll<HTMLElement>('body *')]
+            .filter((node) => {
+              const bounds = node.getBoundingClientRect();
+              return bounds.width > 0 && bounds.right > document.documentElement.clientWidth + 1;
+            })
+            .slice(0, 12)
+            .map((node) => ({
+              tag: node.tagName,
+              testId: node.getAttribute('data-testid'),
+              sonner: node.hasAttribute('data-sonner-toaster') || node.hasAttribute('data-sonner-toast'),
+              x: Math.round(node.getBoundingClientRect().x),
+              right: Math.round(node.getBoundingClientRect().right),
+              width: Math.round(node.getBoundingClientRect().width),
+            })),
         };
       });
       expect(geometry.cardHeight, 'Touch height at ' + width + 'px').toBeGreaterThanOrEqual(44);
@@ -959,7 +974,10 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
         geometry.visibleRight - geometry.cardRight,
         'Card is clipped at right on ' + width + 'px: ' + JSON.stringify(geometry),
       ).toBeGreaterThanOrEqual(0);
-      expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+      expect(
+        geometry.documentWidth,
+        'Document overflow on ' + width + 'px: ' + JSON.stringify(geometry),
+      ).toBeLessThanOrEqual(geometry.viewportWidth + 1);
       await fitsPhone(page);
     }
   } finally {
