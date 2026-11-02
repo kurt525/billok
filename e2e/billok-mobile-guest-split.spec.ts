@@ -307,6 +307,10 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
       const cancel = dialog.getByRole('button', { name: 'Отмена' });
       await cancel.scrollIntoViewIfNeeded();
       await expect(cancel).toBeInViewport();
+      const cancelBounds = await cancel.boundingBox();
+      expect(cancelBounds).not.toBeNull();
+      expect(cancelBounds!.height).toBeGreaterThanOrEqual(44);
+      expect(cancelBounds!.width).toBeGreaterThanOrEqual(44);
       await cancel.click();
       await page.setViewportSize({ width: 320, height: 460 });
       await expect(historyCard).toBeVisible();

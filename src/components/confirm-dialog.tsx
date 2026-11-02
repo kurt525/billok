@@ -47,14 +47,26 @@ export function ConfirmDialog({
 
   return (
     <AlertDialog open={open} onOpenChange={(next) => onOpenChange(next)}>
-      <AlertDialogContent>
+      <AlertDialogContent
+        className="
+          min-h-0
+          [@media(max-height:320px)]:top-4
+          [@media(max-height:320px)]:bottom-4
+          [@media(max-height:320px)]:h-auto
+          [@media(max-height:320px)]:max-h-none
+          [@media(max-height:320px)]:translate-y-0
+        "
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>{shown.title}</AlertDialogTitle>
           <AlertDialogDescription>{shown.description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>{cancelLabel ?? tc('actions.cancel')}</AlertDialogCancel>
+          <AlertDialogCancel className="min-h-11 whitespace-normal">
+            {cancelLabel ?? tc('actions.cancel')}
+          </AlertDialogCancel>
           <AlertDialogAction
+            className="min-h-11 whitespace-normal"
             variant={destructive ? 'destructive' : 'default'}
             onClick={() => {
               // A second click while it animates closed doesn't run the action again
