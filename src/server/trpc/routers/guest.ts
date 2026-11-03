@@ -571,7 +571,8 @@ export const guestRouter = createTRPCRouter({
     if (!split) {
       throw new AppError('NOT_FOUND', 'splitNotFound');
     }
-    if (split.expiresAt < new Date()) {
+    const guestLinkExpired = split.expiresAt < new Date();
+    if (guestLinkExpired) {
       // Guest links expire; only the active registered creator may view their
       // finalized receipt afterward through their own account history.
       if (split.status !== GuestSplitStatus.FINALIZED || !split.userId || split.userId !== ctx.session?.user?.id) {
@@ -613,6 +614,7 @@ export const guestRouter = createTRPCRouter({
       paidByIndex: split.paidByIndex,
       payerVenmoHandle: split.payerVenmoHandle,
       isCreator: !!split.userId && split.userId === ctx.session?.user?.id,
+      archivedCreatorView: guestLinkExpired,
       isPayer: (() => {
         if (!ctx.session?.user?.name) return false;
         const people = split.people as GuestSessionPerson[];

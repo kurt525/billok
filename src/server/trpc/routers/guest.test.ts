@@ -338,6 +338,7 @@ describe('BillOK private finalized history after guest link expiry', () => {
     const view = await (await caller(signedIn)).getSplit({ token: 'archived-link' });
     expect(view).toMatchObject({
       isCreator: true,
+      archivedCreatorView: true,
       receiptData: { total: 1000, currency: 'RUB' },
       items: [{ name: 'Блюдо', totalPrice: 1000 }],
       summary: [{ total: 1000 }],
@@ -380,6 +381,7 @@ describe('BillOK private finalized history after guest link expiry', () => {
     mockDb.guestSplit.findUnique.mockResolvedValue({ ...expired(), expiresAt: new Date(Date.now() + 86_400_000) });
     const view = await (await caller()).getSplit({ token: 'archived-link' });
     expect(view.isCreator).toBe(false);
+    expect(view.archivedCreatorView).toBe(false);
     expect(mockDb.user.findUnique).not.toHaveBeenCalled();
   });
 });

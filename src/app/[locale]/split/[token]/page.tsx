@@ -78,7 +78,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
   }
 
   const data = split.data!;
-  const expiredCreatorHistory = data.isCreator && new Date(data.expiresAt).getTime() < Date.now();
+  const expiredCreatorHistory = data.archivedCreatorView;
   const currency = data.receiptData.currency;
   // Saved shares are the definitive settlement, including personal tips.
   const finalizedTotal = data.summary.reduce((sum, person) => sum + person.total, 0);
