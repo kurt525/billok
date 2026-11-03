@@ -508,3 +508,66 @@ test('long expense history stays readable and opens at six mobile widths', async
     await group.dispose();
   }
 });
+
+test('mobile admin user controls remain touch-friendly with delete confirmation', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await page.goto('/admin', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const section = page.getByTestId('admin-user-management');
+    await expect(section).toBeVisible({ timeout: 15_000 });
+    const search = section.getByRole('textbox', { name: 'Поиск пользователей' });
+    await expect(search).toBeVisible();
+    await expect(search).toHaveAttribute('placeholder', /Поиск/);
+
+    for (const filter of ['all', 'active', 'suspended', 'placeholder']) {
+      const button = section.getByTestId('admin-users-filter-' + filter);
+      await expect(button).toBeVisible();
+      const bounds = await button.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.height, 'Admin status filter at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(bounds!.width, 'Admin status filter at ' + width + 'px').toBeGreaterThanOrEqual(44);
+    }
+    const searchBounds = await search.boundingBox();
+    expect(searchBounds!.height, 'Admin search at ' + width + 'px').toBeGreaterThanOrEqual(44);
+
+    await search.fill('bob@example.com');
+    const row = section.locator('tbody tr').filter({ hasText: 'bob@example.com' });
+    await expect(row).toHaveCount(1, { timeout: 15_000 });
+    const deleteButton = row.getByRole('button', { name: /Удалить пользователя/ });
+    await deleteButton.scrollIntoViewIfNeeded();
+    await expect(deleteButton).toBeVisible();
+    const delBounds = await deleteButton.boundingBox();
+    expect(delBounds!.width, 'Admin delete action width at ' + width + 'px').toBeGreaterThanOrEqual(44);
+    expect(delBounds!.height, 'Admin delete action height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+    await deleteButton.click();
+
+    const dialog = page.getByTestId('admin-user-delete-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('Bob');
+    const cancel = dialog.getByRole('button', { name: 'Отмена' });
+    const confirm = dialog.getByRole('button', { name: 'Удалить', exact: true });
+    for (const button of [cancel, confirm]) {
+      const bounds = await button.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.height, 'Admin confirm action at ' + width + 'px').toBeGreaterThanOrEqual(44);
+    }
+    const dialogRect = await dialog.boundingBox();
+    expect(dialogRect).not.toBeNull();
+    expect(dialogRect!.x, 'Admin dialog left at ' + width + 'px').toBeGreaterThanOrEqual(0);
+    expect(dialogRect!.x + dialogRect!.width, 'Admin dialog right at ' + width + 'px').toBeLessThanOrEqual(width);
+    expect(dialogRect!.height, 'Admin dialog height at ' + width + 'px').toBeLessThanOrEqual(380);
+    await cancel.click();
+    await expect(dialog).toBeHidden();
+
+    const layout = await page.evaluate(() => ({
+      viewport: innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+    }));
+    expect(layout.viewport, 'Admin viewport width at ' + width + 'px').toBe(width);
+    expect(layout.documentWidth, 'Admin document overflow at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+  }
+});
