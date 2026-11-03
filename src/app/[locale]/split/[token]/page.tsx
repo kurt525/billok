@@ -78,6 +78,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
   }
 
   const data = split.data!;
+  const expiredCreatorHistory = data.isCreator && new Date(data.expiresAt).getTime() < Date.now();
   const currency = data.receiptData.currency;
   // Saved shares are the definitive settlement, including personal tips.
   const finalizedTotal = data.summary.reduce((sum, person) => sum + person.total, 0);
@@ -127,11 +128,11 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
       {/* Return to the participant's private settlement view. The shared
           summary contains no personal payment controls or identity token. */}
       <Link
-        href={'/split/' + token + '/claim'}
+        href={expiredCreatorHistory ? '/splits' : '/split/' + token + '/claim'}
         className="flex min-h-11 w-full min-w-0 items-center justify-center rounded-lg border px-4 py-2 text-center text-sm font-medium text-primary [overflow-wrap:anywhere] hover:bg-muted"
         data-testid="split-result-back-to-claim"
       >
-        Вернуться к своему чеку
+        {expiredCreatorHistory ? t('backToHistory') : 'Вернуться к своему чеку'}
       </Link>
 
       {/* Header */}
@@ -329,9 +330,9 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
 
       {/* Expiry notice */}
       <p className="text-xs text-center text-muted-foreground">
-        {t('expiresOn', {
-          date: format.dateTime(new Date(data.expiresAt), { dateStyle: 'long' }),
-        })}
+        {expiredCreatorHistory
+          ? t('expiredCreatorHistory')
+          : t('expiresOn', { date: format.dateTime(new Date(data.expiresAt), { dateStyle: 'long' }) })}
       </p>
 
       {/* CTA */}
@@ -347,7 +348,11 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
 
       {/* Share buttons - sticky bottom */}
       <div
-        className="fixed inset-x-0 bottom-0 z-10 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
+        className={
+          expiredCreatorHistory
+            ? 'hidden'
+            : 'fixed inset-x-0 bottom-0 z-10 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]'
+        }
         data-testid="split-result-actions"
       >
         <div className="mx-auto flex max-w-lg min-w-0 gap-2 max-[399px]:flex-col">

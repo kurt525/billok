@@ -231,6 +231,8 @@
     "shareOf": "({fraction} of {price})",
     "total": "Total",
     "receiptDetails": "Receipt details",
+    "backToHistory": "Back to bill history",
+    "expiredCreatorHistory": "The guest link expired. This finalized bill is still available in your signed-in account history.",
     "expiresOn": "This split link expires on {date}.",
     "or": "or",
     "createAccount": "Create an account",

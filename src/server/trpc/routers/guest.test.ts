@@ -315,6 +315,75 @@ describe('new shared receipts use RUB exclusively', () => {
   });
 });
 
+describe('BillOK private finalized history after guest link expiry', () => {
+  const expired = () => ({
+    id: 'archived-1',
+    shareToken: 'archived-link',
+    userId: 'user-1',
+    status: 'FINALIZED',
+    expiresAt: new Date(Date.now() - 86_400_000),
+    createdAt: new Date('2026-10-01T00:00:00.000Z'),
+    receiptData: { merchantName: 'Ужин', subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'RUB' },
+    items: [{ name: 'Блюдо', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
+    people: [{ name: 'Организатор', personToken: '11111111-1111-4111-8111-111111111111' }],
+    assignments: [{ itemIndex: 0, personIndices: [0] }],
+    summary: [{ personIndex: 0, name: 'Организатор', itemTotal: 1000, tax: 0, tip: 0, total: 1000 }],
+    paidByIndex: 0,
+    payerVenmoHandle: null,
+  });
+
+  beforeEach(() => mockDb.guestSplit.findUnique.mockResolvedValue(expired()));
+
+  test('active creator reads an old finalized bill without writing or leaking identities', async () => {
+    const view = await (await caller(signedIn)).getSplit({ token: 'archived-link' });
+    expect(view).toMatchObject({
+      isCreator: true,
+      receiptData: { total: 1000, currency: 'RUB' },
+      items: [{ name: 'Блюдо', totalPrice: 1000 }],
+      summary: [{ total: 1000 }],
+    });
+    expect(mockDb.user.findUnique).toHaveBeenCalledWith({
+      where: { id: 'user-1' },
+      select: { suspendedAt: true },
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    expect(JSON.stringify(view)).not.toContain('11111111-1111-4111-8111-111111111111');
+  });
+
+  test('anonymous guests and unrelated accounts cannot view an expired link', async () => {
+    for (const session of [null, { user: { id: 'user-2' } }]) {
+      await expect((await caller(session)).getSplit({ token: 'archived-link' })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      });
+    }
+    expect(mockDb.user.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('deleted or suspended owner cannot use a stale session to read archived bills', async () => {
+    for (const user of [{ suspendedAt: new Date() }, null]) {
+      mockDb.user.findUnique.mockResolvedValueOnce(user);
+      await expect((await caller(signedIn)).getSplit({ token: 'archived-link' })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      });
+    }
+  });
+
+  test('expired CLAIMING drafts never become available in private finalized history', async () => {
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...expired(), status: 'CLAIMING' });
+    await expect((await caller(signedIn)).getSplit({ token: 'archived-link' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(mockDb.user.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('a finalized share link not yet expired still works for guests', async () => {
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...expired(), expiresAt: new Date(Date.now() + 86_400_000) });
+    const view = await (await caller()).getSplit({ token: 'archived-link' });
+    expect(view.isCreator).toBe(false);
+    expect(mockDb.user.findUnique).not.toHaveBeenCalled();
+  });
+});
+
 describe('share tokens longer than any real one (#208)', () => {
   // Share tokens are 25-character cuids; 64 leaves room and bounds the limiter keys built from them
   const long = 'x'.repeat(65);

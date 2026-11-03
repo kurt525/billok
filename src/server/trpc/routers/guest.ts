@@ -572,7 +572,16 @@ export const guestRouter = createTRPCRouter({
       throw new AppError('NOT_FOUND', 'splitNotFound');
     }
     if (split.expiresAt < new Date()) {
-      throw new AppError('NOT_FOUND', 'splitExpired');
+      // Guest links expire; only the active registered creator may view their
+      // finalized receipt afterward through their own account history.
+      if (split.status !== GuestSplitStatus.FINALIZED || !split.userId || split.userId !== ctx.session?.user?.id) {
+        throw new AppError('NOT_FOUND', 'splitExpired');
+      }
+      const creator = await ctx.db.user.findUnique({
+        where: { id: split.userId },
+        select: { suspendedAt: true },
+      });
+      if (!creator || creator.suspendedAt) throw new AppError('NOT_FOUND', 'splitExpired');
     }
     if (split.status !== GuestSplitStatus.FINALIZED) {
       throw new AppError('CONFLICT', 'splitNotFinalized');
