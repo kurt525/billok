@@ -819,3 +819,99 @@ test('mobile admin announcement controls remain accessible at six widths', async
   }
   expect(writes).toBe(0);
 });
+
+test('mobile admin activity and audit tables scroll inside cards at six widths', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+  let mockedQueries = 0;
+  let writes = 0;
+  const longName = 'МобильныйЖурналОченьДлинноеНазваниеБезПробелов'.repeat(6);
+  await page.route('**/api/trpc/**', async (route) => {
+    const procedures = new URL(route.request().url()).pathname.split('/api/trpc/')[1]?.split(',') ?? [];
+    if (route.request().method() !== 'GET') {
+      writes++;
+      await route.abort();
+      return;
+    }
+    const activityIndex = procedures.indexOf('admin.getGlobalActivity');
+    const auditIndex = procedures.indexOf('admin.getAuditLog');
+    if (activityIndex < 0 && auditIndex < 0) {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const body = await response.json();
+    const entries = Array.isArray(body) ? body : [body];
+    if (activityIndex >= 0) {
+      const item = entries[activityIndex];
+      expect(item?.result?.data).toBeDefined();
+      item.result.data.json = {
+        items: [
+          {
+            id: 'mobile-activity-row',
+            type: 'EXPENSE_CREATED',
+            userName: longName,
+            groupName: longName,
+            createdAt: '2026-10-27T10:00:00.000Z',
+          },
+        ],
+        nextCursor: 'mobile-activity-next',
+      };
+      mockedQueries++;
+    }
+    if (auditIndex >= 0) {
+      const item = entries[auditIndex];
+      expect(item?.result?.data).toBeDefined();
+      item.result.data.json = {
+        items: [
+          {
+            id: 'mobile-audit-row',
+            action: 'INVITE_CREATED',
+            adminName: longName,
+            metadata: { name: longName },
+            createdAt: '2026-10-27T10:00:00.000Z',
+          },
+        ],
+        nextCursor: 'mobile-audit-next',
+      };
+      mockedQueries++;
+    }
+    await route.fulfill({ response, json: Array.isArray(body) ? entries : entries[0] });
+  });
+
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await page.goto('/admin', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+
+    for (const ids of [
+      { section: 'admin-activity-section', scroll: 'admin-activity-scroll', load: 'admin-activity-load-more' },
+      { section: 'admin-audit-section', scroll: 'admin-audit-scroll', load: 'admin-audit-load-more' },
+    ]) {
+      const section = page.getByTestId(ids.section);
+      await expect(section).toBeVisible({ timeout: 15_000 });
+      const scroll = section.getByTestId(ids.scroll);
+      await expect(scroll).toBeVisible();
+      await expect(scroll.getByText(longName, { exact: true }).first()).toBeVisible();
+      await expect(scroll).toHaveAttribute('tabindex', '0');
+      await expect(scroll).toHaveAttribute('role', 'region');
+      const metrics = await scroll.evaluate((el) => ({ clientWidth: el.clientWidth, scrollWidth: el.scrollWidth }));
+      expect(metrics.scrollWidth, ids.scroll + ' must scroll inside its card').toBeGreaterThan(metrics.clientWidth);
+      const rect = await scroll.boundingBox();
+      expect(rect).not.toBeNull();
+      expect(rect!.x, ids.scroll + ' left at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(rect!.x + rect!.width, ids.scroll + ' right at ' + width).toBeLessThanOrEqual(width + 1);
+      const load = section.getByTestId(ids.load);
+      await expect(load).toBeVisible();
+      const button = await load.boundingBox();
+      expect(button).not.toBeNull();
+      expect(button!.height, ids.load + ' height at ' + width).toBeGreaterThanOrEqual(44);
+      expect(button!.width, ids.load + ' width at ' + width).toBeGreaterThanOrEqual(44);
+      expect(button!.x + button!.width, ids.load + ' right at ' + width).toBeLessThanOrEqual(width + 1);
+    }
+    await checkPhoneLayout(page, width, true);
+    expect(writes, 'Audit E2E must not change persistent data').toBe(0);
+  }
+  expect(mockedQueries).toBeGreaterThanOrEqual(12);
+  expect(writes).toBe(0);
+});

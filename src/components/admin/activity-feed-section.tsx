@@ -34,14 +34,14 @@ export function ActivityFeedSection() {
   };
 
   return (
-    <section>
-      <div className="mb-4 flex items-center gap-2">
+    <section className="min-w-0" data-testid="admin-activity-section">
+      <div className="mb-4 flex min-w-0 flex-wrap items-center gap-2">
         <Activity className="h-5 w-5 text-muted-foreground" />
-        <h2 className="text-lg font-semibold">{t('activity.title')}</h2>
+        <h2 className="min-w-0 text-lg font-semibold [overflow-wrap:anywhere]">{t('activity.title')}</h2>
       </div>
 
-      <Card>
-        <CardContent className="p-0">
+      <Card className="min-w-0">
+        <CardContent className="min-w-0 p-0">
           {activity.isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -50,8 +50,14 @@ export function ActivityFeedSection() {
             <div className="py-12 text-center text-sm text-muted-foreground">{t('activity.noActivity')}</div>
           ) : (
             <>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <div
+                className="min-w-0 max-w-full overflow-x-auto overscroll-x-contain"
+                role="region"
+                aria-label={t('activity.title')}
+                tabIndex={0}
+                data-testid="admin-activity-scroll"
+              >
+                <table className="w-full min-w-[720px] table-fixed text-sm">
                   <thead>
                     <tr className="border-b text-left text-muted-foreground">
                       <th className="px-4 py-3 font-medium">{t('activity.colType')}</th>
@@ -64,10 +70,12 @@ export function ActivityFeedSection() {
                     {activity.data?.items.map((item) => (
                       <tr key={item.id} className="border-b last:border-0">
                         <td className="px-4 py-3">
-                          <Badge variant="outline">{TYPE_LABELS[item.type] ?? item.type}</Badge>
+                          <Badge variant="outline" className="max-w-full whitespace-normal [overflow-wrap:anywhere]">
+                            {TYPE_LABELS[item.type] ?? item.type}
+                          </Badge>
                         </td>
-                        <td className="px-4 py-3 text-muted-foreground">{item.userName}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{item.groupName}</td>
+                        <td className="px-4 py-3 text-muted-foreground [overflow-wrap:anywhere]">{item.userName}</td>
+                        <td className="px-4 py-3 text-muted-foreground [overflow-wrap:anywhere]">{item.groupName}</td>
                         <td className="px-4 py-3 text-muted-foreground">
                           {new Date(item.createdAt).toLocaleString(locale)}
                         </td>
@@ -78,7 +86,13 @@ export function ActivityFeedSection() {
               </div>
               {activity.data?.nextCursor && (
                 <div className="border-t px-4 py-3">
-                  <Button variant="ghost" size="sm" onClick={() => setCursor(activity.data?.nextCursor)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="min-h-11 min-w-11 max-w-full whitespace-normal [overflow-wrap:anywhere]"
+                    data-testid="admin-activity-load-more"
+                    onClick={() => setCursor(activity.data?.nextCursor)}
+                  >
                     {t('activity.loadMore')}
                   </Button>
                 </div>

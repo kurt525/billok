@@ -109,14 +109,14 @@ export function AuditLogSection() {
   }
 
   return (
-    <section>
-      <div className="mb-4 flex items-center gap-2">
+    <section className="min-w-0" data-testid="admin-audit-section">
+      <div className="mb-4 flex min-w-0 flex-wrap items-center gap-2">
         <ScrollText className="h-5 w-5 text-muted-foreground" />
-        <h2 className="text-lg font-semibold">{t('audit.title')}</h2>
+        <h2 className="min-w-0 text-lg font-semibold [overflow-wrap:anywhere]">{t('audit.title')}</h2>
       </div>
 
-      <Card>
-        <CardContent className="p-0">
+      <Card className="min-w-0">
+        <CardContent className="min-w-0 p-0">
           {auditLog.isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -125,8 +125,14 @@ export function AuditLogSection() {
             <div className="py-12 text-center text-sm text-muted-foreground">{t('audit.noEntries')}</div>
           ) : (
             <>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <div
+                className="min-w-0 max-w-full overflow-x-auto overscroll-x-contain"
+                role="region"
+                aria-label={t('audit.title')}
+                tabIndex={0}
+                data-testid="admin-audit-scroll"
+              >
+                <table className="w-full min-w-[720px] table-fixed text-sm">
                   <thead>
                     <tr className="border-b text-left text-muted-foreground">
                       <th className="px-4 py-3 font-medium">{t('audit.colAction')}</th>
@@ -144,12 +150,19 @@ export function AuditLogSection() {
                       return (
                         <tr key={entry.id} className="border-b last:border-0">
                           <td className="px-4 py-3">
-                            <Badge variant="secondary" className={actionInfo.color}>
+                            <Badge
+                              variant="secondary"
+                              className={actionInfo.color + ' max-w-full whitespace-normal [overflow-wrap:anywhere]'}
+                            >
                               {actionInfo.label}
                             </Badge>
                           </td>
-                          <td className="px-4 py-3 text-muted-foreground">{entry.adminName}</td>
-                          <td className="px-4 py-3 text-muted-foreground">{formatMetadata(entry.metadata)}</td>
+                          <td className="px-4 py-3 text-muted-foreground [overflow-wrap:anywhere]">
+                            {entry.adminName}
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground [overflow-wrap:anywhere]">
+                            {formatMetadata(entry.metadata)}
+                          </td>
                           <td className="px-4 py-3 text-muted-foreground">
                             {new Date(entry.createdAt).toLocaleString(locale)}
                           </td>
@@ -161,7 +174,13 @@ export function AuditLogSection() {
               </div>
               {auditLog.data?.nextCursor && (
                 <div className="border-t px-4 py-3">
-                  <Button variant="ghost" size="sm" onClick={() => setCursor(auditLog.data?.nextCursor)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="min-h-11 min-w-11 max-w-full whitespace-normal [overflow-wrap:anywhere]"
+                    data-testid="admin-audit-load-more"
+                    onClick={() => setCursor(auditLog.data?.nextCursor)}
+                  >
                     {t('audit.loadMore')}
                   </Button>
                 </div>
