@@ -190,6 +190,8 @@
     "cleanupLoading": "Загрузка…",
     "cleanupStats": "Просрочено чеков: {expired} из {total}.",
     "cleanupButton": "Удалить просроченные",
+    "cleanupConfirmTitle": "Удалить просроченные чеки?",
+    "cleanupConfirmDescription": "Будут безвозвратно удалены просроченные чеки: {count}. Это действие нельзя отменить.",
     "cleanupSuccess": "Удалено просроченных чеков: {count}",
     "unknownError": "Неизвестная ошибка"
   },

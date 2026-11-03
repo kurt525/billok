@@ -692,3 +692,65 @@ test('mobile server log filters and search remain reachable at six widths', asyn
     await checkPhoneLayout(page, width, true);
   }
 });
+
+test('mobile admin tools confirm cleanup safely at six widths', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+  let cleanupCalls = 0;
+  // Stub only the count for safe, repeatable UI checks; no real cleanup mutation can run.
+  await page.route('**/api/trpc/admin.getExpiredSplitCount*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{ result: { data: { json: { expiredCount: 2, totalCount: 2 } } } }]),
+    });
+  });
+  await page.route('**/api/trpc/admin.cleanupExpiredSplits*', async (route) => {
+    cleanupCalls++;
+    await route.abort();
+  });
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await page.goto('/admin', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const section = page.getByTestId('admin-tools-section');
+    await expect(section).toBeVisible({ timeout: 15_000 });
+    const cleanup = section.getByTestId('admin-tools-cleanup');
+    await expect(cleanup).toBeEnabled({ timeout: 15_000 });
+    for (const button of [
+      section.getByTestId('admin-tools-export'),
+      section.getByTestId('admin-tools-test-email'),
+      cleanup,
+    ]) {
+      await expect(button).toBeVisible();
+      const bounds = await button.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.height, 'Admin tool height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(bounds!.width, 'Admin tool width at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(bounds!.x, 'Admin tool left at ' + width + 'px').toBeGreaterThanOrEqual(-1);
+      expect(bounds!.x + bounds!.width, 'Admin tool right at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+    }
+    await cleanup.click();
+    const dialog = page.getByRole('alertdialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('Удалить просроченные чеки?');
+    await expect(dialog).toContainText('просроченные чеки: 2');
+    for (const button of [
+      dialog.getByRole('button', { name: 'Отмена' }),
+      dialog.getByRole('button', { name: 'Удалить просроченные' }),
+    ]) {
+      const bounds = await button.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.height, 'Cleanup confirmation height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+    }
+    const bounds = await dialog.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x, 'Cleanup dialog left at ' + width + 'px').toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width, 'Cleanup dialog right at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+    await dialog.getByRole('button', { name: 'Отмена' }).click();
+    await expect(dialog).toBeHidden();
+    expect(cleanupCalls, 'Cancel must not delete data on ' + width + 'px').toBe(0);
+    await checkPhoneLayout(page, width, true);
+  }
+  expect(cleanupCalls).toBe(0);
+});

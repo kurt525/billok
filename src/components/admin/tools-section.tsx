@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/confirm-dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Loader2, Download, Mail, Wrench, CheckCircle2, AlertCircle, Trash2 } from 'lucide-react';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
@@ -17,6 +18,7 @@ export function ToolsSection() {
     onSuccess: () => expiredSplits.refetch(),
   });
   const [exporting, setExporting] = useState(false);
+  const [confirmCleanup, setConfirmCleanup] = useState(false);
   const [exportResult, setExportResult] = useState<{ message: string; isError: boolean } | null>(null);
 
   const handleExport = async () => {
@@ -51,23 +53,30 @@ export function ToolsSection() {
   };
 
   return (
-    <section>
-      <div className="mb-4 flex items-center gap-2">
+    <section data-testid="admin-tools-section" className="min-w-0">
+      <div className="mb-4 flex min-w-0 flex-wrap items-center gap-2">
         <Wrench className="h-5 w-5 text-muted-foreground" />
-        <h2 className="text-lg font-semibold">{t('tools.title')}</h2>
+        <h2 className="min-w-0 text-lg font-semibold [overflow-wrap:anywhere]">{t('tools.title')}</h2>
       </div>
 
-      <div className="grid gap-4 @2xl:grid-cols-2">
+      <div className="grid min-w-0 gap-4 @2xl:grid-cols-2 [&>*]:min-w-0">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <CardTitle className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-muted-foreground [overflow-wrap:anywhere]">
               <Download className="h-4 w-4" />
               {t('tools.exportTitle')}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             <p className="text-sm text-muted-foreground">{t('tools.exportDescription')}</p>
-            <Button size="sm" variant="outline" onClick={handleExport} disabled={exporting}>
+            <Button
+              size="sm"
+              variant="outline"
+              className="min-h-11 min-w-11 max-w-full whitespace-normal [overflow-wrap:anywhere]"
+              data-testid="admin-tools-export"
+              onClick={handleExport}
+              disabled={exporting}
+            >
               {exporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
               {t('tools.exportButton')}
             </Button>
@@ -81,7 +90,7 @@ export function ToolsSection() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <CardTitle className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-muted-foreground [overflow-wrap:anywhere]">
               <Mail className="h-4 w-4" />
               {t('tools.emailTitle')}
             </CardTitle>
@@ -91,6 +100,8 @@ export function ToolsSection() {
             <Button
               size="sm"
               variant="outline"
+              data-testid="admin-tools-test-email"
+              className="min-h-11 min-w-11 max-w-full whitespace-normal [overflow-wrap:anywhere]"
               onClick={() => sendTestEmail.mutate()}
               disabled={sendTestEmail.isPending}
             >
@@ -117,7 +128,7 @@ export function ToolsSection() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <CardTitle className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-muted-foreground [overflow-wrap:anywhere]">
               <Trash2 className="h-4 w-4" />
               {t('tools.cleanupTitle')}
             </CardTitle>
@@ -134,7 +145,9 @@ export function ToolsSection() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => cleanupSplits.mutate()}
+              data-testid="admin-tools-cleanup"
+              className="min-h-11 min-w-11 max-w-full whitespace-normal [overflow-wrap:anywhere]"
+              onClick={() => setConfirmCleanup(true)}
               disabled={cleanupSplits.isPending || (expiredSplits.data?.expiredCount ?? 0) === 0}
             >
               {cleanupSplits.isPending ? (
@@ -159,6 +172,14 @@ export function ToolsSection() {
           </CardContent>
         </Card>
       </div>
+      <ConfirmDialog
+        open={confirmCleanup}
+        onOpenChange={setConfirmCleanup}
+        title={t('tools.cleanupConfirmTitle')}
+        description={t('tools.cleanupConfirmDescription', { count: expiredSplits.data?.expiredCount ?? 0 })}
+        confirmLabel={t('tools.cleanupButton')}
+        onConfirm={() => cleanupSplits.mutate()}
+      />
     </section>
   );
 }
