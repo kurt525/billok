@@ -766,3 +766,56 @@ test('mobile admin tools confirm cleanup safely at six widths', async ({ page })
   expect(cleanupCalls).toBe(0);
   expect(countMocked).toBeGreaterThan(0);
 });
+
+test('mobile admin announcement controls remain accessible at six widths', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+  let writes = 0;
+  await page.route('**/api/trpc/**', async (route) => {
+    const procedures = new URL(route.request().url()).pathname.split('/api/trpc/')[1]?.split(',') ?? [];
+    if (procedures.includes('admin.setAnnouncement')) {
+      writes++;
+      await route.abort();
+    } else {
+      await route.continue();
+    }
+  });
+
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await page.goto('/admin', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+
+    const section = page.getByTestId('admin-announcement-section');
+    await expect(section).toBeVisible({ timeout: 15_000 });
+    const input = section.getByTestId('admin-announcement-input');
+    const save = section.getByTestId('admin-announcement-save');
+    const clear = section.getByTestId('admin-announcement-clear');
+    await expect(input).toHaveAttribute('maxlength', '500');
+    const controls = [input, save];
+    if (await clear.count()) controls.push(clear);
+    for (const control of controls) {
+      await expect(control).toBeVisible();
+      const bounds = await control.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.height, 'Announcement control height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(bounds!.width, 'Announcement control width at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(bounds!.x, 'Announcement control left at ' + width + 'px').toBeGreaterThanOrEqual(-1);
+      expect(bounds!.x + bounds!.width, 'Announcement control right at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+    }
+
+    const announcement = 'МобильноеОбъявление'.repeat(10);
+    await input.fill(announcement);
+    await expect(input).toHaveValue(announcement);
+    await expect(section.getByTestId('admin-announcement-counter')).toContainText(
+      'Символов: ' + announcement.length + '/500',
+    );
+    await expect(save).toBeEnabled();
+    await input.focus();
+    await input.scrollIntoViewIfNeeded();
+    await expect(input).toBeInViewport();
+    expect(writes, 'No server changes while testing width ' + width + 'px').toBe(0);
+    await checkPhoneLayout(page, width, true);
+  }
+  expect(writes).toBe(0);
+});

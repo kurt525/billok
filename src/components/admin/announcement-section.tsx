@@ -31,36 +31,43 @@ export function AnnouncementSection() {
   }
 
   return (
-    <section>
-      <div className="mb-4 flex items-center gap-2">
+    <section className="min-w-0" data-testid="admin-announcement-section">
+      <div className="mb-4 flex min-w-0 flex-wrap items-center gap-2">
         <Megaphone className="h-5 w-5 text-muted-foreground" />
-        <h2 className="text-lg font-semibold">{t('announcement.title')}</h2>
+        <h2 className="min-w-0 text-lg font-semibold [overflow-wrap:anywhere]">{t('announcement.title')}</h2>
       </div>
 
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium text-muted-foreground">
+      <Card className="min-w-0">
+        <CardHeader className="min-w-0 pb-2">
+          <CardTitle className="min-w-0 text-sm font-medium text-muted-foreground [overflow-wrap:anywhere]">
             {announcement.data?.message ? t('announcement.showing') : t('announcement.noActive')}
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="min-w-0 space-y-3">
           <textarea
-            className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            data-testid="admin-announcement-input"
+            aria-label={t('announcement.placeholder')}
+            className="min-h-28 w-full min-w-0 max-w-full resize-y rounded-md border bg-background px-3 py-2 text-base [overflow-wrap:anywhere] focus:outline-none focus:ring-2 focus:ring-ring"
             rows={3}
             placeholder={t('announcement.placeholder')}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             maxLength={500}
           />
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-muted-foreground">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+            <span
+              className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]"
+              data-testid="admin-announcement-counter"
+            >
               {t('announcement.charCount', { count: draft.length })}
             </span>
-            <div className="flex gap-2">
+            <div className="flex min-w-0 flex-wrap gap-2">
               {announcement.data?.message && (
                 <Button
                   variant="outline"
                   size="sm"
+                  data-testid="admin-announcement-clear"
+                  className="min-h-11 min-w-11 max-w-full whitespace-normal [overflow-wrap:anywhere]"
                   disabled={setAnnouncement.isPending}
                   onClick={() => {
                     setAnnouncement.mutate({ message: '' });
@@ -72,6 +79,8 @@ export function AnnouncementSection() {
               )}
               <Button
                 size="sm"
+                data-testid="admin-announcement-save"
+                className="min-h-11 min-w-11 max-w-full whitespace-normal [overflow-wrap:anywhere]"
                 disabled={setAnnouncement.isPending || draft.trim() === (announcement.data?.message ?? '')}
                 onClick={() => setAnnouncement.mutate({ message: draft.trim() })}
               >
