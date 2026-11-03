@@ -134,7 +134,8 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
         {g.members.map((m) => (
           <div
             key={m.user.id}
-            className={`flex items-center gap-2 rounded-full py-1 pr-3 pl-1 ${
+            data-testid="group-member-chip"
+            className={`flex min-w-0 max-w-full items-center gap-2 rounded-full py-1 pr-3 pl-1 ${
               m.user.isPlaceholder ? 'border border-dashed border-muted-foreground/40 bg-muted/50' : 'bg-muted'
             }`}
           >
@@ -152,7 +153,12 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                 {getInitials(m.user.placeholderName ?? m.user.name, m.user.email)}
               </div>
             )}
-            <span className="text-sm font-medium">{m.user.placeholderName ?? m.user.name ?? m.user.email}</span>
+            <span
+              data-testid="group-member-name"
+              className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]"
+            >
+              {m.user.placeholderName ?? m.user.name ?? m.user.email}
+            </span>
             {m.role === 'OWNER' && (
               <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
                 {t('detail.owner')}

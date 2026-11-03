@@ -388,6 +388,26 @@ test('long group history links stay readable and open on all mobile widths', asy
         headingSizes.client + 1,
       );
       await checkPhoneLayout(page, width);
+      const members = await page.getByTestId('group-member-chip').evaluateAll((chips) =>
+        chips.map((chip) => {
+          const bounds = chip.getBoundingClientRect();
+          const name = chip.querySelector('[data-testid="group-member-name"]');
+          return {
+            left: bounds.left,
+            right: bounds.right,
+            nameClientWidth: name?.clientWidth ?? 0,
+            nameScrollWidth: name?.scrollWidth ?? 0,
+          };
+        }),
+      );
+      expect(members.length, 'Group members should be visible').toBeGreaterThan(0);
+      for (const member of members) {
+        expect(member.left, 'Member chip left on ' + width + 'px').toBeGreaterThanOrEqual(-1);
+        expect(member.right, 'Member chip right on ' + width + 'px').toBeLessThanOrEqual(width + 1);
+        expect(member.nameScrollWidth, 'Unclipped member name on ' + width + 'px').toBeLessThanOrEqual(
+          member.nameClientWidth + 1,
+        );
+      }
       await page.goBack({ waitUntil: 'networkidle' });
       await expect(historyLink).toBeVisible({ timeout: 15_000 });
       await checkPhoneLayout(page, width);
