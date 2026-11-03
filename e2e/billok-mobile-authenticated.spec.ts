@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { createTestGroup, users } from './helpers';
+import { createTestGroup, trpcMutation, trpcResult, users } from './helpers';
 
 // Only against the disposable seed database created by the Mobile Chromium CI job.
 const widths = [320, 360, 393, 412] as const;
@@ -414,5 +414,76 @@ test('long group history links stay readable and open on all mobile widths', asy
     }
   } finally {
     await testGroup.dispose();
+  }
+});
+
+test('long expense history stays readable and opens at six mobile widths', async ({ page }) => {
+  test.setTimeout(170_000);
+  const title = 'РесторанныйСчётБезПробелов'.repeat(3);
+  const group = await createTestGroup(
+    users.alice.email,
+    users.alice.password,
+    [{ email: users.bob.email, password: users.bob.password }],
+    'Мобильная история расходов',
+  );
+  try {
+    const result = await trpcMutation(group.owner, 'expenses.create', {
+      groupId: group.groupId,
+      title,
+      amount: 123456789,
+      currency: 'RUB',
+      splitMode: 'EQUAL',
+      paidById: group.memberIds[users.alice.email],
+      shares: [
+        { userId: group.memberIds[users.alice.email], amount: 61728394 },
+        { userId: group.memberIds[users.bob.email], amount: 61728395 },
+      ],
+    });
+    expect(result.ok(), 'Disposable history fixture must be created').toBeTruthy();
+    const expense = await trpcResult(result);
+    expect(expense?.id).toBeTruthy();
+    await signInAsSeedAdmin(page);
+
+    for (const width of [320, 360, 430, 480, 600, 720]) {
+      await page.setViewportSize({ width, height: 380 });
+      await page.goto('/groups/' + group.groupId, { waitUntil: 'networkidle' });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      const link = page.locator('a[href="/groups/' + group.groupId + '/expenses/' + expense.id + '"]');
+      await expect(link).toBeVisible({ timeout: 15_000 });
+      await expect(link.getByTestId('group-history-expense-title')).toHaveText(title);
+      await expect(link.getByTestId('group-history-expense-amount')).toContainText('₽');
+      const sizes = await link.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const titleElement = element.querySelector<HTMLElement>('[data-testid="group-history-expense-title"]');
+        const amountElement = element.querySelector<HTMLElement>('[data-testid="group-history-expense-amount"]');
+        return {
+          left: bounds.left,
+          right: bounds.right,
+          height: bounds.height,
+          titleClientWidth: titleElement?.clientWidth ?? 0,
+          titleScrollWidth: titleElement?.scrollWidth ?? 0,
+          amountClientWidth: amountElement?.clientWidth ?? 0,
+          amountScrollWidth: amountElement?.scrollWidth ?? 0,
+        };
+      });
+      expect(sizes.left, 'Expense history link left at ' + width + 'px').toBeGreaterThanOrEqual(-1);
+      expect(sizes.right, 'Expense history link right at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+      expect(sizes.height, 'Expense history touch height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(sizes.titleScrollWidth, 'Expense title fully visible at ' + width + 'px').toBeLessThanOrEqual(
+        sizes.titleClientWidth + 1,
+      );
+      expect(sizes.amountScrollWidth, 'Expense amount fully visible at ' + width + 'px').toBeLessThanOrEqual(
+        sizes.amountClientWidth + 1,
+      );
+      await checkPhoneLayout(page, width);
+      await link.click();
+      await expect(page).toHaveURL(new RegExp('/groups/' + group.groupId + '/expenses/' + expense.id + '$'));
+      await expect(page.getByRole('heading', { name: title })).toBeVisible();
+      await page.goBack({ waitUntil: 'networkidle' });
+      await expect(link).toBeVisible();
+      await checkPhoneLayout(page, width);
+    }
+  } finally {
+    await group.dispose();
   }
 });

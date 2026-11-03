@@ -384,26 +384,35 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
         {expenses.data && expenses.data.expenses.length > 0 && (
           <Card className="divide-y divide-border overflow-hidden">
             {expenses.data.expenses.map((expense, index) => (
-              <Link key={expense.id} href={`/groups/${groupId}/expenses/${expense.id}`} className="block">
+              <Link
+                key={expense.id}
+                href={`/groups/${groupId}/expenses/${expense.id}`}
+                className="block min-w-0 min-h-11"
+              >
                 <div
-                  className={`flex items-center justify-between px-4 py-3 transition-colors hover:bg-muted/50 ${
+                  className={`flex min-w-0 flex-wrap items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-muted/50 ${
                     index % 2 === 1 ? 'bg-muted/20' : ''
                   }`}
                 >
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex min-w-0 flex-1 basis-48 items-start gap-3">
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent">
                       <Tag className="h-3.5 w-3.5 text-accent-foreground" />
                     </div>
-                    <div className="min-w-0">
-                      <p className="font-medium truncate">{expense.title}</p>
-                      <p className="text-sm text-muted-foreground">
+                    <div className="min-w-0 flex-1">
+                      <p
+                        data-testid="group-history-expense-title"
+                        className="min-w-0 font-medium [overflow-wrap:anywhere]"
+                      >
+                        {expense.title}
+                      </p>
+                      <p className="min-w-0 text-sm text-muted-foreground [overflow-wrap:anywhere]">
                         {t('detail.paidBy', {
                           name: expense.paidBy.name ?? expense.paidBy.email ?? t('detail.unknown'),
                         })}
                         {' · '}
                         {new Date(expense.expenseDate).toLocaleDateString(locale)}
                         {expense.category && (
-                          <span className="ml-1 text-muted-foreground/70">
+                          <span className="ml-1 text-muted-foreground/70 [overflow-wrap:anywhere]">
                             {' · '}
                             {expense.category}
                           </span>
@@ -411,7 +420,10 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                       </p>
                     </div>
                   </div>
-                  <p className="ml-4 shrink-0 text-lg font-semibold tabular-nums">
+                  <p
+                    data-testid="group-history-expense-amount"
+                    className="ml-auto min-w-0 max-w-full text-right text-lg font-semibold tabular-nums [overflow-wrap:anywhere]"
+                  >
                     {formatCents(
                       expense.amount,
                       expense.baseCurrencyAmount != null ? expense.currency : g.currency,
