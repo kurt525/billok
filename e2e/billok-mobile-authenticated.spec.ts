@@ -571,3 +571,79 @@ test('mobile admin user controls remain touch-friendly with delete confirmation'
     expect(layout.documentWidth, 'Admin document overflow at ' + width + 'px').toBeLessThanOrEqual(width + 1);
   }
 });
+
+test('mobile invitation management keeps registration controls accessible at six widths', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+  const label = 'МобильноеПриглашение'.repeat(2);
+  await page.goto('/admin', { waitUntil: 'networkidle' });
+  const section = page.getByTestId('admin-registration-control');
+  await expect(section).toBeVisible();
+  await section.getByTestId('admin-registration-invite-label').fill(label);
+  await section.getByTestId('admin-registration-create-invite').click();
+  const invite = section.getByTestId('admin-invitation-row').filter({ hasText: label });
+  await expect(invite).toHaveCount(1, { timeout: 15_000 });
+
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await page.goto('/admin', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const registration = page.getByTestId('admin-registration-control');
+    await expect(registration).toBeVisible({ timeout: 15_000 });
+    const labelInput = registration.getByTestId('admin-registration-invite-label');
+    const createButton = registration.getByTestId('admin-registration-create-invite');
+
+    for (const control of [
+      registration.getByTestId('admin-registration-mode-open'),
+      registration.getByTestId('admin-registration-mode-invite-only'),
+      registration.getByTestId('admin-registration-mode-closed'),
+      labelInput,
+      createButton,
+    ]) {
+      await expect(control).toBeVisible();
+      const bounds = await control.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.width, 'Registration touch width at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(bounds!.height, 'Registration touch height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+    }
+    const row = registration.getByTestId('admin-invitation-row').filter({ hasText: label });
+    await expect(row).toHaveCount(1);
+    const copy = row.getByRole('button', { name: 'Скопировать код приглашения' });
+    const revoke = row.getByTestId('admin-registration-revoke-invite');
+    for (const button of [copy, revoke]) {
+      await button.scrollIntoViewIfNeeded();
+      const bounds = await button.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.width, 'Invite action width at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(bounds!.height, 'Invite action height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+    }
+    await revoke.click();
+    const confirm = page.getByRole('alertdialog');
+    await expect(confirm).toBeVisible();
+    await expect(confirm).toContainText('Отозвать код приглашения?');
+    for (const button of [
+      confirm.getByRole('button', { name: 'Отмена' }),
+      confirm.getByRole('button', { name: 'Отозвать приглашение' }),
+    ]) {
+      await expect(button).toBeVisible();
+      const bounds = await button.boundingBox();
+      expect(bounds!.height, 'Revoke confirmation at ' + width + 'px').toBeGreaterThanOrEqual(44);
+    }
+    const dialogBounds = await confirm.boundingBox();
+    expect(dialogBounds).not.toBeNull();
+    expect(dialogBounds!.x, 'Dialog left at ' + width + 'px').toBeGreaterThanOrEqual(0);
+    expect(dialogBounds!.x + dialogBounds!.width, 'Dialog right at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+    await confirm.getByRole('button', { name: 'Отмена' }).click();
+    await expect(confirm).toBeHidden();
+    await expect(revoke).toBeVisible();
+
+    await checkPhoneLayout(page, width, true);
+  }
+  const row = page.getByTestId('admin-invitation-row').filter({ hasText: label });
+  await row.getByTestId('admin-registration-revoke-invite').click();
+  const confirm = page.getByRole('alertdialog');
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole('button', { name: 'Отозвать приглашение' }).click();
+  await expect(row).toContainText('Отозвано', { timeout: 15_000 });
+  await expect(row.getByTestId('admin-registration-revoke-invite')).toHaveCount(0);
+});
