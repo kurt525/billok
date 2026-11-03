@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AppError } from '@/server/lib/app-error';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
-import { type AdminAction, type PrismaClient, Prisma } from '@/generated/prisma/client';
+import { type AdminAction, type PrismaClient, GuestSplitStatus, Prisma } from '@/generated/prisma/client';
 import nodemailer from 'nodemailer';
 import fs from 'fs';
 import * as fsp from 'fs/promises';
@@ -886,9 +886,9 @@ export const adminRouter = createTRPCRouter({
 
   getExpiredSplitCount: adminProcedure.query(async ({ ctx }) => {
     const expiredCount = await ctx.db.guestSplit.count({
-      where: { expiresAt: { lt: new Date() } },
+      where: { status: GuestSplitStatus.CLAIMING, expiresAt: { lt: new Date() } },
     });
-    const totalCount = await ctx.db.guestSplit.count();
+    const totalCount = await ctx.db.guestSplit.count({ where: { status: GuestSplitStatus.CLAIMING } });
     return { expiredCount, totalCount };
   }),
 

@@ -697,17 +697,28 @@ test('mobile admin tools confirm cleanup safely at six widths', async ({ page })
   test.setTimeout(170_000);
   await signInAsSeedAdmin(page);
   let cleanupCalls = 0;
-  // Stub only the count for safe, repeatable UI checks; no real cleanup mutation can run.
-  await page.route('**/api/trpc/admin.getExpiredSplitCount*', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify([{ result: { data: { json: { expiredCount: 2, totalCount: 2 } } } }]),
-    });
-  });
-  await page.route('**/api/trpc/admin.cleanupExpiredSplits*', async (route) => {
-    cleanupCalls++;
-    await route.abort();
+  // Queries can be part of a tRPC batch: preserve the other procedures.
+  let countMocked = 0;
+  await page.route('**/api/trpc/**', async (route) => {
+    const procedurePath = new URL(route.request().url()).pathname.split('/api/trpc/')[1] ?? '';
+    const procedures = procedurePath.split(',');
+    const index = procedures.indexOf('admin.getExpiredSplitCount');
+    if (index < 0) {
+      if (procedures.includes('admin.cleanupExpiredSplits')) {
+        cleanupCalls++;
+        await route.abort();
+      } else {
+        await route.continue();
+      }
+      return;
+    }
+    const response = await route.fetch();
+    const body = await response.json();
+    const payload = Array.isArray(body) ? body[index] : body;
+    expect(payload?.result?.data).toBeDefined();
+    payload.result.data.json = { expiredCount: 2, totalCount: 2 };
+    countMocked++;
+    await route.fulfill({ response, json: body });
   });
   for (const width of [320, 360, 430, 480, 600, 720]) {
     await page.setViewportSize({ width, height: 380 });
@@ -733,11 +744,11 @@ test('mobile admin tools confirm cleanup safely at six widths', async ({ page })
     await cleanup.click();
     const dialog = page.getByRole('alertdialog');
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText('Удалить просроченные чеки?');
-    await expect(dialog).toContainText('просроченные чеки: 2');
+    await expect(dialog).toContainText('Удалить незавершённые черновики?');
+    await expect(dialog).toContainText('незавершённые черновики: 2');
     for (const button of [
       dialog.getByRole('button', { name: 'Отмена' }),
-      dialog.getByRole('button', { name: 'Удалить просроченные' }),
+      dialog.getByRole('button', { name: 'Удалить черновики' }),
     ]) {
       const bounds = await button.boundingBox();
       expect(bounds).not.toBeNull();
@@ -753,4 +764,5 @@ test('mobile admin tools confirm cleanup safely at six widths', async ({ page })
     await checkPhoneLayout(page, width, true);
   }
   expect(cleanupCalls).toBe(0);
+  expect(countMocked).toBeGreaterThan(0);
 });
