@@ -71,32 +71,38 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
       : null;
 
   return (
-    <div className="mx-auto max-w-lg space-y-6">
-      <div className="flex items-center gap-2">
+    <div className="mx-auto w-full min-w-0 max-w-lg space-y-6">
+      <div className="flex min-w-0 items-start gap-2">
         <Button
           variant="ghost"
           size="icon"
+          className="size-11 shrink-0"
+          data-testid="expense-detail-back"
           aria-label={t('detail.backToGroup')}
           nativeButton={false}
           render={<Link href={`/groups/${groupId}`} />}
         >
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <h1 className="text-2xl font-bold">{e.title}</h1>
+        <h1 className="min-w-0 flex-1 text-2xl font-bold [overflow-wrap:anywhere]">{e.title}</h1>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <div>
-              <span>{formatCents(e.amount, e.currency, locale)}</span>
+          <CardTitle className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+            <div className="min-w-0 max-w-full flex-1 basis-40 [overflow-wrap:anywhere]">
+              <span data-testid="expense-detail-total" className="tabular-nums [overflow-wrap:anywhere]">
+                {formatCents(e.amount, e.currency, locale)}
+              </span>
               {isCurrencyConverted && (
-                <span className="ml-2 text-sm font-normal text-muted-foreground">
+                <span className="ml-2 text-sm font-normal text-muted-foreground [overflow-wrap:anywhere]">
                   ({formatCents(e.baseCurrencyAmount!, groupCurrency, locale)})
                 </span>
               )}
             </div>
-            <Badge variant="secondary">{splitModeLabels[e.splitMode]}</Badge>
+            <Badge variant="secondary" className="max-w-full whitespace-normal [overflow-wrap:anywhere]">
+              {splitModeLabels[e.splitMode]}
+            </Badge>
           </CardTitle>
           {isCurrencyConverted && (
             <p className="text-xs text-muted-foreground">
@@ -109,31 +115,67 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
           )}
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
+          <div className="grid min-w-0 grid-cols-1 gap-4 text-sm min-[360px]:grid-cols-2">
+            <div className="min-w-0">
               <p className="text-muted-foreground">{t('detail.paidBy')}</p>
-              <p className="font-medium">{e.paidBy.name ?? t('detail.unknown')}</p>
+              <p data-testid="expense-detail-payer" className="min-w-0 font-medium [overflow-wrap:anywhere]">
+                {e.paidBy.name ?? t('detail.unknown')}
+              </p>
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="text-muted-foreground">{t('detail.date')}</p>
-              <p className="font-medium">{new Date(e.expenseDate).toLocaleDateString(locale)}</p>
+              <p className="min-w-0 font-medium [overflow-wrap:anywhere]">
+                {new Date(e.expenseDate).toLocaleDateString(locale)}
+              </p>
             </div>
             {e.category && (
-              <div>
+              <div className="min-w-0">
                 <p className="text-muted-foreground">{t('detail.category')}</p>
-                <p className="font-medium">{e.category}</p>
+                <p className="min-w-0 font-medium [overflow-wrap:anywhere]">{e.category}</p>
               </div>
             )}
-            <div>
+            <div className="min-w-0">
               <p className="text-muted-foreground">{t('detail.addedBy')}</p>
-              <p className="font-medium">{e.addedBy.name ?? t('detail.unknown')}</p>
+              <p className="min-w-0 font-medium [overflow-wrap:anywhere]">{e.addedBy.name ?? t('detail.unknown')}</p>
             </div>
           </div>
 
           {e.description && (
             <>
               <Separator />
-              <p className="text-sm">{e.description}</p>
+              <p className="min-w-0 text-sm [overflow-wrap:anywhere]">{e.description}</p>
+            </>
+          )}
+
+          {receiptItems.data && receiptItems.data.items.length > 0 && (
+            <>
+              <Separator />
+              <div className="min-w-0 space-y-2 text-sm" data-testid="group-finalized-receipt-items">
+                <p className="font-semibold">{t('detail.splitByItem')}</p>
+                {receiptItems.data.items.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex min-w-0 flex-wrap items-start justify-between gap-x-3 gap-y-1"
+                    data-testid="group-finalized-receipt-item"
+                  >
+                    <div className="min-w-0 flex-1 basis-24">
+                      <p
+                        className="min-w-0 font-medium [overflow-wrap:anywhere]"
+                        data-testid="group-finalized-item-name"
+                      >
+                        {item.name}
+                      </p>
+                      <p className="text-muted-foreground">{item.quantity} ×</p>
+                    </div>
+                    <span
+                      className="ml-auto min-w-0 max-w-full text-right font-medium tabular-nums [overflow-wrap:anywhere]"
+                      data-testid="group-finalized-item-total"
+                    >
+                      {formatCents(item.totalPrice, e.currency, locale)}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </>
           )}
 
@@ -142,30 +184,48 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
               <Separator />
               <div className="space-y-2 text-sm" data-testid="manual-group-payer-summary">
                 <p className="font-semibold">{t('detail.waiterTipSummary')}</p>
-                <div className="flex min-w-0 justify-between gap-3">
-                  <span className="text-muted-foreground">{t('detail.dishesTotal')}</span>
-                  <span className="shrink-0 tabular-nums" data-testid="group-finalized-food-total">
+                <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+                  <span className="min-w-0 flex-1 basis-24 text-muted-foreground [overflow-wrap:anywhere]">
+                    {t('detail.dishesTotal')}
+                  </span>
+                  <span
+                    className="ml-auto min-w-0 max-w-full text-right tabular-nums [overflow-wrap:anywhere]"
+                    data-testid="group-finalized-food-total"
+                  >
                     {formatCents(manualSummary.foodTotal, 'RUB', locale)}
                   </span>
                 </div>
-                <div className="flex min-w-0 justify-between gap-3">
-                  <span className="text-muted-foreground">{t('detail.tipForWaiter')}</span>
-                  <span className="shrink-0 tabular-nums" data-testid="group-finalized-tip-total">
+                <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+                  <span className="min-w-0 flex-1 basis-24 text-muted-foreground [overflow-wrap:anywhere]">
+                    {t('detail.tipForWaiter')}
+                  </span>
+                  <span
+                    className="ml-auto min-w-0 max-w-full text-right tabular-nums [overflow-wrap:anywhere]"
+                    data-testid="group-finalized-tip-total"
+                  >
                     {formatCents(manualSummary.tipTotal, 'RUB', locale)}
                   </span>
                 </div>
-                <div className="flex min-w-0 justify-between gap-3 font-semibold">
-                  <span>{t('detail.totalWithTips')}</span>
-                  <span className="shrink-0 tabular-nums" data-testid="group-finalized-grand-total">
+                <div className="flex min-w-0 flex-wrap items-start justify-between gap-3 font-semibold">
+                  <span className="min-w-0 flex-1 basis-24 [overflow-wrap:anywhere]">{t('detail.totalWithTips')}</span>
+                  <span
+                    className="ml-auto min-w-0 max-w-full text-right tabular-nums [overflow-wrap:anywhere]"
+                    data-testid="group-finalized-grand-total"
+                  >
                     {formatCents(manualSummary.total, 'RUB', locale)}
                   </span>
                 </div>
                 <Separator />
                 <p className="font-medium">{t('detail.initialReimbursements')}</p>
                 <p className="text-xs text-muted-foreground">{t('detail.initialReimbursementsHint')}</p>
-                <div className="flex min-w-0 justify-between gap-3">
-                  <span className="text-muted-foreground">{t('detail.payerOwnShare')}</span>
-                  <span className="shrink-0 tabular-nums" data-testid="group-payer-own-share">
+                <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+                  <span className="min-w-0 flex-1 basis-24 text-muted-foreground [overflow-wrap:anywhere]">
+                    {t('detail.payerOwnShare')}
+                  </span>
+                  <span
+                    className="ml-auto min-w-0 max-w-full text-right tabular-nums [overflow-wrap:anywhere]"
+                    data-testid="group-payer-own-share"
+                  >
                     {formatCents(manualSummary.payerShare, 'RUB', locale)}
                   </span>
                 </div>
@@ -174,19 +234,26 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
                   return (
                     <div
                       key={reimbursement.fromId}
-                      className="flex min-w-0 justify-between gap-3"
+                      className="flex min-w-0 flex-wrap items-start justify-between gap-3"
                       data-testid={'group-payer-reimbursement-' + reimbursement.fromId}
                     >
-                      <span className="min-w-0 truncate">
+                      <span className="min-w-0 flex-1 basis-24 [overflow-wrap:anywhere]">
                         {t('detail.memberReimburses', { name: member?.user.name ?? t('detail.unknown') })}
                       </span>
-                      <span className="shrink-0 tabular-nums">{formatCents(reimbursement.amount, 'RUB', locale)}</span>
+                      <span className="ml-auto min-w-0 max-w-full text-right tabular-nums [overflow-wrap:anywhere]">
+                        {formatCents(reimbursement.amount, 'RUB', locale)}
+                      </span>
                     </div>
                   );
                 })}
-                <div className="flex min-w-0 justify-between gap-3 font-semibold">
-                  <span>{t('detail.reimbursementsTotal')}</span>
-                  <span className="shrink-0 tabular-nums" data-testid="group-payer-reimbursements-total">
+                <div className="flex min-w-0 flex-wrap items-start justify-between gap-3 font-semibold">
+                  <span className="min-w-0 flex-1 basis-24 [overflow-wrap:anywhere]">
+                    {t('detail.reimbursementsTotal')}
+                  </span>
+                  <span
+                    className="ml-auto min-w-0 max-w-full text-right tabular-nums [overflow-wrap:anywhere]"
+                    data-testid="group-payer-reimbursements-total"
+                  >
                     {formatCents(manualSummary.reimbursementTotal, 'RUB', locale)}
                   </span>
                 </div>
@@ -200,9 +267,16 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
             <p className="mb-2 text-sm font-medium text-muted-foreground">{t('detail.split')}</p>
             <div className="space-y-1">
               {e.shares.map((share) => (
-                <div key={share.userId} className="flex items-center justify-between text-sm">
-                  <span>{share.user.name ?? t('detail.unknown')}</span>
-                  <span className="font-medium">{formatCents(share.amount, e.currency, locale)}</span>
+                <div
+                  key={share.userId}
+                  className="flex min-w-0 flex-wrap items-start justify-between gap-x-3 gap-y-1 text-sm"
+                >
+                  <span className="min-w-0 flex-1 basis-24 [overflow-wrap:anywhere]">
+                    {share.user.name ?? t('detail.unknown')}
+                  </span>
+                  <span className="ml-auto min-w-0 max-w-full text-right font-medium tabular-nums [overflow-wrap:anywhere]">
+                    {formatCents(share.amount, e.currency, locale)}
+                  </span>
                 </div>
               ))}
             </div>
@@ -213,10 +287,11 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
       {/* An archived group refuses edits and deletes, so offer them only once the group is known to be active */}
       {group.data?.archivedAt && <p className="text-center text-sm text-muted-foreground">{t('detail.archived')}</p>}
       {group.data && !group.data.archivedAt && (
-        <div className="flex gap-2">
+        <div className="flex min-w-0 flex-wrap gap-2">
           <Button
             variant="outline"
-            className="flex-1"
+            data-testid="expense-detail-edit"
+            className="min-h-11 min-w-0 flex-1 basis-32 whitespace-normal text-center [overflow-wrap:anywhere]"
             nativeButton={false}
             render={<Link href={`/groups/${groupId}/expenses/${expenseId}/edit`} />}
           >
@@ -225,7 +300,8 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
           </Button>
           <Button
             variant="destructive"
-            className="flex-1"
+            data-testid="expense-detail-delete"
+            className="min-h-11 min-w-0 flex-1 basis-32 whitespace-normal text-center [overflow-wrap:anywhere]"
             onClick={() => setConfirmDelete(true)}
             disabled={deleteExpense.isPending}
           >

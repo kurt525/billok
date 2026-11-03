@@ -492,7 +492,15 @@ test('long expense history stays readable and opens at six mobile widths', async
       await link.click();
       await expect(page).toHaveURL(new RegExp('/groups/' + group.groupId + '/expenses/' + expense.id + '$'));
       await expect(page.getByRole('heading', { name: title })).toBeVisible();
-      await page.goBack({ waitUntil: 'networkidle' });
+      await expect(page.getByTestId('expense-detail-total')).toContainText('1');
+      await checkPhoneLayout(page, width);
+      const back = page.getByTestId('expense-detail-back');
+      const backBounds = await back.boundingBox();
+      expect(backBounds).not.toBeNull();
+      expect(backBounds!.width, 'Expense back button width at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(backBounds!.height, 'Expense back button height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      await back.click();
+      await expect(page).toHaveURL(new RegExp('/groups/' + group.groupId + '$'));
       await expect(link).toBeVisible();
       await checkPhoneLayout(page, width);
     }

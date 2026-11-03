@@ -139,7 +139,7 @@ test('two registered group members independently save voluntary RUB tips on a mo
   browser,
 }) => {
   test.skip(!groupId, 'Requires disposable RUB group fixture');
-  test.setTimeout(165_000);
+  test.setTimeout(225_000);
 
   await page.goto('/login', { waitUntil: 'networkidle' });
   await page.locator('input[type=email]').fill('bob@example.com');
@@ -226,17 +226,19 @@ test('two registered group members independently save voluntary RUB tips on a mo
 
     // Finalize a real manual receipt with both diners assigned a dish.
     // Bob is the creator/payer and chooses 0 RUB; Alice chooses 1.50 RUB.
+    const longItemName = 'ДесертОченьДлинноеНазвание'.repeat(3);
+    const longReceiptTitle = 'ЧекЗаСемейныйУжин'.repeat(4);
     await page.getByTestId('add-item-btn').click();
     const add = page.getByTestId('add-item-form');
-    await add.locator('input').nth(0).fill('Десерт');
+    await add.locator('input').nth(0).fill(longItemName);
     await add.locator('input').nth(1).fill('1');
     await add.locator('input').nth(2).fill('10,01');
     await add.getByRole('button', { name: 'Добавить', exact: true }).click();
-    const dessert = item(page, 'Десерт');
+    const dessert = item(page, longItemName);
     await expect(dessert).toBeVisible();
     await dessert.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Alice' }).click();
     await dessert.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Bob' }).click();
-    await page.locator('#title').fill('Десерт с личными чаевыми');
+    await page.locator('#title').fill(longReceiptTitle);
     await page.getByTestId('create-expense-btn').click();
     await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'), { timeout: 20_000 });
 
@@ -262,7 +264,47 @@ test('two registered group members independently save voluntary RUB tips on a mo
     await expect(payerReimbursements).toContainText('6,50');
     await expect(payerReimbursements).toContainText('Alice');
     await expect(page.getByText('Возмещения плательщику по этому чеку')).toBeVisible();
+    await expect(page.getByTestId('group-finalized-receipt-item')).toHaveCount(1);
+    await expect(page.getByTestId('group-finalized-item-name')).toHaveText(longItemName);
+    await expect(page.getByTestId('group-finalized-item-total')).toContainText('10,01');
+    await expect(page.getByTestId('expense-detail-payer')).toContainText('Bob');
     await noDocumentOverflow(page);
+
+    for (const width of [320, 360, 430, 480, 600, 720]) {
+      await page.setViewportSize({ width, height: 380 });
+      await page.goto('/groups/' + groupId + '/expenses/' + finalized.id, { waitUntil: 'networkidle' });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      await expect(page.getByRole('heading', { name: longReceiptTitle })).toBeVisible();
+      const dish = page.getByTestId('group-finalized-item-name');
+      await expect(dish).toHaveText(longItemName);
+      const itemSize = await dish.evaluate((element) => ({ client: element.clientWidth, scroll: element.scrollWidth }));
+      expect(itemSize.scroll, 'Completed receipt item at ' + width + 'px').toBeLessThanOrEqual(itemSize.client + 1);
+      await expect(page.getByTestId('group-finalized-grand-total')).toContainText('11,51');
+      await expect(page.getByTestId('group-finalized-tip-total')).toContainText('1,50');
+      await expect(page.getByTestId('expense-detail-payer')).toContainText('Bob');
+      const layout = await page.evaluate(() => ({
+        viewport: innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        bodyWidth: document.body.scrollWidth,
+      }));
+      expect(layout.viewport, 'Viewport expanded at ' + width + 'px').toBe(width);
+      expect(layout.documentWidth, 'Document overflow at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+      expect(layout.bodyWidth, 'Body overflow at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+      for (const control of [
+        page.getByTestId('expense-detail-back'),
+        page.getByTestId('expense-detail-edit'),
+        page.getByTestId('expense-detail-delete'),
+      ]) {
+        await touchTarget(control);
+        const bounds = await control.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x, 'Control left at ' + width + 'px').toBeGreaterThanOrEqual(-1);
+        expect(bounds!.x + bounds!.width, 'Control right at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+      }
+      await page.getByTestId('expense-detail-back').click();
+      await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'));
+      await expect(page.locator('a[href="/groups/' + groupId + '/expenses/' + finalized.id + '"]')).toBeVisible();
+    }
   } finally {
     await aliceContext.close();
   }
