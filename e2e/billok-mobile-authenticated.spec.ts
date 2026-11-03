@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { createTestGroup, trpcMutation, trpcResult, users } from './helpers';
+import { createTestGroup, trpcMutation, users } from './helpers';
 
 // Only against the disposable seed database created by the Mobile Chromium CI job.
 const widths = [320, 360, 393, 412] as const;
@@ -440,7 +440,7 @@ test('long expense history stays readable and opens at six mobile widths', async
       ],
     });
     expect(result.ok(), 'Disposable history fixture must be created').toBeTruthy();
-    const expense = await trpcResult(result);
+    const expense = (await result.json()).result?.data?.json;
     expect(expense?.id).toBeTruthy();
     await signInAsSeedAdmin(page);
 
