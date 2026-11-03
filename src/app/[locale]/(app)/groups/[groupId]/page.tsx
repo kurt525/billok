@@ -1,27 +1,41 @@
-'use client';
+"use client";
 
-import { use, useState, useRef, useEffect } from 'react';
-import { useLocale, useTranslations } from 'next-intl';
-import { trpc } from '@/lib/trpc';
-import { formatCents } from '@/lib/money';
-import { buildVenmoPayUrl, isValidVenmoHandle } from '@/lib/venmo';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { LoadingSpinner } from '@/components/ui/loading-spinner';
-import { Plus, Settings, UserPlus, ArrowRight, Receipt, Handshake, Tag, Archive, Trash2 } from 'lucide-react';
-import { Link } from '@/i18n/navigation';
-import { toast } from 'sonner';
-import { localizedTrpcError } from '@/lib/localized-trpc-error';
-import { InviteDialog } from '@/components/groups/invite-dialog';
-import { SettleDialog } from '@/components/groups/settle-dialog';
-import { PaymentsList } from '@/components/groups/payments-list';
-import { ConfirmDialog } from '@/components/confirm-dialog';
-import { getInitials, avatarColor } from '@/lib/avatar';
+import { use, useState, useRef, useEffect } from "react";
+import { useLocale, useTranslations } from "next-intl";
+import { trpc } from "@/lib/trpc";
+import { formatCents } from "@/lib/money";
+import { buildVenmoPayUrl, isValidVenmoHandle } from "@/lib/venmo";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import {
+  Plus,
+  Settings,
+  UserPlus,
+  ArrowRight,
+  Receipt,
+  Handshake,
+  Tag,
+  Archive,
+  Trash2,
+} from "lucide-react";
+import { Link } from "@/i18n/navigation";
+import { toast } from "sonner";
+import { localizedTrpcError } from "@/lib/localized-trpc-error";
+import { InviteDialog } from "@/components/groups/invite-dialog";
+import { SettleDialog } from "@/components/groups/settle-dialog";
+import { PaymentsList } from "@/components/groups/payments-list";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { getInitials, avatarColor } from "@/lib/avatar";
 
-export default function GroupDetailPage({ params }: { params: Promise<{ groupId: string }> }) {
+export default function GroupDetailPage({
+  params,
+}: {
+  params: Promise<{ groupId: string }>;
+}) {
   const { groupId } = use(params);
   const locale = useLocale();
   const [showInvite, setShowInvite] = useState(false);
@@ -32,11 +46,16 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
     amount?: number;
   }>({ open: false });
   // The Venmo payment to ask about once the payer is back from Venmo
-  const [venmoPaid, setVenmoPaid] = useState<{ from: string; to: string; amount: number; toName: string } | null>(null);
+  const [venmoPaid, setVenmoPaid] = useState<{
+    from: string;
+    to: string;
+    amount: number;
+    toName: string;
+  } | null>(null);
   const [deleteReceiptId, setDeleteReceiptId] = useState<string | null>(null);
 
-  const t = useTranslations('groups');
-  const tc = useTranslations('common');
+  const t = useTranslations("groups");
+  const tc = useTranslations("common");
   // Who tRPC acts as: the impersonated user while an admin impersonates, where
   // useSession() would still report the admin.
   const profile = trpc.auth.getProfile.useQuery();
@@ -59,7 +78,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
       utils.settlements.list.invalidate({ groupId });
     },
     onError: (err) => {
-      toast.error(localizedTrpcError(err, tc('errors.generic')));
+      toast.error(localizedTrpcError(err, tc("errors.generic")));
     },
   });
 
@@ -79,10 +98,12 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
     return (
       <div className="mx-auto max-w-md py-16 text-center">
         <Receipt className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
-        <h2 className="mb-2 text-lg font-semibold">{t('detail.notFound')}</h2>
-        <p className="mb-4 text-sm text-muted-foreground">{t('detail.notFoundDescription')}</p>
+        <h2 className="mb-2 text-lg font-semibold">{t("detail.notFound")}</h2>
+        <p className="mb-4 text-sm text-muted-foreground">
+          {t("detail.notFoundDescription")}
+        </p>
         <Button nativeButton={false} render={<Link href="/groups" />}>
-          {t('detail.backToGroups')}
+          {t("detail.backToGroups")}
         </Button>
       </div>
     );
@@ -91,9 +112,16 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
   const g = group.data;
   // A placeholder removed from the group still has their name in the balances: one that
   // comes back (an old expense changed) shows under it, and can be settled with them (#284)
-  const memberMap = new Map([...g.members, ...g.removedMembers].map((m) => [m.user.id, m.user]));
-  const inDebts = new Set(debts.data?.debts.flatMap((d) => [d.from, d.to]) ?? []);
-  const settleParties = [...g.members, ...g.removedMembers.filter((m) => inDebts.has(m.user.id))];
+  const memberMap = new Map(
+    [...g.members, ...g.removedMembers].map((m) => [m.user.id, m.user]),
+  );
+  const inDebts = new Set(
+    debts.data?.debts.flatMap((d) => [d.from, d.to]) ?? [],
+  );
+  const settleParties = [
+    ...g.members,
+    ...g.removedMembers.filter((m) => inDebts.has(m.user.id)),
+  ];
   const myRole = g.members.find((m) => m.user.id === myId)?.role;
 
   return (
@@ -104,23 +132,32 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
             <span className="text-4xl leading-none">{g.emoji}</span>
           </div>
           <div className="min-w-0 flex-1 pr-2">
-            <h1 className="max-w-full break-all text-2xl font-bold leading-tight [overflow-wrap:anywhere]">{g.name}</h1>
+            <h1 className="max-w-full break-all text-2xl font-bold leading-tight [overflow-wrap:anywhere]">
+              {g.name}
+            </h1>
             {g.description && (
-              <p className="mt-0.5 text-sm text-muted-foreground [overflow-wrap:anywhere]">{g.description}</p>
+              <p className="mt-0.5 text-sm text-muted-foreground [overflow-wrap:anywhere]">
+                {g.description}
+              </p>
             )}
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" className="min-h-11 min-w-11" onClick={() => setShowInvite(true)}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="min-h-11 min-w-11"
+            onClick={() => setShowInvite(true)}
+          >
             <UserPlus className="mr-2 h-4 w-4" />
-            {t('detail.invite')}
+            {t("detail.invite")}
           </Button>
           <Button
             variant="outline"
             size="sm"
             className="min-h-11 min-w-11"
-            aria-label={t('settings.title')}
-            title={t('settings.title')}
+            aria-label={t("settings.title")}
+            title={t("settings.title")}
             nativeButton={false}
             render={<Link href={`/groups/${groupId}/settings`} />}
           >
@@ -136,21 +173,29 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
             key={m.user.id}
             data-testid="group-member-chip"
             className={`flex min-w-0 max-w-full items-center gap-2 rounded-full py-1 pr-3 pl-1 ${
-              m.user.isPlaceholder ? 'border border-dashed border-muted-foreground/40 bg-muted/50' : 'bg-muted'
+              m.user.isPlaceholder
+                ? "border border-dashed border-muted-foreground/40 bg-muted/50"
+                : "bg-muted"
             }`}
           >
             {m.user.image ? (
               <Avatar className="h-6 w-6">
                 <AvatarImage src={m.user.image} />
                 <AvatarFallback className="text-[10px]">
-                  {getInitials(m.user.placeholderName ?? m.user.name, m.user.email)}
+                  {getInitials(
+                    m.user.placeholderName ?? m.user.name,
+                    m.user.email,
+                  )}
                 </AvatarFallback>
               </Avatar>
             ) : (
               <div
                 className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-medium text-white ${avatarColor(m.user.id)}`}
               >
-                {getInitials(m.user.placeholderName ?? m.user.name, m.user.email)}
+                {getInitials(
+                  m.user.placeholderName ?? m.user.name,
+                  m.user.email,
+                )}
               </div>
             )}
             <span
@@ -159,14 +204,14 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
             >
               {m.user.placeholderName ?? m.user.name ?? m.user.email}
             </span>
-            {m.role === 'OWNER' && (
+            {m.role === "OWNER" && (
               <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                {t('detail.owner')}
+                {t("detail.owner")}
               </span>
             )}
             {m.user.isPlaceholder && (
               <Badge variant="outline" className="ml-0.5 text-[10px]">
-                {t('detail.pending')}
+                {t("detail.pending")}
               </Badge>
             )}
           </div>
@@ -178,10 +223,10 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
           <Archive className="h-4 w-4 shrink-0" />
           {/* Only owners and admins can unarchive, so a plain member is told whom to ask */}
           <span>
-            {t('detail.archivedMessage')}
-            {myRole === 'MEMBER' && <> {t('detail.askToUnarchive')}</>}
+            {t("detail.archivedMessage")}
+            {myRole === "MEMBER" && <> {t("detail.askToUnarchive")}</>}
           </span>
-          {(myRole === 'OWNER' || myRole === 'ADMIN') && (
+          {(myRole === "OWNER" || myRole === "ADMIN") && (
             <Button
               variant="link"
               size="sm"
@@ -189,7 +234,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
               nativeButton={false}
               render={<Link href={`/groups/${groupId}/settings`} />}
             >
-              {t('detail.manage')}
+              {t("detail.manage")}
             </Button>
           )}
         </div>
@@ -201,15 +246,24 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
       {debts.data && debts.data.debts.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base" data-testid="balances-title">
-                {t('detail.balances')}
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+              <CardTitle
+                className="min-w-0 text-base [overflow-wrap:anywhere]"
+                data-testid="balances-title"
+              >
+                {t("detail.balances")}
               </CardTitle>
               {/* An archived group refuses payments (see the banner above) */}
               {!g.archivedAt && (
-                <Button variant="outline" size="sm" onClick={() => setSettleState({ open: true })}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="min-h-11 min-w-0 max-w-full whitespace-normal text-center"
+                  data-testid="group-settle-all-button"
+                  onClick={() => setSettleState({ open: true })}
+                >
                   <Handshake className="mr-2 h-4 w-4" />
-                  {t('detail.settle')}
+                  {t("detail.settle")}
                 </Button>
               )}
             </div>
@@ -218,22 +272,32 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
             {debts.data.debts.map((debt, i) => {
               const from = memberMap.get(debt.from);
               const to = memberMap.get(debt.to);
-              const toName = to?.name ?? to?.email ?? t('detail.unknown');
+              const toName = to?.name ?? to?.email ?? t("detail.unknown");
               const isMyDebt = debt.from === myId;
               const showVenmo =
                 !g.archivedAt &&
                 venmoSetting.data?.enabled &&
-                g.currency === 'USD' &&
+                g.currency === "USD" &&
                 isMyDebt &&
                 to?.venmoUsername &&
                 isValidVenmoHandle(to.venmoUsername);
-              const venmoUrl = showVenmo ? buildVenmoPayUrl(to.venmoUsername!, debt.amount, `BillOK: ${g.name}`) : null;
+              const venmoUrl = showVenmo
+                ? buildVenmoPayUrl(
+                    to.venmoUsername!,
+                    debt.amount,
+                    `BillOK: ${g.name}`,
+                  )
+                : null;
               return (
-                <div key={i} className="flex items-center gap-2">
+                <div
+                  key={i}
+                  className="flex min-w-0 flex-wrap items-center gap-2"
+                >
                   <button
                     type="button"
                     disabled={!!g.archivedAt}
-                    className="flex flex-1 items-center gap-2 rounded-lg p-2.5 text-sm transition-all enabled:hover:bg-muted/70 enabled:hover:shadow-sm"
+                    data-testid="group-debt-settlement-button"
+                    className="flex min-h-11 w-full min-w-0 flex-wrap items-center gap-2 rounded-lg p-2.5 text-sm whitespace-normal transition-all enabled:hover:bg-muted/70 enabled:hover:shadow-sm"
                     onClick={() =>
                       setSettleState({
                         open: true,
@@ -243,14 +307,14 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                       })
                     }
                   >
-                    <span className="truncate text-xs font-medium text-red-600 sm:text-sm dark:text-red-400">
-                      {from?.name ?? from?.email ?? t('detail.unknown')}
+                    <span className="min-w-0 text-xs font-medium text-red-600 [overflow-wrap:anywhere] sm:text-sm dark:text-red-400">
+                      {from?.name ?? from?.email ?? t("detail.unknown")}
                     </span>
                     <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="truncate text-xs font-medium text-emerald-600 sm:text-sm dark:text-emerald-400">
+                    <span className="min-w-0 text-xs font-medium text-emerald-600 [overflow-wrap:anywhere] sm:text-sm dark:text-emerald-400">
                       {toName}
                     </span>
-                    <span className="ml-auto shrink-0 font-semibold tabular-nums text-red-600 dark:text-red-400">
+                    <span className="ml-auto min-w-0 max-w-full font-semibold tabular-nums text-red-600 [overflow-wrap:anywhere] dark:text-red-400">
                       {formatCents(debt.amount, g.currency, locale)}
                     </span>
                   </button>
@@ -263,15 +327,20 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                       onClick={(e) => {
                         e.stopPropagation();
                         if (settleTimerRef.current) return;
-                        window.open(venmoUrl, '_blank', 'noopener,noreferrer');
+                        window.open(venmoUrl, "_blank", "noopener,noreferrer");
                         settleTimerRef.current = setTimeout(() => {
                           settleTimerRef.current = null;
-                          setVenmoPaid({ from: debt.from, to: debt.to, amount: debt.amount, toName });
+                          setVenmoPaid({
+                            from: debt.from,
+                            to: debt.to,
+                            amount: debt.amount,
+                            toName,
+                          });
                         }, 2000);
                       }}
                       data-testid={`venmo-settle-${i}`}
                     >
-                      {t('detail.payViaVenmo')}
+                      {t("detail.payViaVenmo")}
                     </Button>
                   )}
                 </div>
@@ -284,7 +353,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
       {debts.data && debts.data.debts.length === 0 && (
         <Card>
           <CardContent className="py-4 text-center text-sm text-muted-foreground">
-            {t('detail.allSettledUp')}
+            {t("detail.allSettledUp")}
           </CardContent>
         </Card>
       )}
@@ -292,41 +361,60 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
       {/* Pending Receipts */}
       {pendingReceipts.data && pendingReceipts.data.length > 0 && (
         <div>
-          <h2 className="mb-3 text-lg font-semibold">{t('detail.pendingReceipts')}</h2>
+          <h2 className="mb-3 text-lg font-semibold">
+            {t("detail.pendingReceipts")}
+          </h2>
           <div className="space-y-2">
             {pendingReceipts.data.map((r) => {
               const summary = (
                 <>
                   <p className="min-w-0 font-medium [overflow-wrap:anywhere]">
-                    {r.extractedData?.merchantName ?? t('detail.receipt')}
+                    {r.extractedData?.merchantName ?? t("detail.receipt")}
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    {r.extractedData?.date ?? new Date(r.createdAt).toLocaleDateString(locale)}
-                    {' · '}
-                    {t('detail.savedForLater')}
+                    {r.extractedData?.date ??
+                      new Date(r.createdAt).toLocaleDateString(locale)}
+                    {" · "}
+                    {t("detail.savedForLater")}
                   </p>
                 </>
               );
               return (
-                <Card key={r.id} className={g.archivedAt ? undefined : 'transition-colors hover:bg-muted/50'}>
+                <Card
+                  key={r.id}
+                  className={
+                    g.archivedAt
+                      ? undefined
+                      : "transition-colors hover:bg-muted/50"
+                  }
+                >
                   <CardContent className="flex min-w-0 flex-wrap items-center justify-between gap-2 py-3">
                     {/* An archived group refuses the expense finishing a saved receipt makes; deleting one still works */}
                     {g.archivedAt ? (
                       <div className="flex-1 min-w-0">{summary}</div>
                     ) : (
-                      <Link href={`/groups/${groupId}/scan?receiptId=${r.id}`} className="flex-1 min-w-0">
+                      <Link
+                        href={`/groups/${groupId}/scan?receiptId=${r.id}`}
+                        className="flex-1 min-w-0"
+                      >
                         {summary}
                       </Link>
                     )}
                     <div className="ml-3 flex min-w-0 flex-wrap items-center justify-end gap-2">
                       <p className="min-w-0 text-lg font-semibold tabular-nums [overflow-wrap:anywhere]">
-                        {r.extractedData ? formatCents(r.extractedData.total, g.currency, locale) : '—'}
+                        {r.extractedData
+                          ? formatCents(
+                              r.extractedData.total,
+                              g.currency,
+                              locale,
+                            )
+                          : "—"}
                       </p>
                       <button
                         type="button"
                         className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-destructive"
-                        aria-label={t('detail.deleteReceipt')}
-                        title={t('detail.deleteReceipt')}
+                        aria-label={t("detail.deleteReceipt")}
+                        title={t("detail.deleteReceipt")}
                         onClick={() => setDeleteReceiptId(r.id)}
                       >
                         <Trash2 className="h-4 w-4" />
@@ -343,7 +431,9 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
       {/* Expenses */}
       <div>
         <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-2">
-          <h2 className="min-w-0 text-lg font-semibold">{t('detail.expenses')}</h2>
+          <h2 className="min-w-0 text-lg font-semibold">
+            {t("detail.expenses")}
+          </h2>
           {!g.archivedAt && (
             <div className="flex min-w-0 max-w-full flex-wrap gap-2">
               <Button
@@ -353,7 +443,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                 render={<Link href={`/groups/${groupId}/expenses/new`} />}
               >
                 <Plus className="mr-2 h-4 w-4" />
-                {t('detail.addExpense')}
+                {t("detail.addExpense")}
               </Button>
             </div>
           )}
@@ -365,7 +455,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
           <Card>
             <CardContent className="py-8 text-center">
               <Receipt className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
-              <p className="text-muted-foreground">{t('detail.noExpenses')}</p>
+              <p className="text-muted-foreground">{t("detail.noExpenses")}</p>
               {!g.archivedAt && (
                 <Button
                   className="mt-4"
@@ -374,7 +464,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                   render={<Link href={`/groups/${groupId}/expenses/new`} />}
                 >
                   <Plus className="mr-2 h-4 w-4" />
-                  {t('detail.addFirstExpense')}
+                  {t("detail.addFirstExpense")}
                 </Button>
               )}
             </CardContent>
@@ -391,7 +481,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
               >
                 <div
                   className={`flex min-w-0 flex-wrap items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-muted/50 ${
-                    index % 2 === 1 ? 'bg-muted/20' : ''
+                    index % 2 === 1 ? "bg-muted/20" : ""
                   }`}
                 >
                   <div className="flex min-w-0 flex-1 basis-48 items-start gap-3">
@@ -406,14 +496,19 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                         {expense.title}
                       </p>
                       <p className="min-w-0 text-sm text-muted-foreground [overflow-wrap:anywhere]">
-                        {t('detail.paidBy', {
-                          name: expense.paidBy.name ?? expense.paidBy.email ?? t('detail.unknown'),
+                        {t("detail.paidBy", {
+                          name:
+                            expense.paidBy.name ??
+                            expense.paidBy.email ??
+                            t("detail.unknown"),
                         })}
-                        {' · '}
-                        {new Date(expense.expenseDate).toLocaleDateString(locale)}
+                        {" · "}
+                        {new Date(expense.expenseDate).toLocaleDateString(
+                          locale,
+                        )}
                         {expense.category && (
                           <span className="ml-1 text-muted-foreground/70 [overflow-wrap:anywhere]">
-                            {' · '}
+                            {" · "}
                             {expense.category}
                           </span>
                         )}
@@ -426,7 +521,9 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                   >
                     {formatCents(
                       expense.amount,
-                      expense.baseCurrencyAmount != null ? expense.currency : g.currency,
+                      expense.baseCurrencyAmount != null
+                        ? expense.currency
+                        : g.currency,
                       locale,
                     )}
                   </p>
@@ -441,18 +538,31 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
         groupId={groupId}
         groupCurrency={g.currency}
         currentUserId={myId}
-        isOwnerOrAdmin={myRole === 'OWNER' || myRole === 'ADMIN'}
+        isOwnerOrAdmin={myRole === "OWNER" || myRole === "ADMIN"}
         archived={!!g.archivedAt}
       />
 
-      <InviteDialog groupId={groupId} open={showInvite} onOpenChange={setShowInvite} />
+      <InviteDialog
+        groupId={groupId}
+        open={showInvite}
+        onOpenChange={setShowInvite}
+      />
 
       <SettleDialog
         groupId={groupId}
-        members={settleParties.map((m) => ({ id: m.user.id, name: m.user.name ?? m.user.email }))}
-        {...(settleState.from !== undefined ? { suggestedFrom: settleState.from } : {})}
-        {...(settleState.to !== undefined ? { suggestedTo: settleState.to } : {})}
-        {...(settleState.amount !== undefined ? { suggestedAmount: settleState.amount } : {})}
+        members={settleParties.map((m) => ({
+          id: m.user.id,
+          name: m.user.name ?? m.user.email,
+        }))}
+        {...(settleState.from !== undefined
+          ? { suggestedFrom: settleState.from }
+          : {})}
+        {...(settleState.to !== undefined
+          ? { suggestedTo: settleState.to }
+          : {})}
+        {...(settleState.amount !== undefined
+          ? { suggestedAmount: settleState.amount }
+          : {})}
         currency={g.currency}
         open={settleState.open}
         onOpenChange={(open) => setSettleState((s) => ({ ...s, open }))}
@@ -460,13 +570,15 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
       <ConfirmDialog
         open={venmoPaid !== null}
         onOpenChange={(open) => !open && setVenmoPaid(null)}
-        title={t('detail.venmoPaidTitle')}
-        description={t('detail.venmoPaidDescription', {
-          amount: venmoPaid ? formatCents(venmoPaid.amount, g.currency, locale) : '',
-          name: venmoPaid?.toName ?? '',
+        title={t("detail.venmoPaidTitle")}
+        description={t("detail.venmoPaidDescription", {
+          amount: venmoPaid
+            ? formatCents(venmoPaid.amount, g.currency, locale)
+            : "",
+          name: venmoPaid?.toName ?? "",
         })}
-        confirmLabel={t('detail.venmoPaidConfirm')}
-        cancelLabel={t('detail.venmoPaidCancel')}
+        confirmLabel={t("detail.venmoPaidConfirm")}
+        cancelLabel={t("detail.venmoPaidCancel")}
         destructive={false}
         onConfirm={() =>
           venmoPaid &&
@@ -476,17 +588,20 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
             toId: venmoPaid.to,
             amount: venmoPaid.amount,
             currency: g.currency,
-            note: t('detail.settledViaVenmo'),
+            note: t("detail.settledViaVenmo"),
           })
         }
       />
       <ConfirmDialog
         open={deleteReceiptId !== null}
         onOpenChange={(open) => !open && setDeleteReceiptId(null)}
-        title={t('detail.deleteReceiptTitle')}
-        description={t('detail.deleteReceiptDescription')}
-        confirmLabel={tc('actions.delete')}
-        onConfirm={() => deleteReceiptId && deletePending.mutate({ receiptId: deleteReceiptId })}
+        title={t("detail.deleteReceiptTitle")}
+        description={t("detail.deleteReceiptDescription")}
+        confirmLabel={tc("actions.delete")}
+        onConfirm={() =>
+          deleteReceiptId &&
+          deletePending.mutate({ receiptId: deleteReceiptId })
+        }
       />
     </div>
   );
