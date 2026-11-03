@@ -78,25 +78,30 @@ export function ServerLogsSection() {
   const levels: LogLevel[] = ['debug', 'info', 'warn', 'error'];
 
   return (
-    <section>
-      <div className="mb-4 flex items-center gap-2">
+    <section className="min-w-0" data-testid="admin-server-logs">
+      <div className="mb-4 flex min-w-0 flex-wrap items-center gap-2">
         <ScrollText className="h-5 w-5 text-muted-foreground" />
-        <h2 className="text-lg font-semibold">{t('serverLogs.title')}</h2>
-        {logs.data && <Badge variant="secondary">{t('serverLogs.entries', { count: logs.data.entries.length })}</Badge>}
+        <h2 className="min-w-0 text-lg font-semibold [overflow-wrap:anywhere]">{t('serverLogs.title')}</h2>
+        {logs.data && (
+          <Badge variant="secondary" className="max-w-full whitespace-normal [overflow-wrap:anywhere]">
+            {t('serverLogs.entries', { count: logs.data.entries.length })}
+          </Badge>
+        )}
       </div>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex flex-wrap items-center gap-2">
+      <Card className="min-w-0">
+        <CardHeader className="min-w-0 pb-3">
+          <CardTitle className="flex min-w-0 flex-wrap items-center gap-2">
             {/* Level filter buttons */}
-            <div className="flex gap-1">
+            <div className="flex min-w-0 max-w-full flex-wrap gap-1">
               {levels.map((level) => (
                 <Button
                   key={level}
+                  data-testid={'admin-logs-level-' + level}
                   size="sm"
                   variant={minLevel === level ? 'default' : 'outline'}
                   onClick={() => setMinLevel(level)}
-                  className="h-7 px-2.5 text-xs capitalize"
+                  className="min-h-11 min-w-11 px-3 py-2 text-xs capitalize"
                 >
                   {level}
                 </Button>
@@ -104,33 +109,39 @@ export function ServerLogsSection() {
             </div>
 
             {/* Search */}
-            <div className="relative flex-1 min-w-[180px]">
+            <div className="relative min-w-0 basis-full flex-1 sm:basis-48">
               <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
+                data-testid="admin-logs-search"
+                aria-label={t('serverLogs.filterPlaceholder')}
                 placeholder={t('serverLogs.filterPlaceholder')}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="h-7 pl-8 text-xs"
+                className="min-h-11 pl-8 text-sm"
               />
             </div>
 
             {/* Controls */}
-            <div className="flex gap-1">
+            <div className="flex min-w-0 flex-wrap gap-1">
               <Button
+                data-testid="admin-logs-pause"
+                aria-label={paused ? t('serverLogs.resumeAutoRefresh') : t('serverLogs.pauseAutoRefresh')}
                 size="sm"
                 variant="outline"
                 onClick={() => setPaused(!paused)}
-                className="h-7 px-2.5"
+                className="min-h-11 min-w-11 px-3"
                 title={paused ? t('serverLogs.resumeAutoRefresh') : t('serverLogs.pauseAutoRefresh')}
               >
                 {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
               </Button>
               {!autoScroll && (
                 <Button
+                  data-testid="admin-logs-bottom"
+                  aria-label={t('serverLogs.scrollToBottom')}
                   size="sm"
                   variant="outline"
                   onClick={scrollToBottom}
-                  className="h-7 px-2.5"
+                  className="min-h-11 min-w-11 px-3"
                   title={t('serverLogs.scrollToBottom')}
                 >
                   <ArrowDown className="h-3.5 w-3.5" />

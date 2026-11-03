@@ -647,3 +647,48 @@ test('mobile invitation management keeps registration controls accessible at six
   await expect(row).toContainText('Отозвано', { timeout: 15_000 });
   await expect(row.getByTestId('admin-registration-revoke-invite')).toHaveCount(0);
 });
+
+test('mobile server log filters and search remain reachable at six widths', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await page.goto('/admin', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const section = page.getByTestId('admin-server-logs');
+    await expect(section).toBeVisible();
+    const search = section.getByTestId('admin-logs-search');
+    for (const control of [
+      section.getByTestId('admin-logs-level-debug'),
+      section.getByTestId('admin-logs-level-info'),
+      section.getByTestId('admin-logs-level-warn'),
+      section.getByTestId('admin-logs-level-error'),
+      search,
+      section.getByTestId('admin-logs-pause'),
+    ]) {
+      await expect(control).toBeVisible();
+      const bounds = await control.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.height, 'Logs control height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(bounds!.width, 'Logs control width at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(bounds!.x, 'Logs control left at ' + width + 'px').toBeGreaterThanOrEqual(-1);
+      expect(bounds!.x + bounds!.width, 'Logs control right at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+    }
+    await section.getByTestId('admin-logs-level-error').click();
+    await expect(section.getByTestId('admin-logs-level-error')).toHaveAttribute('data-slot', 'button');
+    await search.fill('billok-mobile-logs-check');
+    await search.focus();
+    await search.scrollIntoViewIfNeeded();
+    await expect(search).toBeInViewport();
+
+    const pause = section.getByTestId('admin-logs-pause');
+    await expect(pause).toHaveAttribute('aria-label', 'Приостановить автоматическое обновление');
+    await pause.click();
+    await expect(pause).toHaveAttribute('aria-label', 'Возобновить автоматическое обновление');
+    await expect(section).toContainText('Автоматическое обновление приостановлено');
+    await pause.click();
+    await expect(pause).toHaveAttribute('aria-label', 'Приостановить автоматическое обновление');
+    await checkPhoneLayout(page, width, true);
+  }
+});
