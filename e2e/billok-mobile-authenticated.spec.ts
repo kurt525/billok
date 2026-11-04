@@ -1293,3 +1293,42 @@ test('mobile BillOK hides legacy Venmo controls while preserving SBP at six widt
     await checkPhoneLayout(page, width, true);
   }
 });
+
+test('mobile profile SBP search stays reachable with compact keyboard viewport', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+  const height = 300;
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height });
+    await page.goto('/settings', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const form = page.getByTestId('mobile-profile-form');
+    const phone = form.getByTestId('sbp-phone-input');
+    const search = form.getByTestId('sbp-bank-search');
+    const options = form.getByTestId('sbp-bank-list');
+    const save = form.getByTestId('save-profile-btn');
+
+    await phone.focus();
+    await phone.fill('+79991234567');
+    await search.focus();
+    await search.fill('Сбер');
+    await expect(options.getByTestId('sbp-bank-option-sberbank')).toBeVisible();
+    const option = options.getByTestId('sbp-bank-option-sberbank');
+    await option.click();
+    await expect(option.getByTestId('sbp-bank-radio-sberbank')).toBeChecked();
+
+    const listDimensions = await options.evaluate((el) => ({ height: el.clientHeight }));
+    expect(listDimensions.height, 'SBP list height at ' + width).toBeLessThanOrEqual(height * 0.36 + 2);
+    for (const field of [phone, search, save]) {
+      await field.scrollIntoViewIfNeeded();
+      const rect = await field.boundingBox();
+      expect(rect).not.toBeNull();
+      expect(rect!.height, 'Field touch height at ' + width).toBeGreaterThanOrEqual(44);
+      expect(rect!.x, 'Field left at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(rect!.x + rect!.width, 'Field right at ' + width).toBeLessThanOrEqual(width + 1);
+      expect(rect!.y, 'Field top at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(rect!.y + rect!.height, 'Field below viewport at ' + width).toBeLessThanOrEqual(height + 1);
+    }
+    await checkPhoneLayout(page, width);
+  }
+});

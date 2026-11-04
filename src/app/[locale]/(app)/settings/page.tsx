@@ -63,7 +63,7 @@ function ProfileForm({
   }
 
   return (
-    <form onSubmit={handleSave} className="space-y-4">
+    <form onSubmit={handleSave} className="min-w-0 space-y-4" data-testid="mobile-profile-form">
       <div className="space-y-2">
         <Label htmlFor="email">{t('profile.email')}</Label>
         <Input id="email" type="email" autoComplete="email" className="h-11 min-w-0 text-base" value={email} disabled />
@@ -88,7 +88,7 @@ function ProfileForm({
           inputMode="tel"
           autoComplete="tel"
           maxLength={24}
-          className="h-11 min-w-0 text-base"
+          className="h-11 min-w-0 scroll-mt-20 text-base"
           value={sbpPhone}
           onChange={(e) => setSbpPhone(e.target.value)}
           placeholder={t('profile.sbpPhonePlaceholder')}
@@ -102,7 +102,7 @@ function ProfileForm({
           id="sbp-bank-search"
           type="search"
           autoComplete="off"
-          className="h-11 min-w-0 text-base"
+          className="h-11 min-w-0 scroll-mt-20 text-base"
           placeholder={t('profile.sbpBankSearchPlaceholder')}
           aria-label={t('profile.sbpBankSearch')}
           value={sbpBankSearch}
@@ -117,7 +117,7 @@ function ProfileForm({
         <div
           role="radiogroup"
           aria-label={t('profile.sbpBank')}
-          className="max-h-64 space-y-1 overflow-y-auto rounded-xl border p-1"
+          className="max-h-[min(16rem,36dvh)] min-w-0 space-y-1 overflow-y-auto overscroll-contain rounded-xl border p-1"
           data-testid="sbp-bank-list"
         >
           <label
@@ -237,7 +237,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-lg space-y-6">
+    <div className="mx-auto min-w-0 max-w-lg space-y-6 pb-[calc(2rem+env(safe-area-inset-bottom))]">
       <h1 className="text-2xl font-bold">{t('title')}</h1>
 
       <Card>
