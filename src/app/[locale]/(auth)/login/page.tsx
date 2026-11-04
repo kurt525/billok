@@ -193,7 +193,7 @@ function LoginForm() {
   );
 
   return (
-    <Card className="border-primary/10 shadow-lg shadow-primary/5">
+    <Card className="min-w-0 border-primary/10 shadow-lg shadow-primary/5">
       <CardHeader className="text-center pb-2">
         <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/20">
           <Receipt className="h-7 w-7 text-primary" />
@@ -201,7 +201,7 @@ function LoginForm() {
         <CardTitle className="text-2xl font-semibold tracking-tight">{t('title')}</CardTitle>
         <CardDescription className="mt-1">{t('subtitle')}</CardDescription>
       </CardHeader>
-      <CardContent className="pt-4">
+      <CardContent className="min-w-0 pt-4">
         {loginOptions.isPending ? (
           <LoadingSpinner className="py-8" />
         ) : (
@@ -210,7 +210,7 @@ function LoginForm() {
               <div
                 role="alert"
                 data-testid="login-error"
-                className="mb-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+                className="mb-4 min-w-0 rounded-md bg-destructive/10 p-3 text-sm text-destructive [overflow-wrap:anywhere]"
               >
                 {shownError}
                 {showSignOut && (
@@ -278,7 +278,7 @@ function LoginForm() {
             {passwordLogin &&
               (!showMagicLink ? (
                 <>
-                  <form onSubmit={handleSubmit} className="space-y-4">
+                  <form onSubmit={handleSubmit} className="min-w-0 space-y-4" data-testid="mobile-login-form">
                     <div className="space-y-2">
                       <Label htmlFor="email">{t('email')}</Label>
                       <Input
@@ -295,7 +295,7 @@ function LoginForm() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <div className="flex items-center justify-between">
+                      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                         <Label htmlFor="password">{t('password')}</Label>
                         <Link
                           href="/forgot-password"

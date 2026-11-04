@@ -505,3 +505,52 @@ test('password recovery mobile request and one-time reset feedback', async ({ pa
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
   }
 });
+
+test.describe('Keyboard-sized BillOK login on six mobile widths', () => {
+  test.use({ viewport: { width: 320, height: 300 }, isMobile: true, hasTouch: true });
+
+  test('short-viewport login keeps error and credentials reachable without submitting', async ({ page }) => {
+    test.setTimeout(170_000);
+    const height = 300;
+    for (const width of [320, 360, 430, 480, 600, 720]) {
+      await page.setViewportSize({ width, height });
+      await page.goto('/login?error=OAuthAccountNotLinked', { waitUntil: 'networkidle' });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      const alert = page.getByTestId('login-error');
+      const form = page.getByTestId('mobile-login-form');
+      await expect(alert).toBeVisible();
+      await expect(form).toBeVisible();
+      const email = form.locator('input#email');
+      const password = form.locator('input#password');
+      const submit = form.locator('button[type="submit"]');
+      const forgot = form.locator('a[href*="/forgot-password"]');
+      await expect(forgot).toBeVisible();
+
+      await email.fill('example@mail.ru');
+      await password.fill('example-password');
+      for (const target of [email, password, submit, forgot]) {
+        await target.scrollIntoViewIfNeeded();
+        const rect = await target.boundingBox();
+        expect(rect).not.toBeNull();
+        expect(rect!.height, 'Touch target height at ' + width).toBeGreaterThanOrEqual(44);
+        expect(rect!.x, 'Target left at ' + width).toBeGreaterThanOrEqual(-1);
+        expect(rect!.x + rect!.width, 'Target right at ' + width).toBeLessThanOrEqual(width + 1);
+        expect(rect!.y, 'Target top at ' + width).toBeGreaterThanOrEqual(-1);
+        expect(rect!.y + rect!.height, 'Target bottom at ' + width).toBeLessThanOrEqual(height + 1);
+      }
+      const layout = await page.evaluate(() => ({
+        inner: innerWidth,
+        width: document.documentElement.scrollWidth,
+        clipped: [...document.querySelectorAll('input, button, form, [data-slot="card"], [role="alert"]')]
+          .filter((el) => {
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && (rect.left < -2 || rect.right > innerWidth + 2);
+          })
+          .map((el) => ({ name: el.tagName, testId: el.getAttribute('data-testid') })),
+      }));
+      expect(layout.inner, 'Expanded viewport at ' + width).toBe(width);
+      expect(layout.width, 'Horizontal overflow at ' + width).toBeLessThanOrEqual(width + 1);
+      expect(layout.clipped, 'Off-screen login element at ' + width).toEqual([]);
+    }
+  });
+});
