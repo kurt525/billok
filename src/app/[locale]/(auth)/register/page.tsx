@@ -132,7 +132,7 @@ function RegisterForm() {
   }
 
   return (
-    <Card className="border-primary/10 shadow-lg shadow-primary/5">
+    <Card className="min-w-0 border-primary/10 shadow-lg shadow-primary/5">
       <CardHeader className="text-center pb-2">
         <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/20">
           <Receipt className="h-7 w-7 text-primary" />
@@ -140,11 +140,13 @@ function RegisterForm() {
         <CardTitle className="text-2xl font-semibold tracking-tight">{t('title')}</CardTitle>
         <CardDescription className="mt-1">{t('subtitle')}</CardDescription>
       </CardHeader>
-      <CardContent className="pt-4">
+      <CardContent className="min-w-0 pt-4">
         {confirmationEmail !== null ? (
           <div className="space-y-4" role="status" aria-live="polite">
             <p className="text-base font-semibold">{t('confirmationPendingTitle')}</p>
-            <p className="break-words text-sm">{t('confirmationPendingDescription', { email: confirmationEmail })}</p>
+            <p className="min-w-0 text-sm [overflow-wrap:anywhere]">
+              {t('confirmationPendingDescription', { email: confirmationEmail })}
+            </p>
             <p className="text-sm text-muted-foreground">{t('confirmationPendingSpamHint')}</p>
             <RegistrationEmailResendForm initialEmail={confirmationEmail} />
             <Link href={loginHref} className="inline-flex min-h-11 items-center font-medium text-primary underline">
@@ -160,8 +162,15 @@ function RegisterForm() {
             {t('error.closed')}
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {error && <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+          <form onSubmit={handleSubmit} className="min-w-0 space-y-4" data-testid="mobile-register-form">
+            {error && (
+              <div
+                role="alert"
+                className="min-w-0 rounded-md bg-destructive/10 p-3 text-sm text-destructive [overflow-wrap:anywhere]"
+              >
+                {error}
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="name">{t('name')}</Label>
               <Input
@@ -181,7 +190,7 @@ function RegisterForm() {
                 aria-describedby={nameError ? 'name-error' : undefined}
               />
               {nameError && (
-                <p id="name-error" className="text-sm text-destructive">
+                <p id="name-error" className="text-sm text-destructive [overflow-wrap:anywhere]">
                   {nameError}
                 </p>
               )}
@@ -249,7 +258,7 @@ function RegisterForm() {
 
         <p className="text-center text-sm text-muted-foreground">
           {t('hasAccount')}{' '}
-          <Link href={loginHref} className="font-medium text-primary hover:underline">
+          <Link href={loginHref} className="inline-flex min-h-11 items-center font-medium text-primary hover:underline">
             {t('signIn')}
           </Link>
         </p>

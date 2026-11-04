@@ -554,3 +554,65 @@ test.describe('Keyboard-sized BillOK login on six mobile widths', () => {
     }
   });
 });
+
+test('invite-only form fits keyboard-sized viewport at six widths', async ({ page }) => {
+  test.setTimeout(170_000);
+  let registrations = 0;
+  await page.route('**/api/trpc/auth.getRegistrationMode*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{ result: { data: { json: { mode: 'invite-only' } } } }]),
+    }),
+  );
+  await page.route('**/api/trpc/auth.register*', async (route) => {
+    registrations++;
+    await route.abort();
+  });
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 300 });
+    await page.goto('/register', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const form = page.getByTestId('mobile-register-form');
+    await expect(form).toBeVisible();
+    const name = form.locator('input#name');
+    const controls = [
+      name,
+      form.locator('input#email'),
+      form.locator('input#password'),
+      form.locator('input#inviteCode'),
+      form.locator('button[type="submit"]'),
+    ];
+    await name.fill('   ');
+    await controls[1]!.fill('participant@mail.ru');
+    await controls[2]!.fill('example-password');
+    await controls[3]!.fill('INVITE-QA-FAKE');
+    await controls[4]!.click();
+    await expect(page.locator('#name-error')).toBeVisible();
+    expect(registrations).toBe(0);
+    for (const el of controls) {
+      await el.scrollIntoViewIfNeeded();
+      const b = await el.boundingBox();
+      expect(b).not.toBeNull();
+      expect(b!.height).toBeGreaterThanOrEqual(44);
+      expect(b!.x).toBeGreaterThanOrEqual(-1);
+      expect(b!.x + b!.width).toBeLessThanOrEqual(width + 1);
+      expect(b!.y).toBeGreaterThanOrEqual(-1);
+      expect(b!.y + b!.height).toBeLessThanOrEqual(301);
+    }
+    const geometry = await page.evaluate(() => ({
+      viewport: innerWidth,
+      document: document.documentElement.scrollWidth,
+      clipped: [...document.querySelectorAll('input,button,form,[data-slot="card"]')]
+        .filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && (r.left < -2 || r.right > innerWidth + 2);
+        })
+        .map((el) => el.tagName),
+    }));
+    expect(geometry.viewport).toBe(width);
+    expect(geometry.document).toBeLessThanOrEqual(width + 1);
+    expect(geometry.clipped).toEqual([]);
+  }
+  expect(registrations).toBe(0);
+});
