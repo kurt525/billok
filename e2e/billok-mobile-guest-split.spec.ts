@@ -588,7 +588,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // 1.4.15.11.5.2: mobile end-to-end acceptance for the finalized receipt.
     // Hard reload at each width avoids carrying stale mobile viewport offsets.
     for (const width of [320, 360, 430, 480, 600, 720]) {
-      await page.setViewportSize({ width, height: 380 });
+      await page.setViewportSize({ width, height: 300 });
       await page.reload({ waitUntil: 'networkidle' });
       await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
       await expect(page.getByTestId('finalized-bill-total')).toContainText('12,01', { timeout: 15_000 });
@@ -596,6 +596,17 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       await expect(page.getByTestId('finalized-waiter-tip-total')).toContainText('2,00');
       await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('4,59');
       await expect(page.getByTestId('guest-personal-reimbursement')).toContainText('Борис');
+      await expect(page.locator('#settle-amount')).toHaveCount(0);
+      await expect(page.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 15000 });
+      for (const id of ['guest-personal-reimbursement-amount', 'guest-copy-reimbursement-amount', 'guest-mark-paid']) {
+        const target = page.getByTestId(id);
+        await target.scrollIntoViewIfNeeded();
+        const box = await target.boundingBox();
+        expect(box!.x, id + ' left at ' + width).toBeGreaterThanOrEqual(-1);
+        expect(box!.x + box!.width, id + ' right at ' + width).toBeLessThanOrEqual(width + 1);
+        if (id !== 'guest-personal-reimbursement-amount')
+          expect(box!.height, id + ' touch height at ' + width).toBeGreaterThanOrEqual(44);
+      }
       await fitsPhone(page);
       for (const testId of ['guest-view-summary-link', 'copy-link-btn', 'personal-link-btn']) {
         const bounds = await page.getByTestId(testId).evaluate((element) => {

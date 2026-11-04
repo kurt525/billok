@@ -147,9 +147,12 @@ export function GuestPayerPaymentReview({
                 className="space-y-2 rounded-lg border p-3"
                 data-testid={'guest-payer-payment-' + payment.personId}
               >
-                <div className="flex min-w-0 justify-between gap-3 text-sm">
+                <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 text-sm">
                   <span className="min-w-0 [overflow-wrap:anywhere] font-medium">{payment.name}</span>
-                  <span className="shrink-0 font-semibold tabular-nums">
+                  <span
+                    data-testid="guest-payer-payment-amount"
+                    className="ml-auto min-w-0 max-w-full font-semibold tabular-nums [overflow-wrap:anywhere]"
+                  >
                     {formatCents(payment.amount, 'RUB', locale)}
                   </span>
                 </div>
@@ -167,7 +170,7 @@ export function GuestPayerPaymentReview({
                   <Button
                     type="button"
                     variant="outline"
-                    className="min-h-11 w-full"
+                    className="min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center"
                     disabled={verifyingId !== null}
                     onClick={() => {
                       void confirmReceipt(payment.personId);

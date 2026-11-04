@@ -11,12 +11,11 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
-import { Plus, Settings, UserPlus, ArrowRight, Receipt, Handshake, Tag, Archive, Trash2 } from 'lucide-react';
+import { Plus, Settings, UserPlus, ArrowRight, Receipt, Tag, Archive, Trash2 } from 'lucide-react';
 import { Link } from '@/i18n/navigation';
 import { toast } from 'sonner';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { InviteDialog } from '@/components/groups/invite-dialog';
-import { SettleDialog } from '@/components/groups/settle-dialog';
 import { PaymentsList } from '@/components/groups/payments-list';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { getInitials, avatarColor } from '@/lib/avatar';
@@ -25,12 +24,6 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
   const { groupId } = use(params);
   const locale = useLocale();
   const [showInvite, setShowInvite] = useState(false);
-  const [settleState, setSettleState] = useState<{
-    open: boolean;
-    from?: string;
-    to?: string;
-    amount?: number;
-  }>({ open: false });
   // The Venmo payment to ask about once the payer is back from Venmo
   const [venmoPaid, setVenmoPaid] = useState<{
     from: string;
@@ -97,8 +90,6 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
   // A placeholder removed from the group still has their name in the balances: one that
   // comes back (an old expense changed) shows under it, and can be settled with them (#284)
   const memberMap = new Map([...g.members, ...g.removedMembers].map((m) => [m.user.id, m.user]));
-  const inDebts = new Set(debts.data?.debts.flatMap((d) => [d.from, d.to]) ?? []);
-  const settleParties = [...g.members, ...g.removedMembers.filter((m) => inDebts.has(m.user.id))];
   const myRole = g.members.find((m) => m.user.id === myId)?.role;
 
   return (
@@ -210,19 +201,6 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
               <CardTitle className="min-w-0 text-base [overflow-wrap:anywhere]" data-testid="balances-title">
                 {t('detail.balances')}
               </CardTitle>
-              {/* An archived group refuses payments (see the banner above) */}
-              {!g.archivedAt && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="min-h-11 min-w-0 max-w-full whitespace-normal text-center"
-                  data-testid="group-settle-all-button"
-                  onClick={() => setSettleState({ open: true })}
-                >
-                  <Handshake className="mr-2 h-4 w-4" />
-                  {t('detail.settle')}
-                </Button>
-              )}
             </div>
           </CardHeader>
           <CardContent className="space-y-1">
@@ -241,19 +219,9 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
               const venmoUrl = showVenmo ? buildVenmoPayUrl(to.venmoUsername!, debt.amount, `BillOK: ${g.name}`) : null;
               return (
                 <div key={i} className="flex min-w-0 flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={!!g.archivedAt}
-                    data-testid="group-debt-settlement-button"
-                    className="flex min-h-11 w-full min-w-0 scroll-mt-20 flex-wrap items-center gap-2 rounded-lg p-2.5 text-sm whitespace-normal transition-all enabled:hover:bg-muted/70 enabled:hover:shadow-sm"
-                    onClick={() =>
-                      setSettleState({
-                        open: true,
-                        from: debt.from,
-                        to: debt.to,
-                        amount: debt.amount,
-                      })
-                    }
+                  <div
+                    data-testid="group-debt-row"
+                    className="flex min-h-11 w-full min-w-0 flex-wrap items-center gap-2 rounded-lg p-2.5 text-sm"
                   >
                     <span className="min-w-0 text-xs font-medium text-red-600 [overflow-wrap:anywhere] sm:text-sm dark:text-red-400">
                       {from?.name ?? from?.email ?? t('detail.unknown')}
@@ -268,7 +236,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                     >
                       {formatCents(debt.amount, g.currency, locale)}
                     </span>
-                  </button>
+                  </div>
                   {venmoUrl && (
                     <Button
                       variant="ghost"
@@ -472,19 +440,6 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
 
       <InviteDialog groupId={groupId} open={showInvite} onOpenChange={setShowInvite} />
 
-      <SettleDialog
-        groupId={groupId}
-        members={settleParties.map((m) => ({
-          id: m.user.id,
-          name: m.user.name ?? m.user.email,
-        }))}
-        {...(settleState.from !== undefined ? { suggestedFrom: settleState.from } : {})}
-        {...(settleState.to !== undefined ? { suggestedTo: settleState.to } : {})}
-        {...(settleState.amount !== undefined ? { suggestedAmount: settleState.amount } : {})}
-        currency={g.currency}
-        open={settleState.open}
-        onOpenChange={(open) => setSettleState((s) => ({ ...s, open }))}
-      />
       <ConfirmDialog
         open={venmoPaid !== null}
         onOpenChange={(open) => !open && setVenmoPaid(null)}

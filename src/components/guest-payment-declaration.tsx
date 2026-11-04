@@ -91,7 +91,7 @@ export function GuestPaymentDeclaration({
         <>
           <Button
             type="button"
-            className="min-h-11 w-full"
+            className="min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center"
             onClick={declarePayment}
             disabled={mark.isPending}
             data-testid="guest-mark-paid"

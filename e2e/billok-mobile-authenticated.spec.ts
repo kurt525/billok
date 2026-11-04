@@ -487,18 +487,16 @@ test('long expense history stays readable and opens at six mobile widths', async
         sizes.amountClientWidth + 1,
       );
       await checkPhoneLayout(page, width);
-      for (const button of [
-        page.getByTestId('group-settle-all-button'),
-        page.getByTestId('group-debt-settlement-button'),
-      ]) {
-        await expect(button).toBeVisible();
-        const bounds = await button.boundingBox();
-        expect(bounds).not.toBeNull();
-        expect(bounds!.x, 'Settlement button left at ' + width + 'px').toBeGreaterThanOrEqual(-1);
-        expect(bounds!.x + bounds!.width, 'Settlement button right at ' + width + 'px').toBeLessThanOrEqual(width + 1);
-        expect(bounds!.height, 'Settlement tap target at ' + width + 'px').toBeGreaterThanOrEqual(44);
-      }
-      const debtButton = page.getByTestId('group-debt-settlement-button').first();
+      // BillOK displays group debt read-only; actual reimbursements belong to a receipt.
+      await expect(page.getByTestId('group-settle-all-button')).toHaveCount(0);
+      await expect(page.getByTestId('group-debt-settlement-button')).toHaveCount(0);
+      await expect(page.getByTestId('mobile-settle-dialog')).toHaveCount(0);
+      const debtButton = page.getByTestId('group-debt-row').first();
+      await expect(debtButton).toBeVisible();
+      const debtBox = await debtButton.boundingBox();
+      expect(debtBox!.height).toBeGreaterThanOrEqual(44);
+      expect(debtBox!.x).toBeGreaterThanOrEqual(-1);
+      expect(debtBox!.x + debtBox!.width).toBeLessThanOrEqual(width + 1);
       const debtAmount = debtButton.getByTestId('group-debt-amount');
       await expect(debtAmount).toContainText('₽');
       await debtAmount.scrollIntoViewIfNeeded();
@@ -509,19 +507,6 @@ test('long expense history stays readable and opens at six mobile widths', async
       expect(debtGeometry.left, 'Debt amount left at ' + width).toBeGreaterThanOrEqual(-1);
       expect(debtGeometry.right, 'Debt amount right at ' + width).toBeLessThanOrEqual(width + 1);
       expect(debtGeometry.scroll, 'Unclipped RUB debt at ' + width).toBeLessThanOrEqual(debtGeometry.width + 1);
-      await debtButton.click();
-      const settlement = page.getByTestId('mobile-settle-dialog');
-      await expect(settlement).toBeVisible();
-      const suggested = settlement.locator('#settle-amount');
-      await expect(suggested).toBeVisible();
-      await suggested.scrollIntoViewIfNeeded();
-      const suggestedBox = await suggested.boundingBox();
-      expect(suggestedBox, 'Settlement amount at ' + width).not.toBeNull();
-      expect(suggestedBox!.height).toBeGreaterThanOrEqual(44);
-      expect(suggestedBox!.x).toBeGreaterThanOrEqual(-1);
-      expect(suggestedBox!.x + suggestedBox!.width).toBeLessThanOrEqual(width + 1);
-      await settlement.locator('[data-slot="dialog-close"]').click();
-      await expect(settlement).toHaveCount(0);
       await checkPhoneLayout(page, width);
       await link.click();
       await expect(page).toHaveURL(new RegExp('/groups/' + group.groupId + '/expenses/' + expense.id + '$'));
@@ -1625,5 +1610,77 @@ test('group search and archive fit with a keyboard-height viewport', async ({ pa
     await link.click();
     await expect(page).toHaveURL(/\/groups\/[^/]+$/);
     await checkPhoneLayout(page, width);
+  }
+});
+
+test('receipt-linked history layout is usable on six keyboard-sized phones', async ({ page }) => {
+  test.setTimeout(160_000);
+  const group = await createTestGroup(users.alice.email, users.alice.password, [
+    { email: users.bob.email, password: users.bob.password },
+  ]);
+  const note = 'ДлинноеПримечание'.repeat(5);
+  let deleted = 0;
+  try {
+    await signInAsSeedAdmin(page);
+    // Mocked visual history only: no payment record is created.
+    await page.route('**/api/trpc/**', async (route) => {
+      const names = new URL(route.request().url()).pathname.split('/api/trpc/')[1]?.split(',') ?? [];
+      if (names.includes('settlements.delete')) {
+        deleted++;
+        return route.abort();
+      }
+      const idx = names.indexOf('settlements.list');
+      if (idx < 0) return route.continue();
+      const response = await route.fetch();
+      const original = await response.json();
+      const rows = Array.isArray(original) ? original : [original];
+      rows[idx].result.data = {
+        json: {
+          items: [
+            {
+              id: 'visual-only',
+              fromId: group.memberIds[users.bob.email],
+              toId: group.memberIds[users.alice.email],
+              from: { name: 'Борис'.repeat(8) },
+              to: { name: 'Алексей'.repeat(6) },
+              amount: 61728395,
+              currency: 'RUB',
+              baseCurrencyAmount: null,
+              settledAt: '2026-11-01T00:00:00Z',
+              note,
+            },
+          ],
+          nextCursor: null,
+        },
+      };
+      return route.fulfill({ response, json: Array.isArray(original) ? rows : rows[0] });
+    });
+    for (const width of [320, 360, 430, 480, 600, 720]) {
+      await page.setViewportSize({ width, height: 300 });
+      await page.goto('/groups/' + group.groupId, { waitUntil: 'networkidle' });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      const row = page.getByTestId('payments-section').getByTestId('payment-row');
+      await expect(row).toHaveCount(1);
+      await expect(row.getByTestId('payment-note')).toContainText(note);
+      await expect(row.getByTestId('payment-amount')).toContainText('₽');
+      await checkPhoneLayout(page, width);
+      const remove = row.getByTestId('delete-payment');
+      const button = await remove.boundingBox();
+      expect(button!.width).toBeGreaterThanOrEqual(44);
+      expect(button!.height).toBeGreaterThanOrEqual(44);
+      await remove.click();
+      const dialog = page.getByTestId('mobile-payment-delete-dialog');
+      await expect(dialog).toBeVisible();
+      const bounds = await dialog.boundingBox();
+      expect(bounds!.x).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width + 1);
+      expect(bounds!.y).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(301);
+      await dialog.getByTestId('cancel-delete-payment').click();
+      await expect(dialog).toHaveCount(0);
+      expect(deleted).toBe(0);
+    }
+  } finally {
+    await group.dispose();
   }
 });

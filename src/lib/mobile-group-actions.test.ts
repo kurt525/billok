@@ -80,3 +80,34 @@ describe('Mobile payment history and safe confirmation', () => {
     }
   });
 });
+
+describe('BillOK receipt-bound payments (mobile presentation only)', () => {
+  it('removes legacy free-form settlement actions from the group screen', () => {
+    const page = source('src/app/[locale]/(app)/groups/[groupId]/page.tsx');
+    expect(page).not.toContain('<SettleDialog');
+    expect(page).not.toContain('group-debt-settlement-button');
+    expect(page).not.toContain('group-settle-all-button');
+    expect(page).toContain('data-testid="group-debt-row"');
+  });
+
+  it('uses the calculated receipt debt rather than an editable transfer amount', () => {
+    const receipt = source('src/app/[locale]/split/[token]/claim/page.tsx');
+    const payer = source('src/components/guest-payer-payment-review.tsx');
+    const participant = source('src/components/guest-payment-declaration.tsx');
+    expect(receipt).toContain('data-testid="guest-personal-reimbursement-amount"');
+    expect(receipt).toContain('formatCents(personalReimbursement.total, currency, locale)');
+    expect(receipt).not.toContain('id="settle-amount"');
+    expect(payer).toContain('data-testid="guest-payer-payment-amount"');
+    expect(participant).toContain('data-testid="guest-mark-paid"');
+  });
+
+  it('keeps payment history and cancellation visible on small phones', () => {
+    const list = source('src/components/groups/payments-list.tsx');
+    expect(list).toContain('data-testid="payment-note"');
+    expect(list).toContain('data-testid="payment-amount"');
+    expect(list).toContain('data-testid="cancel-delete-payment"');
+    expect(list).toContain('data-testid="mobile-payment-delete-dialog"');
+    expect(list).toContain('max-h-[calc(100dvh-2rem)]');
+    expect(list).toContain('size-11 shrink-0');
+  });
+});

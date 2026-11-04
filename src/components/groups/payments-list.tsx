@@ -91,14 +91,20 @@ export function PaymentsList({
                     <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     <span className="min-w-0 [overflow-wrap:anywhere]">{to}</span>
                   </p>
-                  <p className="min-w-0 text-sm text-muted-foreground [overflow-wrap:anywhere]">
+                  <p
+                    data-testid="payment-note"
+                    className="min-w-0 text-sm text-muted-foreground [overflow-wrap:anywhere]"
+                  >
                     {date}
                     {p.note && ` · ${p.note}`}
                   </p>
                 </div>
               </div>
               <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
-                <p className="min-w-0 max-w-full text-right text-lg font-semibold tabular-nums [overflow-wrap:anywhere]">
+                <p
+                  data-testid="payment-amount"
+                  className="min-w-0 max-w-full text-right text-lg font-semibold tabular-nums [overflow-wrap:anywhere]"
+                >
                   {amount}
                 </p>
                 {canDelete && (
@@ -149,7 +155,12 @@ export function PaymentsList({
             )}
           </DialogHeader>
           <DialogFooter className="flex min-w-0 flex-wrap gap-2">
-            <Button variant="outline" className="min-h-11 min-w-11" onClick={() => setPending(null)}>
+            <Button
+              variant="outline"
+              className="min-h-11 min-w-11"
+              data-testid="cancel-delete-payment"
+              onClick={() => setPending(null)}
+            >
               {tc('actions.cancel')}
             </Button>
             <Button

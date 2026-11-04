@@ -1178,7 +1178,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 })}
               </p>
               <p
-                className="text-2xl font-bold text-primary tabular-nums"
+                className="min-w-0 max-w-full text-2xl font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
                 data-testid="guest-personal-reimbursement-amount"
               >
                 {formatCents(personalReimbursement.total, currency, locale)}
