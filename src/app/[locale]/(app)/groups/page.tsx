@@ -53,6 +53,7 @@ function GroupsContent() {
         </div>
         <Button
           className="min-h-11 min-w-0 whitespace-normal"
+          data-testid="mobile-groups-create"
           nativeButton={false}
           render={<Link href="/groups/new" />}
         >
@@ -62,24 +63,27 @@ function GroupsContent() {
       </div>
 
       {hasGroups && (
-        <div className="flex min-w-0 flex-wrap items-center gap-3">
-          <div className="relative min-w-0 flex-1">
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <div className="relative min-w-0 w-full sm:flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               placeholder={t('list.searchPlaceholder')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="h-11 min-w-0 pl-9"
+              className="h-11 min-w-0 scroll-mt-20 pl-9 text-base"
+              data-testid="mobile-groups-search"
             />
           </div>
           <Button
             variant={showArchived ? 'default' : 'outline'}
+            aria-pressed={showArchived}
+            data-testid="mobile-groups-archived-toggle"
             size="sm"
             onClick={() => {
               setShowArchived(!showArchived);
               setShowAll(false);
             }}
-            className="min-h-11 shrink-0"
+            className="min-h-11 w-full min-w-0 whitespace-normal sm:w-auto sm:shrink-0"
           >
             <Archive className="mr-2 h-4 w-4" />
             {t('list.archived')}
@@ -114,7 +118,7 @@ function GroupsContent() {
 
       <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-[repeat(auto-fit,minmax(280px,1fr))]">
         {(search || showAll ? filteredGroups : filteredGroups?.slice(0, GROUPS_PER_PAGE))?.map((group) => (
-          <Link key={group.id} href={`/groups/${group.id}`} className="block min-w-0">
+          <Link key={group.id} href={`/groups/${group.id}`} className="block min-w-0 scroll-mt-20">
             <Card
               className={`border-l-[3px] transition-all duration-200 hover:-translate-y-px hover:shadow-md ${
                 showArchived

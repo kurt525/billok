@@ -1552,3 +1552,44 @@ test('keyboard-height manual item inputs stay reachable at six mobile widths', a
   }
   expect(saveRequests).toBe(0);
 });
+
+test('group search and archive fit with a keyboard-height viewport', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 300 });
+    await page.goto('/groups', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const search = page.getByTestId('mobile-groups-search');
+    const archived = page.getByTestId('mobile-groups-archived-toggle');
+    const create = page.getByTestId('mobile-groups-create');
+    await expect(search).toBeVisible();
+    await expect(archived).toHaveAttribute('aria-pressed', 'false');
+    for (const control of [search, archived, create]) {
+      await control.scrollIntoViewIfNeeded();
+      const box = await control.boundingBox();
+      expect(box, 'Group control at ' + width).not.toBeNull();
+      expect(box!.height, 'Touch height at ' + width).toBeGreaterThanOrEqual(44);
+      expect(box!.x, 'Left edge at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(box!.x + box!.width, 'Right edge at ' + width).toBeLessThanOrEqual(width + 1);
+      expect(box!.y, 'Top edge at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(box!.y + box!.height, 'Bottom edge at ' + width).toBeLessThanOrEqual(301);
+    }
+    await search.fill('Apartment');
+    const link = page.locator('a[href^="/groups/"]').filter({ hasText: 'Apartment' }).first();
+    await expect(link).toBeVisible();
+    await checkPhoneLayout(page, width);
+    await search.fill('no-such-billok-group-1234');
+    await expect(link).toHaveCount(0);
+    await search.fill('');
+    await archived.click();
+    await expect(archived).toHaveAttribute('aria-pressed', 'true');
+    await archived.click();
+    await expect(archived).toHaveAttribute('aria-pressed', 'false');
+    await checkPhoneLayout(page, width);
+    await search.fill('Apartment');
+    await link.click();
+    await expect(page).toHaveURL(/\/groups\/[^/]+$/);
+    await checkPhoneLayout(page, width);
+  }
+});
