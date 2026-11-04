@@ -1034,3 +1034,77 @@ test('mobile group table sort and local scroll at six widths', async ({ page }) 
   }
   expect(reads).toBeGreaterThanOrEqual(6);
 });
+
+test('mobile admin group deletion dialog is safe at six widths', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+  let deletions = 0;
+  const name = 'ДлинноеИмяГруппыБезПробелов'.repeat(5);
+  await page.route('**/api/trpc/**', async (route) => {
+    const procedures = new URL(route.request().url()).pathname.split('/api/trpc/')[1]?.split(',') ?? [];
+    if (procedures.includes('admin.deleteGroup')) {
+      deletions++;
+      await route.abort();
+      return;
+    }
+    const index = procedures.indexOf('admin.listGroups');
+    if (index < 0) return route.continue();
+    const response = await route.fetch();
+    const data = await response.json();
+    const entries = Array.isArray(data) ? data : [data];
+    expect(entries[index]?.result?.data).toBeDefined();
+    entries[index].result.data = {
+      json: {
+        groups: [
+          {
+            id: 'mock-group',
+            name,
+            memberCount: 2,
+            expenseCount: 1,
+            currency: 'RUB',
+            totalAmount: 100,
+            lastActivity: '2026-10-20T00:00:00Z',
+            createdAt: '2026-10-20T00:00:00Z',
+            isArchived: false,
+          },
+        ],
+        totalCount: 1,
+        totalExpenses: 1,
+        totalSettlements: 0,
+        nextCursor: null,
+      },
+    };
+    await route.fulfill({ response, json: Array.isArray(data) ? entries : entries[0] });
+  });
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await page.goto('/admin', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const trigger = page.getByTestId('admin-groups-delete-trigger');
+    await trigger.scrollIntoViewIfNeeded();
+    const triggerBox = await trigger.boundingBox();
+    expect(triggerBox!.height).toBeGreaterThanOrEqual(44);
+    expect(triggerBox!.width).toBeGreaterThanOrEqual(44);
+    await trigger.click();
+    const dialog = page.getByTestId('admin-groups-delete-dialog');
+    await expect(dialog).toContainText(name);
+    const box = await dialog.boundingBox();
+    expect(box!.x).toBeGreaterThanOrEqual(-1);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+    expect(box!.height).toBeLessThanOrEqual(380);
+    for (const control of [
+      dialog.getByTestId('admin-groups-delete-cancel'),
+      dialog.getByTestId('admin-groups-delete-confirm'),
+      dialog.locator('[data-slot="dialog-close"]'),
+    ]) {
+      const rect = await control.boundingBox();
+      expect(rect).not.toBeNull();
+      expect(rect!.height).toBeGreaterThanOrEqual(44);
+      expect(rect!.width).toBeGreaterThanOrEqual(44);
+    }
+    await dialog.getByTestId('admin-groups-delete-cancel').click();
+    await expect(dialog).toBeHidden();
+    expect(deletions).toBe(0);
+    await checkPhoneLayout(page, width, true);
+  }
+});

@@ -259,6 +259,8 @@ export function GroupOverviewSection() {
                           <Button
                             variant="ghost"
                             size="icon-sm"
+                            className="min-h-11 min-w-11"
+                            data-testid="admin-groups-delete-trigger"
                             aria-label={t('groups.deleteGroup', { name: group.name })}
                             onClick={() =>
                               setDeleteTarget({
@@ -296,22 +298,33 @@ export function GroupOverviewSection() {
       </Card>
 
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t('groups.deleteTitle')}</DialogTitle>
-            <DialogDescription>
+        <DialogContent
+          data-testid="admin-groups-delete-dialog"
+          className="min-w-0 overflow-x-hidden [overflow-wrap:anywhere] [&_[data-slot=dialog-close]]:min-h-11 [&_[data-slot=dialog-close]]:min-w-11"
+        >
+          <DialogHeader className="min-w-0 pr-11">
+            <DialogTitle className="[overflow-wrap:anywhere]">{t('groups.deleteTitle')}</DialogTitle>
+            <DialogDescription className="[overflow-wrap:anywhere]">
               {t.rich('groups.deleteDescription', {
                 name: deleteTarget?.name ?? '',
-                strong: (chunks) => <strong>{chunks}</strong>,
+                strong: (chunks) => <strong className="[overflow-wrap:anywhere]">{chunks}</strong>,
               })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleteGroup.isPending}>
+            <Button
+              variant="outline"
+              className="min-h-11 min-w-11"
+              data-testid="admin-groups-delete-cancel"
+              onClick={() => setDeleteTarget(null)}
+              disabled={deleteGroup.isPending}
+            >
               {t('groups.cancel')}
             </Button>
             <Button
               variant="destructive"
+              className="min-h-11 min-w-11"
+              data-testid="admin-groups-delete-confirm"
               onClick={() => deleteTarget && deleteGroup.mutate({ groupId: deleteTarget.id })}
               disabled={deleteGroup.isPending}
             >
