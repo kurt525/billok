@@ -1807,6 +1807,7 @@ test('mobile group and expense dialogs remain reachable without mutations', asyn
       await page.locator('#title').fill('ПозицииЧекаДляПроверки');
       await checkControl(page.locator('#title'), width, 'New expense title');
       await checkControl(page.locator('#amount'), width, 'New expense amount');
+      await checkControl(page.locator('#category'), width, 'New expense category');
       await checkControl(page.locator('form button[type=submit]'), width, 'Create expense action');
       await checkPhoneLayout(page, width);
 

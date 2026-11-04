@@ -170,6 +170,7 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
               <Label htmlFor="title">{t('new.description')}</Label>
               <Input
                 id="title"
+                className="h-11 min-w-0 scroll-mt-20 text-base"
                 placeholder={t('new.descriptionPlaceholder')}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
@@ -196,6 +197,7 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
               <Label htmlFor="category">{t('new.category')}</Label>
               <Input
                 id="category"
+                className="h-11 min-w-0 scroll-mt-20 text-base"
                 placeholder={t('new.categoryPlaceholder')}
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
