@@ -1332,3 +1332,70 @@ test('mobile profile SBP search stays reachable with compact keyboard viewport',
     await checkPhoneLayout(page, width);
   }
 });
+
+test('mobile invite modal survives long content and a short keyboard viewport', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+  let interceptedInvites = 0;
+  await page.route('**/api/trpc/groups.createInvite*', async (route) => {
+    interceptedInvites++;
+    const token = 'long-test-token-'.repeat(12);
+    const result = { result: { data: { json: { token } } } };
+    const isBatch = new URL(route.request().url()).searchParams.has('batch');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(isBatch ? [result] : result),
+    });
+  });
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 300 });
+    await page.goto('/groups', { waitUntil: 'networkidle' });
+    const group = page.locator('a[href^="/groups/"]').filter({ hasText: 'Apartment' }).first();
+    await expect(group).toBeVisible();
+    await group.click();
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    await page.getByRole('button', { name: 'Пригласить', exact: true }).click();
+    const dialog = page.getByTestId('mobile-invite-dialog');
+    await expect(dialog).toBeVisible();
+    const title = dialog.locator('[data-slot="dialog-title"]');
+    const description = dialog.locator('[data-slot="dialog-description"]');
+    await expect(title).toBeVisible();
+    await expect(description).toBeVisible();
+    await description.evaluate((el) => {
+      el.textContent += 'ДлинноеИмяПриглашённогоБезПробелов'.repeat(8);
+    });
+    const generate = dialog.getByRole('button', { name: 'Создать ссылку-приглашение' });
+    await generate.scrollIntoViewIfNeeded();
+    await expect(generate).toBeVisible();
+    expect((await generate.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    const before = interceptedInvites;
+    await generate.click();
+    await expect.poll(() => interceptedInvites).toBe(before + 1);
+    const copy = dialog.getByTestId('mobile-copy-invite');
+    await copy.scrollIntoViewIfNeeded();
+    await expect(copy).toBeVisible();
+    const close = dialog.locator('[data-slot="dialog-close"]');
+    for (const button of [copy, close]) {
+      const box = await button.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.width).toBeGreaterThanOrEqual(44);
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+    }
+    const bounds = await dialog.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(-1);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width + 1);
+    expect(bounds!.y).toBeGreaterThanOrEqual(-1);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(301);
+    const overflow = await dialog.evaluate((el) => ({
+      content: el.scrollWidth,
+      visible: el.clientWidth,
+    }));
+    expect(overflow.content).toBeLessThanOrEqual(overflow.visible + 1);
+    await close.click();
+    await expect(dialog).toHaveCount(0);
+    await checkPhoneLayout(page, width);
+  }
+  expect(interceptedInvites).toBe(6);
+});

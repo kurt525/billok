@@ -57,14 +57,14 @@ export function InviteDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-y-auto overscroll-contain pb-[calc(1rem+env(safe-area-inset-bottom))]"
+        className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain pb-[calc(1rem+env(safe-area-inset-bottom))] [overflow-wrap:anywhere] [&_[data-slot=dialog-close]]:min-h-11 [&_[data-slot=dialog-close]]:min-w-11"
         data-testid="mobile-invite-dialog"
       >
-        <DialogHeader>
-          <DialogTitle>
+        <DialogHeader className="min-w-0 pr-11">
+          <DialogTitle className="min-w-0 [overflow-wrap:anywhere]">
             {placeholder ? t('invite.claimTitle', { name: placeholder.name }) : t('invite.title')}
           </DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="min-w-0 [overflow-wrap:anywhere]">
             {placeholder ? t('invite.claimDescription', { name: placeholder.name }) : t('invite.description')}
           </DialogDescription>
         </DialogHeader>
@@ -98,7 +98,7 @@ export function InviteDialog({
                 {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">
+            <p className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
               {placeholder ? t('invite.claimLinkInfo', { name: placeholder.name }) : t('invite.linkInfo')}
             </p>
           </div>
