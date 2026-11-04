@@ -1695,6 +1695,8 @@ test('mobile group and expense dialogs remain reachable without mutations', asyn
   );
   const expenseTitle = 'БольшойЧекДляПроверки'.repeat(2);
   try {
+    const bobMemberId = group.memberIds[users.bob.email];
+    if (!bobMemberId) throw new Error('Missing disposable Bob member ID');
     const placeholder = await trpcMutation(group.owner, 'groups.addPlaceholder', {
       groupId: group.groupId,
       name: 'ДлинноеИмяГостяДляДиалога',
@@ -1776,7 +1778,7 @@ test('mobile group and expense dialogs remain reachable without mutations', asyn
       await page.getByTestId('mobile-group-merge-trigger').click();
       const mergeDialog = page.getByTestId('mobile-group-merge-dialog');
       await checkControl(mergeDialog.locator('#merge-target'), width, 'Merge group member');
-      await mergeDialog.locator('#merge-target').selectOption(group.memberIds[users.bob.email]);
+      await mergeDialog.locator('#merge-target').selectOption(bobMemberId);
       await checkControl(mergeDialog.getByRole('button', { name: 'Отмена' }), width, 'Cancel group merge');
       await mergeDialog.getByRole('button', { name: 'Отмена' }).click();
       await expect(mergeDialog).toHaveCount(0);
@@ -1785,7 +1787,7 @@ test('mobile group and expense dialogs remain reachable without mutations', asyn
       await page.getByTestId('mobile-group-transfer-trigger').click();
       const transferDialog = page.getByTestId('mobile-group-transfer-dialog');
       await checkControl(transferDialog.locator('#transfer-target'), width, 'Transfer group owner');
-      await transferDialog.locator('#transfer-target').selectOption(group.memberIds[users.bob.email]);
+      await transferDialog.locator('#transfer-target').selectOption(bobMemberId);
       await checkControl(transferDialog.getByRole('button', { name: 'Отмена' }), width, 'Cancel owner transfer');
       await transferDialog.getByRole('button', { name: 'Отмена' }).click();
       await expect(transferDialog).toHaveCount(0);
