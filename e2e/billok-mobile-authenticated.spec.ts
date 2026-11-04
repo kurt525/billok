@@ -963,3 +963,74 @@ test('mobile admin group search and status filters are touch-friendly at six wid
     await checkPhoneLayout(page, width, true);
   }
 });
+
+test('mobile group table sort and local scroll at six widths', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+  const groupName = 'ОченьДлинноеИмяГруппыБезПробелов'.repeat(3);
+  let reads = 0;
+  await page.route('**/api/trpc/**', async (route) => {
+    const procedures = new URL(route.request().url()).pathname.split('/api/trpc/')[1]?.split(',') ?? [];
+    const index = procedures.indexOf('admin.listGroups');
+    if (index < 0) return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    const items = Array.isArray(body) ? body : [body];
+    expect(items[index]?.result?.data).toBeDefined();
+    // Replace the SuperJSON metadata together with the response to preserve nextCursor.
+    items[index].result.data = {
+      json: {
+        groups: [
+          {
+            id: 'mobile-mocked-group',
+            name: groupName,
+            memberCount: 2,
+            expenseCount: 1,
+            currency: 'RUB',
+            totalAmount: 12500,
+            lastActivity: '2026-10-20T00:00:00Z',
+            createdAt: '2026-10-19T00:00:00Z',
+            isArchived: false,
+          },
+        ],
+        totalCount: 2,
+        totalExpenses: 1,
+        totalSettlements: 0,
+        nextCursor: 'next-mobile-page',
+      },
+    };
+    reads++;
+    await route.fulfill({ response, json: Array.isArray(body) ? items : items[0] });
+  });
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await page.goto('/admin', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const section = page.getByTestId('admin-groups-section');
+    const scroll = section.getByTestId('admin-groups-scroll');
+    await expect(scroll.getByText(groupName, { exact: true })).toBeVisible();
+    await expect(scroll).toHaveAttribute('tabindex', '0');
+    const metrics = await scroll.evaluate((el) => ({ content: el.scrollWidth, visible: el.clientWidth }));
+    expect(metrics.content).toBeGreaterThan(metrics.visible);
+    const box = await scroll.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(-1);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+    const sort = section.getByTestId('admin-groups-sort-name');
+    const sortBox = await sort.boundingBox();
+    expect(sortBox).not.toBeNull();
+    expect(sortBox!.height).toBeGreaterThanOrEqual(44);
+    await sort.click();
+    await expect(section.locator('th[aria-sort="ascending"]')).toContainText('Название');
+    await sort.click();
+    await expect(section.locator('th[aria-sort="descending"]')).toContainText('Название');
+    const load = section.getByTestId('admin-groups-load-more');
+    await expect(load).toBeVisible();
+    const loadBox = await load.boundingBox();
+    expect(loadBox).not.toBeNull();
+    expect(loadBox!.height).toBeGreaterThanOrEqual(44);
+    expect(loadBox!.width).toBeGreaterThanOrEqual(44);
+    await checkPhoneLayout(page, width, true);
+  }
+  expect(reads).toBeGreaterThanOrEqual(6);
+});
