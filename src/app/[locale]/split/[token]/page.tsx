@@ -351,7 +351,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
         className={
           expiredCreatorHistory
             ? 'hidden'
-            : 'fixed inset-x-0 bottom-0 z-10 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] [@media(max-height:420px)]:static [@media(max-height:420px)]:max-h-none [@media(max-height:420px)]:border-t-0'
+            : 'fixed inset-x-0 bottom-0 z-10 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] [@media(max-height:320px)]:static [@media(max-height:320px)]:max-h-none [@media(max-height:320px)]:border-t-0'
         }
         data-testid="split-result-actions"
       >
