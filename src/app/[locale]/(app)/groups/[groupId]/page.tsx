@@ -317,7 +317,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                   <p className="min-w-0 font-medium [overflow-wrap:anywhere]">
                     {r.extractedData?.merchantName ?? t('detail.receipt')}
                   </p>
-                  <p className="text-sm text-muted-foreground">
+                  <p className="min-w-0 text-sm text-muted-foreground [overflow-wrap:anywhere]">
                     {r.extractedData?.date ?? new Date(r.createdAt).toLocaleDateString(locale)}
                     {' · '}
                     {t('detail.savedForLater')}
@@ -331,7 +331,10 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                     {g.archivedAt ? (
                       <div className="flex-1 min-w-0">{summary}</div>
                     ) : (
-                      <Link href={`/groups/${groupId}/scan?receiptId=${r.id}`} className="flex-1 min-w-0">
+                      <Link
+                        href={`/groups/${groupId}/scan?receiptId=${r.id}`}
+                        className="flex-1 min-w-0 min-h-11 scroll-mt-20"
+                      >
                         {summary}
                       </Link>
                     )}
@@ -385,7 +388,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
               <p className="text-muted-foreground">{t('detail.noExpenses')}</p>
               {!g.archivedAt && (
                 <Button
-                  className="mt-4"
+                  className="mt-4 min-h-11"
                   size="sm"
                   nativeButton={false}
                   render={<Link href={`/groups/${groupId}/expenses/new`} />}
@@ -404,7 +407,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
               <Link
                 key={expense.id}
                 href={`/groups/${groupId}/expenses/${expense.id}`}
-                className="block min-w-0 min-h-11"
+                className="block min-w-0 min-h-11 scroll-mt-20"
               >
                 <div
                   className={`flex min-w-0 flex-wrap items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-muted/50 ${
@@ -427,7 +430,9 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                           name: expense.paidBy.name ?? expense.paidBy.email ?? t('detail.unknown'),
                         })}
                         {' · '}
-                        {new Date(expense.expenseDate).toLocaleDateString(locale)}
+                        <span data-testid="group-history-expense-date" className="[overflow-wrap:anywhere]">
+                          {new Date(expense.expenseDate).toLocaleDateString(locale)}
+                        </span>
                         {expense.category && (
                           <span className="ml-1 text-muted-foreground/70 [overflow-wrap:anywhere]">
                             {' · '}

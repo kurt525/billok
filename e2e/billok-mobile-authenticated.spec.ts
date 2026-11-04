@@ -445,7 +445,7 @@ test('long expense history stays readable and opens at six mobile widths', async
     await signInAsSeedAdmin(page);
 
     for (const width of [320, 360, 430, 480, 600, 720]) {
-      await page.setViewportSize({ width, height: 380 });
+      await page.setViewportSize({ width, height: 300 });
       await page.goto('/groups/' + group.groupId, { waitUntil: 'networkidle' });
       await page.addStyleTag({
         content: 'html { font-size: 20px !important; }',
@@ -454,6 +454,15 @@ test('long expense history stays readable and opens at six mobile widths', async
       await expect(link).toBeVisible({ timeout: 15_000 });
       await expect(link.getByTestId('group-history-expense-title')).toHaveText(title);
       await expect(link.getByTestId('group-history-expense-amount')).toContainText('₽');
+      const date = link.getByTestId('group-history-expense-date');
+      await expect(date).toHaveText(/\d/);
+      await date.scrollIntoViewIfNeeded();
+      const dateBounds = await date.boundingBox();
+      expect(dateBounds, 'History date present at ' + width + 'px').not.toBeNull();
+      expect(dateBounds!.x, 'History date left at ' + width + 'px').toBeGreaterThanOrEqual(-1);
+      expect(dateBounds!.x + dateBounds!.width, 'History date right at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+      expect(dateBounds!.y, 'History date top at ' + width + 'px').toBeGreaterThanOrEqual(-1);
+      expect(dateBounds!.y + dateBounds!.height, 'History date bottom at ' + width + 'px').toBeLessThanOrEqual(301);
       const sizes = await link.evaluate((element) => {
         const bounds = element.getBoundingClientRect();
         const titleElement = element.querySelector<HTMLElement>('[data-testid="group-history-expense-title"]');
