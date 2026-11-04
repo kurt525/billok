@@ -921,3 +921,45 @@ test('mobile admin activity and audit tables scroll inside cards at six widths',
   expect(mockedQueries).toBeGreaterThanOrEqual(12);
   expect(writes).toBe(0);
 });
+
+test('mobile admin group search and status filters are touch-friendly at six widths', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await page.goto('/admin', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+
+    const section = page.getByTestId('admin-groups-section');
+    await expect(section).toBeVisible({ timeout: 15_000 });
+    const search = section.getByTestId('admin-groups-search');
+    const filters = ['all', 'active', 'archived'].map((status) => section.getByTestId('admin-groups-filter-' + status));
+
+    for (const control of [search, ...filters]) {
+      await expect(control).toBeVisible();
+      const rect = await control.boundingBox();
+      expect(rect).not.toBeNull();
+      expect(rect!.height, 'Group filter/search height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(rect!.width, 'Group filter/search width at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(rect!.x, 'Group filter/search left at ' + width + 'px').toBeGreaterThanOrEqual(-1);
+      expect(rect!.x + rect!.width, 'Group filter/search right at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+    }
+
+    await expect(filters[0]!).toHaveAttribute('aria-pressed', 'true');
+    await filters[1]!.click();
+    await expect(filters[1]!).toHaveAttribute('aria-pressed', 'true');
+    await filters[2]!.click();
+    await expect(filters[2]!).toHaveAttribute('aria-pressed', 'true');
+    await filters[0]!.click();
+    await expect(filters[0]!).toHaveAttribute('aria-pressed', 'true');
+
+    await search.fill('ОченьДлинноеИмяГруппыБезПробелов');
+    await expect(search).toHaveValue('ОченьДлинноеИмяГруппыБезПробелов');
+    await search.focus();
+    await search.scrollIntoViewIfNeeded();
+    await expect(search).toBeInViewport();
+    await search.fill('');
+    await checkPhoneLayout(page, width, true);
+  }
+});

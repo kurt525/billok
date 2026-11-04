@@ -108,10 +108,10 @@ export function GroupOverviewSection() {
   ];
 
   return (
-    <section>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-semibold">{t('groups.title')}</h2>
-        <div className="flex flex-wrap items-center gap-2">
+    <section className="min-w-0" data-testid="admin-groups-section">
+      <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <h2 className="min-w-0 text-lg font-semibold [overflow-wrap:anywhere]">{t('groups.title')}</h2>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <Badge variant="secondary">{t('groups.count', { count: totalCount })}</Badge>
           {totalExpenses != null && <Badge variant="secondary">{t('groups.expenses', { count: totalExpenses })}</Badge>}
           {totalSettlements != null && (
@@ -121,16 +121,18 @@ export function GroupOverviewSection() {
       </div>
 
       {/* Filters toolbar */}
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+      <div className="mb-3 flex min-w-0 flex-wrap items-center gap-2">
         {/* Status filter buttons */}
-        <div className="flex min-w-0 flex-wrap gap-1">
+        <div className="flex min-w-0 flex-wrap gap-2" role="group" aria-label={t('groups.title')}>
           {statuses.map((s) => (
             <Button
               key={s.value}
               size="sm"
               variant={status === s.value ? 'default' : 'outline'}
+              data-testid={'admin-groups-filter-' + s.value}
+              aria-pressed={status === s.value}
               onClick={() => setStatus(s.value)}
-              className="h-7 px-2.5 text-xs"
+              className="min-h-11 min-w-11 max-w-full whitespace-normal px-3 py-2 text-xs [overflow-wrap:anywhere]"
             >
               {s.label}
             </Button>
@@ -141,11 +143,12 @@ export function GroupOverviewSection() {
         <div className="relative min-w-0 basis-full flex-1 sm:min-w-[180px] sm:basis-auto">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
+            data-testid="admin-groups-search"
             aria-label={t('groups.searchAriaLabel')}
             placeholder={t('groups.searchPlaceholder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="h-7 pl-8 text-xs"
+            className="min-h-11 w-full min-w-0 max-w-full pl-8 text-base"
           />
         </div>
       </div>
