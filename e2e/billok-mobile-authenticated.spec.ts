@@ -1188,3 +1188,79 @@ test('mobile read-only admin health and storage cards fit six widths', async ({ 
   expect(healthReads).toBeGreaterThanOrEqual(6);
   expect(storageReads).toBeGreaterThanOrEqual(6);
 });
+
+test('mobile storage cleanup confirmation cancels both actions at six widths', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+  let cleanupMutations = 0;
+  await page.route('**/api/trpc/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const procedures = path.split('/api/trpc/')[1]?.split(',') ?? [];
+    if (procedures.some((name) => ['admin.cleanupOrphans', 'admin.cleanupUnusedReceipts'].includes(name))) {
+      cleanupMutations++;
+      await route.abort();
+      return;
+    }
+    const index = procedures.indexOf('admin.getStorageStats');
+    if (index < 0) return route.continue();
+    const response = await route.fetch();
+    const data = await response.json();
+    const entries = Array.isArray(data) ? data : [data];
+    expect(entries[index]?.result?.data).toBeDefined();
+    entries[index].result.data = {
+      json: {
+        receiptCount: 12,
+        diskFiles: 8,
+        totalDiskUsage: 4096,
+        totalDiskUsageFormatted: '4 KB',
+        orphanCount: 3,
+        orphanPaths: [],
+        unusedReceiptCount: 4,
+        unusedReceiptBytes: 2048,
+        unusedReceiptBytesFormatted: '2 KB',
+      },
+    };
+    await route.fulfill({ response, json: Array.isArray(data) ? entries : entries[0] });
+  });
+
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await page.goto('/admin', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const storage = page.getByTestId('admin-storage-stats');
+    const triggers = storage.getByTestId('admin-storage-open-cleanup');
+    await expect(triggers).toHaveCount(2);
+    for (const index of [0, 1]) {
+      const trigger = triggers.nth(index);
+      const triggerRect = await trigger.boundingBox();
+      expect(triggerRect).not.toBeNull();
+      expect(triggerRect!.height).toBeGreaterThanOrEqual(44);
+      expect(triggerRect!.width).toBeGreaterThanOrEqual(44);
+      await trigger.click();
+      const dialog = page.getByTestId('admin-storage-cleanup-dialog');
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toContainText(index === 0 ? 'Файлов без связанного чека: 3' : 'Неиспользуемых чеков: 4');
+      const rect = await dialog.boundingBox();
+      expect(rect).not.toBeNull();
+      expect(rect!.x).toBeGreaterThanOrEqual(-1);
+      expect(rect!.x + rect!.width).toBeLessThanOrEqual(width + 1);
+      expect(rect!.height).toBeLessThanOrEqual(380);
+      for (const button of [
+        dialog.getByTestId('admin-storage-cleanup-cancel'),
+        dialog.getByTestId('admin-storage-cleanup-confirm'),
+        dialog.locator('[data-slot="dialog-close"]'),
+      ]) {
+        await expect(button).toBeVisible();
+        const bounds = await button.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.height).toBeGreaterThanOrEqual(44);
+        expect(bounds!.width).toBeGreaterThanOrEqual(44);
+      }
+      await dialog.getByTestId('admin-storage-cleanup-cancel').click();
+      await expect(dialog).toBeHidden();
+      expect(cleanupMutations, 'Closing dialog must not delete any data').toBe(0);
+    }
+    await checkPhoneLayout(page, width, true);
+  }
+  expect(cleanupMutations).toBe(0);
+});

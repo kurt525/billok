@@ -1,11 +1,21 @@
 'use client';
 
+import { useState } from 'react';
+
 import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Shield,
   Database,
@@ -156,20 +166,25 @@ function SystemHealthSection() {
 function StorageStatsSection() {
   const t = useTranslations('admin');
   const tc = useTranslations('common');
+  const [cleanupTarget, setCleanupTarget] = useState<'orphans' | 'unused' | null>(null);
   const storage = trpc.admin.getStorageStats.useQuery();
   const utils = trpc.useUtils();
   const cleanup = trpc.admin.cleanupOrphans.useMutation({
     onSuccess: () => {
       utils.admin.getStorageStats.invalidate();
       utils.admin.getAuditLog.invalidate();
+      setCleanupTarget(null);
     },
   });
   const cleanupUnused = trpc.admin.cleanupUnusedReceipts.useMutation({
     onSuccess: () => {
       utils.admin.getStorageStats.invalidate();
       utils.admin.getAuditLog.invalidate();
+      setCleanupTarget(null);
     },
   });
+
+  const cleanupBusy = cleanup.isPending || cleanupUnused.isPending;
 
   if (storage.isLoading) return <SectionSkeleton title={t('storage.title')} />;
 
@@ -221,8 +236,9 @@ function StorageStatsSection() {
                   size="sm"
                   variant="destructive"
                   className="min-h-11 min-w-11 whitespace-normal leading-tight"
-                  onClick={() => cleanup.mutate()}
-                  disabled={cleanup.isPending}
+                  data-testid="admin-storage-open-cleanup"
+                  onClick={() => setCleanupTarget('orphans')}
+                  disabled={cleanupBusy}
                 >
                   {cleanup.isPending ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -259,8 +275,9 @@ function StorageStatsSection() {
                   size="sm"
                   variant="destructive"
                   className="min-h-11 min-w-11 whitespace-normal leading-tight"
-                  onClick={() => cleanupUnused.mutate()}
-                  disabled={cleanupUnused.isPending}
+                  data-testid="admin-storage-open-cleanup"
+                  onClick={() => setCleanupTarget('unused')}
+                  disabled={cleanupBusy}
                 >
                   {cleanupUnused.isPending ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -290,6 +307,65 @@ function StorageStatsSection() {
           </CardContent>
         </Card>
       </div>
+      <Dialog
+        open={cleanupTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !cleanupBusy) setCleanupTarget(null);
+        }}
+      >
+        <DialogContent
+          data-testid="admin-storage-cleanup-dialog"
+          className="min-w-0 overflow-x-hidden [overflow-wrap:anywhere] [&_[data-slot=dialog-close]]:min-h-11 [&_[data-slot=dialog-close]]:min-w-11"
+        >
+          <DialogHeader className="min-w-0 pr-11">
+            <DialogTitle className="[overflow-wrap:anywhere]">
+              {cleanupTarget === 'orphans' ? t('storage.confirmOrphansTitle') : t('storage.confirmUnusedTitle')}
+            </DialogTitle>
+            <DialogDescription className="[overflow-wrap:anywhere]">
+              {cleanupTarget === 'orphans'
+                ? t('storage.confirmOrphansDescription', { count: data?.orphanCount ?? 0 })
+                : t('storage.confirmUnusedDescription', { count: data?.unusedReceiptCount ?? 0 })}
+            </DialogDescription>
+          </DialogHeader>
+          {cleanupTarget === 'orphans' && cleanup.isError && (
+            <p role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
+              {localizedTrpcError(cleanup.error, tc('errors.generic'))}
+            </p>
+          )}
+          {cleanupTarget === 'unused' && cleanupUnused.isError && (
+            <p role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
+              {localizedTrpcError(cleanupUnused.error, tc('errors.generic'))}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="min-h-11 min-w-11"
+              data-testid="admin-storage-cleanup-cancel"
+              disabled={cleanupBusy}
+              onClick={() => setCleanupTarget(null)}
+            >
+              {t('storage.cancel')}
+            </Button>
+            <Button
+              variant="destructive"
+              className="min-h-11 min-w-11"
+              data-testid="admin-storage-cleanup-confirm"
+              disabled={
+                cleanupBusy ||
+                (cleanupTarget === 'orphans' ? (data?.orphanCount ?? 0) === 0 : (data?.unusedReceiptCount ?? 0) === 0)
+              }
+              onClick={() => {
+                if (cleanupTarget === 'orphans' && (data?.orphanCount ?? 0) > 0) cleanup.mutate();
+                if (cleanupTarget === 'unused' && (data?.unusedReceiptCount ?? 0) > 0) cleanupUnused.mutate();
+              }}
+            >
+              {cleanupBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {t('storage.cleanUp')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

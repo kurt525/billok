@@ -92,8 +92,15 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
       );
     }
     expect(admin.match(/className="min-h-11 min-w-11 whitespace-normal leading-tight"/g)).toHaveLength(2);
-    expect(admin).toContain('onClick={() => cleanup.mutate()}');
-    expect(admin).toContain('onClick={() => cleanupUnused.mutate()}');
+    expect(admin).toContain("onClick={() => setCleanupTarget('orphans')}");
+    expect(admin).toContain("onClick={() => setCleanupTarget('unused')}");
+    expect(admin).toContain('data-testid="admin-storage-cleanup-dialog"');
+    expect(admin).toContain("if (cleanupTarget === 'orphans' &&");
+    expect(admin).toContain("if (cleanupTarget === 'unused' &&");
+    expect(admin).toContain('cleanup.mutate();');
+    expect(admin).toContain('cleanupUnused.mutate();');
+    expect(admin).not.toContain('onClick={() => cleanup.mutate()}');
+    expect(admin).not.toContain('onClick={() => cleanupUnused.mutate()}');
   });
 
   it('keeps placeholder member editing and management actions at least 44px on mobile', () => {
