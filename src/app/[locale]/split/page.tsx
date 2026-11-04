@@ -552,13 +552,13 @@ function AuthenticatedGuestSplitPage() {
           {addingItem && (
             <Card className="border-primary/50">
               <CardContent className="py-3">
-                <form onSubmit={handleAddItem} className="space-y-2">
+                <form onSubmit={handleAddItem} className="min-w-0 space-y-2" data-testid="manual-item-entry-form">
                   <Input
                     placeholder={t('assign.itemNamePlaceholder')}
                     value={newItem.name}
                     onChange={(e) => setNewItem((p) => ({ ...p, name: e.target.value }))}
                     required
-                    className="h-12"
+                    className="h-12 min-w-0 scroll-mt-4 text-base"
                   />
                   <div className="grid min-w-0 grid-cols-2 gap-2">
                     <Input
@@ -567,7 +567,7 @@ function AuthenticatedGuestSplitPage() {
                       placeholder={t('assign.qtyPlaceholder')}
                       value={newItem.quantity}
                       onChange={(e) => setNewItem((p) => ({ ...p, quantity: e.target.value }))}
-                      className="h-12 min-w-0"
+                      className="h-12 min-w-0 scroll-mt-4 text-base"
                       min="1"
                     />
                     <Input
@@ -576,19 +576,19 @@ function AuthenticatedGuestSplitPage() {
                       placeholder={t('assign.pricePlaceholder')}
                       value={newItem.totalPrice}
                       onChange={(e) => setNewItem((p) => ({ ...p, totalPrice: e.target.value }))}
-                      className="h-12 min-w-0"
+                      className="h-12 min-w-0 scroll-mt-4 text-base"
                       required
                     />
                   </div>
-                  <div className="flex gap-2">
-                    <Button type="submit" size="sm" className="min-h-11" data-testid="guest-add-item-submit">
+                  <div className="flex min-w-0 flex-wrap gap-2">
+                    <Button type="submit" size="sm" className="min-h-11 min-w-11" data-testid="guest-add-item-submit">
                       {t('assign.add')}
                     </Button>
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="min-h-11"
+                      className="min-h-11 min-w-11"
                       onClick={() => setAddingItem(false)}
                     >
                       {t('assign.cancel')}
@@ -796,38 +796,40 @@ function AuthenticatedGuestSplitPage() {
             </Card>
           )}
 
-          {/* Next button - sticky bottom */}
-          <div
-            data-testid="guest-assign-actions"
-            className="fixed right-0 bottom-0 left-0 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
-          >
-            <div className="mx-auto max-w-lg space-y-3">
-              <Button
-                className="w-full h-14 text-lg"
-                disabled={!allAssigned || createSplit.isPending}
-                onClick={handleCreateSplit}
-                data-testid="create-split-btn"
-              >
-                {createSplit.isPending
-                  ? t('assign.creatingSplit')
-                  : !allAssigned
-                    ? t('assign.assignAllItems', { remaining: items.length - assignedCount })
-                    : t('assign.createSplitButton')}
-                {allAssigned && !createSplit.isPending && <Share2 className="ml-2 h-5 w-5" />}
-              </Button>
-              <Button
-                variant="outline"
-                className="w-full h-12"
-                disabled={items.length === 0 || validPeople.length < 1 || createClaimSession.isPending}
-                onClick={handleShareForClaiming}
-                data-testid="share-for-claiming-btn"
-              >
-                {createClaimSession.isPending ? t('assign.creatingSession') : t('assign.shareForClaiming')}
-                {!createClaimSession.isPending && <Users className="ml-2 h-5 w-5" />}
-              </Button>
-              <p className="text-xs text-center text-muted-foreground">{t('assign.shareHint')}</p>
+          {/* The persistent finalization bar must not cover item fields when the keyboard is open. */}
+          {!addingItem && (
+            <div
+              data-testid="guest-assign-actions"
+              className="fixed right-0 bottom-0 left-0 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
+            >
+              <div className="mx-auto max-w-lg space-y-3">
+                <Button
+                  className="w-full h-14 text-lg"
+                  disabled={!allAssigned || createSplit.isPending}
+                  onClick={handleCreateSplit}
+                  data-testid="create-split-btn"
+                >
+                  {createSplit.isPending
+                    ? t('assign.creatingSplit')
+                    : !allAssigned
+                      ? t('assign.assignAllItems', { remaining: items.length - assignedCount })
+                      : t('assign.createSplitButton')}
+                  {allAssigned && !createSplit.isPending && <Share2 className="ml-2 h-5 w-5" />}
+                </Button>
+                <Button
+                  variant="outline"
+                  className="w-full h-12"
+                  disabled={items.length === 0 || validPeople.length < 1 || createClaimSession.isPending}
+                  onClick={handleShareForClaiming}
+                  data-testid="share-for-claiming-btn"
+                >
+                  {createClaimSession.isPending ? t('assign.creatingSession') : t('assign.shareForClaiming')}
+                  {!createClaimSession.isPending && <Users className="ml-2 h-5 w-5" />}
+                </Button>
+                <p className="text-xs text-center text-muted-foreground">{t('assign.shareHint')}</p>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>

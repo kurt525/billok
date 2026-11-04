@@ -1399,3 +1399,57 @@ test('mobile invite modal survives long content and a short keyboard viewport', 
   }
   expect(interceptedInvites).toBe(6);
 });
+
+test('keyboard-height manual item inputs stay reachable at six mobile widths', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+  let saveRequests = 0;
+  await page.route('**/api/trpc/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === 'POST' && /guest\.(createSplit|createClaimSession)/.test(path)) {
+      saveRequests++;
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 300 });
+    await page.goto('/split', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    await page.getByTestId('person-input-0').fill('Участник');
+    await page.getByTestId('next-assign-btn').click();
+    await expect(page.getByTestId('guest-assign-step')).toBeVisible();
+    await page.getByTestId('guest-add-item-btn').click();
+    const form = page.getByTestId('manual-item-entry-form');
+    await expect(form).toBeVisible();
+    await expect(page.getByTestId('guest-assign-actions')).toHaveCount(0);
+    const fields = form.locator('input');
+    await expect(fields).toHaveCount(3);
+    await fields.nth(0).fill('БлюдоБезПробелов'.repeat(5));
+    await fields.nth(1).fill('2');
+    await fields.nth(2).fill('155,70');
+    for (const control of [
+      fields.nth(0),
+      fields.nth(1),
+      fields.nth(2),
+      form.getByTestId('guest-add-item-submit'),
+      form.getByRole('button', { name: 'Отмена' }),
+    ]) {
+      await control.scrollIntoViewIfNeeded();
+      const b = await control.boundingBox();
+      expect(b).not.toBeNull();
+      expect(b!.height, 'Touch height at ' + width).toBeGreaterThanOrEqual(44);
+      expect(b!.x, 'Left boundary at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(b!.x + b!.width, 'Right boundary at ' + width).toBeLessThanOrEqual(width + 1);
+      expect(b!.y, 'Top boundary at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(b!.y + b!.height, 'Bottom boundary at ' + width).toBeLessThanOrEqual(301);
+    }
+    await checkPhoneLayout(page, width, true);
+    await form.getByTestId('guest-add-item-submit').click();
+    await expect(form).toHaveCount(0);
+    await expect(page.getByTestId('guest-assign-actions')).toBeVisible();
+    expect(saveRequests, 'Editing items must not create a receipt').toBe(0);
+  }
+  expect(saveRequests).toBe(0);
+});
