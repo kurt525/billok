@@ -21,13 +21,11 @@ import { SBP_BANKS, searchSbpBanks } from '@/lib/sbp-banks';
 function ProfileForm({
   email,
   initialName,
-  initialVenmoUsername,
   initialSbpPhone,
   initialSbpBankId,
 }: {
   email: string;
   initialName: string;
-  initialVenmoUsername: string;
   initialSbpPhone: string;
   initialSbpBankId: string;
 }) {
@@ -36,7 +34,6 @@ function ProfileForm({
   const { update } = useSession();
   const router = useRouter();
   const [name, setName] = useState(initialName);
-  const [venmoUsername, setVenmoUsername] = useState(initialVenmoUsername);
   const [sbpPhone, setSbpPhone] = useState(initialSbpPhone);
   const [sbpBankId, setSbpBankId] = useState(initialSbpBankId);
   const [sbpBankSearch, setSbpBankSearch] = useState('');
@@ -60,7 +57,6 @@ function ProfileForm({
     if (!name.trim()) return;
     updateProfile.mutate({
       name: name.trim(),
-      venmoUsername: venmoUsername.trim() || null,
       sbpPhone: sbpPhone.trim() || null,
       sbpBankId: sbpBankId || null,
     });
@@ -82,18 +78,6 @@ function ProfileForm({
           value={name}
           onChange={(e) => setName(e.target.value)}
           required
-        />
-      </div>
-      <div className="space-y-2">
-        <Label htmlFor="venmo">{t('profile.venmo')}</Label>
-        <Input
-          id="venmo"
-          className="h-11 min-w-0 text-base"
-          autoCapitalize="none"
-          value={venmoUsername}
-          onChange={(e) => setVenmoUsername(e.target.value)}
-          placeholder={t('profile.venmoPlaceholder')}
-          data-testid="venmo-username-input"
         />
       </div>
       <div className="space-y-2">
@@ -265,7 +249,6 @@ export default function SettingsPage() {
             <ProfileForm
               email={profile.data.email ?? session?.user?.email ?? ''}
               initialName={profile.data.name ?? session?.user?.name ?? ''}
-              initialVenmoUsername={profile.data.venmoUsername ?? ''}
               initialSbpPhone={profile.data.sbpPhone ?? ''}
               initialSbpBankId={profile.data.sbpBankId ?? ''}
             />

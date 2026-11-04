@@ -37,7 +37,6 @@ import { ToolsSection } from '@/components/admin/tools-section';
 import { ServerLogsSection } from '@/components/admin/server-logs-section';
 import { UserManagementSection } from '@/components/admin/user-management-section';
 import { GroupOverviewSection } from '@/components/admin/group-overview-section';
-import { VenmoSettingsSection } from '@/components/admin/venmo-settings-section';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 export default function AdminPage() {
@@ -64,8 +63,6 @@ export default function AdminPage() {
         <RegistrationControlSection />
         <Separator />
         <AnnouncementSection />
-        <VenmoSettingsSection />
-        <Separator />
         <Separator />
         <ActivityFeedSection />
         <Separator />

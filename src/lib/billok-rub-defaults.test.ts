@@ -55,4 +55,20 @@ describe('BillOK RUB and ru-RU defaults', () => {
     expect(schema).toMatch(/defaultCurrency\s+String\s+@default\("RUB"\)/);
     expect(schema).toMatch(/locale\s+String\s+@default\("ru"\)/);
   });
+  it('hides legacy Venmo settings and disallows re-enabling it without rewriting stored data', () => {
+    const adminPage = read('src/app/[locale]/(app)/admin/page.tsx');
+    const profilePage = read('src/app/[locale]/(app)/settings/page.tsx');
+    const adminApi = read('src/server/trpc/routers/admin.ts');
+
+    expect(adminPage).not.toContain('VenmoSettingsSection');
+    expect(profilePage).not.toContain('venmo-username-input');
+    expect(profilePage).not.toContain('venmoUsername:');
+    expect(profilePage).toContain('data-testid="sbp-phone-input"');
+    expect(profilePage).toContain('data-testid="sbp-bank-search"');
+
+    expect(adminApi).toContain('getVenmoEnabled: publicProcedure.query(() => ({ enabled: false }))');
+    expect(adminApi).toContain("if (input.enabled) throw new AppError('FORBIDDEN')");
+    const legacyToggle = adminApi.slice(adminApi.indexOf('getVenmoEnabled:'), adminApi.indexOf('// ─── Email Test'));
+    expect(legacyToggle).not.toContain('systemSetting.upsert');
+  });
 });

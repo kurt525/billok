@@ -676,24 +676,13 @@ export const adminRouter = createTRPCRouter({
       return { success: true };
     }),
 
-  // ─── Venmo Payments Toggle ──────────────────────────────
+  // Legacy ShareTab API preserved for compatibility, but BillOK uses RUB and SBP only.
+  // Ignore any persisted Venmo toggle, including on old USD receipts.
+  getVenmoEnabled: publicProcedure.query(() => ({ enabled: false })),
 
-  getVenmoEnabled: publicProcedure.query(async ({ ctx }) => {
-    const setting = await ctx.db.systemSetting.findUnique({
-      where: { key: 'venmoEnabled' },
-    });
-    return { enabled: setting?.value === 'true' };
-  }),
-
-  setVenmoEnabled: adminProcedure.input(z.object({ enabled: z.boolean() })).mutation(async ({ ctx, input }) => {
-    await ctx.db.systemSetting.upsert({
-      where: { key: 'venmoEnabled' },
-      update: { value: String(input.enabled) },
-      create: { key: 'venmoEnabled', value: String(input.enabled) },
-    });
-
-    await logAdminAction(ctx.db, ctx.user.id, 'VENMO_SETTING_CHANGED', null, { enabled: input.enabled });
-
+  setVenmoEnabled: adminProcedure.input(z.object({ enabled: z.boolean() })).mutation(({ input }) => {
+    if (input.enabled) throw new AppError('FORBIDDEN');
+    // Do not rewrite persisted legacy records just to hide a retired feature.
     return { success: true };
   }),
 

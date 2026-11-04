@@ -1264,3 +1264,32 @@ test('mobile storage cleanup confirmation cancels both actions at six widths', a
   }
   expect(cleanupMutations).toBe(0);
 });
+
+test('mobile BillOK hides legacy Venmo controls while preserving SBP at six widths', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await page.goto('/admin', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    await expect(page.getByTestId('admin-system-health')).toBeVisible();
+    await expect(page.getByTestId('venmo-toggle-btn')).toHaveCount(0);
+    await expect(page.getByText('Платежи через Venmo')).toHaveCount(0);
+    await checkPhoneLayout(page, width, true);
+
+    await page.goto('/settings', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    const phone = page.getByTestId('sbp-phone-input');
+    const bank = page.getByTestId('sbp-bank-search');
+    await expect(phone).toBeVisible();
+    await expect(bank).toBeVisible();
+    await expect(page.getByTestId('venmo-username-input')).toHaveCount(0);
+    for (const field of [phone, bank]) {
+      const bounds = await field.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.height, 'SBP input touch height at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(bounds!.x + bounds!.width, 'SBP input right edge at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+    }
+    await checkPhoneLayout(page, width, true);
+  }
+});
