@@ -42,7 +42,19 @@ describe('Android group actions and account forms', () => {
       expect(profile).toContain(value);
     }
     expect(profile).not.toContain('autoComplete="name"');
-    expect(profile.match(/h-11 min-w-0 text-base/g)?.length).toBeGreaterThanOrEqual(6);
+    expect(profile.match(/h-11 min-w-0 (?:scroll-mt-20 )?text-base/g)?.length).toBeGreaterThanOrEqual(6);
+    for (const [id, testId] of [
+      ['sbp-phone', 'sbp-phone-input'],
+      ['sbp-bank-search', 'sbp-bank-search'],
+    ] as const) {
+      const start = profile.indexOf('id="' + id + '"');
+      expect(start).toBeGreaterThanOrEqual(0);
+      const end = profile.indexOf('/>', start);
+      expect(end).toBeGreaterThan(start);
+      const inputMarkup = profile.slice(start, end);
+      expect(inputMarkup).toContain('className="h-11 min-w-0 scroll-mt-20 text-base"');
+      expect(inputMarkup).toContain('data-testid="' + testId + '"');
+    }
     expect(profile).toContain('data-testid="save-profile-btn"');
     expect(profile).toContain('className="min-h-11 w-full"');
   });
