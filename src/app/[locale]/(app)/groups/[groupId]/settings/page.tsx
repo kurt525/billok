@@ -82,12 +82,20 @@ function GroupDetailsForm({
         <form onSubmit={handleSave} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="name">{t('settings.name')}</Label>
-            <Input id="name" value={name} onChange={(e) => setName(e.target.value)} required disabled={readOnly} />
+            <Input
+              id="name"
+              className="h-11 min-w-0 scroll-mt-20 text-base"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              disabled={readOnly}
+            />
           </div>
           <div className="space-y-2">
             <Label htmlFor="description">{t('settings.description')}</Label>
             <Input
               id="description"
+              className="h-11 min-w-0 scroll-mt-20 text-base"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               disabled={readOnly}
@@ -106,7 +114,7 @@ function GroupDetailsForm({
             )}
           </div>
           {!readOnly && (
-            <Button type="submit" disabled={updateGroup.isPending}>
+            <Button type="submit" className="min-h-11 min-w-11 whitespace-normal" disabled={updateGroup.isPending}>
               {updateGroup.isPending ? t('settings.saving') : t('settings.saveChanges')}
             </Button>
           )}
@@ -391,6 +399,7 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
                                 type="button"
                                 aria-label={t('settings.mergeIntoMember', { name: m.displayName })}
                                 title={t('settings.mergeIntoMember', { name: m.displayName })}
+                                data-testid="mobile-group-merge-trigger"
                                 onClick={() => setMergeFor({ id: m.user.id, name: m.displayName })}
                                 className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
                               >
@@ -496,7 +505,12 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
           {isOwnerOrAdmin && !group.data.archivedAt && (
             <div>
               <p className="mb-2 text-sm text-muted-foreground">{t('settings.archiveDescription')}</p>
-              <Button variant="outline" onClick={() => setConfirming('archive')} disabled={archiveGroup.isPending}>
+              <Button
+                variant="outline"
+                className="min-h-11 min-w-11 whitespace-normal"
+                onClick={() => setConfirming('archive')}
+                disabled={archiveGroup.isPending}
+              >
                 <Archive className="mr-2 h-4 w-4" />
                 {archiveGroup.isPending ? t('settings.archiving') : t('settings.archiveGroup')}
               </Button>
@@ -510,6 +524,8 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
               </p>
               <Button
                 variant="outline"
+                className="min-h-11 min-w-11 whitespace-normal"
+                data-testid="mobile-group-transfer-trigger"
                 onClick={() => setTransferOpen(true)}
                 disabled={newOwnerCandidates.length === 0}
               >
@@ -521,7 +537,13 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
           {myRole === 'OWNER' ? (
             <div>
               <p className="mb-2 text-sm text-muted-foreground">{t('settings.deleteDescription')}</p>
-              <Button variant="destructive" onClick={() => setConfirming('delete')} disabled={deleteGroup.isPending}>
+              <Button
+                variant="destructive"
+                data-testid="mobile-group-delete-trigger"
+                className="min-h-11 min-w-11 whitespace-normal"
+                onClick={() => setConfirming('delete')}
+                disabled={deleteGroup.isPending}
+              >
                 <Trash2 className="mr-2 h-4 w-4" />
                 {deleteGroup.isPending ? t('settings.deleting') : t('settings.deleteGroup')}
               </Button>
@@ -532,7 +554,12 @@ export default function GroupSettingsPage({ params }: { params: Promise<{ groupI
             myId && (
               <div>
                 <p className="mb-2 text-sm text-muted-foreground">{t('settings.leaveDescription')}</p>
-                <Button variant="destructive" onClick={() => setConfirming('leave')} disabled={leaveGroup.isPending}>
+                <Button
+                  variant="destructive"
+                  className="min-h-11 min-w-11 whitespace-normal"
+                  onClick={() => setConfirming('leave')}
+                  disabled={leaveGroup.isPending}
+                >
                   <LogOut className="mr-2 h-4 w-4" />
                   {leaveGroup.isPending ? t('settings.leaving') : t('settings.leaveGroup')}
                 </Button>

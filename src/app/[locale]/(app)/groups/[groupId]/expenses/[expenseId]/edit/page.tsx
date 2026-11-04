@@ -275,6 +275,7 @@ function EditExpenseForm({
               <Label htmlFor="title">{t('new.description')}</Label>
               <Input
                 id="title"
+                className="h-11 min-w-0 scroll-mt-20 text-base"
                 placeholder={t('new.descriptionPlaceholder')}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
@@ -296,7 +297,7 @@ function EditExpenseForm({
                 onChange={(e) => setAmountStr(e.target.value)}
                 required
                 disabled={!isRubExpense}
-                className="h-11 min-w-0 text-base"
+                className="h-11 min-w-0 scroll-mt-20 text-base"
               />
             </div>
 
@@ -304,6 +305,7 @@ function EditExpenseForm({
               <Label htmlFor="category">{t('new.category')}</Label>
               <Input
                 id="category"
+                className="h-11 min-w-0 scroll-mt-20 text-base"
                 placeholder={t('new.categoryPlaceholder')}
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}

@@ -1684,3 +1684,155 @@ test('receipt-linked history layout is usable on six keyboard-sized phones', asy
     await group.dispose();
   }
 });
+
+test('mobile group and expense dialogs remain reachable without mutations', async ({ page }) => {
+  test.setTimeout(260_000);
+  const group = await createTestGroup(
+    users.alice.email,
+    users.alice.password,
+    [{ email: users.bob.email, password: users.bob.password }],
+    'Мобильная проверка диалогов',
+  );
+  const expenseTitle = 'БольшойЧекДляПроверки'.repeat(2);
+  try {
+    const placeholder = await trpcMutation(group.owner, 'groups.addPlaceholder', {
+      groupId: group.groupId,
+      name: 'ДлинноеИмяГостяДляДиалога',
+    });
+    expect(placeholder.ok(), await placeholder.text()).toBeTruthy();
+    const created = await trpcMutation(group.owner, 'expenses.create', {
+      groupId: group.groupId,
+      title: expenseTitle,
+      amount: 125000,
+      currency: 'RUB',
+      paidById: group.memberIds[users.alice.email],
+      splitMode: 'EQUAL',
+      shares: [
+        { userId: group.memberIds[users.alice.email], amount: 62500 },
+        { userId: group.memberIds[users.bob.email], amount: 62500 },
+      ],
+    });
+    expect(created.ok(), await created.text()).toBeTruthy();
+    const expenseId = (await created.json()).result.data.json.id as string;
+    await signInAsSeedAdmin(page);
+    const blockedMutations: string[] = [];
+    const mutations = new Set([
+      'groups.create',
+      'groups.update',
+      'groups.delete',
+      'groups.mergePlaceholder',
+      'groups.transferOwnership',
+      'expenses.create',
+      'expenses.update',
+      'expenses.delete',
+      'settlements.create',
+      'settlements.delete',
+    ]);
+    await page.route('**/api/trpc/**', async (route) => {
+      const names = new URL(route.request().url()).pathname.split('/api/trpc/')[1]?.split(',') ?? [];
+      for (const name of names) {
+        if (mutations.has(name)) {
+          blockedMutations.push(name);
+          await route.abort();
+          return;
+        }
+      }
+      await route.continue();
+    });
+
+    async function checkControl(locator: ReturnType<Page['locator']>, width: number, name: string) {
+      await expect(locator).toBeVisible();
+      await locator.scrollIntoViewIfNeeded();
+      const box = await locator.boundingBox();
+      expect(box, name + ' missing at ' + width).not.toBeNull();
+      expect(box!.x, name + ' left at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(box!.x + box!.width, name + ' right at ' + width).toBeLessThanOrEqual(width + 1);
+      expect(box!.y, name + ' top at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(box!.y + box!.height, name + ' bottom at ' + width).toBeLessThanOrEqual(301);
+      expect(box!.height, name + ' touch height at ' + width).toBeGreaterThanOrEqual(44);
+    }
+
+    for (const width of [320, 360, 430, 480, 600, 720]) {
+      await page.setViewportSize({ width, height: 300 });
+
+      // Group creation: fill draft only, never submit.
+      await page.goto('/groups/new', { waitUntil: 'networkidle' });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      await page.locator('#name').fill('ГруппаБезПробеловДляТелефона');
+      await checkControl(page.locator('#name'), width, 'Create group name');
+      await checkControl(page.locator('form button[type=submit]'), width, 'Create group action');
+      await checkPhoneLayout(page, width);
+
+      // Editing existing group: no changes are saved.
+      await page.goto('/groups/' + group.groupId + '/settings', { waitUntil: 'networkidle' });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      await page.locator('#name').fill('НовоеИмяДляПредпросмотра');
+      await checkControl(page.locator('#name'), width, 'Edit group name');
+      await checkControl(page.locator('#description'), width, 'Edit group description');
+      await checkControl(page.locator('form').first().locator('button[type=submit]'), width, 'Save group action');
+      await checkPhoneLayout(page, width);
+
+      // Group-member merge: selection and cancellation only.
+      await page.getByTestId('mobile-group-merge-trigger').click();
+      const mergeDialog = page.getByTestId('mobile-group-merge-dialog');
+      await checkControl(mergeDialog.locator('#merge-target'), width, 'Merge group member');
+      await mergeDialog.locator('#merge-target').selectOption(group.memberIds[users.bob.email]);
+      await checkControl(mergeDialog.getByRole('button', { name: 'Отмена' }), width, 'Cancel group merge');
+      await mergeDialog.getByRole('button', { name: 'Отмена' }).click();
+      await expect(mergeDialog).toHaveCount(0);
+
+      // Ownership transfer: selection and cancellation only.
+      await page.getByTestId('mobile-group-transfer-trigger').click();
+      const transferDialog = page.getByTestId('mobile-group-transfer-dialog');
+      await checkControl(transferDialog.locator('#transfer-target'), width, 'Transfer group owner');
+      await transferDialog.locator('#transfer-target').selectOption(group.memberIds[users.bob.email]);
+      await checkControl(transferDialog.getByRole('button', { name: 'Отмена' }), width, 'Cancel owner transfer');
+      await transferDialog.getByRole('button', { name: 'Отмена' }).click();
+      await expect(transferDialog).toHaveCount(0);
+
+      // Group removal: inspect confirmation and cancel, no delete mutation.
+      await page.getByTestId('mobile-group-delete-trigger').click();
+      const groupAlert = page.getByRole('alertdialog');
+      await expect(groupAlert).toBeVisible();
+      await checkControl(groupAlert.getByRole('button', { name: 'Отмена' }), width, 'Cancel group deletion');
+      await groupAlert.getByRole('button', { name: 'Отмена' }).click();
+      await expect(groupAlert).toHaveCount(0);
+      await checkPhoneLayout(page, width);
+
+      // New manual expense form: preview only.
+      await page.goto('/groups/' + group.groupId + '/expenses/new', { waitUntil: 'networkidle' });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      await page.locator('#title').fill('ПозицииЧекаДляПроверки');
+      await checkControl(page.locator('#title'), width, 'New expense title');
+      await checkControl(page.locator('#amount'), width, 'New expense amount');
+      await checkControl(page.locator('form button[type=submit]'), width, 'Create expense action');
+      await checkPhoneLayout(page, width);
+
+      // Edit existing disposable expense; do not submit changes.
+      await page.goto('/groups/' + group.groupId + '/expenses/' + expenseId + '/edit', { waitUntil: 'networkidle' });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      await page.locator('#title').fill('ЧерновикРедактированияЧека');
+      await checkControl(page.locator('#title'), width, 'Edit expense title');
+      await checkControl(page.locator('#amount'), width, 'Edit expense amount');
+      await checkControl(page.locator('form button[type=submit]'), width, 'Save expense action');
+      await checkPhoneLayout(page, width);
+
+      // Expense deletion: the existing record must survive Cancel.
+      await page.goto('/groups/' + group.groupId + '/expenses/' + expenseId, { waitUntil: 'networkidle' });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      await checkControl(page.getByTestId('expense-detail-edit'), width, 'Expense edit link');
+      await checkControl(page.getByTestId('expense-detail-delete'), width, 'Expense delete action');
+      await page.getByTestId('expense-detail-delete').click();
+      const expenseAlert = page.getByRole('alertdialog');
+      await expect(expenseAlert).toContainText(expenseTitle);
+      await checkControl(expenseAlert.getByRole('button', { name: 'Отмена' }), width, 'Cancel expense deletion');
+      await expenseAlert.getByRole('button', { name: 'Отмена' }).click();
+      await expect(expenseAlert).toHaveCount(0);
+      await expect(page.getByRole('heading', { name: expenseTitle })).toBeVisible();
+      await checkPhoneLayout(page, width);
+      expect(blockedMutations, 'No write request at ' + width).toEqual([]);
+    }
+  } finally {
+    await group.dispose();
+  }
+});
