@@ -1420,6 +1420,14 @@ test('keyboard-height manual item inputs stay reachable at six mobile widths', a
     await page.getByTestId('person-input-0').fill('Участник');
     await page.getByTestId('next-assign-btn').click();
     await expect(page.getByTestId('guest-assign-step')).toBeVisible();
+    const bar = await page.getByTestId('guest-assign-actions').boundingBox();
+    const header = await page.locator('header').first().boundingBox();
+    expect(bar, 'Finalization bar geometry at ' + width + 'px').not.toBeNull();
+    expect(header, 'Sticky header geometry at ' + width + 'px').not.toBeNull();
+    expect(
+      bar!.y - (header!.y + header!.height),
+      'Clickable content gap at ' + width + 'px: ' + JSON.stringify({ bar, header }),
+    ).toBeGreaterThanOrEqual(44);
     await page.getByTestId('guest-add-item-btn').click();
     const form = page.getByTestId('manual-item-entry-form');
     await expect(form).toBeVisible();
