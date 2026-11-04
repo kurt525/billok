@@ -1487,8 +1487,28 @@ test('keyboard-height manual item inputs stay reachable at six mobile widths', a
     await page.setViewportSize({ width, height: 520 });
     for (const idx of [0, 1]) {
       const guest = page.getByTestId('guest-item-card-' + idx).getByRole('button', { name: 'Участник' });
-      await guest.scrollIntoViewIfNeeded();
-      expect((await guest.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      // The floating action bar must leave a usable region for each portion chip.
+      await guest.evaluate((element) => element.scrollIntoView({ block: 'center', inline: 'nearest' }));
+      const hit = await guest.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        const overlay = document.elementFromPoint(x, y);
+        const bar = document.querySelector('[data-testid="guest-assign-actions"]')?.getBoundingClientRect();
+        const header = document.querySelector('header')?.getBoundingClientRect();
+        return {
+          height: rect.height,
+          visible: x >= 0 && x < innerWidth && y >= 0 && y < innerHeight,
+          clickable: overlay === element || element.contains(overlay),
+          target: overlay?.tagName,
+          barTop: bar?.top ?? null,
+          headerBottom: header?.bottom ?? null,
+          centerY: y,
+        };
+      });
+      expect(hit.height, 'Portion chip height at ' + width).toBeGreaterThanOrEqual(44);
+      expect(hit.visible, 'Chip outside viewport at ' + width + ': ' + JSON.stringify(hit)).toBe(true);
+      expect(hit.clickable, 'Chip intercepted at ' + width + ': ' + JSON.stringify(hit)).toBe(true);
       await guest.click();
       await expect(guest).toHaveClass(/bg-primary/);
     }

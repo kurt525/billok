@@ -800,7 +800,7 @@ function AuthenticatedGuestSplitPage() {
           {!addingItem && splittingIndex === null && (
             <div
               data-testid="guest-assign-actions"
-              className="fixed right-0 bottom-0 left-0 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] [@media(max-height:420px)]:max-h-[max(6rem,45dvh)]"
+              className="fixed right-0 bottom-0 left-0 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] [@media(max-height:640px)]:max-h-24"
             >
               <div className="mx-auto max-w-lg space-y-3">
                 <Button
