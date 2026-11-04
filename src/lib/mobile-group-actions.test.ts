@@ -59,3 +59,24 @@ describe('Android group actions and account forms', () => {
     expect(profile).toContain('className="min-h-11 w-full"');
   });
 });
+
+describe('Mobile payment history and safe confirmation', () => {
+  it('wraps participants, notes and amounts without shrinking touch targets', () => {
+    const ui = source('src/components/groups/payments-list.tsx');
+    expect(ui).not.toContain('className="truncate"');
+    expect(ui).not.toContain('size="icon-sm"');
+    for (const token of [
+      'flex min-w-0 flex-wrap items-center justify-between gap-3',
+      '[overflow-wrap:anywhere]',
+      'size-11 shrink-0',
+      'className="mt-2 min-h-11"',
+      'data-testid="mobile-payment-delete-dialog"',
+      'max-h-[calc(100dvh-2rem)]',
+      'overflow-y-auto overscroll-contain',
+      'env(safe-area-inset-bottom)',
+      'className="min-h-11 min-w-11"',
+    ]) {
+      expect(ui).toContain(token);
+    }
+  });
+});
