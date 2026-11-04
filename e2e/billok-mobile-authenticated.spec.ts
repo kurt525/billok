@@ -857,6 +857,9 @@ test('mobile admin activity and audit tables scroll inside cards at six widths',
         ],
         nextCursor: 'mobile-activity-next',
       };
+      // Drop the response's old SuperJSON metadata: a real query without a next
+      // page marks nextCursor as undefined, overriding the mocked cursor.
+      item.result.data = { json: item.result.data.json };
       mockedQueries++;
     }
     if (auditIndex >= 0) {
@@ -874,6 +877,9 @@ test('mobile admin activity and audit tables scroll inside cards at six widths',
         ],
         nextCursor: 'mobile-audit-next',
       };
+      // Drop the response's old SuperJSON metadata: a real query without a next
+      // page marks nextCursor as undefined, overriding the mocked cursor.
+      item.result.data = { json: item.result.data.json };
       mockedQueries++;
     }
     await route.fulfill({ response, json: Array.isArray(body) ? entries : entries[0] });
