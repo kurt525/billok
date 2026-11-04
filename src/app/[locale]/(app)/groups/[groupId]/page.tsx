@@ -245,7 +245,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                     type="button"
                     disabled={!!g.archivedAt}
                     data-testid="group-debt-settlement-button"
-                    className="flex min-h-11 w-full min-w-0 flex-wrap items-center gap-2 rounded-lg p-2.5 text-sm whitespace-normal transition-all enabled:hover:bg-muted/70 enabled:hover:shadow-sm"
+                    className="flex min-h-11 w-full min-w-0 scroll-mt-20 flex-wrap items-center gap-2 rounded-lg p-2.5 text-sm whitespace-normal transition-all enabled:hover:bg-muted/70 enabled:hover:shadow-sm"
                     onClick={() =>
                       setSettleState({
                         open: true,
@@ -262,7 +262,10 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                     <span className="min-w-0 text-xs font-medium text-emerald-600 [overflow-wrap:anywhere] sm:text-sm dark:text-emerald-400">
                       {toName}
                     </span>
-                    <span className="ml-auto min-w-0 max-w-full font-semibold tabular-nums text-red-600 [overflow-wrap:anywhere] dark:text-red-400">
+                    <span
+                      data-testid="group-debt-amount"
+                      className="ml-auto min-w-0 max-w-full basis-full text-right font-semibold tabular-nums text-red-600 [overflow-wrap:anywhere] sm:basis-auto dark:text-red-400"
+                    >
                       {formatCents(debt.amount, g.currency, locale)}
                     </span>
                   </button>

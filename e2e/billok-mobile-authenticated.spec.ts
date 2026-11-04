@@ -498,6 +498,31 @@ test('long expense history stays readable and opens at six mobile widths', async
         expect(bounds!.x + bounds!.width, 'Settlement button right at ' + width + 'px').toBeLessThanOrEqual(width + 1);
         expect(bounds!.height, 'Settlement tap target at ' + width + 'px').toBeGreaterThanOrEqual(44);
       }
+      const debtButton = page.getByTestId('group-debt-settlement-button').first();
+      const debtAmount = debtButton.getByTestId('group-debt-amount');
+      await expect(debtAmount).toContainText('₽');
+      await debtAmount.scrollIntoViewIfNeeded();
+      const debtGeometry = await debtAmount.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, width: element.clientWidth, scroll: element.scrollWidth };
+      });
+      expect(debtGeometry.left, 'Debt amount left at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(debtGeometry.right, 'Debt amount right at ' + width).toBeLessThanOrEqual(width + 1);
+      expect(debtGeometry.scroll, 'Unclipped RUB debt at ' + width).toBeLessThanOrEqual(debtGeometry.width + 1);
+      await debtButton.click();
+      const settlement = page.getByTestId('mobile-settle-dialog');
+      await expect(settlement).toBeVisible();
+      const suggested = settlement.locator('#settle-amount');
+      await expect(suggested).toBeVisible();
+      await suggested.scrollIntoViewIfNeeded();
+      const suggestedBox = await suggested.boundingBox();
+      expect(suggestedBox, 'Settlement amount at ' + width).not.toBeNull();
+      expect(suggestedBox!.height).toBeGreaterThanOrEqual(44);
+      expect(suggestedBox!.x).toBeGreaterThanOrEqual(-1);
+      expect(suggestedBox!.x + suggestedBox!.width).toBeLessThanOrEqual(width + 1);
+      await settlement.locator('[data-slot="dialog-close"]').click();
+      await expect(settlement).toHaveCount(0);
+      await checkPhoneLayout(page, width);
       await link.click();
       await expect(page).toHaveURL(new RegExp('/groups/' + group.groupId + '/expenses/' + expense.id + '$'));
       await expect(page.getByRole('heading', { name: title })).toBeVisible();
