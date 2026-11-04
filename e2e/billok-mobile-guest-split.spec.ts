@@ -634,7 +634,26 @@ test('mobile guest finalization reconciles personal tips for three dining partic
         expect(bounds.right, testId + ' right at ' + width + 'px').toBeLessThanOrEqual(width);
         expect(bounds.height, testId + ' touch height at ' + width + 'px').toBeGreaterThanOrEqual(44);
       }
-      await page.getByTestId('split-result-back-to-claim').click();
+      const backToClaim = page.getByTestId('split-result-back-to-claim');
+      await backToClaim.scrollIntoViewIfNeeded();
+      const hit = await backToClaim.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const target = document.elementFromPoint(centerX, centerY);
+        const footer = document.querySelector('[data-testid="split-result-actions"]');
+        return {
+          centerY,
+          buttonTop: rect.top,
+          footerPosition: footer ? getComputedStyle(footer).position : 'missing',
+          coveringElement: target?.tagName ?? 'none',
+          coveringTestId: target?.getAttribute('data-testid') ?? null,
+          clickable: target === element || element.contains(target),
+        };
+      });
+      expect(hit.footerPosition, 'Footer at ' + width + 'px: ' + JSON.stringify(hit)).toBe('static');
+      expect(hit.clickable, 'Back to receipt blocked at ' + width + 'px: ' + JSON.stringify(hit)).toBe(true);
+      await backToClaim.click();
       await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('4,59', {
         timeout: 15_000,
       });
