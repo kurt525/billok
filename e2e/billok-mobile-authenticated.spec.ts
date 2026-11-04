@@ -1108,3 +1108,83 @@ test('mobile admin group deletion dialog is safe at six widths', async ({ page }
     await checkPhoneLayout(page, width, true);
   }
 });
+
+test('mobile read-only admin health and storage cards fit six widths', async ({ page }) => {
+  test.setTimeout(170_000);
+  await signInAsSeedAdmin(page);
+  const longValue = 'АдаптивнаяПроверкаОченьДлинногоЗначенияБезПробелов'.repeat(3);
+  let healthReads = 0;
+  let storageReads = 0;
+  await page.route('**/api/trpc/**', async (route) => {
+    const procedures = new URL(route.request().url()).pathname.split('/api/trpc/')[1]?.split(',') ?? [];
+    const healthIndex = procedures.indexOf('admin.getSystemHealth');
+    const storageIndex = procedures.indexOf('admin.getStorageStats');
+    if (healthIndex < 0 && storageIndex < 0) return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    const entries = Array.isArray(body) ? body : [body];
+    if (healthIndex >= 0) {
+      expect(entries[healthIndex]?.result?.data).toBeDefined();
+      entries[healthIndex].result.data = {
+        json: {
+          dbStatus: 'connected',
+          version: longValue,
+          commitSha: 'a'.repeat(96),
+          uptime: 3600,
+          serverStartTime: '2026-10-20T10:00:00.000Z',
+        },
+      };
+      healthReads++;
+    }
+    if (storageIndex >= 0) {
+      expect(entries[storageIndex]?.result?.data).toBeDefined();
+      entries[storageIndex].result.data = {
+        json: {
+          receiptCount: 5,
+          diskFiles: 3,
+          totalDiskUsage: 1024,
+          totalDiskUsageFormatted: longValue,
+          orphanCount: 0,
+          orphanPaths: [],
+          unusedReceiptCount: 0,
+          unusedReceiptBytes: 0,
+          unusedReceiptBytesFormatted: '0 B',
+        },
+      };
+      storageReads++;
+    }
+    await route.fulfill({ response, json: Array.isArray(body) ? entries : entries[0] });
+  });
+
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    await page.goto('/admin', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+
+    const health = page.getByTestId('admin-system-health');
+    const storage = page.getByTestId('admin-storage-stats');
+    await expect(health.getByTestId('admin-system-version')).toContainText(longValue);
+    await expect(health.getByTestId('admin-system-commit')).toContainText('a'.repeat(96));
+    await expect(storage.getByTestId('admin-storage-disk-usage')).toContainText(longValue);
+    for (const section of [health, storage]) {
+      await expect(section).toBeVisible();
+      const cards = section.locator('[data-slot="card"]');
+      await expect(cards).toHaveCount(section === health ? 3 : 4);
+      for (const card of await cards.all()) {
+        const bounds = await card.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.width, 'Card width at ' + width).toBeGreaterThan(0);
+        expect(bounds!.x, 'Card left at ' + width).toBeGreaterThanOrEqual(-1);
+        expect(bounds!.x + bounds!.width, 'Card right at ' + width).toBeLessThanOrEqual(width + 1);
+        const sizes = await card.evaluate((element) => ({
+          width: element.clientWidth,
+          content: element.scrollWidth,
+        }));
+        expect(sizes.content, 'Card content overflow at ' + width).toBeLessThanOrEqual(sizes.width + 1);
+      }
+    }
+    await checkPhoneLayout(page, width, true);
+  }
+  expect(healthReads).toBeGreaterThanOrEqual(6);
+  expect(storageReads).toBeGreaterThanOrEqual(6);
+});

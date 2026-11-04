@@ -36,7 +36,7 @@ export default function AdminPage() {
   const currentUserEmail = session?.user?.email;
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6">
       <div className="flex items-center gap-3">
         <Shield className="h-7 w-7 text-primary" />
         <h1 className="text-2xl font-bold">{t('title')}</h1>
@@ -83,9 +83,9 @@ function SystemHealthSection() {
   const data = health.data;
 
   return (
-    <section>
-      <h2 className="mb-4 text-lg font-semibold">{t('systemHealth.title')}</h2>
-      <div className="grid gap-4 @2xl:grid-cols-2">
+    <section className="min-w-0" data-testid="admin-system-health">
+      <h2 className="mb-4 min-w-0 text-lg font-semibold [overflow-wrap:anywhere]">{t('systemHealth.title')}</h2>
+      <div className="grid min-w-0 gap-4 @2xl:grid-cols-2 [&>*]:min-w-0">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
@@ -98,7 +98,9 @@ function SystemHealthSection() {
               <span
                 className={`h-2.5 w-2.5 rounded-full ${data?.dbStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'}`}
               />
-              <span className="text-sm font-medium capitalize">{data?.dbStatus ?? 'unknown'}</span>
+              <span className="min-w-0 text-sm font-medium capitalize [overflow-wrap:anywhere]">
+                {data?.dbStatus ?? 'unknown'}
+              </span>
             </div>
           </CardContent>
         </Card>
@@ -111,9 +113,19 @@ function SystemHealthSection() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <span className="text-sm font-medium">v{data?.version}</span>
+            <span
+              className="block min-w-0 text-sm font-medium [overflow-wrap:anywhere]"
+              data-testid="admin-system-version"
+            >
+              v{data?.version}
+            </span>
             {data?.commitSha && data.commitSha !== 'unknown' && (
-              <span className="ml-2 text-xs text-muted-foreground font-mono">({data.commitSha})</span>
+              <span
+                className="block min-w-0 break-all font-mono text-xs text-muted-foreground"
+                data-testid="admin-system-commit"
+              >
+                ({data.commitSha})
+              </span>
             )}
           </CardContent>
         </Card>
@@ -128,7 +140,7 @@ function SystemHealthSection() {
           <CardContent>
             <span className="text-sm font-medium">{data ? formatUptime(data.uptime) : '---'}</span>
             {data?.serverStartTime && (
-              <p className="mt-1 text-xs text-muted-foreground">
+              <p className="mt-1 min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
                 {t('systemHealth.started', { time: new Date(data.serverStartTime).toLocaleString(locale) })}
               </p>
             )}
@@ -164,9 +176,9 @@ function StorageStatsSection() {
   const data = storage.data;
 
   return (
-    <section>
-      <h2 className="mb-4 text-lg font-semibold">{t('storage.title')}</h2>
-      <div className="grid gap-4 @2xl:grid-cols-2">
+    <section className="min-w-0" data-testid="admin-storage-stats">
+      <h2 className="mb-4 min-w-0 text-lg font-semibold [overflow-wrap:anywhere]">{t('storage.title')}</h2>
+      <div className="grid min-w-0 gap-4 @2xl:grid-cols-2 [&>*]:min-w-0">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
@@ -175,8 +187,8 @@ function StorageStatsSection() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold">{data?.receiptCount ?? 0}</p>
-            <p className="text-xs text-muted-foreground">{t('storage.inDatabase')}</p>
+            <p className="min-w-0 text-2xl font-bold [overflow-wrap:anywhere]">{data?.receiptCount ?? 0}</p>
+            <p className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">{t('storage.inDatabase')}</p>
           </CardContent>
         </Card>
 
@@ -188,15 +200,19 @@ function StorageStatsSection() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold">{data?.totalDiskUsageFormatted ?? '0 B'}</p>
-            <p className="text-xs text-muted-foreground">{t('storage.filesOnDisk', { count: data?.diskFiles ?? 0 })}</p>
+            <p className="min-w-0 text-2xl font-bold [overflow-wrap:anywhere]" data-testid="admin-storage-disk-usage">
+              {data?.totalDiskUsageFormatted ?? '0 B'}
+            </p>
+            <p className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+              {t('storage.filesOnDisk', { count: data?.diskFiles ?? 0 })}
+            </p>
           </CardContent>
         </Card>
 
         <Card className="@2xl:col-span-2">
           <CardHeader className="pb-2">
-            <CardTitle className="flex flex-wrap items-center justify-between gap-2">
-              <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-muted-foreground">
+            <CardTitle className="flex min-w-0 flex-wrap items-center justify-between gap-2 [overflow-wrap:anywhere]">
+              <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-muted-foreground [overflow-wrap:anywhere]">
                 <FileWarning className="h-4 w-4" />
                 {t('storage.orphanedFiles')}
               </span>
@@ -219,8 +235,10 @@ function StorageStatsSection() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold">{data?.orphanCount ?? 0}</p>
-            <p className="text-xs text-muted-foreground">{t('storage.orphanDescription')}</p>
+            <p className="min-w-0 text-2xl font-bold [overflow-wrap:anywhere]">{data?.orphanCount ?? 0}</p>
+            <p className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+              {t('storage.orphanDescription')}
+            </p>
             {cleanup.isSuccess && (
               <p className="mt-2 text-sm text-green-600">
                 {t('storage.cleanedUp', { count: cleanup.data.deletedCount, size: cleanup.data.freedBytesFormatted })}
@@ -231,8 +249,8 @@ function StorageStatsSection() {
 
         <Card className="@2xl:col-span-2" data-testid="unused-receipts-card">
           <CardHeader className="pb-2">
-            <CardTitle className="flex flex-wrap items-center justify-between gap-2">
-              <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-muted-foreground">
+            <CardTitle className="flex min-w-0 flex-wrap items-center justify-between gap-2 [overflow-wrap:anywhere]">
+              <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-muted-foreground [overflow-wrap:anywhere]">
                 <ReceiptText className="h-4 w-4" />
                 {t('storage.unusedReceipts')}
               </span>
@@ -255,8 +273,8 @@ function StorageStatsSection() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold">{data?.unusedReceiptCount ?? 0}</p>
-            <p className="text-xs text-muted-foreground">
+            <p className="min-w-0 text-2xl font-bold [overflow-wrap:anywhere]">{data?.unusedReceiptCount ?? 0}</p>
+            <p className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
               {t('storage.unusedDescription', { size: data?.unusedReceiptBytesFormatted ?? '0 B' })}
             </p>
             {cleanupUnused.isSuccess && (
