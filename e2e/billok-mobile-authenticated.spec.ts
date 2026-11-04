@@ -1512,7 +1512,43 @@ test('keyboard-height manual item inputs stay reachable at six mobile widths', a
       await guest.click();
       await expect(guest).toHaveClass(/bg-primary/);
     }
-    expect(saveRequests, 'Editing and splitting must not create a receipt').toBe(0);
+    const finalSave = page.getByTestId('create-split-btn');
+    await expect(finalSave).toBeEnabled();
+    const card = page.getByTestId('guest-item-card-0');
+    await card.locator('button[title]').first().click();
+    const edit = page.getByTestId('guest-edit-item-form');
+    await expect(edit).toBeVisible();
+    await page.setViewportSize({ width, height: 300 });
+    await expect(page.getByTestId('guest-assign-actions')).toHaveCount(0);
+    const editedName = edit.locator('input').first();
+    await editedName.fill('   ');
+    const saveEdit = edit.getByRole('button', { name: 'Сохранить' });
+    const cancelEdit = edit.getByRole('button', { name: 'Отмена' });
+    for (const control of [editedName, saveEdit, cancelEdit]) {
+      await control.scrollIntoViewIfNeeded();
+      const bounds = await control.boundingBox();
+      expect(bounds, 'Edit action at ' + width).not.toBeNull();
+      expect(bounds!.height).toBeGreaterThanOrEqual(44);
+      expect(bounds!.x).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width + 1);
+      expect(bounds!.y).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(301);
+    }
+    await saveEdit.click();
+    await expect(page.getByText('Укажите название позиции.', { exact: true })).toBeVisible();
+    await expect(edit).toBeVisible();
+    await checkPhoneLayout(page, width, true);
+    await cancelEdit.click();
+    await expect(edit).toHaveCount(0);
+    await expect(card).toContainText('БлюдоБезПробелов');
+    await expect(page.getByTestId('guest-assign-actions')).toBeVisible();
+    await page.setViewportSize({ width, height: 520 });
+    await card.locator('button[title]').first().click();
+    await page.getByTestId('guest-edit-item-form').locator('input').first().fill('Блюдо на двоих');
+    await page.getByTestId('guest-edit-item-form').getByRole('button', { name: 'Сохранить' }).click();
+    await expect(card).toContainText('Блюдо на двоих');
+    await expect(page.getByTestId('guest-assign-actions')).toBeVisible();
+    expect(saveRequests, 'Local edit, cancel and validation cannot create a receipt').toBe(0);
   }
   expect(saveRequests).toBe(0);
 });

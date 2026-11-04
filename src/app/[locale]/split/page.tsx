@@ -614,7 +614,7 @@ function AuthenticatedGuestSplitPage() {
                 >
                   <CardContent className="py-3">
                     {isEditing ? (
-                      <div className="mb-2 space-y-2">
+                      <div className="mb-2 min-w-0 space-y-2" data-testid="guest-edit-item-form">
                         <Input
                           value={editValues.name}
                           onChange={(e) => setEditValues((p) => ({ ...p, name: e.target.value }))}
@@ -640,7 +640,7 @@ function AuthenticatedGuestSplitPage() {
                             placeholder={t('assign.pricePlaceholder')}
                           />
                         </div>
-                        <div className="flex gap-1">
+                        <div className="flex min-w-0 flex-wrap gap-2">
                           <Button type="button" size="sm" className="min-h-11" onClick={saveEdit}>
                             {t('assign.save')}
                           </Button>
@@ -797,7 +797,7 @@ function AuthenticatedGuestSplitPage() {
           )}
 
           {/* The persistent finalization bar must not cover item fields when the keyboard is open. */}
-          {!addingItem && splittingIndex === null && (
+          {!addingItem && splittingIndex === null && editingItem === null && (
             <div
               data-testid="guest-assign-actions"
               className="fixed right-0 bottom-0 left-0 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] [@media(max-height:640px)]:max-h-24"
