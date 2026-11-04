@@ -1457,7 +1457,42 @@ test('keyboard-height manual item inputs stay reachable at six mobile widths', a
     await form.getByTestId('guest-add-item-submit').click();
     await expect(form).toHaveCount(0);
     await expect(page.getByTestId('guest-assign-actions')).toBeVisible();
-    expect(saveRequests, 'Editing items must not create a receipt').toBe(0);
+    // Open the split before showing the mobile keyboard.
+    await page.setViewportSize({ width, height: 520 });
+    await page.getByTestId('guest-split-btn-0').click();
+    const qty = page.getByTestId('guest-split-qty-0');
+    const confirmSplit = page.getByTestId('guest-split-submit-0');
+    await expect(qty).toBeVisible();
+    await page.setViewportSize({ width, height: 300 });
+    await expect(page.getByTestId('guest-assign-actions')).toHaveCount(0);
+    await qty.fill('0');
+    await expect(confirmSplit).toBeDisabled();
+    await qty.fill('1');
+    await expect(confirmSplit).toBeEnabled();
+    for (const control of [qty, confirmSplit]) {
+      await control.scrollIntoViewIfNeeded();
+      const rect = await control.boundingBox();
+      expect(rect).not.toBeNull();
+      expect(rect!.height, 'Split touch height at ' + width).toBeGreaterThanOrEqual(44);
+      expect(rect!.x, 'Split left at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(rect!.x + rect!.width, 'Split right at ' + width).toBeLessThanOrEqual(width + 1);
+      expect(rect!.y, 'Split top at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(rect!.y + rect!.height, 'Split bottom at ' + width).toBeLessThanOrEqual(301);
+    }
+    await checkPhoneLayout(page, width, true);
+    await confirmSplit.click();
+    await expect(page.locator('[data-testid^="guest-item-card-"]')).toHaveCount(2);
+    await expect(page.getByTestId('guest-assign-actions')).toBeVisible();
+    // Restore the normal viewport to select the two local portions.
+    await page.setViewportSize({ width, height: 520 });
+    for (const idx of [0, 1]) {
+      const guest = page.getByTestId('guest-item-card-' + idx).getByRole('button', { name: 'Участник' });
+      await guest.scrollIntoViewIfNeeded();
+      expect((await guest.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await guest.click();
+      await expect(guest).toHaveClass(/bg-primary/);
+    }
+    expect(saveRequests, 'Editing and splitting must not create a receipt').toBe(0);
   }
   expect(saveRequests).toBe(0);
 });
