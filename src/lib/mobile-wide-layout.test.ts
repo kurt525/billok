@@ -74,7 +74,23 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
 
   it('keeps rare admin clean-up controls touch-sized with wrapping titles on mobile', () => {
     const admin = source('src/app/[locale]/(app)/admin/page.tsx');
-    expect(admin.match(/<CardTitle className="flex flex-wrap items-center justify-between gap-2">/g)).toHaveLength(2);
+    const cleanupTitleClasses = [...admin.matchAll(/<CardTitle className="([^"]+)">/g)]
+      .map((match) => match[1]?.split(/\s+/) ?? [])
+      .filter((classes) => classes.includes('flex-wrap') && classes.includes('justify-between'));
+    expect(cleanupTitleClasses).toHaveLength(2);
+    for (const classes of cleanupTitleClasses) {
+      expect(classes).toEqual(
+        expect.arrayContaining([
+          'flex',
+          'min-w-0',
+          'flex-wrap',
+          'items-center',
+          'justify-between',
+          'gap-2',
+          '[overflow-wrap:anywhere]',
+        ]),
+      );
+    }
     expect(admin.match(/className="min-h-11 min-w-11 whitespace-normal leading-tight"/g)).toHaveLength(2);
     expect(admin).toContain('onClick={() => cleanup.mutate()}');
     expect(admin).toContain('onClick={() => cleanupUnused.mutate()}');
