@@ -492,7 +492,7 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
   }
 });
 
-test('Issue 2.14: two guest phones save personal parts 3/5 without knowing the original count', async ({
+test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobile approval, exact RUB', async ({
   page,
   browser,
 }) => {
@@ -526,6 +526,26 @@ test('Issue 2.14: two guest phones save personal parts 3/5 without knowing the o
     await expect(page.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 0');
     await expect(page.getByTestId('unclaimed-total')).toContainText('8,00');
     await expect(page.getByTestId('guest-parts-preliminary')).toBeVisible();
+    // 2.20.3: the optional original is meaningful even at zero claims.
+    const emptyKnown = await trpcMutation(owner, 'guest.setKnownItemParts', {
+      token,
+      itemIndex: 0,
+      totalParts: 8,
+    });
+    expect(emptyKnown.ok(), await emptyKnown.text()).toBe(true);
+    await expect(page.getByTestId('guest-claimed-parts-progress-0')).toContainText(
+      'Осталось нераспределённых частей: 8',
+      { timeout: 15_000 },
+    );
+    const unknownAgain = await trpcMutation(owner, 'guest.setKnownItemParts', {
+      token,
+      itemIndex: 0,
+      totalParts: null,
+    });
+    expect(unknownAgain.ok(), await unknownAgain.text()).toBe(true);
+    await expect(page.getByTestId('guest-claimed-parts-progress-0')).toContainText('Исходное количество неизвестно', {
+      timeout: 15_000,
+    });
 
     for (const guest of [anna, boris]) {
       const ctx = guest.personId === anna.personId ? owner : second.request;
@@ -738,8 +758,89 @@ test('Issue 2.14: two guest phones save personal parts 3/5 without knowing the o
       )
       .toBe(3);
     await expect(aliceInput).toHaveValue('3', { timeout: 15_000 });
-    const approved = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
-    expect(approved.ok(), await approved.text()).toBe(true);
+
+    // 2.20.3: creator enters the original count in the mobile UI.
+    await alicePage.goto('/login', { waitUntil: 'networkidle' });
+    await alicePage.locator('input[type=email]').fill(users.alice.email);
+    await alicePage.locator('input[type=password]').fill(users.alice.password);
+    await alicePage.getByRole('button', { name: 'Войти', exact: true }).click();
+    await expect(alicePage).toHaveURL(/\/dashboard/);
+    await alicePage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    const original = alicePage.getByTestId('guest-known-parts-input-0');
+    const saveOriginal = alicePage.getByTestId('guest-known-parts-save-0');
+    await expect(original).toBeVisible();
+    await expect(bobPage.getByTestId('guest-known-parts-editor-0')).toHaveCount(0);
+    await original.fill('10');
+    await saveOriginal.click();
+    await expect(alicePage.getByTestId('guest-claimed-parts-progress-0')).toContainText(
+      'Осталось нераспределённых частей: 2',
+      { timeout: 15_000 },
+    );
+    await expect(bobPage.getByTestId('guest-claimed-parts-progress-0')).toContainText(
+      'Осталось нераспределённых частей: 2',
+      { timeout: 15_000 },
+    );
+    // A known remainder prevents both creator approval and direct API finalization.
+    await expect(alicePage.getByTestId('guest-confirm-parts-btn')).toHaveCount(0);
+    const premature = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
+    expect(premature.ok()).toBe(false);
+    const unfinished = await trpcMutation(owner, 'guest.finalizeSession', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+    });
+    expect(unfinished.ok()).toBe(false);
+    await original.fill('8');
+    await saveOriginal.click();
+    await expect(alicePage.getByTestId('guest-claimed-parts-progress-0')).toContainText(
+      'Осталось нераспределённых частей: 0',
+      { timeout: 15_000 },
+    );
+    // An extra slice cannot be saved by another device when all 8 are taken.
+    const exceed = await trpcMutation(second.request, 'guest.setMyItemParts', {
+      token,
+      personId: boris.personId,
+      personToken: boris.personToken,
+      itemIndex: 0,
+      parts: 6,
+    });
+    expect(exceed.ok()).toBe(false);
+    const stillEight = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(stillEight.assignments[0].partsByPersonId).toEqual({ [anna.personId]: 3, [boris.personId]: 5 });
+    for (const width of [320, 360, 430, 480, 600, 720]) {
+      await alicePage.setViewportSize({ width, height: 520 });
+      await original.scrollIntoViewIfNeeded();
+      const rect = await original.boundingBox();
+      expect(rect, 'Known original input at ' + width).not.toBeNull();
+      expect(rect!.x).toBeGreaterThanOrEqual(-1);
+      expect(rect!.x + rect!.width).toBeLessThanOrEqual(width + 1);
+      await fitsPhone(alicePage);
+    }
+    await alicePage.getByTestId('guest-confirm-parts-btn').click();
+    await expect
+      .poll(async () => (await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).partsConfirmed)
+      .toBe(true);
+
+    // Any correction to the known original invalidates the saved sign-off.
+    await original.fill('9');
+    await saveOriginal.click();
+    await expect(alicePage.getByTestId('guest-claimed-parts-progress-0')).toContainText(
+      'Осталось нераспределённых частей: 1',
+      { timeout: 15_000 },
+    );
+    await expect
+      .poll(async () => (await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).partsConfirmed)
+      .toBe(false);
+    const stale = await trpcMutation(owner, 'guest.finalizeSession', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+    });
+    expect(stale.ok()).toBe(false);
+    await original.fill('8');
+    await saveOriginal.click();
+    await expect(alicePage.getByTestId('guest-confirm-parts-btn')).toBeVisible();
+    await alicePage.getByTestId('guest-confirm-parts-btn').click();
     await expect
       .poll(async () => (await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).partsConfirmed)
       .toBe(true);

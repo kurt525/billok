@@ -134,7 +134,7 @@ test('group receipt: add, edit, cancel, split, assign, save, delete and finalize
   await expect(page.getByText('Тестовый чек', { exact: true }).first()).toBeVisible();
 });
 
-test('manual receipt creator saves, reloads and clears optional original portions on six mobile widths', async ({
+test('Issue 2.20.3: group known original portions, creator reapproval, exact RUB on six mobile widths', async ({
   page,
   browser,
 }) => {
@@ -161,6 +161,15 @@ test('manual receipt creator saves, reloads and clears optional original portion
   await add.getByRole('button', { name: 'Добавить', exact: true }).click();
   const pizza = item(page, 'Пицца 8 частей');
   await expect(pizza).toHaveCount(1);
+  // 2.20.3: a known original may be entered when nobody claimed anything.
+  const initialKnown = pizza.locator('[data-testid^="item-total-parts-input-"]');
+  const initialProgress = pizza.locator('[data-testid^="item-total-parts-progress-"]');
+  await initialKnown.fill('10');
+  await pizza.locator('[data-testid^="item-total-parts-save-"]').click();
+  await expect(initialProgress).toContainText('Участниками учтено частей: 0');
+  await expect(initialProgress).toContainText('Осталось нераспределённых частей: 10');
+  await pizza.locator('[data-testid^="item-total-parts-clear-"]').click();
+  await expect(initialProgress).toContainText('Исходное количество частей не указано');
   await pizza.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Bob' }).click();
   await pizza.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Alice' }).click();
   await pizza.getByLabel('Частей: Bob').fill('3');
@@ -266,6 +275,42 @@ test('manual receipt creator saves, reloads and clears optional original portion
   );
   expect(cleared.receipt.extractedData.declaredTotalPartsByItem).toEqual({});
   expect(cleared.items[0].totalPrice).toBe(8000);
+
+  // 2.20.3: finalize the same known original on a real mobile page.
+  // A restored 8-portion receipt costs exactly 80 RUB, not eight times more.
+  const known = restored.locator('[data-testid^="item-total-parts-input-"]');
+  const saveKnown = restored.locator('[data-testid^="item-total-parts-save-"]');
+  await known.fill('8');
+  await saveKnown.click();
+  await expect(restored.locator('[data-testid^="item-total-parts-progress-"]')).toContainText(
+    'Осталось нераспределённых частей: 0',
+  );
+  await page.locator('#title').fill('Приёмка 2.20.3');
+  await expect(approve).toBeEnabled();
+  await approve.check();
+  await expect(page.getByTestId('create-expense-btn')).toBeEnabled();
+
+  // A creator correction after sign-off must invalidate the old approval.
+  await known.fill('9');
+  await saveKnown.click();
+  await expect(approve).not.toBeChecked();
+  await expect(approve).toBeDisabled();
+  await expect(page.getByTestId('create-expense-btn')).toBeDisabled();
+  await known.fill('8');
+  await saveKnown.click();
+  await expect(approve).toBeEnabled();
+  await expect(approve).not.toBeChecked();
+  await approve.check();
+  await page.getByTestId('create-expense-btn').click();
+  await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'), { timeout: 20_000 });
+  const { expenses } = await trpcResult(await trpcQuery(page.request, 'expenses.list', { groupId, limit: 100 }));
+  const finalized = (
+    expenses as { receiptId: string; amount: number; currency: string; shares: { amount: number }[] }[]
+  ).find((expense) => expense.receiptId === createdReceiptId);
+  expect(finalized).toBeTruthy();
+  expect(finalized!.currency).toBe('RUB');
+  expect(finalized!.amount).toBe(8000);
+  expect(finalized!.shares.reduce((sum, share) => sum + share.amount, 0)).toBe(8000);
 });
 
 test('Issue 2.16.3: manual group receipt balances two dishes and persists exact kopecks at six mobile widths', async ({
