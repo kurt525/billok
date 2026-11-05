@@ -687,6 +687,9 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         tip: session.data.receiptData.tip,
         peopleCount: session.data.people.length,
         balanceAcrossItems: session.data.receiptData.roundingBalanced === true,
+        organizerIndex: session.data.people.findIndex(
+          (person) => person.id === session.data.receiptData.organizerPersonId,
+        ),
         ...weightsParam,
       });
     }
@@ -698,6 +701,9 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       tip: session.data.receiptData.tip,
       peopleCount: session.data.people.length,
       balanceAcrossItems: session.data.receiptData.roundingBalanced === true,
+      organizerIndex: session.data.people.findIndex(
+        (person) => person.id === session.data.receiptData.organizerPersonId,
+      ),
       ...weightsParam,
     });
   }, [session.data, baseClaimsMap, localEdits, pendingByIndex]);

@@ -502,8 +502,10 @@ function claimSession(
       total: number;
       currency: string;
       roundingBalanced?: boolean;
+      organizerPersonId?: string;
     };
     expiresAt?: Date;
+    paidByIndex?: number;
     assignments?: { itemIndex: number; personIndices: number[]; partsByPersonId?: Record<string, number> }[];
     items?: { name: string; quantity: number; unitPrice: number; totalPrice: number }[];
     legacy?: boolean;
@@ -882,6 +884,26 @@ describe('guest.createClaimSession', () => {
     };
     expect(saved.receiptData.roundingBalanced).toBe(true);
     expect(saved.receiptData.total).toBe(saved.receiptData.subtotal);
+  });
+
+  test('2.17.2.2 saves the creator personal ID even when they are not first or the payer', async () => {
+    await (
+      await caller(signedIn)
+    ).createClaimSession({
+      ...session,
+      people: ['Dana', 'Host', 'Payer'],
+      creatorName: 'Host',
+      paidByName: 'Payer',
+    });
+    const saved = mockDb.guestSplit.create.mock.calls[0]![0].data as {
+      people: { id: string; name: string }[];
+      paidByIndex: number;
+      receiptData: { organizerPersonId: string; roundingBalanced: boolean };
+    };
+    expect(saved.paidByIndex).toBe(2);
+    expect(saved.receiptData.organizerPersonId).toBe(saved.people[1]!.id);
+    expect(saved.receiptData.organizerPersonId).not.toBe(saved.people[saved.paidByIndex]!.id);
+    expect(saved.receiptData.roundingBalanced).toBe(true);
   });
 
   test('gives the creator and the payer ids', async () => {
@@ -1714,6 +1736,45 @@ describe('guest.finalizeSession', () => {
     };
     expect(saved.data.summary.map((person) => person.itemTotal)).toEqual([67, 135]);
     expect(saved.data.summary.reduce((sum, person) => sum + person.total, 0)).toBe(202);
+  });
+
+  test('2.17.2.2 finalizes an indivisible guest kopeck to creator, not payer, with no phantom item', async () => {
+    claimSession(
+      [
+        { name: 'Аня', personToken: ALICE_TOKEN },
+        { name: 'Борис', personToken: OTHER_TOKEN },
+        { name: 'Виктор', personToken: D_TOKEN },
+        { name: 'Плательщик' },
+        { name: 'Организатор' },
+      ],
+      {
+        items: [
+          { name: 'Блюдо', quantity: 1, unitPrice: 1, totalPrice: 1 },
+          { name: 'Напиток', quantity: 1, unitPrice: 1, totalPrice: 1 },
+        ],
+        receiptData: {
+          subtotal: 2,
+          total: 2,
+          tax: 0,
+          tip: 0,
+          currency: 'RUB',
+          roundingBalanced: true,
+          organizerPersonId: pid(4),
+        },
+        paidByIndex: 3,
+        assignments: [
+          { itemIndex: 0, personIndices: [0, 1, 2] },
+          { itemIndex: 1, personIndices: [3] },
+        ],
+      },
+    );
+    await (await caller()).finalizeSession({ token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN });
+    const saved = mockDb.guestSplit.update.mock.calls.at(-1)![0] as {
+      data: { summary: { personIndex: number; itemTotal: number; roundingCorrectionCents?: number; total: number }[] };
+    };
+    expect(saved.data.summary.map((person) => person.itemTotal)).toEqual([0, 0, 0, 1, 1]);
+    expect(saved.data.summary[4]).toMatchObject({ personIndex: 4, roundingCorrectionCents: 1, total: 1 });
+    expect(saved.data.summary.reduce((sum, person) => sum + person.total, 0)).toBe(2);
   });
 
   test('uses only current personal tips when finalizing guest shares in the same transaction', async () => {

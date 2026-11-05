@@ -12,10 +12,19 @@ export function calculateSplitTotals(params: {
   peopleCount: number;
   personWeights?: number[]; // weight for each person index (default all 1)
   balanceAcrossItems?: boolean; // only new personal-link claim sessions; legacy splits stay unchanged
-}): { personIndex: number; itemTotal: number; tax: number; tip: number; total: number }[] {
+  organizerIndex?: number; // stable creator ID mapped to current people order, never the payer
+}): {
+  personIndex: number;
+  itemTotal: number;
+  tax: number;
+  tip: number;
+  total: number;
+  roundingCorrectionCents?: number;
+}[] {
   const { items, assignments, tax, tip, personWeights } = params;
-  const balanced =
-    params.balanceAcrossItems && items.length > 1 ? balancedGuestItemShares(items, assignments, personWeights) : null;
+  const balanced = params.balanceAcrossItems
+    ? balancedGuestItemShares(items, assignments, personWeights, params.organizerIndex)
+    : null;
 
   // Calculate per-person item subtotals
   const personSubtotals = new Map<number, number>();
@@ -25,17 +34,22 @@ export function calculateSplitTotals(params: {
     if (!item || assignment.personIndices.length === 0) continue;
 
     const amounts =
-      balanced?.get(assignment.itemIndex) ??
+      balanced?.allocation.get(assignment.itemIndex) ??
       splitItemPrice(item.totalPrice, assignment.personIndices, personWeights, assignment.portions);
     for (const [i, personIdx] of assignment.personIndices.entries()) {
       personSubtotals.set(personIdx, (personSubtotals.get(personIdx) ?? 0) + amounts[i]!);
     }
   }
 
+  if (balanced?.organizerCorrectionCents && params.organizerIndex !== undefined) {
+    const organizerIndex = params.organizerIndex;
+    personSubtotals.set(organizerIndex, (personSubtotals.get(organizerIndex) ?? 0) + balanced.organizerCorrectionCents);
+  }
+
   const actualSubtotal = Array.from(personSubtotals.values()).reduce((a, b) => a + b, 0);
   const totalAmount = actualSubtotal + tax + tip;
 
-  const results: { personIndex: number; itemTotal: number; tax: number; tip: number; total: number }[] = [];
+  const results: ReturnType<typeof calculateSplitTotals> = [];
   let allocated = 0;
   const entries = Array.from(personSubtotals.entries());
 
@@ -46,6 +60,9 @@ export function calculateSplitTotals(params: {
       results.push({
         personIndex: personIdx,
         itemTotal,
+        ...(balanced?.organizerCorrectionCents && personIdx === params.organizerIndex
+          ? { roundingCorrectionCents: balanced.organizerCorrectionCents }
+          : {}),
         tax: total - itemTotal - Math.round(tip * (actualSubtotal > 0 ? itemTotal / actualSubtotal : 0)),
         tip: Math.round(tip * (actualSubtotal > 0 ? itemTotal / actualSubtotal : 0)),
         total,
@@ -55,7 +72,16 @@ export function calculateSplitTotals(params: {
       const personTax = Math.round(tax * proportion);
       const personTip = Math.round(tip * proportion);
       const total = itemTotal + personTax + personTip;
-      results.push({ personIndex: personIdx, itemTotal, tax: personTax, tip: personTip, total });
+      results.push({
+        personIndex: personIdx,
+        itemTotal,
+        ...(balanced?.organizerCorrectionCents && personIdx === params.organizerIndex
+          ? { roundingCorrectionCents: balanced.organizerCorrectionCents }
+          : {}),
+        tax: personTax,
+        tip: personTip,
+        total,
+      });
       allocated += total;
     }
   }
@@ -71,6 +97,7 @@ export function calculateSplitTotals(params: {
 export function addPersonalGuestTips(
   shares: ReturnType<typeof calculateSplitTotals>,
   people: readonly { tipCents?: number | undefined }[],
+  consumingPersonIndices?: ReadonlySet<number>,
 ): ReturnType<typeof calculateSplitTotals> {
   const results = shares.map((share) => ({ ...share }));
   const indices = new Set<number>();
@@ -97,7 +124,13 @@ export function addPersonalGuestTips(
     }
     if (tip === 0) continue;
     const previous = results.find((share) => share.personIndex === personIndex);
-    if (!previous) {
+    if (
+      !previous ||
+      (consumingPersonIndices !== undefined && !consumingPersonIndices.has(personIndex)) ||
+      (consumingPersonIndices === undefined &&
+        previous.roundingCorrectionCents !== undefined &&
+        previous.itemTotal === previous.roundingCorrectionCents)
+    ) {
       throw new RangeError('Cannot charge personal tips without assigned items');
     }
     previous.tip += tip;
@@ -160,9 +193,15 @@ function balancedGuestItemShares(
   items: readonly { totalPrice: number }[],
   assignments: readonly { itemIndex: number; personIndices: number[]; portions?: number[] }[],
   personWeights?: number[],
-): Map<number, number[]> {
+  organizerIndex?: number,
+): { allocation: Map<number, number[]>; organizerCorrectionCents: number } {
   const deficits = new Map<number, number>();
+  const exactTotals = new Map<number, number>();
+  const totals = new Map<number, number>();
   const allocation = new Map<number, number[]>();
+  const awardedByItem = new Map<number, Set<number>>();
+  const awards: { itemIndex: number; personIndex: number | null; consumers: number[] }[] = [];
+
   for (const assignment of assignments) {
     const item = items[assignment.itemIndex];
     const people = assignment.personIndices;
@@ -187,13 +226,16 @@ function balancedGuestItemShares(
     );
     const candidates = people.map((personIndex, index) => {
       deficits.set(personIndex, (deficits.get(personIndex) ?? 0) + fractions[index]!);
+      exactTotals.set(personIndex, (exactTotals.get(personIndex) ?? 0) + prices[index]! + fractions[index]!);
+      totals.set(personIndex, (totals.get(personIndex) ?? 0) + prices[index]!);
       return { personIndex, index };
     });
     let remaining = item.totalPrice - prices.reduce((sum, price) => sum + price, 0);
     const awarded = new Set<number>();
+    awardedByItem.set(assignment.itemIndex, awarded);
     while (remaining > 0) {
       const chosen = candidates
-        .filter((candidate) => !awarded.has(candidate.index))
+        .filter((candidate) => !awarded.has(candidate.personIndex))
         .sort(
           (a, b) =>
             (deficits.get(b.personIndex) ?? 0) - (deficits.get(a.personIndex) ?? 0) ||
@@ -202,13 +244,83 @@ function balancedGuestItemShares(
         )[0];
       if (!chosen) throw new RangeError('Invalid guest remainder');
       prices[chosen.index]!++;
+      totals.set(chosen.personIndex, (totals.get(chosen.personIndex) ?? 0) + 1);
       deficits.set(chosen.personIndex, (deficits.get(chosen.personIndex) ?? 0) - 1);
-      awarded.add(chosen.index);
+      awarded.add(chosen.personIndex);
+      awards.push({ itemIndex: assignment.itemIndex, personIndex: chosen.personIndex, consumers: [...people] });
       remaining--;
     }
     allocation.set(assignment.itemIndex, prices);
   }
-  return allocation;
+
+  // Only new guest claim sessions with an unambiguous, stable creator identity
+  // use the fallback. Legacy direct splits and old claim data retain their
+  // prior calculation. Never infer creator identity from the payer or array order.
+  if (organizerIndex === undefined || organizerIndex < 0) return { allocation, organizerCorrectionCents: 0 };
+
+  const surplus = (personIndex: number) => (totals.get(personIndex) ?? 0) - (exactTotals.get(personIndex) ?? 0);
+  type AwardMove = { awardIndex: number; from: number; to: number };
+  const findConsumerTransfer = (source: number): AwardMove[] | null => {
+    const visited = new Set([source]);
+    const queue: { personIndex: number; path: AwardMove[] }[] = [{ personIndex: source, path: [] }];
+    for (let head = 0; head < queue.length; head++) {
+      const current = queue[head]!;
+      for (const [awardIndex, award] of awards.entries()) {
+        if (award.personIndex !== current.personIndex) continue;
+        for (const candidate of award.consumers) {
+          if (candidate === current.personIndex || awardedByItem.get(award.itemIndex)?.has(candidate)) continue;
+          const path = [...current.path, { awardIndex, from: current.personIndex, to: candidate }];
+          if (surplus(candidate) < -0.5 + 1e-7) return path;
+          if (!visited.has(candidate)) {
+            visited.add(candidate);
+            queue.push({ personIndex: candidate, path });
+          }
+        }
+      }
+    }
+    return null;
+  };
+
+  // Keep the same half-kopeck receipt-wide target as manual group receipts.
+  // First seek transfers only between consumers of each actual item. When no
+  // connected consumer can accept a kopeck, it is a separate creator correction
+  // rather than a purchase fictitiously assigned to the organizer.
+  let organizerCorrectionCents = 0;
+  for (;;) {
+    const overcharged = [...totals.keys()]
+      .filter(
+        (personIndex) => surplus(personIndex) > 0.5 + 1e-7 && awards.some((award) => award.personIndex === personIndex),
+      )
+      .sort((a, b) => surplus(b) - surplus(a) || a - b)[0];
+    if (overcharged === undefined) break;
+    const path = findConsumerTransfer(overcharged);
+    if (path) {
+      const terminalReceiver = path[path.length - 1]!.to;
+      for (const move of path.reverse()) {
+        const award = awards[move.awardIndex]!;
+        const winners = awardedByItem.get(award.itemIndex)!;
+        winners.delete(move.from);
+        winners.add(move.to);
+        const indices = assignments.find((entry) => entry.itemIndex === award.itemIndex)!.personIndices;
+        const prices = allocation.get(award.itemIndex)!;
+        prices[indices.indexOf(move.from)]!--;
+        prices[indices.indexOf(move.to)]!++;
+        award.personIndex = move.to;
+      }
+      totals.set(overcharged, (totals.get(overcharged) ?? 0) - 1);
+      totals.set(terminalReceiver, (totals.get(terminalReceiver) ?? 0) + 1);
+      continue;
+    }
+    const award = awards.find((entry) => entry.personIndex === overcharged)!;
+    awardedByItem.get(award.itemIndex)!.delete(overcharged);
+    const prices = allocation.get(award.itemIndex)!;
+    const indices = assignments.find((entry) => entry.itemIndex === award.itemIndex)!.personIndices;
+    prices[indices.indexOf(overcharged)]!--;
+    award.personIndex = null;
+    totals.set(overcharged, (totals.get(overcharged) ?? 0) - 1);
+    organizerCorrectionCents++;
+  }
+  return { allocation, organizerCorrectionCents };
 }
 
 function itemWeight(personIndices: number[], personWeights: number[]): number {
@@ -227,18 +339,20 @@ export function personItemShares(
   personIndex: number,
   params: Pick<
     Parameters<typeof calculateSplitTotals>[0],
-    'items' | 'assignments' | 'personWeights' | 'balanceAcrossItems'
+    'items' | 'assignments' | 'personWeights' | 'balanceAcrossItems' | 'organizerIndex'
   >,
 ): { itemIndex: number; amount: number; share: { numerator: number; denominator: number } }[] {
   const { items, assignments, personWeights } = params;
-  const balanced =
-    params.balanceAcrossItems && items.length > 1 ? balancedGuestItemShares(items, assignments, personWeights) : null;
+  const balanced = params.balanceAcrossItems
+    ? balancedGuestItemShares(items, assignments, personWeights, params.organizerIndex)
+    : null;
   const shares: ReturnType<typeof personItemShares> = [];
   for (const { itemIndex, personIndices, portions } of assignments) {
     const item = items[itemIndex];
     if (!item || !personIndices.includes(personIndex)) continue;
 
-    const amounts = balanced?.get(itemIndex) ?? splitItemPrice(item.totalPrice, personIndices, personWeights, portions);
+    const amounts =
+      balanced?.allocation.get(itemIndex) ?? splitItemPrice(item.totalPrice, personIndices, personWeights, portions);
     let amount = 0;
     let numerator = 0;
     for (const [i, personIdx] of personIndices.entries()) {
@@ -307,7 +421,11 @@ export function calculateClaimTotals(params: Parameters<typeof calculateSplitTot
   });
 
   return {
-    people: people.map((p, i) => ({ personIndex: p.personIndex, ...withShares(p.itemTotal, i) })),
+    people: people.map((p, i) => ({
+      personIndex: p.personIndex,
+      ...(p.roundingCorrectionCents ? { roundingCorrectionCents: p.roundingCorrectionCents } : {}),
+      ...withShares(p.itemTotal, i),
+    })),
     unclaimed: withShares(subtotals[people.length]!, people.length),
   };
 }

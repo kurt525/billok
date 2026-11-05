@@ -192,6 +192,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
             items: data.items,
             assignments: data.assignments,
             balanceAcrossItems: data.receiptData.roundingBalanced === true,
+            organizerIndex: data.organizerIndex,
             ...weights,
           });
 

@@ -64,6 +64,7 @@ export const guestSummaryEntrySchema = z.object({
   personIndex: z.number().int().min(0),
   name: z.string(),
   itemTotal: z.number(),
+  roundingCorrectionCents: z.number().int().min(0).optional(),
   tax: z.number(),
   tip: z.number(),
   total: z.number(),

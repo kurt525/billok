@@ -272,6 +272,153 @@ describe('calculateSplitTotals', () => {
   });
 });
 
+describe('Issue 2.17.2.2: creator-only fallback for an unbalanceable guest receipt', () => {
+  const params = {
+    items: [{ totalPrice: 1 }, { totalPrice: 1 }],
+    assignments: [
+      { itemIndex: 0, personIndices: [0, 1, 2], portions: [1, 1, 1] },
+      { itemIndex: 1, personIndices: [3], portions: [1] },
+    ],
+    tax: 0,
+    tip: 0,
+    peopleCount: 5,
+    balanceAcrossItems: true,
+    organizerIndex: 4,
+  };
+
+  test('assigns the spare kopeck to creator index 4, not payer index 3 or a first person', () => {
+    const split = calculateSplitTotals(params);
+    expect(split).toEqual([
+      { personIndex: 0, itemTotal: 0, tax: 0, tip: 0, total: 0 },
+      { personIndex: 1, itemTotal: 0, tax: 0, tip: 0, total: 0 },
+      { personIndex: 2, itemTotal: 0, tax: 0, tip: 0, total: 0 },
+      { personIndex: 3, itemTotal: 1, tax: 0, tip: 0, total: 1 },
+      { personIndex: 4, itemTotal: 1, tax: 0, tip: 0, total: 1, roundingCorrectionCents: 1 },
+    ]);
+    expect(split.reduce((sum, person) => sum + person.total, 0)).toBe(2);
+    expect(split.every((person) => person.total >= 0)).toBe(true);
+    // The adjustment has no phantom item: line shares belong only to eaters.
+    expect(personItemShares(4, params)).toEqual([]);
+    expect(personItemShares(0, params)[0]?.amount).toBe(0);
+    expect(personItemShares(3, params)[0]?.amount).toBe(1);
+  });
+
+  test('creator may also eat another dish; the adjustment is separate and never an item assignment', () => {
+    const sameCreatorAndPayer = { ...params, organizerIndex: 3, peopleCount: 4 };
+    const split = calculateSplitTotals(sameCreatorAndPayer);
+    expect(split).toEqual([
+      { personIndex: 0, itemTotal: 0, tax: 0, tip: 0, total: 0 },
+      { personIndex: 1, itemTotal: 0, tax: 0, tip: 0, total: 0 },
+      { personIndex: 2, itemTotal: 0, tax: 0, tip: 0, total: 0 },
+      { personIndex: 3, itemTotal: 2, tax: 0, tip: 0, total: 2, roundingCorrectionCents: 1 },
+    ]);
+    expect(personItemShares(3, sameCreatorAndPayer)).toEqual([
+      { itemIndex: 1, amount: 1, share: { numerator: 1, denominator: 1 } },
+    ]);
+  });
+
+  test('own voluntary tips remain independent of the organizer rounding adjustment', () => {
+    const result = addPersonalGuestTips(calculateSplitTotals(params), [{}, {}, {}, { tipCents: 50 }, { tipCents: 0 }]);
+    expect(result.find((p) => p.personIndex === 3)).toMatchObject({ itemTotal: 1, tip: 50, total: 51 });
+    expect(result.find((p) => p.personIndex === 4)).toMatchObject({
+      itemTotal: 1,
+      tip: 0,
+      total: 1,
+      roundingCorrectionCents: 1,
+    });
+    expect(result.reduce((sum, p) => sum + p.total, 0)).toBe(52);
+  });
+
+  test('organizer with a rounding adjustment but no dishes cannot tip; an actual diner still can', () => {
+    const base = calculateSplitTotals(params);
+    expect(() => addPersonalGuestTips(base, [{}, {}, {}, {}, { tipCents: 1 }], new Set([0, 1, 2, 3]))).toThrow(
+      RangeError,
+    );
+    const withDinerTip = addPersonalGuestTips(
+      base,
+      [{}, {}, {}, { tipCents: 25 }, { tipCents: 0 }],
+      new Set([0, 1, 2, 3]),
+    );
+    expect(withDinerTip.find((entry) => entry.personIndex === 3)?.total).toBe(26);
+    expect(withDinerTip.find((entry) => entry.personIndex === 4)?.total).toBe(1);
+  });
+
+  test('preliminary preview and finalized totals use the same correction, not an unclaimed item', () => {
+    expect(calculateClaimTotals(params)).toEqual({ people: calculateSplitTotals(params), unclaimed: null });
+    expect(
+      calculateClaimTotals({
+        ...params,
+        assignments: [params.assignments[0]!],
+      }).unclaimed?.itemTotal,
+    ).toBe(1);
+  });
+
+  test('120 deterministic guest receipts preserve exact cents and line items plus organizer adjustment', () => {
+    const guests = [0, 1, 2, 3];
+    for (let scenario = 0; scenario < 120; scenario++) {
+      const items = Array.from({ length: 2 + (scenario % 4) }, (_, index) => ({
+        totalPrice: 1 + ((scenario * 11 + index * 3) % 19),
+      }));
+      const assignments = items.map((_, itemIndex) => ({
+        itemIndex,
+        personIndices: guests.filter((guest) => (scenario + itemIndex * 2 + guest * 3) % 5 !== 0),
+      }));
+      const params = {
+        items,
+        assignments,
+        tax: 0,
+        tip: 0,
+        peopleCount: 5,
+        balanceAcrossItems: true,
+        organizerIndex: 4,
+      };
+      const people = calculateSplitTotals(params);
+      const original = items.reduce((total, item) => total + item.totalPrice, 0);
+      const expected = assignments.reduce((total, assignment) => total + items[assignment.itemIndex]!.totalPrice, 0);
+      const allocated = people.reduce((total, person) => total + person.itemTotal, 0);
+      expect(allocated, 'scenario ' + scenario).toBe(expected);
+      expect(allocated, 'scenario ' + scenario).toBe(original);
+      expect(people.every((person) => Number.isSafeInteger(person.itemTotal) && person.itemTotal >= 0)).toBe(true);
+      const organizerCorrection = people.find((person) => person.personIndex === 4)?.roundingCorrectionCents ?? 0;
+      const lines = guests.reduce(
+        (total, guest) => total + personItemShares(guest, params).reduce((sum, line) => sum + line.amount, 0),
+        0,
+      );
+      expect(lines + organizerCorrection, 'line items and adjustment ' + scenario).toBe(original);
+      expect(personItemShares(4, params)).toEqual([]);
+      expect(calculateClaimTotals(params)).toEqual({ people, unclaimed: null });
+    }
+  });
+
+  test('old balanced sessions without a stored creator index keep their previous allocation', () => {
+    const split = calculateSplitTotals({
+      items: params.items,
+      assignments: params.assignments,
+      tax: params.tax,
+      tip: params.tip,
+      peopleCount: params.peopleCount,
+      balanceAcrossItems: true,
+    });
+    expect(split.reduce((sum, p) => sum + p.itemTotal, 0)).toBe(2);
+    expect(split.every((person) => person.roundingCorrectionCents === undefined)).toBe(true);
+  });
+
+  test('nine equal tiny dishes still balance between real eaters with no separate adjustment', () => {
+    const items = Array.from({ length: 9 }, () => ({ totalPrice: 1 }));
+    const split = calculateSplitTotals({
+      items,
+      assignments: items.map((_, itemIndex) => ({ itemIndex, personIndices: [0, 1, 2] })),
+      tax: 0,
+      tip: 0,
+      peopleCount: 4,
+      balanceAcrossItems: true,
+      organizerIndex: 3,
+    });
+    expect(split.map((person) => person.itemTotal)).toEqual([3, 3, 3]);
+    expect(split.every((person) => person.roundingCorrectionCents === undefined)).toBe(true);
+  });
+});
+
 // #264: while items are unclaimed, tax and tip were all put on the people who had claimed something
 describe('calculateClaimTotals', () => {
   const sumAll = (result: ReturnType<typeof calculateClaimTotals>) =>

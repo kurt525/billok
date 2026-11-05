@@ -602,9 +602,16 @@ export const guestRouter = createTRPCRouter({
         total: number;
         currency: string;
         roundingBalanced?: boolean;
+        organizerPersonId?: string;
       },
       items: split.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[],
       people: toPublicPeople(split.people as GuestSessionPerson[]),
+      organizerIndex: (() => {
+        const organizerPersonId = (split.receiptData as { organizerPersonId?: string }).organizerPersonId;
+        return typeof organizerPersonId === 'string'
+          ? (split.people as GuestSessionPerson[]).findIndex((person) => person.id === organizerPersonId)
+          : -1;
+      })(),
       assignments: guestPortionAssignments(
         split.assignments as GuestPortionAssignment[],
         split.people as GuestSessionPerson[],
@@ -616,6 +623,7 @@ export const guestRouter = createTRPCRouter({
         tax: number;
         tip: number;
         total: number;
+        roundingCorrectionCents?: number;
       }[],
       paidByIndex: split.paidByIndex,
       payerVenmoHandle: split.payerVenmoHandle,
@@ -673,6 +681,9 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('BAD_REQUEST', 'sessionFull', { max: MAX_SESSION_PEOPLE });
       }
       const paidByIndex = indexOf(paidByName);
+      // A persistent participant ID identifies the creator even if names are
+      // edited and the payer is a different person or appears earlier in the list.
+      const organizerPersonId = people[indexOf(creatorName)]!.id;
 
       // Everyone else gets a token the first time they join this session
       let creator: { personId: string; personToken: string; name: string } | null = null;
@@ -723,7 +734,11 @@ export const guestRouter = createTRPCRouter({
             ...(receiptId !== undefined ? { receiptId, receiptShared: true } : {}),
             // New personal-link claims use one cross-item rounding strategy.
             // Direct finalized splits keep their historical settlement rules.
-            receiptData: { ...input.receiptData, roundingBalanced: true } as unknown as Prisma.InputJsonValue,
+            receiptData: {
+              ...input.receiptData,
+              roundingBalanced: true,
+              organizerPersonId,
+            } as unknown as Prisma.InputJsonValue,
             items: expandedItems as unknown as Prisma.InputJsonValue,
             people: people as unknown as Prisma.InputJsonValue,
             assignments: [] as unknown as Prisma.InputJsonValue,
@@ -1351,13 +1366,23 @@ export const guestRouter = createTRPCRouter({
         total: number;
         currency: string;
         roundingBalanced?: boolean;
+        organizerPersonId?: string;
       },
       items: session.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[],
       // Everyone has an id by now (savePersonIds above)
       people: toClaimPeople(session.people as IdentifiedGuestPerson[]),
       assignments: session.assignments as GuestPortionAssignment[],
       summary: session.summary as
-        { personIndex: number; name: string; itemTotal: number; tax: number; tip: number; total: number }[] | null,
+        | {
+            personIndex: number;
+            name: string;
+            itemTotal: number;
+            tax: number;
+            tip: number;
+            total: number;
+            roundingCorrectionCents?: number;
+          }[]
+        | null,
       paidByIndex: session.paidByIndex,
       payerVenmoHandle: session.payerVenmoHandle,
       isCreator: !!session.userId && session.userId === ctx.session?.user?.id,
@@ -1408,6 +1433,15 @@ export const guestRouter = createTRPCRouter({
 
         const tip = receiptData.tip;
 
+        // This session's organizer is identified by their original stable
+        // person ID, never paidByIndex or their position in the array.
+        const organizerPersonId = receiptData.organizerPersonId;
+        const organizerIndex =
+          typeof organizerPersonId === 'string' ? people.findIndex((entry) => entry.id === organizerPersonId) : -1;
+        if (receiptData.roundingBalanced === true && typeof organizerPersonId === 'string' && organizerIndex < 0) {
+          throw new AppError('PRECONDITION_FAILED', 'invalidData', { label: 'receipt organizer' });
+        }
+
         // Each person's groupSize weights the items they share
         const itemShares = calculateSplitTotals({
           items,
@@ -1416,11 +1450,16 @@ export const guestRouter = createTRPCRouter({
           tip,
           peopleCount: people.length,
           balanceAcrossItems: receiptData.roundingBalanced === true,
+          ...(organizerIndex >= 0 ? { organizerIndex } : {}),
           ...groupSizeWeights(people),
         });
         let summary: ReturnType<typeof calculateSplitTotals>;
         try {
-          summary = addPersonalGuestTips(itemShares, people);
+          summary = addPersonalGuestTips(
+            itemShares,
+            people,
+            new Set(assignments.flatMap((assignment) => assignment.personIndices)),
+          );
         } catch (error) {
           if (!(error instanceof RangeError)) throw error;
           throw new AppError('BAD_REQUEST', 'receiptPersonalTipsInvalid', undefined, { cause: error });
