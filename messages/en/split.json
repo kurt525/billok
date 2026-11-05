@@ -208,7 +208,8 @@
     "payerPaymentVerifyFailed": "Could not confirm funds received",
     "payerPaymentDeclarationNotice": "New payment declaration: {name}. Check incoming funds.",
     "payerPaymentDeclarationBatchNotice": "New payment declarations: {count}. Check incoming funds.",
-    "paymentVerifiedNotice": "The payer confirmed receipt of your transfer."
+    "paymentVerifiedNotice": "The payer confirmed receipt of your transfer.",
+    "organizerRoundingCorrection": "Creator rounding adjustment (already included)"
   },
   "result": {
     "loading": "Loading split...",
@@ -240,6 +241,7 @@
     "share": "Share",
     "dishesTotal": "Dish total",
     "tipForWaiter": "Total voluntary tips for the waiter",
-    "totalWithTips": "Total including tips"
+    "totalWithTips": "Total including tips",
+    "organizerRoundingCorrection": "Creator rounding adjustment (already included)"
   }
 }

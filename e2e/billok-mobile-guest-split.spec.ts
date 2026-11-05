@@ -735,6 +735,8 @@ test('Issue 2.16.3: nine one-kopeck guest dishes balance 3:3:3 in preview, final
       await expect(page.getByTestId('person-total-' + index)).toContainText('0,03', { timeout: 15_000 });
     }
     await expect(page.getByTestId('unclaimed-total')).toHaveCount(0);
+    // A fully balanced nine-dish receipt must not show a fictitious correction.
+    await expect(page.locator('[data-testid^="guest-preview-rounding-correction-"]')).toHaveCount(0);
 
     for (const width of [320, 360, 430, 480, 600, 720]) {
       await page.setViewportSize({ width, height: 520 });
@@ -764,6 +766,7 @@ test('Issue 2.16.3: nine one-kopeck guest dishes balance 3:3:3 in preview, final
     await page.goto('/split/' + token, { waitUntil: 'networkidle' });
     await expect(page.getByTestId('split-result')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('split-result-total')).toContainText('0,09');
+    await expect(page.locator('[data-testid^="guest-result-rounding-correction-"]')).toHaveCount(0);
     for (const width of [320, 360, 430, 480, 600, 720]) {
       await page.setViewportSize({ width, height: 520 });
       for (const index of [0, 1, 2]) {

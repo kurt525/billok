@@ -1291,6 +1291,21 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       {formatCents(person.total, currency, locale)}
                     </span>
                   </div>
+                  {'roundingCorrectionCents' in person &&
+                    typeof person.roundingCorrectionCents === 'number' &&
+                    person.roundingCorrectionCents > 0 && (
+                      <div
+                        className="mt-2 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
+                        data-testid={'guest-finalized-rounding-correction-' + person.personIndex}
+                      >
+                        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                          {t('organizerRoundingCorrection')}
+                        </span>
+                        <span className="shrink-0 tabular-nums">
+                          {formatCents(person.roundingCorrectionCents, currency, locale)}
+                        </span>
+                      </div>
+                    )}
                   {venmoSetting.data?.enabled &&
                     currency === 'USD' &&
                     isValidVenmoHandle(venmoHandle) &&
@@ -2100,14 +2115,31 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       {formatCents(person.total, currency, locale)}
                     </span>
                   </div>
-                  {(person.tax > 0 || person.tip > 0) && (
-                    <div className="ml-11 mt-1 flex gap-3 text-xs text-muted-foreground">
-                      <span>{t('items', { amount: formatCents(person.itemTotal, currency, locale) })}</span>
+                  {(person.tax > 0 || person.tip > 0 || !!person.roundingCorrectionCents) && (
+                    <div className="ml-11 mt-1 flex min-w-0 flex-wrap gap-3 text-xs text-muted-foreground">
+                      <span>
+                        {t('items', {
+                          amount: formatCents(
+                            person.itemTotal - (person.roundingCorrectionCents ?? 0),
+                            currency,
+                            locale,
+                          ),
+                        })}
+                      </span>
                       {person.tax > 0 && (
                         <span>{t('taxAmount', { amount: formatCents(person.tax, currency, locale) })}</span>
                       )}
                       {person.tip > 0 && (
                         <span>{t('tipAmount', { amount: formatCents(person.tip, currency, locale) })}</span>
+                      )}
+                      {!!person.roundingCorrectionCents && (
+                        <span
+                          className="min-w-0 [overflow-wrap:anywhere]"
+                          data-testid={'guest-preview-rounding-correction-' + person.personIndex}
+                        >
+                          {t('organizerRoundingCorrection')}:{' '}
+                          {formatCents(person.roundingCorrectionCents, currency, locale)}
+                        </span>
                       )}
                     </div>
                   )}

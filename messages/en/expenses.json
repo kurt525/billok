@@ -65,7 +65,8 @@
     "initialReimbursementsHint": "Original amounts only; previously recorded payments and other group expenses are not deducted here.",
     "payerOwnShare": "Payer’s own share (no payment to oneself)",
     "memberReimburses": "{name} reimburses the payer",
-    "reimbursementsTotal": "Total reimbursement from others"
+    "reimbursementsTotal": "Total reimbursement from others",
+    "organizerRoundingCorrection": "Within dish subtotal: creator {name} rounding adjustment (included)"
   },
   "scan": {
     "title": "Scan Receipt",
@@ -125,7 +126,7 @@
     "removeDescription": "It's taken off this receipt, along with who it's assigned to.",
     "remove": "Remove",
     "splitAriaLabel": "Split {name} into separate line",
-    "perPersonTotals": "Dish costs per member (excluding tips)",
+    "perPersonTotals": "Receipt shares per member (excluding tips)",
     "creatingExpense": "Creating expense...",
     "assignAllItems": "Assign all items ({remaining} remaining)",
     "createExpense": "Create Expense from Receipt",
@@ -147,7 +148,8 @@
     "personalTipInvalid": "Enter 0 or more, with at most two decimal places.",
     "personalTipPendingTotals": "The table below shows dish costs only. Saved personal tips are added to each member’s share when the receipt is finalized.",
     "personalTipMembersTitle": "Participant tips",
-    "personalTipMembersLive": "Saved amounts update automatically. Each member can change only their own tip."
+    "personalTipMembersLive": "Saved amounts update automatically. Each member can change only their own tip.",
+    "organizerRoundingCorrection": "Receipt creator {name} rounding adjustment (already included)"
   },
   "splits": {
     "selectAll": "Select all",

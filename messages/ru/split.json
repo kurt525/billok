@@ -213,7 +213,8 @@
     "payerPaymentVerifyFailed": "Не удалось подтвердить поступление",
     "payerPaymentDeclarationNotice": "Новая отметка об оплате: {name}. Проверьте поступление.",
     "payerPaymentDeclarationBatchNotice": "Новые отметки об оплате: {count}. Проверьте поступления.",
-    "paymentVerifiedNotice": "Плательщик подтвердил поступление денег."
+    "paymentVerifiedNotice": "Плательщик подтвердил поступление денег.",
+    "organizerRoundingCorrection": "Корректировка округления организатору (уже учтена)"
   },
   "result": {
     "loading": "Загрузка расчёта…",
@@ -245,7 +246,8 @@
     "share": "Поделиться",
     "dishesTotal": "Стоимость блюд",
     "tipForWaiter": "Всего чаевых официанту",
-    "totalWithTips": "Итого с чаевыми"
+    "totalWithTips": "Итого с чаевыми",
+    "organizerRoundingCorrection": "Корректировка округления организатору (уже учтена)"
   },
   "manual": {
     "defaultTitle": "Общий чек",

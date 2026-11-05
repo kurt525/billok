@@ -200,6 +200,23 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
                     {formatCents(manualSummary.tipTotal, 'RUB', locale)}
                   </span>
                 </div>
+                {manualSummary.organizerCorrection && (
+                  <div
+                    className="flex min-w-0 flex-wrap items-start justify-between gap-3 text-sm"
+                    data-testid="group-finalized-rounding-correction"
+                  >
+                    <span className="min-w-0 flex-1 basis-24 text-muted-foreground [overflow-wrap:anywhere]">
+                      {t('detail.organizerRoundingCorrection', {
+                        name:
+                          e.shares.find((share) => share.userId === manualSummary.organizerCorrection?.userId)?.user
+                            .name ?? t('detail.unknown'),
+                      })}
+                    </span>
+                    <span className="ml-auto min-w-0 max-w-full text-right tabular-nums [overflow-wrap:anywhere]">
+                      {formatCents(manualSummary.organizerCorrection.amount, 'RUB', locale)}
+                    </span>
+                  </div>
+                )}
                 <div className="flex min-w-0 flex-wrap items-start justify-between gap-3 font-semibold">
                   <span className="min-w-0 flex-1 basis-24 [overflow-wrap:anywhere]">{t('detail.totalWithTips')}</span>
                   <span

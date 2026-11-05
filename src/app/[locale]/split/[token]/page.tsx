@@ -238,6 +238,19 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
                       </div>
                     );
                   })}
+                  {!!person.roundingCorrectionCents && (
+                    <div
+                      className="flex min-w-0 flex-wrap justify-between gap-2"
+                      data-testid={'guest-result-rounding-correction-' + person.personIndex}
+                    >
+                      <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                        {t('organizerRoundingCorrection')}
+                      </span>
+                      <span className="shrink-0 tabular-nums">
+                        {formatCents(person.roundingCorrectionCents, currency, locale)}
+                      </span>
+                    </div>
+                  )}
                   {person.tax > 0 && (
                     <div className="flex justify-between">
                       <span>{t('tax')}</span>

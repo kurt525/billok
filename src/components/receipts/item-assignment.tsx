@@ -6,7 +6,7 @@ import { trpc } from '@/lib/trpc';
 import { formatCents, centsToDecimal, parseToCents, isValidMoneyInput, MAX_MONEY_CENTS } from '@/lib/money';
 import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
-import { calculateManualReceiptTotals, manualPortionProgress } from '@/lib/manual-receipt-split';
+import { calculateManualReceiptAllocation, manualPortionProgress } from '@/lib/manual-receipt-split';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -310,7 +310,7 @@ export function ItemAssignment({
 
   // Calculate per-person totals using shared calculateSplitTotals (Finding #30).
   // Memoized to avoid recomputation on every render (Finding #36).
-  const perPersonTotals = useMemo(() => {
+  const perPersonAllocation = useMemo(() => {
     if (receipt?.isManual && receipt.creatorId) {
       const chosen = Object.entries(assignments)
         .filter(([receiptItemId, userIds]) => userIds.size > 0 && items.some((item) => item.id === receiptItemId))
@@ -322,9 +322,9 @@ export function ItemAssignment({
           })),
         }));
       if (chosen.some((a) => a.people.some((p) => !Number.isSafeInteger(p.parts) || p.parts < 1 || p.parts > 10000))) {
-        return new Map<string, number>();
+        return { totals: new Map<string, number>(), organizerCorrectionCents: 0 };
       }
-      return calculateManualReceiptTotals({
+      return calculateManualReceiptAllocation({
         items: items.filter((item) => chosen.some((a) => a.receiptItemId === item.id)),
         assignments: chosen,
         creatorId: receipt.creatorId,
@@ -361,8 +361,9 @@ export function ItemAssignment({
       const member = members[r.personIndex];
       if (member) totals.set(member.id, r.total);
     }
-    return totals;
+    return { totals, organizerCorrectionCents: 0 };
   }, [items, assignments, partsByItem, receipt, members]);
+  const perPersonTotals = perPersonAllocation.totals;
   const assignedItemCount = items.filter((item) => (assignments[item.id]?.size ?? 0) > 0).length;
   const partsAreValid = Object.entries(assignments).every(([itemId, users]) =>
     [...users].every((userId) => {
@@ -1134,6 +1135,21 @@ export function ItemAssignment({
                 </div>
               );
             })}
+            {receipt?.isManual && receipt.creatorId && perPersonAllocation.organizerCorrectionCents > 0 && (
+              <div
+                className="flex min-w-0 flex-wrap items-start justify-between gap-2 border-t pt-2 text-sm"
+                data-testid="group-rounding-correction-preview"
+              >
+                <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                  {t('organizerRoundingCorrection', {
+                    name: members.find((member) => member.id === receipt.creatorId)?.name ?? t('unnamed'),
+                  })}
+                </span>
+                <span className="shrink-0 font-medium tabular-nums">
+                  {formatCents(perPersonAllocation.organizerCorrectionCents, 'RUB', locale)}
+                </span>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

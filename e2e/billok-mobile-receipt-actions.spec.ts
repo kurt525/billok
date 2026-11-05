@@ -484,6 +484,11 @@ test('two registered group members independently save voluntary RUB tips on a mo
     await dessert.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Alice' }).click();
     await dessert.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Bob' }).click();
     await page.locator('#title').fill(longReceiptTitle);
+    // The creator Bob consumed this dish. A 1001-kopeck split 1:1 gives
+    // Alice 500, Bob 500 for food plus an explicit 1-kopeck correction.
+    // The correction is NOT another line item or another payment.
+    await expect(page.getByTestId('group-rounding-correction-preview')).toContainText('0,01');
+    await expect(page.getByTestId('group-rounding-correction-preview')).toContainText('Bob');
     await page.getByTestId('create-expense-btn').click();
     await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'), { timeout: 20_000 });
 
@@ -500,6 +505,8 @@ test('two registered group members independently save voluntary RUB tips on a mo
     await expect(page.getByTestId('manual-group-payer-summary')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('group-finalized-food-total')).toContainText('10,01');
     await expect(page.getByTestId('group-finalized-tip-total')).toContainText('1,50');
+    await expect(page.getByTestId('group-finalized-rounding-correction')).toContainText('0,01');
+    await expect(page.getByTestId('group-finalized-rounding-correction')).toContainText('Bob');
     await expect(page.getByTestId('group-finalized-grand-total')).toContainText('11,51');
     await expect(page.getByText('Всего чаевых официанту')).toBeVisible();
     await expect(page.getByTestId('group-payer-own-share')).toContainText('5,01');
