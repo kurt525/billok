@@ -28,12 +28,20 @@ describe('BillOK manual group expenses do not use the inherited ShareTab categor
     expect(detail).toContain('expense-detail-payer');
   });
 
-  test('new or updated categories are rejected server-side, historical values are untouched', () => {
+  test('server rejects category writes and generated schema drops the column', () => {
     const router = read('src/server/trpc/routers/expenses.ts');
     expect(router.match(/category: z\.never\(\)\.optional\(\)/g)).toHaveLength(2);
     expect(router).not.toContain('input.category');
     expect(router).toContain('const { groupId, expenseId, shares, ...data } = input;');
-    const schema = read('prisma/schema.prisma');
-    expect(schema).toMatch(/\bcategory\s+String\?/);
+    expect(read('prisma/schema.prisma')).not.toMatch(/\bcategory\s+String\?/);
+    expect(read('prisma/seed.ts')).not.toContain('category:');
+    expect(read('src/app/[locale]/(app)/groups/[groupId]/page.tsx')).not.toContain('expense.category');
+  });
+
+  test('existing test databases discard only the obsolete category column', () => {
+    const migration = read('prisma/migrations/expense_category_drop.sql');
+    expect(migration).toContain('ALTER TABLE IF EXISTS "Expense" DROP COLUMN IF EXISTS "category";');
+    expect(migration).not.toMatch(/DROP\s+TABLE/i);
+    expect(read('scripts/dev.mjs')).toContain('prisma/migrations/expense_category_drop.sql');
   });
 });

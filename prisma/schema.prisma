@@ -200,7 +200,6 @@ model Expense {
   currency    String    @default("RUB")
   exchangeRate        Float   @default(1.0) // rate: 1 unit of expense currency = X units of group currency
   baseCurrencyAmount  Int?    // amount converted to group currency (cents); null = same currency
-  category    String?
   expenseDate DateTime  @default(now())
   splitMode   SplitMode @default(EQUAL)
   paidById    String

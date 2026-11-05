@@ -404,12 +404,6 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                         <span data-testid="group-history-expense-date" className="[overflow-wrap:anywhere]">
                           {new Date(expense.expenseDate).toLocaleDateString(locale)}
                         </span>
-                        {expense.category && (
-                          <span className="ml-1 text-muted-foreground/70 [overflow-wrap:anywhere]">
-                            {' · '}
-                            {expense.category}
-                          </span>
-                        )}
                       </p>
                     </div>
                   </div>
