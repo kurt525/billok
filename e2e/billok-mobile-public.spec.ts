@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { auditMobileViewport, auditMobileTarget } from './billok-mobile-viewport-audit';
 
 // Public BillOK journeys, isolated from any authenticated test data.
 const widths = [320, 360, 393, 412] as const;
@@ -615,4 +616,25 @@ test('invite-only form fits keyboard-sized viewport at six widths', async ({ pag
     expect(geometry.clipped).toEqual([]);
   }
   expect(registrations).toBe(0);
+});
+
+test('six-width final public mobile adaptation audit: login, invite, recovery and join', async ({ page }) => {
+  test.setTimeout(200_000);
+  const screens = [
+    { path: '/login', control: '[data-testid="mobile-login-form"] input#email' },
+    { path: '/register', control: '[data-testid="mobile-register-form"] input#name' },
+    { path: '/forgot-password', control: '[data-testid="forgot-password-form"] input#reset-email' },
+    { path: '/verify-request', control: 'a[href="/login"]' },
+    { path: '/split', control: '[data-testid="manual-split-sign-in-required"] a[href*="/login"]' },
+  ] as const;
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 300 });
+    for (const screen of screens) {
+      await page.goto(screen.path, { waitUntil: 'networkidle' });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      await expect(page.locator('main')).toBeVisible();
+      await auditMobileViewport(page, width, screen.path);
+      await auditMobileTarget(page.locator(screen.control).first(), width, screen.path + ' primary control');
+    }
+  }
 });

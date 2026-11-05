@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { auditMobileViewport, auditMobileTarget } from './billok-mobile-viewport-audit';
 import { createTestGroup, trpcMutation, users } from './helpers';
 
 // Only against the disposable seed database created by the Mobile Chromium CI job.
@@ -1940,5 +1941,48 @@ test('admin forms remain keyboard-accessible at 300 CSS px on six mobile widths'
     await expect(bobRow).toHaveCount(1);
     expect(blockedWrites, 'No administrative mutations at ' + width).toBe(0);
     await checkPhoneLayout(page, width, true);
+  }
+});
+
+test('six-width final authenticated mobile adaptation audit across main screens', async ({ page }) => {
+  test.setTimeout(260_000);
+  await signInAsSeedAdmin(page);
+  const screens = [
+    { path: '/dashboard', control: 'button[aria-label="Открыть меню"]' },
+    { path: '/groups', control: '[data-testid="mobile-groups-search"]' },
+    { path: '/groups/new', control: 'form button[type="submit"]' },
+    { path: '/splits', control: 'a[href="/split"]' },
+    { path: '/settings', control: '[data-testid="sbp-bank-search"]' },
+    { path: '/admin', control: '[data-testid="admin-groups-search"]' },
+    { path: '/split', control: '[data-testid="manual-receipt-name"]' },
+  ] as const;
+
+  // The seeded group is only viewed; no changes to actual receipts, balances or members.
+  await page.goto('/groups', { waitUntil: 'networkidle' });
+  const seededGroup = page.locator('a[href^="/groups/"]').filter({ hasText: 'Apartment' }).first();
+  await expect(seededGroup).toBeVisible();
+  const groupPath = await seededGroup.getAttribute('href');
+  expect(groupPath, 'Existing seeded group URL').toMatch(/^\/groups\/[^/]+$/);
+
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 300 });
+    for (const screen of screens) {
+      await page.goto(screen.path, { waitUntil: 'networkidle' });
+      await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      await expect(page.locator('main')).toBeVisible();
+      await auditMobileViewport(page, width, screen.path);
+      await auditMobileTarget(page.locator(screen.control).first(), width, screen.path + ' primary control');
+    }
+
+    await page.goto(groupPath!, { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    await expect(page.locator('main')).toBeVisible();
+    await auditMobileViewport(page, width, 'group details');
+
+    await page.goto(groupPath! + '/expenses/new', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    await expect(page.getByTestId('manual-group-receipt-entry')).toBeVisible();
+    await auditMobileViewport(page, width, 'manual group receipt creation');
+    await auditMobileTarget(page.locator('#title'), width, 'new group expense title');
   }
 });
