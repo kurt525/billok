@@ -458,6 +458,10 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
       await tipInput.fill(value);
       await expect(tipInput).toBeFocused();
       await expect(tipSave).toBeEnabled();
+      // 2.19.2.2: the creator-approval hint must not enlarge the fixed
+      // action panel and intercept the tip save button on keyboard-sized screens.
+      await expect(page.getByTestId('guest-parts-awaiting-confirmation')).toBeVisible();
+      await expect(page.getByTestId('claim-actions').getByTestId('guest-parts-awaiting-confirmation')).toHaveCount(0);
       for (const testId of ['personal-tip-input', 'personal-tip-save', 'claim-actions', 'save-claims-btn']) {
         const bounds = await page.getByTestId(testId).evaluate((element) => {
           const rect = element.getBoundingClientRect();

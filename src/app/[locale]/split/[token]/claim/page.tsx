@@ -2221,6 +2221,18 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         </div>
       )}
 
+      {/* Non-interactive approval state belongs to the scrollable content, not
+          the fixed action bar. On short Android viewports it otherwise makes
+          the bar cover the personal-tip save button. */}
+      {!data.partsConfirmed && (
+        <p
+          className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground [overflow-wrap:anywhere]"
+          data-testid="guest-parts-awaiting-confirmation"
+        >
+          {t('partsAwaitingConfirmation')}
+        </p>
+      )}
+
       {/* CTA */}
       <div className="text-center">
         <Link href="/split" className="text-sm font-medium text-primary hover:underline">
@@ -2251,14 +2263,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             >
               {t('confirmPartsComplete')}
             </Button>
-          )}
-          {!data.partsConfirmed && (
-            <p
-              className="mb-2 text-xs text-muted-foreground [overflow-wrap:anywhere]"
-              data-testid="guest-parts-awaiting-confirmation"
-            >
-              {t('partsAwaitingConfirmation')}
-            </p>
           )}
           {/* Finalize button -- only after creator approval, with no unsaved changes */}
           {!hasAnyUnsavedChanges &&
