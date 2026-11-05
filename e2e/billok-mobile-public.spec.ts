@@ -632,7 +632,7 @@ test('six-width final public mobile adaptation audit: login, invite, recovery an
     for (const screen of screens) {
       await page.goto(screen.path, { waitUntil: 'networkidle' });
       await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
-      await expect(page.locator('main')).toBeVisible();
+      await expect(page.locator(screen.control).first()).toBeVisible();
       await auditMobileViewport(page, width, screen.path);
       await auditMobileTarget(page.locator(screen.control).first(), width, screen.path + ' primary control');
     }
