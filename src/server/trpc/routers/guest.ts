@@ -22,6 +22,7 @@ import {
   validSaveRecords,
 } from '../../lib/json-schemas';
 import { calculateSplitTotals, addPersonalGuestTips, groupSizeWeights } from '@/lib/split-calculator';
+import { guestPortionAssignments, type GuestPortionAssignment } from '@/lib/guest-portions';
 import { normalizeGuestName } from '@/lib/guest-session';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { MAX_MONEY_CENTS } from '@/lib/money';
@@ -170,10 +171,11 @@ function targetIndexOrThrow(people: readonly { id?: string | undefined }[], id: 
   throw new AppError('CONFLICT', 'personGone');
 }
 
-function cloneAssignments(assignments: { itemIndex: number; personIndices: number[] }[]) {
+function cloneAssignments(assignments: GuestPortionAssignment[]) {
   return assignments.map((assignment) => ({
     ...assignment,
     personIndices: [...assignment.personIndices],
+    ...(assignment.partsByPersonId ? { partsByPersonId: { ...assignment.partsByPersonId } } : {}),
   }));
 }
 
@@ -602,7 +604,10 @@ export const guestRouter = createTRPCRouter({
       },
       items: split.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[],
       people: toPublicPeople(split.people as GuestSessionPerson[]),
-      assignments: split.assignments as { itemIndex: number; personIndices: number[] }[],
+      assignments: guestPortionAssignments(
+        split.assignments as GuestPortionAssignment[],
+        split.people as GuestSessionPerson[],
+      ),
       summary: split.summary as {
         personIndex: number;
         name: string;
@@ -966,16 +971,22 @@ export const guestRouter = createTRPCRouter({
         const targetIndex = targetIndexOrThrow(people, input.targetId);
         if (people.length <= 1) throw new AppError('BAD_REQUEST', 'cannotRemoveLastPerson');
 
+        const removedPersonId = people[targetIndex]?.id;
         people.splice(targetIndex, 1);
 
         // Remap assignments: remove the person and shift indices down
-        const assignments = (session.assignments as { itemIndex: number; personIndices: number[] }[])
-          .map((a) => ({
-            itemIndex: a.itemIndex,
-            personIndices: a.personIndices
-              .filter((pi) => pi !== targetIndex)
-              .map((pi) => (pi > targetIndex ? pi - 1 : pi)),
-          }))
+        const assignments = (session.assignments as GuestPortionAssignment[])
+          .map((a) => {
+            const partsByPersonId = { ...(a.partsByPersonId ?? {}) };
+            if (removedPersonId) delete partsByPersonId[removedPersonId];
+            return {
+              itemIndex: a.itemIndex,
+              personIndices: a.personIndices
+                .filter((pi) => pi !== targetIndex)
+                .map((pi) => (pi > targetIndex ? pi - 1 : pi)),
+              ...(a.partsByPersonId ? { partsByPersonId } : {}),
+            };
+          })
           .filter((a) => a.personIndices.length > 0);
 
         // Adjust paidByIndex
@@ -1053,7 +1064,8 @@ export const guestRouter = createTRPCRouter({
         });
 
         // Remap assignments: shift indices after insertion point
-        const assignments = (session.assignments as { itemIndex: number; personIndices: number[] }[]).map((a) => ({
+        const assignments = (session.assignments as GuestPortionAssignment[]).map((a) => ({
+          ...a,
           itemIndex: a.itemIndex > input.itemIndex ? a.itemIndex + 1 : a.itemIndex,
           personIndices: [...a.personIndices],
         }));
@@ -1111,6 +1123,63 @@ export const guestRouter = createTRPCRouter({
           });
         }
         return { success: true, tipCents: input.tipCents };
+      });
+    }),
+
+  // A guest may adjust only their own number of consumed portions. Keep the
+  // existing claim/save semantics, but never trust name, person index or share
+  // URL as authority to change another person's count.
+  setMyItemParts: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        itemIndex: z.number().int().min(0),
+        parts: z.number().int().min(1).max(10000),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('personal-parts', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'claimRateLimited');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) {
+          throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+        }
+        const people = session.people as GuestSessionPerson[];
+        const personIndex = people.findIndex(
+          (person) => person.id === input.personId && person.personToken === input.personToken,
+        );
+        if (personIndex < 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        const items = session.items as { totalPrice: number }[];
+        if (input.itemIndex >= items.length) throw new AppError('BAD_REQUEST', 'invalidItemIndex');
+        const assignments = cloneAssignments(session.assignments as GuestPortionAssignment[]);
+        const target = assignments.find(
+          (item) => item.itemIndex === input.itemIndex && item.personIndices.includes(personIndex),
+        );
+        if (!target) throw new AppError('PRECONDITION_FAILED', 'itemsUnassigned');
+        if (target.partsByPersonId?.[input.personId] !== input.parts) {
+          target.partsByPersonId = { ...target.partsByPersonId, [input.personId]: input.parts };
+          // Enforce the stored result is still an integer-kopeck division of
+          // the same receipt item before persisting.
+          calculateSplitTotals({
+            items,
+            assignments: guestPortionAssignments([target], people),
+            tax: 0,
+            tip: 0,
+            peopleCount: people.length,
+            ...groupSizeWeights(people),
+          });
+          await tx.guestSplit.update({
+            where: { id: session.id },
+            data: { assignments: assignments as unknown as Prisma.InputJsonValue },
+          });
+        }
+        return { success: true, parts: input.parts };
       });
     }),
 
@@ -1191,7 +1260,7 @@ export const guestRouter = createTRPCRouter({
           }
         }
 
-        const assignments = cloneAssignments(session.assignments as { itemIndex: number; personIndices: number[] }[]);
+        const assignments = cloneAssignments(session.assignments as GuestPortionAssignment[]);
 
         // The person's claims after this save: the set sent, or what is stored now with the
         // changes applied
@@ -1202,9 +1271,12 @@ export const guestRouter = createTRPCRouter({
         for (const idx of input.addItemIndices ?? []) claimedSet.add(idx);
         for (const idx of input.removeItemIndices ?? []) claimedSet.delete(idx);
 
-        // Remove this person from all current assignments
+        // Remove the claimed person without touching other people's portions.
         for (const a of assignments) {
           a.personIndices = a.personIndices.filter((pi) => pi !== personIndex);
+          if (!claimedSet.has(a.itemIndex) && a.partsByPersonId) {
+            delete a.partsByPersonId[input.personId];
+          }
         }
 
         // Add this person to claimed items
@@ -1279,7 +1351,7 @@ export const guestRouter = createTRPCRouter({
       items: session.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[],
       // Everyone has an id by now (savePersonIds above)
       people: toClaimPeople(session.people as IdentifiedGuestPerson[]),
-      assignments: session.assignments as { itemIndex: number; personIndices: number[] }[],
+      assignments: session.assignments as GuestPortionAssignment[],
       summary: session.summary as
         { personIndex: number; name: string; itemTotal: number; tax: number; tip: number; total: number }[] | null,
       paidByIndex: session.paidByIndex,
@@ -1335,7 +1407,7 @@ export const guestRouter = createTRPCRouter({
         // Each person's groupSize weights the items they share
         const itemShares = calculateSplitTotals({
           items,
-          assignments,
+          assignments: guestPortionAssignments(assignments, people),
           tax: receiptData.tax,
           tip,
           peopleCount: people.length,

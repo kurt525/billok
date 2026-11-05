@@ -488,6 +488,184 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
   }
 });
 
+test('Issue 2.14: two guest phones save personal parts 3/5 without knowing the original count', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const second = await browser.newContext({ viewport: { width: 320, height: 520 }, isMobile: true, hasTouch: true });
+  try {
+    const response = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Пицца на двоих', subtotal: 800, tax: 0, tip: 0, total: 800, currency: 'RUB' },
+      items: [{ name: 'Пицца', quantity: 1, unitPrice: 800, totalPrice: 800 }],
+      people: ['Анна', 'Борис'],
+      creatorName: 'Анна',
+      paidByName: 'Борис',
+      joinCreator: true,
+    });
+    const body = await response.text();
+    expect(response.ok(), body).toBe(true);
+    const created = JSON.parse(body).result.data.json as {
+      shareToken: string;
+      creator: { personId: string; personToken: string; name: string };
+    };
+    const token = created.shareToken;
+    const anna = created.creator;
+    const boris = await joinGuestSession(second.request, { token, name: 'Борис' });
+    await rememberClaimIdentity(page.context(), token, anna);
+    await rememberClaimIdentity(second, token, boris);
+
+    for (const guest of [anna, boris]) {
+      const ctx = guest.personId === anna.personId ? owner : second.request;
+      const res = await trpcMutation(ctx, 'guest.claimItems', {
+        token,
+        personId: guest.personId,
+        personToken: guest.personToken,
+        claimedItemIndices: [0],
+      });
+      expect(res.ok(), await res.text()).toBe(true);
+    }
+
+    const alicePage = page;
+    const bobPage = await second.newPage();
+    await alicePage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await bobPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    const aliceInput = alicePage.getByTestId('personal-parts-input-0');
+    const bobInput = bobPage.getByTestId('personal-parts-input-0');
+    await expect(aliceInput).toHaveValue('1', { timeout: 15_000 });
+    await expect(bobInput).toHaveValue('1', { timeout: 15_000 });
+    await aliceInput.fill('0');
+    await expect(alicePage.getByTestId('personal-parts-save-0')).toBeDisabled();
+    await aliceInput.fill('3');
+    await bobInput.fill('5');
+    await alicePage.getByTestId('personal-parts-save-0').click();
+    await bobPage.getByTestId('personal-parts-save-0').click();
+    await expect(aliceInput).toHaveValue('3', { timeout: 15_000 });
+    await expect(bobInput).toHaveValue('5', { timeout: 15_000 });
+
+    await expect
+      .poll(
+        async () => {
+          const stored = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+          return stored.assignments[0].partsByPersonId;
+        },
+        { timeout: 15_000 },
+      )
+      .toEqual({ [anna.personId]: 3, [boris.personId]: 5 });
+    const snapshot = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(snapshot.items[0].totalPrice).toBe(800);
+
+    // Both devices can write the same session concurrently. The row-level
+    // transaction retry must preserve both changes rather than last-write-wins.
+    const simultaneous = await Promise.all([
+      trpcMutation(owner, 'guest.setMyItemParts', {
+        token,
+        personId: anna.personId,
+        personToken: anna.personToken,
+        itemIndex: 0,
+        parts: 4,
+      }),
+      trpcMutation(second.request, 'guest.setMyItemParts', {
+        token,
+        personId: boris.personId,
+        personToken: boris.personToken,
+        itemIndex: 0,
+        parts: 6,
+      }),
+    ]);
+    for (const response of simultaneous) expect(response.ok(), await response.text()).toBe(true);
+    await expect
+      .poll(
+        async () => {
+          const stored = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+          return stored.assignments[0].partsByPersonId;
+        },
+        { timeout: 15_000 },
+      )
+      .toEqual({ [anna.personId]: 4, [boris.personId]: 6 });
+    const restoreAnna = await trpcMutation(owner, 'guest.setMyItemParts', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+      itemIndex: 0,
+      parts: 3,
+    });
+    expect(restoreAnna.ok(), await restoreAnna.text()).toBe(true);
+    const restoreBoris = await trpcMutation(second.request, 'guest.setMyItemParts', {
+      token,
+      personId: boris.personId,
+      personToken: boris.personToken,
+      itemIndex: 0,
+      parts: 5,
+    });
+    expect(restoreBoris.ok(), await restoreBoris.text()).toBe(true);
+    await expect
+      .poll(
+        async () => {
+          const stored = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+          return stored.assignments[0].partsByPersonId;
+        },
+        { timeout: 15_000 },
+      )
+      .toEqual({ [anna.personId]: 3, [boris.personId]: 5 });
+    for (const width of [320, 360, 430, 480, 600, 720]) {
+      await alicePage.setViewportSize({ width, height: 520 });
+      await aliceInput.scrollIntoViewIfNeeded();
+      const bounds = await aliceInput.boundingBox();
+      expect(bounds, 'Personal parts input at ' + width + 'px').not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width + 1);
+      expect(bounds!.height).toBeGreaterThanOrEqual(44);
+      await fitsPhone(alicePage);
+    }
+    await expect(alicePage.getByTestId('person-total-0')).toContainText('3,00', { timeout: 15_000 });
+    await expect(alicePage.getByTestId('person-total-1')).toContainText('5,00', { timeout: 15_000 });
+
+    // Knowing a different guest's personId is not enough to edit their count.
+    const forbidden = await trpcMutation(second.request, 'guest.setMyItemParts', {
+      token,
+      personId: anna.personId,
+      personToken: boris.personToken,
+      itemIndex: 0,
+      parts: 99,
+    });
+    expect(forbidden.ok()).toBe(false);
+    const unchanged = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(unchanged.assignments[0].partsByPersonId).toEqual({ [anna.personId]: 3, [boris.personId]: 5 });
+
+    // A personal correction and finalization must retain exactly one payer and all 800 kopecks.
+    await aliceInput.fill('2');
+    await alicePage.getByTestId('personal-parts-save-0').click();
+    await expect
+      .poll(
+        async () => {
+          const stored = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+          return stored.assignments[0].partsByPersonId[anna.personId];
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(2);
+    await expect(aliceInput).toHaveValue('2', { timeout: 15_000 });
+    await aliceInput.fill('3');
+    await alicePage.getByTestId('personal-parts-save-0').click();
+    await expect(aliceInput).toHaveValue('3', { timeout: 15_000 });
+    const finalize = await trpcMutation(owner, 'guest.finalizeSession', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+    });
+    expect(finalize.ok(), await finalize.text()).toBe(true);
+    const finalized = await trpcResult(await trpcQuery(owner, 'guest.getSplit', { token }));
+    expect(finalized.summary.map((entry: { itemTotal: number }) => entry.itemTotal)).toEqual([300, 500]);
+    expect(finalized.summary.reduce((sum: number, entry: { total: number }) => sum + entry.total, 0)).toBe(800);
+    expect(finalized.assignments[0].portions).toEqual([3, 5]);
+  } finally {
+    await second.close();
+    await owner.dispose();
+  }
+});
+
 test('mobile guest finalization reconciles personal tips for three dining participants', async ({ page, browser }) => {
   test.setTimeout(150_000);
   const owner = await authedContext(users.alice.email, users.alice.password);

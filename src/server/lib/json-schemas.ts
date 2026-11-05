@@ -55,6 +55,7 @@ export type GuestPerson = z.infer<typeof guestPersonSchema>;
 export const guestAssignmentSchema = z.object({
   itemIndex: z.number().int().min(0),
   personIndices: z.array(z.number().int().min(0)),
+  partsByPersonId: z.record(z.string(), z.number().int().min(1).max(10000)).optional(),
 });
 
 export type GuestAssignment = z.infer<typeof guestAssignmentSchema>;

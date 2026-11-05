@@ -495,8 +495,9 @@ function claimSession(
     ...overrides
   }: {
     status?: string;
+    receiptData?: { subtotal: number; tax: number; tip: number; total: number; currency: string };
     expiresAt?: Date;
-    assignments?: { itemIndex: number; personIndices: number[] }[];
+    assignments?: { itemIndex: number; personIndices: number[]; partsByPersonId?: Record<string, number> }[];
     items?: { name: string; quantity: number; unitPrice: number; totalPrice: number }[];
     legacy?: boolean;
   } = {},
@@ -1115,6 +1116,82 @@ describe('guest.setPersonalTip: voluntary kopecks per authenticated participant'
       code: 'NOT_FOUND',
     });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('2.14 guest personal parts cannot change another participant', () => {
+  const base = { token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN, itemIndex: 0, parts: 3 };
+  const diners = [
+    { name: 'Alice', personToken: ALICE_TOKEN },
+    { name: 'Bob', personToken: OTHER_TOKEN },
+  ];
+  function fixture(part?: number) {
+    claimSession(diners, {
+      items: [{ name: 'Пицца', quantity: 1, unitPrice: 101, totalPrice: 101 }],
+      assignments: [{ itemIndex: 0, personIndices: [0, 1], ...(part ? { partsByPersonId: { [pid(1)]: 5 } } : {}) }],
+    });
+  }
+
+  test('stores only the caller own parts and retains another saved portion', async () => {
+    fixture(5);
+    expect(await (await caller()).setMyItemParts(base)).toEqual({ success: true, parts: 3 });
+    expect(savedAssignments()).toEqual([
+      {
+        itemIndex: 0,
+        personIndices: [0, 1],
+        partsByPersonId: { [pid(1)]: 5, [pid(0)]: 3 },
+      },
+    ]);
+    expect(mockDb.$transaction).toHaveBeenCalledOnce();
+  });
+  test('same value is idempotent', async () => {
+    claimSession(diners, {
+      items: items(1),
+      assignments: [{ itemIndex: 0, personIndices: [0], partsByPersonId: { [pid(0)]: 3 } }],
+    });
+    await (await caller()).setMyItemParts(base);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+  test('rejects token-to-person mismatch and strangers', async () => {
+    fixture();
+    await expect((await caller()).setMyItemParts({ ...base, personId: pid(1) })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect((await caller()).setMyItemParts({ ...base, personToken: D_TOKEN })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+  test('requires an already claimed item and refuses out-of-bounds', async () => {
+    fixture();
+    await expect((await caller()).setMyItemParts({ ...base, itemIndex: 1 })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    claimSession(diners, { items: items(1), assignments: [{ itemIndex: 0, personIndices: [1] }] });
+    await expect((await caller()).setMyItemParts(base)).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+  test.each([0, -1, 1.5, 10001])('rejects malformed portions %s before transaction', async (parts) => {
+    fixture();
+    await expect((await caller()).setMyItemParts({ ...base, parts })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+  test('rejects finalized and expired sessions', async () => {
+    fixture();
+    claimSession(diners, { items: items(1), status: 'FINALIZED' });
+    await expect((await caller()).setMyItemParts(base)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    claimSession(diners, { items: items(1), expiresAt: new Date(Date.now() - 60000) });
+    await expect((await caller()).setMyItemParts(base)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+  test('finalization honors saved 3:5 allocation and exact kopecks', async () => {
+    claimSession(diners, {
+      items: [{ name: 'Пицца', quantity: 1, unitPrice: 101, totalPrice: 101 }],
+      receiptData: { subtotal: 101, tax: 0, tip: 0, total: 101, currency: 'RUB' },
+      assignments: [{ itemIndex: 0, personIndices: [0, 1], partsByPersonId: { [pid(0)]: 3, [pid(1)]: 5 } }],
+    });
+    await (await caller()).finalizeSession({ token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN });
+    const saved = mockDb.guestSplit.update.mock.calls.at(-1)![0] as { data: { summary: { itemTotal: number }[] } };
+    expect(saved.data.summary.map((entry) => entry.itemTotal)).toEqual([38, 63]);
   });
 });
 

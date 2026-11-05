@@ -21,6 +21,7 @@ export type ClaimWriteAction =
   | 'remove-person'
   | 'split-item'
   | 'personal-tip'
+  | 'personal-parts'
   | 'payer-sbp-read'
   | 'payer-sbp-write'
   | 'payer-sbp-reimbursement'

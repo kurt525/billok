@@ -6,7 +6,7 @@ import { MAX_MONEY_CENTS } from './money';
  */
 export function calculateSplitTotals(params: {
   items: { totalPrice: number }[];
-  assignments: { itemIndex: number; personIndices: number[] }[];
+  assignments: { itemIndex: number; personIndices: number[]; portions?: number[] }[];
   tax: number;
   tip: number;
   peopleCount: number;
@@ -21,7 +21,7 @@ export function calculateSplitTotals(params: {
     const item = items[assignment.itemIndex];
     if (!item || assignment.personIndices.length === 0) continue;
 
-    const amounts = splitItemPrice(item.totalPrice, assignment.personIndices, personWeights);
+    const amounts = splitItemPrice(item.totalPrice, assignment.personIndices, personWeights, assignment.portions);
     for (const [i, personIdx] of assignment.personIndices.entries()) {
       personSubtotals.set(personIdx, (personSubtotals.get(personIdx) ?? 0) + amounts[i]!);
     }
@@ -106,7 +106,26 @@ export function addPersonalGuestTips(
  * How one item's price is divided among the people on it, in cents, in `personIndices` order.
  * `calculateSplitTotals` adds these up into each person's item total.
  */
-function splitItemPrice(totalPrice: number, personIndices: number[], personWeights?: number[]): number[] {
+function splitItemPrice(
+  totalPrice: number,
+  personIndices: number[],
+  personWeights?: number[],
+  portions?: number[],
+): number[] {
+  if (portions) {
+    if (
+      portions.length !== personIndices.length ||
+      portions.some((part) => !Number.isSafeInteger(part) || part < 1 || part > 10000)
+    ) {
+      throw new RangeError('Invalid personal portions');
+    }
+    const total = portions.reduce((sum, part) => sum + part, 0);
+    if (!Number.isSafeInteger(total) || total <= 0) throw new RangeError('Invalid total portions');
+    const result = portions.map((part) => Number((BigInt(totalPrice) * BigInt(part)) / BigInt(total)));
+    let left = totalPrice - result.reduce((sum, part) => sum + part, 0);
+    for (let i = 0; i < result.length && left > 0; i++, left--) result[i]!++;
+    return result;
+  }
   if (personWeights) {
     // Weighted proportional splitting: each share rounded down, the last person taking what's left
     const totalWeight = itemWeight(personIndices, personWeights);
@@ -144,19 +163,23 @@ export function personItemShares(
 ): { itemIndex: number; amount: number; share: { numerator: number; denominator: number } }[] {
   const { items, assignments, personWeights } = params;
   const shares: ReturnType<typeof personItemShares> = [];
-  for (const { itemIndex, personIndices } of assignments) {
+  for (const { itemIndex, personIndices, portions } of assignments) {
     const item = items[itemIndex];
     if (!item || !personIndices.includes(personIndex)) continue;
 
-    const amounts = splitItemPrice(item.totalPrice, personIndices, personWeights);
+    const amounts = splitItemPrice(item.totalPrice, personIndices, personWeights, portions);
     let amount = 0;
     let numerator = 0;
     for (const [i, personIdx] of personIndices.entries()) {
       if (personIdx !== personIndex) continue;
       amount += amounts[i]!;
-      numerator += personWeights ? (personWeights[personIdx] ?? 1) : 1;
+      numerator += portions ? portions[i]! : personWeights ? (personWeights[personIdx] ?? 1) : 1;
     }
-    const denominator = personWeights ? itemWeight(personIndices, personWeights) : personIndices.length;
+    const denominator = portions
+      ? portions.reduce((sum, count) => sum + count, 0)
+      : personWeights
+        ? itemWeight(personIndices, personWeights)
+        : personIndices.length;
     const divisor = greatestCommonDivisor(numerator, denominator);
     shares.push({ itemIndex, amount, share: { numerator: numerator / divisor, denominator: denominator / divisor } });
   }

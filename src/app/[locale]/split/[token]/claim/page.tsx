@@ -49,6 +49,7 @@ import {
   type SaveReload,
 } from '@/lib/claim-save';
 import { calculateClaimTotals, groupSizeWeights } from '@/lib/split-calculator';
+import { guestPortionAssignments, guestPortionProgress } from '@/lib/guest-portions';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -118,6 +119,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const [groupSize, setGroupSize] = useState(1);
   // Only the owner of this device's personToken can edit these tips.
   const [personalTipDraft, setPersonalTipDraft] = useState<string | null>(null);
+  const [portionDrafts, setPortionDrafts] = useState<Record<number, string>>({});
   // People are tracked by id, not index: someone's index changes when anyone listed before them
   // is removed, on any device. Indexes are looked up in the session as last loaded (below).
   // This device's person, once it joined or resumed
@@ -195,6 +197,21 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         }),
     },
   );
+  const setMyItemParts = trpc.guest.setMyItemParts.useMutation({
+    onSuccess: async (_result, variables) => {
+      await utils.guest.getSession.invalidate({ token });
+      if (identityRef.current?.personId === variables.personId) {
+        setPortionDrafts((drafts) => {
+          const next = { ...drafts };
+          delete next[variables.itemIndex];
+          return next;
+        });
+        toast.success(t('partsSaved'));
+      }
+    },
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
+  });
+
   const setPersonalTip = trpc.guest.setPersonalTip.useMutation({
     onSuccess: async (_result, variables) => {
       await utils.guest.getSession.invalidate({ token });
@@ -230,6 +247,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     identityRef.current = next;
     setIdentityState(next);
     setPersonalTipDraft(null);
+    setPortionDrafts({});
   }
 
   // This device's person is gone (removed here or on another device): back to the join form.
@@ -290,6 +308,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       const splitIdx = variables.itemIndex;
       setSplittingItemIdx(null);
       setSplitQty('');
+      setPortionDrafts({});
       // Remap claimed item indices: items after the split point shift +1 (Finding #4).
       // Only invalidate the split item itself; preserve unsaved edits for other items.
       setClaimEdits((prev) => {
@@ -658,11 +677,12 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         .map(([itemIndex, persons]) => ({
           itemIndex,
           personIndices: Array.from(persons),
+          partsByPersonId: serverAssignments.find((a) => a.itemIndex === itemIndex)?.partsByPersonId,
         }));
 
       return calculateClaimTotals({
         items: session.data.items,
-        assignments: mergedAssignments,
+        assignments: guestPortionAssignments(mergedAssignments, session.data.people),
         tax: session.data.receiptData.tax,
         tip: session.data.receiptData.tip,
         peopleCount: session.data.people.length,
@@ -672,7 +692,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
     return calculateClaimTotals({
       items: session.data.items,
-      assignments: serverAssignments,
+      assignments: guestPortionAssignments(serverAssignments, session.data.people),
       tax: session.data.receiptData.tax,
       tip: session.data.receiptData.tip,
       peopleCount: session.data.people.length,
@@ -1928,6 +1948,86 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                               >
                                 {t('cancelButton')}
                               </Button>
+                            </div>
+                          );
+                        })()}
+
+                      {/* Only the owner of this personal token may save their own portions.
+                          An unsaved item claim must first be stored, so updates cannot
+                          accidentally create a new claim or overwrite another person. */}
+                      {myPersonIndex !== null &&
+                        personIndex === myPersonIndex &&
+                        activeId === myPersonId &&
+                        personToken &&
+                        data.assignments.some(
+                          (assignment) =>
+                            assignment.itemIndex === idx && assignment.personIndices.includes(myPersonIndex),
+                        ) &&
+                        (() => {
+                          const savedAssignment = data.assignments.find((assignment) => assignment.itemIndex === idx)!;
+                          const savedParts =
+                            savedAssignment.partsByPersonId?.[myPersonId!] ??
+                            data.people[myPersonIndex]?.groupSize ??
+                            1;
+                          const value = portionDrafts[idx] ?? String(savedParts);
+                          const parsed = /^\d+$/.test(value) ? Number(value) : NaN;
+                          const valid =
+                            Number.isSafeInteger(parsed) &&
+                            parsed >= 1 &&
+                            parsed <= 10000 &&
+                            !hasUnsavedChanges &&
+                            !saving &&
+                            !anyParked;
+                          const progress = guestPortionProgress(savedAssignment, data.people);
+                          return (
+                            <div
+                              className="mt-3 min-w-0 space-y-1 rounded-lg border p-2"
+                              data-testid={'personal-parts-' + idx}
+                              onClick={(event) => event.stopPropagation()}
+                              onKeyDown={(event) => event.stopPropagation()}
+                            >
+                              <p className="text-xs text-muted-foreground">{t('partsPersonalHint')}</p>
+                              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                <Input
+                                  type="number"
+                                  inputMode="numeric"
+                                  min={1}
+                                  max={10000}
+                                  step={1}
+                                  className="h-11 w-24 min-w-0 text-base"
+                                  data-testid={'personal-parts-input-' + idx}
+                                  aria-label={t('partsPersonalLabel')}
+                                  value={value}
+                                  onChange={(event) =>
+                                    setPortionDrafts((prev) => ({ ...prev, [idx]: event.target.value }))
+                                  }
+                                />
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  className="min-h-11 min-w-11"
+                                  data-testid={'personal-parts-save-' + idx}
+                                  disabled={!valid || parsed === savedParts || setMyItemParts.isPending}
+                                  onClick={() => {
+                                    if (!valid || !myPersonId || !personToken || setMyItemParts.isPending) return;
+                                    setMyItemParts.mutate({
+                                      token,
+                                      personId: myPersonId,
+                                      personToken,
+                                      itemIndex: idx,
+                                      parts: parsed,
+                                    });
+                                  }}
+                                >
+                                  {t('partsSave')}
+                                </Button>
+                              </div>
+                              <p
+                                className="text-xs text-muted-foreground"
+                                data-testid={'personal-parts-counted-' + idx}
+                              >
+                                {t('partsCounted', { count: progress.countedParts })}
+                              </p>
                             </div>
                           );
                         })()}
