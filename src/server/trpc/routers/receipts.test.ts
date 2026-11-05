@@ -21,7 +21,7 @@ const mockDb = {
     deleteMany: vi.fn(),
   },
   receiptItem: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },
-  receiptItemAssignment: { deleteMany: vi.fn(), createMany: vi.fn() },
+  receiptItemAssignment: { deleteMany: vi.fn(), createMany: vi.fn(), findMany: vi.fn() },
   expense: { create: vi.fn(), findUnique: vi.fn() },
   guestSplit: { findMany: vi.fn() },
   activityLog: { create: vi.fn() },
@@ -252,6 +252,91 @@ describe('manual group receipt: each member saves only their own voluntary tip',
   test('rejects editing if the receipt has been deleted before the transaction lock', async () => {
     mockDb.$queryRaw.mockResolvedValueOnce([]);
     await expect((await caller()).setPersonalTip(input)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('manual receipt: only organizer controls optional original portion count', () => {
+  const base = { subtotal: 800, tax: 0, tip: 0, total: 800, currency: 'RUB', personalTips: { u2: 25 } };
+  const receipt = {
+    id: 'r1',
+    groupId: 'g1',
+    uploadedById: 'u1',
+    status: 'COMPLETED',
+    originalName: 'billok-manual',
+    extractedData: base,
+  };
+  const input = { groupId: 'g1', receiptId: 'r1', itemId: 'pizza', totalParts: 10 };
+
+  beforeEach(() => {
+    mockDb.groupMember.findUnique.mockResolvedValue({ userId: 'u1', groupId: 'g1', removedAt: null });
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'RUB' });
+    mockDb.receipt.findUnique.mockResolvedValue(receipt);
+    mockDb.receiptItem.findUnique.mockResolvedValue({ id: 'pizza', receiptId: 'r1' });
+    mockDb.receiptItemAssignment.findMany.mockResolvedValue([{ shareOfItem: 3 }, { shareOfItem: 5 }]);
+    mockDb.expense.findUnique.mockResolvedValue(null);
+    mockDb.$queryRaw.mockResolvedValue([{ id: 'r1', archivedAt: null }]);
+    mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => unknown) => fn(mockDb));
+  });
+
+  test('stores separately from product quantity and keeps personal tips', async () => {
+    expect(await (await caller()).setManualItemTotalParts(input)).toEqual({ success: true, totalParts: 10 });
+    expect(mockDb.receipt.update).toHaveBeenCalledWith({
+      where: { id: 'r1' },
+      data: { extractedData: { ...base, declaredTotalPartsByItem: { pizza: 10 } } },
+    });
+    expect(mockDb.receiptItem.update).not.toHaveBeenCalled();
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+    const queries = mockDb.$queryRaw.mock.calls.map((call) => (call[0] as TemplateStringsArray).join('?'));
+    expect(queries.some((q) => q.includes('FOR UPDATE'))).toBe(true);
+  });
+
+  test('clearing the optional total keeps unrelated item limits and tip data', async () => {
+    mockDb.receipt.findUnique.mockResolvedValue({
+      ...receipt,
+      extractedData: { ...base, declaredTotalPartsByItem: { pizza: 10, soup: 4 } },
+    });
+    const result = await (await caller()).setManualItemTotalParts({ ...input, totalParts: null });
+    expect(result).toEqual({ success: true, totalParts: null });
+    expect(mockDb.receipt.update).toHaveBeenCalledWith({
+      where: { id: 'r1' },
+      data: { extractedData: { ...base, declaredTotalPartsByItem: { soup: 4 } } },
+    });
+  });
+
+  test('repeating the same total is idempotent', async () => {
+    mockDb.receipt.findUnique.mockResolvedValue({
+      ...receipt,
+      extractedData: { ...base, declaredTotalPartsByItem: { pizza: 10 } },
+    });
+    await (await caller()).setManualItemTotalParts(input);
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+  });
+
+  test('another participant cannot set total parts even if a member', async () => {
+    await expect((await caller('u2')).setManualItemTotalParts(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects a total smaller than already saved consumed parts', async () => {
+    await expect((await caller()).setManualItemTotalParts({ ...input, totalParts: 7 })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+  });
+
+  test.each([0, -1, 1.5, 10001])('rejects invalid original total %s', async (totalParts) => {
+    await expect((await caller()).setManualItemTotalParts({ ...input, totalParts })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('rejects changing a different receipt item or an already finalized bill', async () => {
+    mockDb.receiptItem.findUnique.mockResolvedValueOnce({ id: 'pizza', receiptId: 'r2' });
+    await expect((await caller()).setManualItemTotalParts(input)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    mockDb.expense.findUnique.mockResolvedValueOnce({ id: 'e1' });
+    await expect((await caller()).setManualItemTotalParts(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mockDb.receipt.update).not.toHaveBeenCalled();
   });
 });

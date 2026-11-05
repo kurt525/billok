@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'vitest';
-import { calculateManualReceiptTotals, calculateTotalsWithPersonalTips } from './manual-receipt-split';
+import {
+  calculateManualReceiptTotals,
+  calculateTotalsWithPersonalTips,
+  manualPortionProgress,
+} from './manual-receipt-split';
 
 const split = (amount: number, parts: number[], creatorId = 'creator') =>
   calculateManualReceiptTotals({
@@ -217,5 +221,34 @@ describe('individually chosen voluntary tips: exact RUB totals', () => {
         ['creator', 0],
       ]),
     );
+  });
+});
+
+describe('optional original portion count for a hand-entered item', () => {
+  test('3 and 5 consumed portions need no known original amount', () => {
+    expect(manualPortionProgress([3, 5])).toEqual({
+      countedParts: 8,
+      declaredTotalParts: null,
+      remainingParts: null,
+      overclaimed: false,
+    });
+    expect(manualPortionProgress([3, 5], null).remainingParts).toBeNull();
+  });
+  test('a known total is a separate control, not a pricing denominator', () => {
+    expect(manualPortionProgress([3, 5], 10)).toEqual({
+      countedParts: 8,
+      declaredTotalParts: 10,
+      remainingParts: 2,
+      overclaimed: false,
+    });
+    expect(manualPortionProgress([3, 5], 8).remainingParts).toBe(0);
+    expect(manualPortionProgress([3, 5], 7).overclaimed).toBe(true);
+    expect(split(800, [3, 5]).get('alice')).toBe(300);
+  });
+  test.each([0, -1, 2.5, 10001, Number.NaN, Infinity])('rejects invalid total %s', (n) => {
+    expect(() => manualPortionProgress([3, 5], n)).toThrow(RangeError);
+  });
+  test.each([0, -1, 1.5, 10001, Number.NaN, Infinity])('rejects invalid claim %s', (n) => {
+    expect(() => manualPortionProgress([n])).toThrow(RangeError);
   });
 });

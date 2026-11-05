@@ -5,6 +5,33 @@ import { MAX_MONEY_CENTS } from './money';
  * proportional item cost; remaining kopecks always belong to the receipt creator,
  * even if they consumed nothing and another member paid the bill.
  */
+/**
+ * A known original number of portions is optional. A missing total is not
+ * inferred from item.quantity: that's the number of products on the bill.
+ */
+export function manualPortionProgress(consumedParts: readonly number[], declaredTotalParts?: number | null) {
+  let countedParts = 0;
+  for (const parts of consumedParts) {
+    if (!Number.isSafeInteger(parts) || parts < 1 || parts > 10000) {
+      throw new RangeError('Invalid consumed portions');
+    }
+    countedParts += parts;
+    if (!Number.isSafeInteger(countedParts)) throw new RangeError('Too many portions');
+  }
+  if (declaredTotalParts === undefined || declaredTotalParts === null) {
+    return { countedParts, declaredTotalParts: null, remainingParts: null, overclaimed: false };
+  }
+  if (!Number.isSafeInteger(declaredTotalParts) || declaredTotalParts < 1 || declaredTotalParts > 10000) {
+    throw new RangeError('Invalid original number of portions');
+  }
+  return {
+    countedParts,
+    declaredTotalParts,
+    remainingParts: Math.max(0, declaredTotalParts - countedParts),
+    overclaimed: countedParts > declaredTotalParts,
+  };
+}
+
 export type ManualAssignment = {
   receiptItemId: string;
   people: { userId: string; parts: number }[];

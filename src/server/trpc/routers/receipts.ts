@@ -6,7 +6,11 @@ import { createTRPCRouter, protectedProcedure, groupMemberProcedure } from '../i
 import { parseExtractedData } from '../../lib/json-schemas';
 import { stripUndefined } from '../../lib/strip-undefined';
 import { lockActiveGroup } from '../../lib/group-balances';
-import { calculateManualReceiptTotals, calculateTotalsWithPersonalTips } from '@/lib/manual-receipt-split';
+import {
+  calculateManualReceiptTotals,
+  calculateTotalsWithPersonalTips,
+  manualPortionProgress,
+} from '@/lib/manual-receipt-split';
 import { MAX_MONEY_CENTS } from '@/lib/money';
 import { deleteUnusedSplitReceipts, removeReceiptFiles } from '../../lib/receipt-cleanup';
 
@@ -109,11 +113,83 @@ export const receiptsRouter = createTRPCRouter({
           total: number;
           currency: string;
           personalTips?: Record<string, number>;
+          declaredTotalPartsByItem?: Record<string, number>;
         } | null,
       },
       items: receiptWithItems.items as ReceiptItem[],
     };
   }),
+
+  // Optional original count for one hand-entered dish. Only the receipt
+  // creator may set/clear the control value; it never replaces consumption
+  // claims or creates amounts outside the receipt.
+  setManualItemTotalParts: groupMemberProcedure
+    .input(
+      z.object({
+        groupId: z.string(),
+        receiptId: z.string(),
+        itemId: z.string(),
+        totalParts: z.number().int().min(1).max(10000).nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.$transaction(async (tx) => {
+        await lockActiveGroup(tx, input.groupId, 'archivedAddExpense');
+        const [locked] = await tx.$queryRaw<{ id: string }[]>`
+          SELECT "id" FROM "Receipt" WHERE "id" = ${input.receiptId} FOR UPDATE`;
+        if (!locked) throw new AppError('NOT_FOUND');
+        const receipt = await tx.receipt.findUnique({ where: { id: input.receiptId } });
+        if (!receipt || receipt.groupId !== input.groupId) throw new AppError('NOT_FOUND');
+        if (receipt.uploadedById !== ctx.user.id) throw new AppError('FORBIDDEN');
+        if (receipt.status !== 'COMPLETED' || receipt.originalName !== 'billok-manual') {
+          throw new AppError('BAD_REQUEST', 'receiptNotReady');
+        }
+        const group = await tx.group.findUnique({
+          where: { id: input.groupId },
+          select: { currency: true },
+        });
+        if (!group || group.currency.toUpperCase() !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+        }
+        if (await tx.expense.findUnique({ where: { receiptId: input.receiptId } })) {
+          throw new AppError('BAD_REQUEST', 'receiptAlreadyHasExpense');
+        }
+        const item = await tx.receiptItem.findUnique({ where: { id: input.itemId } });
+        if (!item || item.receiptId !== receipt.id) throw new AppError('NOT_FOUND');
+        const extracted = parseExtractedData(receipt.extractedData);
+        if (extracted.currency.toUpperCase() !== 'RUB') throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
+        const original = extracted.declaredTotalPartsByItem;
+        const saved =
+          original && typeof original === 'object' && !Array.isArray(original)
+            ? (original as Record<string, number>)
+            : {};
+        // Reject a new limit lower than already-saved personal claims.
+        if (input.totalParts !== null) {
+          const claims = await tx.receiptItemAssignment.findMany({
+            where: { receiptItemId: input.itemId },
+            select: { shareOfItem: true },
+          });
+          if (
+            manualPortionProgress(
+              claims.map((claim) => claim.shareOfItem),
+              input.totalParts,
+            ).overclaimed
+          ) {
+            throw new AppError('BAD_REQUEST', 'receiptNotReady');
+          }
+        }
+        if ((saved[input.itemId] ?? null) !== input.totalParts) {
+          const next = { ...saved };
+          if (input.totalParts === null) delete next[input.itemId];
+          else next[input.itemId] = input.totalParts;
+          await tx.receipt.update({
+            where: { id: receipt.id },
+            data: { extractedData: { ...extracted, declaredTotalPartsByItem: next } as Prisma.InputJsonValue },
+          });
+        }
+        return { success: true, totalParts: input.totalParts };
+      });
+    }),
 
   // One voluntary RUB tip per registered participant, stored alongside this
   // unfinalized manual receipt. Separate from dish prices and all expense debts
