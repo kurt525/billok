@@ -6,7 +6,7 @@ import { trpc } from '@/lib/trpc';
 import { formatCents, centsToDecimal, parseToCents, isValidMoneyInput, MAX_MONEY_CENTS } from '@/lib/money';
 import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
-import { calculateManualReceiptTotals } from '@/lib/manual-receipt-split';
+import { calculateManualReceiptTotals, manualPortionProgress } from '@/lib/manual-receipt-split';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -54,6 +54,7 @@ export function ItemAssignment({
 
   const [assignments, setAssignments] = useState<Assignments>({});
   const [partsByItem, setPartsByItem] = useState<Record<string, Record<string, number>>>({});
+  const [totalPartsDrafts, setTotalPartsDrafts] = useState<Record<string, string>>({});
   const [title, setTitle] = useState('');
   const [paidById, setPaidById] = useState('');
   // This field is tied to the authenticated member, never the selected payer.
@@ -106,6 +107,10 @@ export function ItemAssignment({
   const saveForLater = trpc.receipts.saveForLater.useMutation({
     onSuccess: () => onSaveForLater?.(),
     onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
+  });
+
+  const setTotalParts = trpc.receipts.setManualItemTotalParts.useMutation({
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
   });
 
   const savePersonalTip = trpc.receipts.setPersonalTip.useMutation({
@@ -202,6 +207,23 @@ export function ItemAssignment({
   function submitPersonalTip() {
     if (!canEditOwnTip || !personalTipIsValid || parsedPersonalTip === ownTipCents || savePersonalTip.isPending) return;
     savePersonalTip.mutate({ groupId, receiptId, tipCents: parsedPersonalTip });
+  }
+
+  const canSetTotalParts = receipt?.isManual === true && !!currentUserId && receipt.creatorId === currentUserId;
+  async function persistTotalParts(itemId: string, totalParts: number | null) {
+    if (!canSetTotalParts || setTotalParts.isPending) return;
+    try {
+      await setTotalParts.mutateAsync({ groupId, receiptId, itemId, totalParts });
+      await utils.receipts.getReceiptItems.invalidate({ receiptId });
+      setTotalPartsDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[itemId];
+        return next;
+      });
+      toast.success(t('totalPartsSaved'));
+    } catch {
+      // The mutation's onError displays the localized error. Keep the draft.
+    }
   }
 
   // Note (Finding #29): toggleAssignment and assignAllToEveryone are intentionally
@@ -773,6 +795,25 @@ export function ItemAssignment({
         {items.map((item) => {
           const assigned = assignments[item.id] ?? new Set();
           const isEditing = editingItem === item.id;
+          const consumedParts = [...assigned].map((userId) => partsByItem[item.id]?.[userId] ?? 1);
+          const validConsumedParts = consumedParts.every(
+            (parts) => Number.isSafeInteger(parts) && parts >= 1 && parts <= 10000,
+          );
+          const savedTotalParts = extracted.declaredTotalPartsByItem?.[item.id] ?? null;
+          const enteredTotalParts =
+            totalPartsDrafts[item.id] ?? (savedTotalParts === null ? '' : String(savedTotalParts));
+          const parsedTotalParts = /^\d+$/.test(enteredTotalParts) ? Number(enteredTotalParts) : NaN;
+          const consumedCount = validConsumedParts
+            ? manualPortionProgress(consumedParts, savedTotalParts).countedParts
+            : null;
+          const totalPartsValid =
+            Number.isSafeInteger(parsedTotalParts) &&
+            parsedTotalParts >= 1 &&
+            parsedTotalParts <= 10000 &&
+            consumedCount !== null &&
+            parsedTotalParts >= consumedCount;
+          const remainingParts =
+            consumedCount === null || savedTotalParts === null ? null : savedTotalParts - consumedCount;
 
           return (
             <Card
@@ -950,6 +991,82 @@ export function ItemAssignment({
                     );
                   })}
                 </div>
+                {canSetTotalParts && (
+                  <div
+                    className="mt-3 min-w-0 space-y-2 rounded-lg border p-3"
+                    data-testid={'item-total-parts-' + item.id}
+                  >
+                    <Label htmlFor={'total-parts-' + item.id} className="text-sm">
+                      {t('totalPartsLabel')}
+                    </Label>
+                    <p className="text-xs text-muted-foreground">{t('totalPartsHint')}</p>
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <Input
+                        id={'total-parts-' + item.id}
+                        data-testid={'item-total-parts-input-' + item.id}
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={10000}
+                        step={1}
+                        value={enteredTotalParts}
+                        onChange={(event) =>
+                          setTotalPartsDrafts((drafts) => ({ ...drafts, [item.id]: event.target.value }))
+                        }
+                        disabled={setTotalParts.isPending}
+                        className="h-11 w-24 min-w-0 text-base"
+                        placeholder={t('totalPartsOptional')}
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="min-h-11 min-w-11"
+                        data-testid={'item-total-parts-save-' + item.id}
+                        disabled={setTotalParts.isPending || !totalPartsValid || parsedTotalParts === savedTotalParts}
+                        onClick={() => persistTotalParts(item.id, parsedTotalParts)}
+                      >
+                        {t('save')}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="min-h-11 min-w-11"
+                        data-testid={'item-total-parts-clear-' + item.id}
+                        disabled={setTotalParts.isPending || (savedTotalParts === null && enteredTotalParts === '')}
+                        onClick={() =>
+                          savedTotalParts === null
+                            ? setTotalPartsDrafts((drafts) => {
+                                const next = { ...drafts };
+                                delete next[item.id];
+                                return next;
+                              })
+                            : persistTotalParts(item.id, null)
+                        }
+                      >
+                        {t('totalPartsClear')}
+                      </Button>
+                    </div>
+                    <div data-testid={'item-total-parts-progress-' + item.id} className="space-y-1 text-xs">
+                      <p>
+                        {consumedCount === null
+                          ? t('totalPartsInvalidConsumed')
+                          : t('totalPartsCounted', { count: consumedCount })}
+                      </p>
+                      <p
+                        className={
+                          remainingParts !== null && remainingParts < 0 ? 'text-destructive' : 'text-muted-foreground'
+                        }
+                      >
+                        {remainingParts === null
+                          ? t('totalPartsUnknown')
+                          : remainingParts < 0
+                            ? t('totalPartsOverclaimed', { count: -remainingParts })
+                            : t('totalPartsRemaining', { count: remainingParts })}
+                      </p>
+                    </div>
+                  </div>
+                )}
                 {receipt?.isManual && assigned.size > 0 && (
                   <div className="mt-3 space-y-2" data-testid={'portions-for-' + item.id}>
                     <p className="text-xs text-muted-foreground">{t('partsHint')}</p>

@@ -134,6 +134,122 @@ test('group receipt: add, edit, cancel, split, assign, save, delete and finalize
   await expect(page.getByText('Тестовый чек', { exact: true }).first()).toBeVisible();
 });
 
+test('manual receipt creator saves, reloads and clears optional original portions on six mobile widths', async ({
+  page,
+  browser,
+}) => {
+  test.skip(!groupId, 'Requires disposable RUB group fixture');
+  test.setTimeout(180_000);
+
+  await page.goto('/login', { waitUntil: 'networkidle' });
+  await page.locator('input[type=email]').fill('bob@example.com');
+  await page.locator('input[type=password]').fill('password123');
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard/);
+  await page.goto('/groups/' + groupId + '/expenses/new', { waitUntil: 'networkidle' });
+  await page.getByTestId('create-manual-group-receipt').click();
+  await expect(page).toHaveURL(/\/scan\?receiptId=/);
+  const createdUrl = page.url();
+  const createdReceiptId = new URL(createdUrl).searchParams.get('receiptId');
+  expect(createdReceiptId).toBeTruthy();
+
+  await page.getByTestId('add-item-btn').click();
+  const add = page.getByTestId('add-item-form');
+  await add.locator('input').nth(0).fill('Пицца 8 частей');
+  await add.locator('input').nth(1).fill('1');
+  await add.locator('input').nth(2).fill('80,00');
+  await add.getByRole('button', { name: 'Добавить', exact: true }).click();
+  const pizza = item(page, 'Пицца 8 частей');
+  await expect(pizza).toHaveCount(1);
+  await pizza.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Bob' }).click();
+  await pizza.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Alice' }).click();
+  await pizza.getByLabel('Частей: Bob').fill('3');
+  await pizza.getByLabel('Частей: Alice').fill('5');
+
+  const original = pizza.locator(
+    '[data-testid^="item-total-parts-"]:not([data-testid*="-input-"]):not([data-testid*="-save-"]):not([data-testid*="-clear-"]):not([data-testid*="-progress-"])',
+  );
+  const originalInput = pizza.locator('[data-testid^="item-total-parts-input-"]');
+  const originalSave = pizza.locator('[data-testid^="item-total-parts-save-"]');
+  const originalProgress = pizza.locator('[data-testid^="item-total-parts-progress-"]');
+  await expect(original).toHaveCount(1);
+  await expect(originalInput).toHaveValue('');
+  await expect(originalProgress).toContainText('Участниками учтено частей: 8');
+  await expect(originalProgress).toContainText('Исходное количество частей не указано');
+
+  await originalInput.fill('7');
+  await expect(originalSave).toBeDisabled();
+  await originalInput.fill('10');
+  await expect(originalSave).toBeEnabled();
+  await touchTarget(originalSave);
+  await originalSave.click();
+  await expect(originalInput).toHaveValue('10');
+  await expect(originalProgress).toContainText('Осталось нераспределённых частей: 2');
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 520 });
+    await originalInput.scrollIntoViewIfNeeded();
+    const inputBounds = await originalInput.boundingBox();
+    expect(inputBounds, 'Original parts input at ' + width).not.toBeNull();
+    expect(inputBounds!.x).toBeGreaterThanOrEqual(-1);
+    expect(inputBounds!.x + inputBounds!.width).toBeLessThanOrEqual(width + 1);
+    await noDocumentOverflow(page);
+  }
+
+  // The existing Save for Later flow persists actual consumed parts. The
+  // original total is independently saved in the receipt JSON.
+  await page.getByTestId('save-for-later-btn').click();
+  await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'));
+  await page.goto(createdUrl, { waitUntil: 'networkidle' });
+  const restored = item(page, 'Пицца 8 частей');
+  await expect(restored.locator('[data-testid^="item-total-parts-input-"]')).toHaveValue('10');
+  await expect(restored.locator('[data-testid^="item-total-parts-progress-"]')).toContainText(
+    'Участниками учтено частей: 8',
+  );
+  await expect(restored.locator('[data-testid^="item-total-parts-progress-"]')).toContainText(
+    'Осталось нераспределённых частей: 2',
+  );
+  const data = await trpcResult(
+    await trpcQuery(page.request, 'receipts.getReceiptItems', { receiptId: createdReceiptId }),
+  );
+  expect(Object.values(data.receipt.extractedData.declaredTotalPartsByItem)).toEqual([10]);
+  expect(data.items).toHaveLength(1);
+  expect(data.items[0].totalPrice).toBe(8000);
+
+  // A different registered group member may adjust their own consumption but
+  // cannot edit the creator-only original-total field.
+  const aliceContext = await browser.newContext({
+    viewport: { width: 320, height: 800 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  try {
+    const alicePage = await aliceContext.newPage();
+    await alicePage.goto('/login', { waitUntil: 'networkidle' });
+    await alicePage.locator('input[type=email]').fill('alice@example.com');
+    await alicePage.locator('input[type=password]').fill('password123');
+    await alicePage.getByRole('button', { name: 'Войти', exact: true }).click();
+    await expect(alicePage).toHaveURL(/\/dashboard/);
+    await alicePage.goto(createdUrl, { waitUntil: 'networkidle' });
+    await expect(alicePage.getByTestId('item-assignment-form')).toBeVisible();
+    await expect(alicePage.locator('[data-testid^="item-total-parts-input-"]')).toHaveCount(0);
+  } finally {
+    await aliceContext.close();
+  }
+
+  await restored.locator('[data-testid^="item-total-parts-clear-"]').click();
+  await expect(restored.locator('[data-testid^="item-total-parts-input-"]')).toHaveValue('');
+  await expect(restored.locator('[data-testid^="item-total-parts-progress-"]')).toContainText(
+    'Исходное количество частей не указано',
+  );
+  await page.reload({ waitUntil: 'networkidle' });
+  await expect(item(page, 'Пицца 8 частей').locator('[data-testid^="item-total-parts-input-"]')).toHaveValue('');
+  const cleared = await trpcResult(
+    await trpcQuery(page.request, 'receipts.getReceiptItems', { receiptId: createdReceiptId }),
+  );
+  expect(cleared.receipt.extractedData.declaredTotalPartsByItem).toEqual({});
+  expect(cleared.items[0].totalPrice).toBe(8000);
+});
+
 test('two registered group members independently save voluntary RUB tips on a mobile manual receipt', async ({
   page,
   browser,
