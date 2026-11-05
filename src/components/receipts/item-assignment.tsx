@@ -1117,7 +1117,7 @@ export function ItemAssignment({
 
       {/* Per-person summary */}
       {perPersonTotals.size > 0 && (
-        <Card data-testid="per-person-totals">
+        <Card className="min-w-0 w-full max-w-full" data-testid="per-person-totals">
           <CardHeader className="pb-2">
             <CardTitle className="text-base">{t('perPersonTotals')}</CardTitle>
           </CardHeader>
@@ -1126,9 +1126,11 @@ export function ItemAssignment({
               const total = perPersonTotals.get(m.id);
               if (!total) return null;
               return (
-                <div key={m.id} className="flex justify-between text-sm">
-                  <span>{m.name ?? t('unnamed')}</span>
-                  <span className="font-medium">{formatCents(total, safeExtracted.currency, locale)}</span>
+                <div key={m.id} className="flex min-w-0 items-center justify-between gap-2 text-sm">
+                  <span className="min-w-0 break-words">{m.name ?? t('unnamed')}</span>
+                  <span className="shrink-0 font-medium tabular-nums">
+                    {formatCents(total, safeExtracted.currency, locale)}
+                  </span>
                 </div>
               );
             })}

@@ -289,13 +289,46 @@ test('Issue 2.16.3: manual group receipt balances two dishes and persists exact 
   await expect(totals).toContainText('0,67');
   await expect(totals).toContainText('1,35');
   await expect(page.getByTestId('manual-rounding-guidance')).toContainText('по всему чеку');
+  // Release the focused mobile numeric field before resizing, just as a guest
+  // would after entering their share. Otherwise the emulated visual viewport
+  // can stay horizontally panned to that field when the keyboard closes.
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    window.scrollTo({ left: 0, top: window.scrollY, behavior: 'instant' });
+  });
   for (const width of [320, 360, 430, 480, 600, 720]) {
     await page.setViewportSize({ width, height: 520 });
-    await totals.scrollIntoViewIfNeeded();
-    const bounds = await totals.boundingBox();
-    expect(bounds, 'Rounding summary at ' + width).not.toBeNull();
-    expect(bounds!.x).toBeGreaterThanOrEqual(-1);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width + 1);
+    // Touch/number inputs may keep the visual viewport panned after a resize.
+    // Move vertically to this exact card, resetting the horizontal page pan
+    // without allowing scrollIntoViewIfNeeded() to scroll sideways.
+    const geometry = await totals.evaluate((element) => {
+      const before = element.getBoundingClientRect();
+      window.scrollTo({ top: window.scrollY + before.top - 72, left: 0, behavior: 'instant' });
+      const after = element.getBoundingClientRect();
+      const parent = element.parentElement?.getBoundingClientRect();
+      return {
+        left: after.left,
+        right: after.right,
+        width: after.width,
+        parentLeft: parent?.left,
+        parentRight: parent?.right,
+        scrollX: window.scrollX,
+        documentWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+        focusedElement: document.activeElement?.tagName,
+      };
+    });
+    expect(geometry.documentWidth, 'Document width at ' + width + ': ' + JSON.stringify(geometry)).toBeLessThanOrEqual(
+      width + 1,
+    );
+    expect(
+      geometry.left,
+      'Specific rounding card left at ' + width + ': ' + JSON.stringify(geometry),
+    ).toBeGreaterThanOrEqual(-1);
+    expect(
+      geometry.right,
+      'Specific rounding card right at ' + width + ': ' + JSON.stringify(geometry),
+    ).toBeLessThanOrEqual(width + 1);
     await noDocumentOverflow(page);
   }
 

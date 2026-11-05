@@ -649,6 +649,18 @@ test('Issue 2.14: two guest phones save personal parts 3/5 without knowing the o
     await expect(aliceInput).toHaveValue('2', { timeout: 15_000 });
     await aliceInput.fill('3');
     await alicePage.getByTestId('personal-parts-save-0').click();
+    // The controlled input changes before the mutation is committed. Never
+    // finalize based only on the visible draft: wait for the personal token's
+    // durable server value, which is what finalization actually uses.
+    await expect
+      .poll(
+        async () => {
+          const stored = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+          return stored.assignments[0].partsByPersonId[anna.personId];
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(3);
     await expect(aliceInput).toHaveValue('3', { timeout: 15_000 });
     const finalize = await trpcMutation(owner, 'guest.finalizeSession', {
       token,
