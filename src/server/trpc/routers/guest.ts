@@ -24,6 +24,7 @@ import {
 import { calculateSplitTotals, addPersonalGuestTips, groupSizeWeights } from '@/lib/split-calculator';
 import { guestPortionAssignments, type GuestPortionAssignment } from '@/lib/guest-portions';
 import { guestPartsConfirmationSnapshot } from '@/lib/guest-parts-confirmation';
+import { guestKnownPartsBalance } from '@/lib/guest-known-parts';
 import { normalizeGuestName } from '@/lib/guest-session';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { MAX_MONEY_CENTS } from '@/lib/money';
@@ -69,8 +70,32 @@ function guestPartsDigest(input: {
   items: readonly { name: string; quantity: number; totalPrice: number }[];
   people: readonly { id?: string | undefined; groupSize?: number | undefined }[];
   assignments: readonly GuestPortionAssignment[];
+  knownPartsByItem?: unknown;
 }): string {
   return createHash('sha256').update(guestPartsConfirmationSnapshot(input)).digest('hex');
+}
+
+/** 2.20.2: known totals are optional, but strict where provided.
+ * All checks happen in guestTransaction using its current data snapshot.
+ */
+function enforceGuestKnownParts(
+  items: readonly unknown[],
+  people: readonly { id?: string | undefined; groupSize?: number | undefined }[],
+  assignments: readonly GuestPortionAssignment[],
+  rawKnown: unknown,
+  requireComplete: boolean,
+) {
+  let state: ReturnType<typeof guestKnownPartsBalance>;
+  try {
+    state = guestKnownPartsBalance({ items, people, assignments, knownPartsByItem: rawKnown });
+  } catch {
+    throw new AppError('BAD_REQUEST', 'invalidData', { label: 'known original portions' });
+  }
+  if (state.overclaimed) throw new AppError('PRECONDITION_FAILED', 'receiptKnownPartsOverclaimed');
+  if (requireComplete && state.hasRemaining) {
+    throw new AppError('PRECONDITION_FAILED', 'receiptKnownPartsRemaining');
+  }
+  return state;
 }
 
 // How long a join can be replayed with its join key (Stripe prunes idempotency keys once they are at least 24 hours old)
@@ -818,14 +843,22 @@ export const guestRouter = createTRPCRouter({
         // with savePersonIds, so it's one write in this transaction with the join's own changes.
         const idsMissing = !hasPersonIds(stored);
         const people = assignPersonIds(stored);
-        const savePeople = () =>
-          tx.guestSplit.update({
+        const savePeople = () => {
+          enforceGuestKnownParts(
+            parseGuestItems(session.items),
+            people,
+            parseGuestAssignments(session.assignments),
+            parseExtractedData(session.receiptData).knownPartsByItem,
+            false,
+          );
+          return tx.guestSplit.update({
             where: { id: session.id },
             data: {
               people: people as unknown as Prisma.InputJsonValue,
               ...invalidatePartsApproval(session.receiptData),
             },
           });
+        };
         const normalizedName = normalizeGuestName(input.name);
 
         // The caller already is someone, by the token their device stored: return them under their
@@ -977,6 +1010,13 @@ export const guestRouter = createTRPCRouter({
           name: input.newName.trim(),
           ...(input.groupSize != null ? { groupSize: input.groupSize } : {}),
         };
+        enforceGuestKnownParts(
+          parseGuestItems(session.items),
+          people,
+          parseGuestAssignments(session.assignments),
+          parseExtractedData(session.receiptData).knownPartsByItem,
+          false,
+        );
         await tx.guestSplit.update({
           where: { id: session.id },
           data: {
@@ -1088,6 +1128,14 @@ export const guestRouter = createTRPCRouter({
         ];
         if (input.itemIndex >= items.length) throw new AppError('BAD_REQUEST', 'invalidItemIndex');
 
+        const currentData = parseExtractedData(session.receiptData);
+        if (
+          currentData.knownPartsByItem &&
+          typeof currentData.knownPartsByItem === 'object' &&
+          Object.keys(currentData.knownPartsByItem).length > 0
+        ) {
+          throw new AppError('PRECONDITION_FAILED', 'receiptKnownPartsSplitItem');
+        }
         const item = items[input.itemIndex]!;
         if (input.splitQuantity >= item.quantity) {
           throw new AppError('BAD_REQUEST', 'splitQuantityOverItem');
@@ -1210,6 +1258,13 @@ export const guestRouter = createTRPCRouter({
         if (!target) throw new AppError('PRECONDITION_FAILED', 'itemsUnassigned');
         if (target.partsByPersonId?.[input.personId] !== input.parts) {
           target.partsByPersonId = { ...target.partsByPersonId, [input.personId]: input.parts };
+          enforceGuestKnownParts(
+            items,
+            people,
+            assignments,
+            parseExtractedData(session.receiptData).knownPartsByItem,
+            false,
+          );
           // Enforce the stored result is still an integer-kopeck division of
           // the same receipt item before persisting.
           calculateSplitTotals({
@@ -1343,6 +1398,14 @@ export const guestRouter = createTRPCRouter({
         // Clean up empty assignments
         const cleanedAssignments = assignments.filter((a) => a.personIndices.length > 0);
 
+        enforceGuestKnownParts(
+          items,
+          people,
+          cleanedAssignments,
+          parseExtractedData(session.receiptData).knownPartsByItem,
+          false,
+        );
+
         // The save key goes on the caller's person with this save, newest last
         const withSaveKey = save
           ? people.map((person, index) =>
@@ -1399,6 +1462,7 @@ export const guestRouter = createTRPCRouter({
         currency: string;
         roundingBalanced?: boolean;
         organizerPersonId?: string;
+        knownPartsByItem?: Record<string, number>;
       },
       items: session.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[],
       // Everyone has an id by now (savePersonIds above)
@@ -1414,6 +1478,7 @@ export const guestRouter = createTRPCRouter({
               items: parseGuestItems(session.items),
               people: session.people as GuestSessionPerson[],
               assignments: parseGuestAssignments(session.assignments),
+              knownPartsByItem: data.knownPartsByItem,
             })
         );
       })(),
@@ -1436,6 +1501,53 @@ export const guestRouter = createTRPCRouter({
       expiresAt: session.expiresAt,
     };
   }),
+
+  // Only the registered creator may declare or clear an original number of
+  // portions for a guest item. This is NOT the item quantity or a price.
+  setKnownItemParts: protectedProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        itemIndex: z.number().int().min(0),
+        totalParts: z.number().int().min(1).max(10000).nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) =>
+      guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionAlreadyFinalized');
+        if (!session.userId || session.userId !== ctx.user.id) throw new AppError('FORBIDDEN');
+
+        const items = parseGuestItems(session.items);
+        if (input.itemIndex >= items.length) throw new AppError('BAD_REQUEST', 'invalidItemIndex');
+        const data = parseExtractedData(session.receiptData);
+        const existing = data.knownPartsByItem;
+        const saved =
+          existing && typeof existing === 'object' && !Array.isArray(existing)
+            ? { ...(existing as Record<string, unknown>) }
+            : {};
+        const key = String(input.itemIndex);
+        if ((saved[key] ?? null) === input.totalParts) return { success: true, totalParts: input.totalParts };
+        if (input.totalParts === null) delete saved[key];
+        else saved[key] = input.totalParts;
+        enforceGuestKnownParts(
+          items,
+          parseGuestPeople(session.people),
+          parseGuestAssignments(session.assignments),
+          saved,
+          false,
+        );
+        const next: Record<string, unknown> = { ...data, knownPartsByItem: saved };
+        delete next.partsApprovalHash;
+        await tx.guestSplit.update({
+          where: { id: session.id },
+          data: { receiptData: next as Prisma.InputJsonValue },
+        });
+        return { success: true, totalParts: input.totalParts };
+      }),
+    ),
 
   // The registered receipt creator, not the bill payer or another diner, approves
   // the exact stored guest claims. A subsequent edit removes this approval.
@@ -1462,7 +1574,8 @@ export const guestRouter = createTRPCRouter({
         if (!items.length || items.some((_, index) => !claimed.has(index))) {
           throw new AppError('PRECONDITION_FAILED', 'itemsUnassigned');
         }
-        const hash = guestPartsDigest({ items, people, assignments });
+        enforceGuestKnownParts(items, people, assignments, data.knownPartsByItem, true);
+        const hash = guestPartsDigest({ items, people, assignments, knownPartsByItem: data.knownPartsByItem });
         await tx.guestSplit.update({
           where: { id: session.id },
           data: { receiptData: { ...data, partsApprovalHash: hash } as Prisma.InputJsonValue },
@@ -1515,11 +1628,13 @@ export const guestRouter = createTRPCRouter({
         if (
           typeof receiptData.organizerPersonId === 'string' &&
           (typeof receiptData.partsApprovalHash !== 'string' ||
-            receiptData.partsApprovalHash !== guestPartsDigest({ items, people, assignments }))
+            receiptData.partsApprovalHash !==
+              guestPartsDigest({ items, people, assignments, knownPartsByItem: receiptData.knownPartsByItem }))
         ) {
           throw new AppError('PRECONDITION_FAILED', 'receiptPartsConfirmationRequired');
         }
 
+        enforceGuestKnownParts(items, people, assignments, receiptData.knownPartsByItem, true);
         const tip = receiptData.tip;
 
         // This session's organizer is identified by their original stable

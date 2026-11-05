@@ -19,6 +19,11 @@ describe('2.19.2.2 guest creator approval snapshot', () => {
     expect(snap({ ...input, assignments: [{ itemIndex: 0, personIndices: [0] }] })).not.toBe(approved);
     expect(snap({ ...input, people: [{ id: 'alice', groupSize: 2 }, { id: 'bob' }] })).not.toBe(approved);
   });
+  test('changing a known original count invalidates sign-off', () => {
+    const approved = snap({ ...input, knownPartsByItem: { 0: 8 } });
+    expect(snap({ ...input, knownPartsByItem: { 0: 10 } })).not.toBe(approved);
+    expect(snap({ ...input, knownPartsByItem: {} })).not.toBe(approved);
+  });
   test('no claims is not a fictional portion', () => {
     expect(snap({ ...input, assignments: [] })).toContain('"portions":[]');
   });

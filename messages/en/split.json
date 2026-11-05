@@ -214,7 +214,16 @@
     "partsPreliminary": "Provisional totals. Participants can still change their portions; before finalizing the organizer will confirm that all portions have been reported.",
     "confirmPartsComplete": "Confirm everyone declared their portions",
     "partsAwaitingConfirmation": "Provisional: waiting for the receipt creator to confirm everyone’s portions.",
-    "partsConfirmationSaved": "Declared portions confirmed."
+    "partsConfirmationSaved": "Declared portions confirmed.",
+    "knownPartsLabel": "Original number of portions (optional)",
+    "knownPartsHint": "Use only if the original number is known. This is not the number of purchased items or an extra payment.",
+    "knownPartsRemaining": "Unassigned portions remaining: {count}",
+    "knownPartsOverclaimed": "Original portion count exceeded by {count}",
+    "knownPartsSave": "Save",
+    "knownPartsClear": "Clear",
+    "knownPartsSaved": "Original portion count saved.",
+    "knownPartsOverLimit": "Claims exceed the known original count. Correct the claims or original count.",
+    "knownPartsNotFullyClaimed": "Known portions remain unassigned. The creator must assign the remainder or correct the count."
   },
   "result": {
     "loading": "Loading split...",

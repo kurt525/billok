@@ -577,6 +577,61 @@ test('Issue 2.14: two guest phones save personal parts 3/5 without knowing the o
       { timeout: 15_000 },
     );
 
+    // 2.20.2: the original count is optional. The logged-in creator may set
+    // it by API; both anonymous personal-link devices see the exact remainder.
+    await expect(alicePage.getByTestId('guest-known-parts-editor-0')).toHaveCount(0);
+    const knownTen = await trpcMutation(owner, 'guest.setKnownItemParts', {
+      token,
+      itemIndex: 0,
+      totalParts: 10,
+    });
+    expect(knownTen.ok(), await knownTen.text()).toBe(true);
+    await expect(alicePage.getByTestId('guest-claimed-parts-progress-0')).toContainText(
+      'Осталось нераспределённых частей: 2',
+      { timeout: 15_000 },
+    );
+    await expect(bobPage.getByTestId('guest-claimed-parts-progress-0')).toContainText(
+      'Осталось нераспределённых частей: 2',
+      { timeout: 15_000 },
+    );
+    const overLimit = await trpcMutation(second.request, 'guest.setMyItemParts', {
+      token,
+      personId: boris.personId,
+      personToken: boris.personToken,
+      itemIndex: 0,
+      parts: 8,
+    });
+    expect(overLimit.ok()).toBe(false);
+    const knownEight = await trpcMutation(owner, 'guest.setKnownItemParts', {
+      token,
+      itemIndex: 0,
+      totalParts: 8,
+    });
+    expect(knownEight.ok(), await knownEight.text()).toBe(true);
+    await expect(alicePage.getByTestId('guest-claimed-parts-progress-0')).toContainText(
+      'Осталось нераспределённых частей: 0',
+      { timeout: 15_000 },
+    );
+    const invalidOriginal = await trpcMutation(owner, 'guest.setKnownItemParts', {
+      token,
+      itemIndex: 0,
+      totalParts: 7,
+    });
+    expect(invalidOriginal.ok()).toBe(false);
+    const clearedKnown = await trpcMutation(owner, 'guest.setKnownItemParts', {
+      token,
+      itemIndex: 0,
+      totalParts: null,
+    });
+    expect(clearedKnown.ok(), await clearedKnown.text()).toBe(true);
+    await expect(bobPage.getByTestId('guest-claimed-parts-progress-0')).toContainText(
+      'Исходное количество неизвестно',
+      { timeout: 15_000 },
+    );
+    const storedAfterKnown = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(storedAfterKnown.assignments[0].partsByPersonId).toEqual({ [anna.personId]: 3, [boris.personId]: 5 });
+    expect(storedAfterKnown.receiptData.knownPartsByItem).toEqual({});
+
     // Both devices can write the same session concurrently. The row-level
     // transaction retry must preserve both changes rather than last-write-wins.
     const simultaneous = await Promise.all([

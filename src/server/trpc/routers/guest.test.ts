@@ -504,6 +504,7 @@ function claimSession(
       roundingBalanced?: boolean;
       organizerPersonId?: string;
       partsApprovalHash?: string;
+      knownPartsByItem?: Record<string, number>;
     };
     userId?: string | null;
     expiresAt?: Date;
@@ -1072,6 +1073,154 @@ describe('guest.getSession read limit (#204)', () => {
     });
     expect(checkRateLimit).toHaveBeenCalledWith('guest-session-read:share-1', 3000, 60_000);
     expect(mockDb.guestSplit.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('2.20.2 guest known original count: creator control and transaction safety', () => {
+  const items = [{ name: 'Пицца', quantity: 1, unitPrice: 800, totalPrice: 800 }];
+  const people = [
+    { name: 'Анна', personToken: ALICE_TOKEN },
+    { name: 'Борис', personToken: OTHER_TOKEN },
+  ];
+  const assignments = [
+    {
+      itemIndex: 0,
+      personIndices: [0, 1],
+      partsByPersonId: { [pid(0)]: 3, [pid(1)]: 5 },
+    },
+  ];
+  const data = (knownPartsByItem: Record<string, number>, partsApprovalHash?: string) => ({
+    subtotal: 800,
+    total: 800,
+    tax: 0,
+    tip: 0,
+    currency: 'RUB',
+    organizerPersonId: pid(0),
+    knownPartsByItem,
+    ...(partsApprovalHash ? { partsApprovalHash } : {}),
+  });
+  const fixture = (knownPartsByItem: Record<string, number>, partsApprovalHash?: string) =>
+    claimSession(people, {
+      userId: 'user-1',
+      items,
+      assignments,
+      receiptData: data(knownPartsByItem, partsApprovalHash),
+    });
+
+  test('only the signed-in original creator can set or clear a per-dish count', async () => {
+    fixture({});
+    await expect(
+      (await caller()).setKnownItemParts({
+        token: 'share-1',
+        itemIndex: 0,
+        totalParts: 8,
+      }),
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    await expect(
+      (await caller({ user: { id: 'someone-else' } })).setKnownItemParts({
+        token: 'share-1',
+        itemIndex: 0,
+        totalParts: 8,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    await expect(
+      (await caller(signedIn)).setKnownItemParts({
+        token: 'share-1',
+        itemIndex: 0,
+        totalParts: 8,
+      }),
+    ).resolves.toEqual({ success: true, totalParts: 8 });
+    expect(mockDb.guestSplit.update.mock.calls.at(-1)![0].data.receiptData.knownPartsByItem).toEqual({ 0: 8 });
+    expect(mockDb.guestSplit.update.mock.calls.at(-1)![0].data.items).toBeUndefined();
+    expect(mockDb.guestSplit.update.mock.calls.at(-1)![0].data.assignments).toBeUndefined();
+  });
+
+  test('rejects original 7 below eight claimed parts and invalid item index', async () => {
+    fixture({});
+    const api = await caller(signedIn);
+    await expect(api.setKnownItemParts({ token: 'share-1', itemIndex: 0, totalParts: 7 })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+    await expect(api.setKnownItemParts({ token: 'share-1', itemIndex: 1, totalParts: 8 })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('changing known count removes a previously saved approval and clearing returns to unknown mode', async () => {
+    fixture({ 0: 10 }, 'a'.repeat(64));
+    await (await caller(signedIn)).setKnownItemParts({ token: 'share-1', itemIndex: 0, totalParts: 8 });
+    const changed = mockDb.guestSplit.update.mock.calls.at(-1)![0].data.receiptData;
+    expect(changed.knownPartsByItem).toEqual({ 0: 8 });
+    expect(changed.partsApprovalHash).toBeUndefined();
+    fixture({ 0: 8 }, 'a'.repeat(64));
+    await (await caller(signedIn)).setKnownItemParts({ token: 'share-1', itemIndex: 0, totalParts: null });
+    const cleared = mockDb.guestSplit.update.mock.calls.at(-1)![0].data.receiptData;
+    expect(cleared.knownPartsByItem).toEqual({});
+    expect(cleared.partsApprovalHash).toBeUndefined();
+  });
+
+  test('an anonymous guest cannot save more parts than the creator declared', async () => {
+    fixture({ 0: 8 });
+    await expect(
+      (await caller()).setMyItemParts({
+        token: 'share-1',
+        personId: pid(1),
+        personToken: OTHER_TOKEN,
+        itemIndex: 0,
+        parts: 6,
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('claiming by another guest cannot overfill a known limit', async () => {
+    claimSession([...people, { name: 'Виктор', personToken: '33333333-3333-4333-8333-333333333333' }], {
+      userId: 'user-1',
+      items,
+      assignments,
+      receiptData: data({ 0: 8 }),
+    });
+    await expect(
+      (await caller()).claimItems({
+        token: 'share-1',
+        personId: pid(2),
+        personToken: '33333333-3333-4333-8333-333333333333',
+        claimedItemIndices: [0],
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('known outstanding portions prevent sign-off and finalization even when every dish has a claimant', async () => {
+    fixture({ 0: 10 });
+    await expect((await caller(signedIn)).confirmSessionParts({ token: 'share-1' })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+    await expect(
+      (await caller()).finalizeSession({
+        token: 'share-1',
+        personId: pid(0),
+        personToken: ALICE_TOKEN,
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    fixture({ 0: 8 });
+    await (await caller(signedIn)).confirmSessionParts({ token: 'share-1' });
+    const confirmed = mockDb.guestSplit.update.mock.calls.at(-1)![0].data.receiptData;
+    expect(confirmed.partsApprovalHash).toMatch(/^[a-f0-9]{64}$/);
+    fixture({ 0: 8 }, confirmed.partsApprovalHash);
+    await (
+      await caller()
+    ).finalizeSession({
+      token: 'share-1',
+      personId: pid(0),
+      personToken: ALICE_TOKEN,
+    });
+    const result = mockDb.guestSplit.update.mock.calls.at(-1)![0].data;
+    expect(result.status).toBe('FINALIZED');
+    expect(result.summary.reduce((sum: number, entry: { total: number }) => sum + entry.total, 0)).toBe(800);
   });
 });
 

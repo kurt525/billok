@@ -50,6 +50,7 @@ import {
 } from '@/lib/claim-save';
 import { calculateClaimTotals, groupSizeWeights } from '@/lib/split-calculator';
 import { guestPortionAssignments, guestPortionProgress } from '@/lib/guest-portions';
+import { guestKnownPartsBalance } from '@/lib/guest-known-parts';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -120,6 +121,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // Only the owner of this device's personToken can edit these tips.
   const [personalTipDraft, setPersonalTipDraft] = useState<string | null>(null);
   const [portionDrafts, setPortionDrafts] = useState<Record<number, string>>({});
+  const [knownPartsDrafts, setKnownPartsDrafts] = useState<Record<number, string>>({});
   // People are tracked by id, not index: someone's index changes when anyone listed before them
   // is removed, on any device. Indexes are looked up in the session as last loaded (below).
   // This device's person, once it joined or resumed
@@ -293,6 +295,19 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       toast.success(t('personRemoved'));
     },
     onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
+  });
+
+  const setKnownItemParts = trpc.guest.setKnownItemParts.useMutation({
+    onSuccess: async (_result, variables) => {
+      setKnownPartsDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[variables.itemIndex];
+        return next;
+      });
+      await utils.guest.getSession.invalidate({ token });
+      toast.success(t('knownPartsSaved'));
+    },
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
   });
 
   const confirmSessionParts = trpc.guest.confirmSessionParts.useMutation({
@@ -635,6 +650,21 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       session.data!.assignments.some((a) => a.itemIndex === idx && a.personIndices.length > 0),
     );
   }, [session.data]);
+
+  const knownPartsBalance = useMemo(() => {
+    if (!session.data) return { progressByItem: {}, overclaimed: false, hasRemaining: false };
+    try {
+      return guestKnownPartsBalance({
+        items: session.data.items,
+        people: session.data.people,
+        assignments: session.data.assignments,
+        knownPartsByItem: session.data.receiptData.knownPartsByItem,
+      });
+    } catch {
+      return { progressByItem: {}, overclaimed: true, hasRemaining: true };
+    }
+  }, [session.data]);
+  const knownPartsReady = !knownPartsBalance.overclaimed && !knownPartsBalance.hasRemaining;
 
   // Which items are claimed by anyone (for sorting unclaimed first)
   const claimedByAnyone = useMemo(() => {
@@ -1847,6 +1877,22 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         {sortedItemIndices.map((idx, sortPosition) => {
           const item = data.items[idx]!;
           const isClaimed = activeClaims.has(idx);
+          const savedOriginal = data.receiptData.knownPartsByItem?.[String(idx)] ?? null;
+          const savedPortionProgress = guestPortionProgress(
+            data.assignments.find((assignment) => assignment.itemIndex === idx) ?? {
+              itemIndex: idx,
+              personIndices: [],
+            },
+            data.people,
+            savedOriginal,
+          );
+          const originalDraft = knownPartsDrafts[idx] ?? (savedOriginal === null ? '' : String(savedOriginal));
+          const parsedOriginal = /^\d+$/.test(originalDraft) ? Number(originalDraft) : NaN;
+          const originalIsValid =
+            Number.isSafeInteger(parsedOriginal) &&
+            parsedOriginal >= 1 &&
+            parsedOriginal <= 10000 &&
+            parsedOriginal >= savedPortionProgress.countedParts;
           // Find other claimants from server state
           const otherClaimants =
             data.assignments.find((a) => a.itemIndex === idx)?.personIndices.filter((pi) => pi !== personIndex) ?? [];
@@ -1920,23 +1966,85 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         </div>
                       </div>
 
-                      {/* Unknown original count: every participant sees only the
-                          portions actually recorded for this item, including zero. */}
+                      {/* The original is optional and must never be inferred from item.quantity.
+                          All phones see the same saved consumed/remaining totals. */}
                       <div
-                        className="mt-1 text-xs text-muted-foreground"
+                        className="mt-1 space-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]"
                         data-testid={'guest-claimed-parts-progress-' + idx}
                       >
-                        {t('partsCounted', {
-                          count: guestPortionProgress(
-                            data.assignments.find((assignment) => assignment.itemIndex === idx) ?? {
-                              itemIndex: idx,
-                              personIndices: [],
-                            },
-                            data.people,
-                          ).countedParts,
-                        })}
-                        <span className="ml-2">{t('partsUnknownOriginal')}</span>
+                        <p>{t('partsCounted', { count: savedPortionProgress.countedParts })}</p>
+                        <p
+                          className={
+                            savedPortionProgress.remainingParts !== null && savedPortionProgress.remainingParts < 0
+                              ? 'text-destructive'
+                              : ''
+                          }
+                        >
+                          {savedPortionProgress.remainingParts === null
+                            ? t('partsUnknownOriginal')
+                            : savedPortionProgress.remainingParts < 0
+                              ? t('knownPartsOverclaimed', { count: -savedPortionProgress.remainingParts })
+                              : t('knownPartsRemaining', { count: savedPortionProgress.remainingParts })}
+                        </p>
                       </div>
+                      {data.isCreator && (
+                        <div
+                          className="mt-2 space-y-1 rounded-md border p-2 text-xs"
+                          data-testid={'guest-known-parts-editor-' + idx}
+                          onClick={(event) => event.stopPropagation()}
+                          onKeyDown={(event) => event.stopPropagation()}
+                        >
+                          <label htmlFor={'guest-original-parts-' + idx} className="block font-medium">
+                            {t('knownPartsLabel')}
+                          </label>
+                          <p className="text-muted-foreground">{t('knownPartsHint')}</p>
+                          <div className="flex min-w-0 flex-wrap items-center gap-2">
+                            <Input
+                              id={'guest-original-parts-' + idx}
+                              type="number"
+                              inputMode="numeric"
+                              min={1}
+                              max={10000}
+                              step={1}
+                              className="h-11 w-24 min-w-0 text-base"
+                              data-testid={'guest-known-parts-input-' + idx}
+                              value={originalDraft}
+                              onChange={(event) =>
+                                setKnownPartsDrafts((prev) => ({
+                                  ...prev,
+                                  [idx]: event.target.value,
+                                }))
+                              }
+                              disabled={setKnownItemParts.isPending}
+                            />
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="min-h-11 min-w-11"
+                              data-testid={'guest-known-parts-save-' + idx}
+                              disabled={
+                                setKnownItemParts.isPending || !originalIsValid || parsedOriginal === savedOriginal
+                              }
+                              onClick={() =>
+                                setKnownItemParts.mutate({ token, itemIndex: idx, totalParts: parsedOriginal })
+                              }
+                            >
+                              {t('knownPartsSave')}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="min-h-11 min-w-11"
+                              data-testid={'guest-known-parts-clear-' + idx}
+                              disabled={setKnownItemParts.isPending || savedOriginal === null}
+                              onClick={() => setKnownItemParts.mutate({ token, itemIndex: idx, totalParts: null })}
+                            >
+                              {t('knownPartsClear')}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Split form */}
                       {splittingItemIdx === idx &&
@@ -2028,6 +2136,9 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                             !saving &&
                             !anyParked;
                           const progress = guestPortionProgress(savedAssignment, data.people);
+                          const original = data.receiptData.knownPartsByItem?.[String(idx)] ?? null;
+                          const projectedParts = progress.countedParts - savedParts + parsed;
+                          const respectsOriginal = original === null || projectedParts <= original;
                           return (
                             <div
                               className="mt-3 min-w-0 space-y-1 rounded-lg border p-2"
@@ -2056,9 +2167,18 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                                   size="sm"
                                   className="min-h-11 min-w-11"
                                   data-testid={'personal-parts-save-' + idx}
-                                  disabled={!valid || parsed === savedParts || setMyItemParts.isPending}
+                                  disabled={
+                                    !valid || !respectsOriginal || parsed === savedParts || setMyItemParts.isPending
+                                  }
                                   onClick={() => {
-                                    if (!valid || !myPersonId || !personToken || setMyItemParts.isPending) return;
+                                    if (
+                                      !valid ||
+                                      !respectsOriginal ||
+                                      !myPersonId ||
+                                      !personToken ||
+                                      setMyItemParts.isPending
+                                    )
+                                      return;
                                     setMyItemParts.mutate({
                                       token,
                                       personId: myPersonId,
@@ -2221,6 +2341,15 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         </div>
       )}
 
+      {!knownPartsReady && (
+        <p
+          className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-destructive [overflow-wrap:anywhere]"
+          data-testid="guest-known-parts-not-reconciled"
+        >
+          {knownPartsBalance.overclaimed ? t('knownPartsOverLimit') : t('knownPartsNotFullyClaimed')}
+        </p>
+      )}
+
       {/* Non-interactive approval state belongs to the scrollable content, not
           the fixed action bar. On short Android viewports it otherwise makes
           the bar cover the personal-tip save button. */}
@@ -2253,7 +2382,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           {/* The registered receipt creator explicitly approves the current
               claims; guests can still submit their own portions, but cannot
               approve completeness for the creator. */}
-          {data.isCreator && !data.partsConfirmed && allItemsClaimed && (
+          {data.isCreator && !data.partsConfirmed && allItemsClaimed && knownPartsReady && (
             <Button
               variant="outline"
               className="mb-2 min-h-12 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere]"
@@ -2271,6 +2400,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             myPersonIndex !== null &&
             !finalizeSession.isPending &&
             allItemsClaimed &&
+            knownPartsReady &&
             data.partsConfirmed && (
               <Button
                 variant="outline"
