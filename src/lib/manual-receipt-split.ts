@@ -100,6 +100,9 @@ export function calculateManualReceiptAllocation(params: {
   // that item. Carry the fractional deficit across item boundaries so the
   // next kopeck compensates whoever was rounded down by earlier dishes.
   const fractionalDeficit = new Map<string, number>();
+  const exactTotals = new Map<string, number>();
+  const awardedByItem = new Map<string, Set<string>>();
+  const kopeckAwards: { itemId: string; userId: string | null; consumers: string[] }[] = [];
   for (const assignment of params.assignments) {
     const amount = itemMap.get(assignment.receiptItemId);
     if (
@@ -130,12 +133,14 @@ export function calculateManualReceiptAllocation(params: {
       const floor = Number(numerator / BigInt(parts));
       const fractional = Number(numerator % BigInt(parts)) / parts;
       totals.set(person.userId, (totals.get(person.userId) ?? 0) + floor);
+      exactTotals.set(person.userId, (exactTotals.get(person.userId) ?? 0) + floor + fractional);
       fractionalDeficit.set(person.userId, (fractionalDeficit.get(person.userId) ?? 0) + fractional);
       used += floor;
       return { userId: person.userId, fractional };
     });
     let remaining = amount - used;
     const awarded = new Set<string>();
+    awardedByItem.set(assignment.receiptItemId, awarded);
     while (remaining > 0) {
       const next = candidates
         .filter((candidate) => !awarded.has(candidate.userId))
@@ -149,11 +154,85 @@ export function calculateManualReceiptAllocation(params: {
       totals.set(next.userId, (totals.get(next.userId) ?? 0) + 1);
       fractionalDeficit.set(next.userId, (fractionalDeficit.get(next.userId) ?? 0) - 1);
       awarded.add(next.userId);
+      kopeckAwards.push({
+        itemId: assignment.receiptItemId,
+        userId: next.userId,
+        consumers: candidates.map((person) => person.userId),
+      });
       remaining--;
     }
   }
-  // Preserve a stable zero-valued creator entry for downstream receipt
-  // summaries. Adjustments reserved for section 2.17 are not added here.
+
+  // 2.17.2: the carried deficits ordinarily let consumers offset one
+  // another across dishes. Some combinations of consumers and tiny prices
+  // still leave an individual paying > half a kopeck above their exact
+  // receipt-wide proportional consumption. Before charging the organizer,
+  // search for a chain of legal 1-kopeck transfers *within the same items*.
+  // Every transfer preserves each dish's total and goes only to its eaters.
+  // If there is no such chain, the extra kopeck becomes a separate
+  // organizer correction, never a fictitious ReceiptItemAssignment.
+  const excess = (userId: string) => (totals.get(userId) ?? 0) - (exactTotals.get(userId) ?? 0);
+  const isExcess = (userId: string) => excess(userId) > 0.5 + 1e-7;
+  type AwardMove = { awardIndex: number; from: string; to: string };
+  const findConsumerTransfer = (source: string): AwardMove[] | null => {
+    const visited = new Set([source]);
+    const queue: { userId: string; path: AwardMove[] }[] = [{ userId: source, path: [] }];
+    for (let head = 0; head < queue.length; head++) {
+      const current = queue[head]!;
+      for (const [awardIndex, award] of kopeckAwards.entries()) {
+        if (award.userId !== current.userId) continue;
+        for (const candidate of award.consumers) {
+          if (candidate === current.userId || awardedByItem.get(award.itemId)?.has(candidate)) continue;
+          const path = [...current.path, { awardIndex, from: current.userId, to: candidate }];
+          // A receiver may gain a kopeck only if its own receipt-wide
+          // rounded share stays within half a kopeck of its exact food cost.
+          if (excess(candidate) < -0.5 + 1e-7) return path;
+          if (!visited.has(candidate)) {
+            visited.add(candidate);
+            queue.push({ userId: candidate, path });
+          }
+        }
+      }
+    }
+    return null;
+  };
+
+  for (;;) {
+    const overcharged = [...totals.keys()]
+      .filter((userId) => isExcess(userId) && kopeckAwards.some((award) => award.userId === userId))
+      .sort((a, b) => excess(b) - excess(a) || a.localeCompare(b))[0];
+    if (!overcharged) break;
+
+    const path = findConsumerTransfer(overcharged);
+    if (path) {
+      // Apply the augmenting path backwards so each recipient is freed on
+      // their old item before receiving a penny from another one.
+      for (const move of path.reverse()) {
+        const award = kopeckAwards[move.awardIndex]!;
+        const winners = awardedByItem.get(award.itemId)!;
+        winners.delete(move.from);
+        winners.add(move.to);
+        award.userId = move.to;
+      }
+      totals.set(overcharged, (totals.get(overcharged) ?? 0) - 1);
+      const receiver = path[0]!.to;
+      // Reversed path starts at the terminal edge; its first "to" is
+      // the only participant whose total increases.
+      totals.set(receiver, (totals.get(receiver) ?? 0) + 1);
+      continue;
+    }
+
+    // No real eater can absorb the indivisible penny without an excessive
+    // receipt-wide surplus; the organizer bears it without eating that dish.
+    const award = kopeckAwards.find((row) => row.userId === overcharged)!;
+    awardedByItem.get(award.itemId)!.delete(overcharged);
+    award.userId = null;
+    totals.set(overcharged, (totals.get(overcharged) ?? 0) - 1);
+    totals.set(params.creatorId, (totals.get(params.creatorId) ?? 0) + 1);
+    organizerCorrectionCents++;
+  }
+
+  // Keep the creator in the settlement even when they did not eat.
   if (!totals.has(params.creatorId)) totals.set(params.creatorId, 0);
   return { totals, organizerCorrectionCents };
 }

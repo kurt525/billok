@@ -396,6 +396,53 @@ describe('manual receipt: consumed portions and creator rounding', () => {
     });
   });
 
+  test('2.17.2 finalizes unbalanceable multi-dish pennies as organizer-only correction, not a fictitious dish', async () => {
+    mockDb.groupMember.findMany.mockResolvedValue(['u1', 'u2', 'u3', 'u4', 'u5'].map((userId) => ({ userId })));
+    mockDb.receipt.findUnique.mockResolvedValue({
+      id: 'r1',
+      originalName: 'billok-manual',
+      uploadedById: 'u1',
+      groupId: 'g1',
+      status: 'COMPLETED',
+      extractedData: { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' },
+      items: [
+        { id: 'dish', totalPrice: 1 },
+        { id: 'drink', totalPrice: 1 },
+      ],
+    });
+    await (
+      await caller()
+    ).assignItemsAndCreateExpense({
+      ...finish,
+      paidById: 'u5',
+      assignments: [
+        { receiptItemId: 'dish', userIds: ['u2', 'u3', 'u4'], parts: [1, 1, 1] },
+        { receiptItemId: 'drink', userIds: ['u5'], parts: [1] },
+      ],
+    });
+    expect(mockDb.expense.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        amount: 2,
+        paidById: 'u5',
+        shares: {
+          create: expect.arrayContaining([
+            { userId: 'u1', amount: 1 }, // organizer, non-consumer
+            { userId: 'u2', amount: 0 },
+            { userId: 'u3', amount: 0 },
+            { userId: 'u4', amount: 0 },
+            { userId: 'u5', amount: 1 }, // actual consumer and sole payer
+          ]),
+        },
+      }),
+    });
+    const create = mockDb.expense.create.mock.calls[0]![0].data.shares.create as { amount: number }[];
+    expect(create.reduce((sum, share) => sum + share.amount, 0)).toBe(2);
+    expect(create.every((share) => share.amount >= 0)).toBe(true);
+    const rows = mockDb.receiptItemAssignment.createMany.mock.calls[0]![0].data as { userId: string }[];
+    expect(rows).toHaveLength(4);
+    expect(rows.every((row) => row.userId !== 'u1')).toBe(true);
+  });
+
   test('atomically finalizes current personal tips, not the stale pre-lock receipt snapshot', async () => {
     const raw = {
       id: 'r1',

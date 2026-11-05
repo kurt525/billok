@@ -183,6 +183,60 @@ describe('Issue 2.17.1: separate rounding adjustment without a fictitious eaten 
   });
 });
 
+describe('Issue 2.17.2: two-dish unavoidable rounding is visible only as creator adjustment', () => {
+  const data = {
+    receipt: { creatorId: 'host', extractedData: { currency: 'RUB', tax: 0, tip: 0 } },
+    items: [
+      {
+        id: 'dish',
+        totalPrice: 1,
+        assignments: [
+          { userId: 'alice', shareOfItem: 1 },
+          { userId: 'bob', shareOfItem: 1 },
+          { userId: 'carol', shareOfItem: 1 },
+        ],
+      },
+      { id: 'drink', totalPrice: 1, assignments: [{ userId: 'dave', shareOfItem: 1 }] },
+    ],
+    expense: {
+      amount: 2,
+      currency: 'RUB',
+      paidById: 'dave',
+      shares: [
+        { userId: 'alice', amount: 0 },
+        { userId: 'bob', amount: 0 },
+        { userId: 'carol', amount: 0 },
+        { userId: 'dave', amount: 1 },
+        { userId: 'host', amount: 1 },
+      ],
+    },
+  };
+
+  test('the exact saved amount includes one explicit organizer correction, without claiming any dish', () => {
+    const result = manualExpenseBreakdown(data);
+    expect(result).toMatchObject({
+      foodTotal: 2,
+      tipTotal: 0,
+      total: 2,
+      organizerCorrection: { userId: 'host', amount: 1 },
+      payerShare: 1,
+      reimbursementTotal: 1,
+      reimbursements: [{ fromId: 'host', amount: 1 }],
+    });
+    expect(data.items.flatMap((item) => item.assignments).every((a) => a.userId !== 'host')).toBe(true);
+  });
+
+  test('the organizer paying the bill does not reimburse themself', () => {
+    const result = manualExpenseBreakdown({ ...data, expense: { ...data.expense, paidById: 'host' } });
+    expect(result).toMatchObject({
+      organizerCorrection: { userId: 'host', amount: 1 },
+      payerShare: 1,
+      reimbursementTotal: 1,
+      reimbursements: [{ fromId: 'dave', amount: 1 }],
+    });
+  });
+});
+
 describe('per-receipt reimbursement excludes sole payer and includes each chosen tip', () => {
   const base = {
     receipt: {

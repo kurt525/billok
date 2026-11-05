@@ -128,6 +128,149 @@ describe('manual item splitting by consumed parts', () => {
     });
   });
 
+  test('2.17.2.1: an indivisible kopeck among three eaters with no shared other dishes goes to the organizer', () => {
+    const params = {
+      items: [
+        { id: 'one', totalPrice: 1 },
+        { id: 'two', totalPrice: 1 },
+      ],
+      assignments: [
+        {
+          receiptItemId: 'one',
+          people: [
+            { userId: 'alice', parts: 1 },
+            { userId: 'bob', parts: 1 },
+            { userId: 'carol', parts: 1 },
+          ],
+        },
+        { receiptItemId: 'two', people: [{ userId: 'dave', parts: 1 }] },
+      ],
+      creatorId: 'host',
+    };
+    const result = calculateManualReceiptAllocation(params);
+    expect(result.organizerCorrectionCents).toBe(1);
+    expect(result.totals).toEqual(
+      new Map([
+        ['alice', 0],
+        ['bob', 0],
+        ['carol', 0],
+        ['dave', 1],
+        ['host', 1],
+      ]),
+    );
+    expect(
+      params.assignments.every((assignment) => assignment.people.every((person) => person.userId !== 'host')),
+    ).toBe(true);
+    expect([...result.totals.values()].reduce((sum, value) => sum + value, 0)).toBe(2);
+    expect([...result.totals.values()].every((amount) => amount >= 0)).toBe(true);
+  });
+
+  test('2.17.2.1: try real consumers first, even when the first greedy recipient was overcharged', () => {
+    const result = calculateManualReceiptAllocation({
+      items: [
+        { id: 'one', totalPrice: 3 },
+        { id: 'two', totalPrice: 1 },
+      ],
+      assignments: [
+        {
+          receiptItemId: 'one',
+          people: [
+            { userId: 'alice', parts: 1 },
+            { userId: 'bob', parts: 1 },
+            { userId: 'carol', parts: 2 },
+          ],
+        },
+        {
+          receiptItemId: 'two',
+          people: [
+            { userId: 'alice', parts: 2 },
+            { userId: 'bob', parts: 1 },
+          ],
+        },
+      ],
+      creatorId: 'host',
+    });
+    expect(result.organizerCorrectionCents).toBe(0);
+    expect(result.totals).toEqual(
+      new Map([
+        ['alice', 1],
+        ['bob', 1],
+        ['carol', 2],
+        ['host', 0],
+      ]),
+    );
+  });
+
+  test('2.17.2.1: balanced tiny dishes still stay entirely with consumers', () => {
+    const items = Array.from({ length: 9 }, (_, index) => ({ id: 'dish-' + index, totalPrice: 1 }));
+    const assignments = items.map((item) => ({
+      receiptItemId: item.id,
+      people: ['alice', 'bob', 'carol'].map((userId) => ({ userId, parts: 1 })),
+    }));
+    const result = calculateManualReceiptAllocation({ items, assignments, creatorId: 'host' });
+    expect(result.organizerCorrectionCents).toBe(0);
+    expect([...result.totals.values()].reduce((sum, value) => sum + value, 0)).toBe(9);
+    expect(result.totals.get('host')).toBe(0);
+  });
+
+  test('2.17.2.1: the creator already eating another dish covers only one extra kopeck', () => {
+    const result = calculateManualReceiptAllocation({
+      items: [
+        { id: 'one', totalPrice: 1 },
+        { id: 'two', totalPrice: 1 },
+      ],
+      assignments: [
+        {
+          receiptItemId: 'one',
+          people: [
+            { userId: 'alice', parts: 1 },
+            { userId: 'bob', parts: 1 },
+            { userId: 'carol', parts: 1 },
+          ],
+        },
+        { receiptItemId: 'two', people: [{ userId: 'dave', parts: 1 }] },
+      ],
+      creatorId: 'dave',
+    });
+    expect(result.organizerCorrectionCents).toBe(1);
+    expect(result.totals).toEqual(
+      new Map([
+        ['alice', 0],
+        ['bob', 0],
+        ['carol', 0],
+        ['dave', 2],
+      ]),
+    );
+    expect([...result.totals.values()].reduce((sum, value) => sum + value, 0)).toBe(2);
+  });
+
+  test('2.17.2.1 deterministic invariant: item cents equal food shares plus organizer correction', () => {
+    const diners = ['alice', 'bob', 'carol', 'dave'];
+    for (let scenario = 0; scenario < 120; scenario++) {
+      const items = Array.from({ length: 2 + (scenario % 4) }, (_, index) => ({
+        id: 'dish-' + index,
+        totalPrice: 1 + ((scenario * 7 + index * 11) % 19),
+      }));
+      const assignments = items.map((item, index) => ({
+        receiptItemId: item.id,
+        people: diners
+          .filter((_, diner) => (scenario + index + diner * 3) % 5 !== 0)
+          .map((userId, diner) => ({ userId, parts: 1 + ((scenario + index + diner) % 4) })),
+      }));
+      const result = calculateManualReceiptAllocation({ items, assignments, creatorId: 'host' });
+      const itemTotal = items.reduce((sum, item) => sum + item.totalPrice, 0);
+      const allocated = [...result.totals.values()].reduce((sum, amount) => sum + amount, 0);
+      expect(allocated, 'scenario ' + scenario).toBe(itemTotal);
+      expect([...result.totals.values()].every((amount) => Number.isSafeInteger(amount) && amount >= 0)).toBe(true);
+      expect(result.organizerCorrectionCents).toBeGreaterThanOrEqual(0);
+      expect(result.organizerCorrectionCents).toBeLessThanOrEqual(itemTotal);
+      expect(calculateManualReceiptTotals({ items, assignments, creatorId: 'host' })).toEqual(result.totals);
+      expect(assignments.every((assignment) => assignment.people.every((person) => person.userId !== 'host'))).toBe(
+        true,
+      );
+    }
+  });
+
   test('one kopeck also reconciles', () => {
     const result = split(1, [3, 5]);
     expect([...result.values()].reduce((sum, x) => sum + x, 0)).toBe(1);
