@@ -143,7 +143,7 @@ function ReceiptContent({ params }: { params: Promise<{ groupId: string }> }) {
       <Button
         type="button"
         variant="outline"
-        className="min-h-11 w-full"
+        className="min-h-11 w-full min-w-0 gap-2 whitespace-normal py-3 text-center"
         onClick={handleShareForClaiming}
         disabled={
           shareForClaiming.isPending ||
@@ -154,8 +154,10 @@ function ReceiptContent({ params }: { params: Promise<{ groupId: string }> }) {
         }
         data-testid="group-share-claiming-btn"
       >
-        <Users className="mr-2 h-4 w-4" />
-        {shareForClaiming.isPending ? t('creatingSession') : t('shareForClaiming')}
+        <Users className="h-4 w-4 shrink-0" />
+        <span className="min-w-0 break-words leading-snug">
+          {shareForClaiming.isPending ? t('creatingSession') : t('shareForClaiming')}
+        </span>
       </Button>
     </div>
   );

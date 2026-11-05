@@ -305,30 +305,31 @@ test('Issue 2.16.3: manual group receipt balances two dishes and persists exact 
       const before = element.getBoundingClientRect();
       window.scrollTo({ top: window.scrollY + before.top - 72, left: 0, behavior: 'instant' });
       const after = element.getBoundingClientRect();
-      const parent = element.parentElement?.getBoundingClientRect();
+      const action = document.querySelector('[data-testid="group-share-claiming-btn"]');
+      const actionBounds = action?.getBoundingClientRect();
+      const iconBounds = action?.querySelector('svg')?.getBoundingClientRect();
       return {
         left: after.left,
         right: after.right,
-        width: after.width,
-        parentLeft: parent?.left,
-        parentRight: parent?.right,
+        cardWidth: after.width,
+        actionLeft: actionBounds?.left,
+        actionRight: actionBounds?.right,
+        iconLeft: iconBounds?.left,
+        iconRight: iconBounds?.right,
         scrollX: window.scrollX,
         documentWidth: document.documentElement.scrollWidth,
-        viewportWidth: window.innerWidth,
-        focusedElement: document.activeElement?.tagName,
+        viewportWidth: document.documentElement.clientWidth,
       };
     });
-    expect(geometry.documentWidth, 'Document width at ' + width + ': ' + JSON.stringify(geometry)).toBeLessThanOrEqual(
-      width + 1,
-    );
-    expect(
-      geometry.left,
-      'Specific rounding card left at ' + width + ': ' + JSON.stringify(geometry),
-    ).toBeGreaterThanOrEqual(-1);
-    expect(
-      geometry.right,
-      'Specific rounding card right at ' + width + ': ' + JSON.stringify(geometry),
-    ).toBeLessThanOrEqual(width + 1);
+    const description = ' at ' + width + 'px: ' + JSON.stringify(geometry);
+    expect(geometry.viewportWidth, 'Viewport' + description).toBe(width);
+    expect(geometry.documentWidth, 'Document width' + description).toBeLessThanOrEqual(width + 1);
+    expect(geometry.left, 'Rounding card left' + description).toBeGreaterThanOrEqual(-1);
+    expect(geometry.right, 'Rounding card right' + description).toBeLessThanOrEqual(width + 1);
+    expect(geometry.actionLeft, 'Share action left' + description).toBeGreaterThanOrEqual(-1);
+    expect(geometry.actionRight, 'Share action right' + description).toBeLessThanOrEqual(width + 1);
+    expect(geometry.iconLeft, 'Share action icon left' + description).toBeGreaterThanOrEqual(-1);
+    expect(geometry.iconRight, 'Share action icon right' + description).toBeLessThanOrEqual(width + 1);
     await noDocumentOverflow(page);
   }
 
@@ -344,6 +345,10 @@ test('Issue 2.16.3: manual group receipt balances two dishes and persists exact 
   expect(response.items).toHaveLength(2);
   expect(response.items.reduce((sum: number, entry: { totalPrice: number }) => sum + entry.totalPrice, 0)).toBe(202);
 
+  // A new manual bill has no merchant/title by default. HTML form
+  // validation correctly prevents submission until this required field is set.
+  await page.locator('#title').fill('Проверка округления 2.16.3');
+  await expect(page.getByTestId('create-expense-btn')).toBeEnabled();
   await page.getByTestId('create-expense-btn').click();
   await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'));
   await expect
