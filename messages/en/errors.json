@@ -170,5 +170,7 @@
   "sbpPhoneInvalid": "Enter a Russian phone number in +7XXXXXXXXXX or 8XXXXXXXXXX format.",
   "sbpBankInvalid": "Select a bank from the list.",
   "paymentNotDeclared": "The participant has not declared their payment yet.",
-  "receiptPartsConfirmationRequired": "Confirm that everyone has declared their consumed portions. If items or portions changed, review them and confirm again."
+  "receiptPartsConfirmationRequired": "Confirm that everyone has declared their consumed portions. If items or portions changed, review them and confirm again.",
+  "receiptKnownPartsOverclaimed": "Claimed portions exceed the known original. Update the claims or the original number of portions.",
+  "receiptKnownPartsRemaining": "Known portions are not fully assigned. Assign the remaining portions or correct the original count before finalizing."
 }

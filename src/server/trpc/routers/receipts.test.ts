@@ -423,6 +423,165 @@ describe('manual receipt: consumed portions and creator rounding', () => {
     expect(mockDb.expense.create).not.toHaveBeenCalled();
   });
 
+  test('2.20.1 rejects known original count with unassigned remainder, even with an approved snapshot', async () => {
+    const raw = {
+      id: 'r1',
+      groupId: 'g1',
+      uploadedById: 'u1',
+      status: 'COMPLETED',
+      originalName: 'billok-manual',
+      extractedData: {
+        subtotal: 0,
+        tax: 0,
+        tip: 0,
+        total: 0,
+        currency: 'RUB',
+        declaredTotalPartsByItem: { pizza: 10 },
+      },
+      items: [{ id: 'pizza', totalPrice: 101 }],
+    };
+    mockDb.receipt.findUnique.mockResolvedValue(raw);
+    const confirmedPartsSnapshot = manualPartsConfirmationSnapshot({
+      items: raw.items,
+      declaredTotalPartsByItem: { pizza: 10 },
+      assignments: [
+        {
+          receiptItemId: 'pizza',
+          people: [
+            { userId: 'u2', parts: 3 },
+            { userId: 'u3', parts: 5 },
+          ],
+        },
+      ],
+    });
+    await expect(
+      (await caller()).assignItemsAndCreateExpense({
+        ...finish,
+        confirmedPartsSnapshot,
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+    expect(mockDb.receiptItemAssignment.createMany).not.toHaveBeenCalled();
+  });
+
+  test('2.20.1 rejects saved claims exceeding known original even with matching approval', async () => {
+    const raw = {
+      id: 'r1',
+      groupId: 'g1',
+      uploadedById: 'u1',
+      status: 'COMPLETED',
+      originalName: 'billok-manual',
+      extractedData: {
+        subtotal: 0,
+        tax: 0,
+        tip: 0,
+        total: 0,
+        currency: 'RUB',
+        declaredTotalPartsByItem: { pizza: 7 },
+      },
+      items: [{ id: 'pizza', totalPrice: 101 }],
+    };
+    mockDb.receipt.findUnique.mockResolvedValue(raw);
+    const confirmedPartsSnapshot = manualPartsConfirmationSnapshot({
+      items: raw.items,
+      declaredTotalPartsByItem: { pizza: 7 },
+      assignments: [
+        {
+          receiptItemId: 'pizza',
+          people: [
+            { userId: 'u2', parts: 3 },
+            { userId: 'u3', parts: 5 },
+          ],
+        },
+      ],
+    });
+    await expect(
+      (await caller()).assignItemsAndCreateExpense({
+        ...finish,
+        confirmedPartsSnapshot,
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+
+  test('2.20.1 accepts a fully claimed known original and preserves exact receipt kopecks', async () => {
+    const raw = {
+      id: 'r1',
+      groupId: 'g1',
+      uploadedById: 'u1',
+      status: 'COMPLETED',
+      originalName: 'billok-manual',
+      extractedData: {
+        subtotal: 0,
+        tax: 0,
+        tip: 0,
+        total: 0,
+        currency: 'RUB',
+        declaredTotalPartsByItem: { pizza: 8 },
+      },
+      items: [{ id: 'pizza', totalPrice: 101 }],
+    };
+    mockDb.receipt.findUnique.mockResolvedValue(raw);
+    const confirmedPartsSnapshot = manualPartsConfirmationSnapshot({
+      items: raw.items,
+      declaredTotalPartsByItem: { pizza: 8 },
+      assignments: [
+        {
+          receiptItemId: 'pizza',
+          people: [
+            { userId: 'u2', parts: 3 },
+            { userId: 'u3', parts: 5 },
+          ],
+        },
+      ],
+    });
+    await (await caller()).assignItemsAndCreateExpense({ ...finish, confirmedPartsSnapshot });
+    const expense = mockDb.expense.create.mock.calls[0]![0].data;
+    expect(expense.amount).toBe(101);
+    expect(expense.shares.create.reduce((sum: number, share: { amount: number }) => sum + share.amount, 0)).toBe(101);
+  });
+
+  test('2.20.1 a count changed after approval cannot finalize the old snapshot', async () => {
+    const base = {
+      id: 'r1',
+      groupId: 'g1',
+      uploadedById: 'u1',
+      status: 'COMPLETED',
+      originalName: 'billok-manual',
+      items: [{ id: 'pizza', totalPrice: 101 }],
+    };
+    const extracted = { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' };
+    mockDb.receipt.findUnique
+      .mockResolvedValueOnce({
+        ...base,
+        extractedData: { ...extracted, declaredTotalPartsByItem: { pizza: 8 } },
+      })
+      .mockResolvedValueOnce({
+        ...base,
+        extractedData: { ...extracted, declaredTotalPartsByItem: { pizza: 10 } },
+      });
+    const confirmedPartsSnapshot = manualPartsConfirmationSnapshot({
+      items: base.items,
+      declaredTotalPartsByItem: { pizza: 8 },
+      assignments: [
+        {
+          receiptItemId: 'pizza',
+          people: [
+            { userId: 'u2', parts: 3 },
+            { userId: 'u3', parts: 5 },
+          ],
+        },
+      ],
+    });
+    await expect(
+      (await caller()).assignItemsAndCreateExpense({
+        ...finish,
+        confirmedPartsSnapshot,
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+
   test('saves actual portions; the rounding kopeck goes to creator, not payer', async () => {
     await (await caller()).assignItemsAndCreateExpense(finish);
     expect(mockDb.expense.create).toHaveBeenCalledWith({
@@ -1108,6 +1267,33 @@ describe('saving a receipt for later while it is deleted from the pending list (
       code: 'BAD_REQUEST',
     });
     expect(mockDb.receipt.update).not.toHaveBeenCalled();
+  });
+
+  test('2.20.1 refuses to persist an over-limit partial draft under the receipt lock', async () => {
+    const known = {
+      ...inGroup,
+      originalName: 'billok-manual',
+      extractedData: {
+        subtotal: 101,
+        tax: 0,
+        tip: 0,
+        total: 101,
+        currency: 'RUB',
+        declaredTotalPartsByItem: { pizza: 7 },
+      },
+    };
+    mockDb.receipt.findUnique.mockResolvedValue(known);
+    mockDb.groupMember.findMany.mockResolvedValue([{ userId: 'u2' }, { userId: 'u3' }]);
+    await expect(
+      (await caller()).saveForLater({
+        groupId: 'g1',
+        receiptId: 'r1',
+        assignments: [{ receiptItemId: 'pizza', userIds: ['u2', 'u3'], parts: [3, 5] }],
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mockDb.receipt.update).not.toHaveBeenCalled();
+    expect(mockDb.receiptItemAssignment.deleteMany).not.toHaveBeenCalled();
+    expect(mockDb.receiptItemAssignment.createMany).not.toHaveBeenCalled();
   });
 
   test('a placeholder removed from the group is not saved as the payer (#284)', async () => {

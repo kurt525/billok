@@ -8,6 +8,7 @@ import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
 import { calculateManualReceiptAllocation, manualPortionProgress } from '@/lib/manual-receipt-split';
 import { manualPartsConfirmationSnapshot } from '@/lib/manual-parts-confirmation';
+import { manualKnownPartsBalance } from '@/lib/manual-known-parts';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -225,6 +226,7 @@ export function ItemAssignment({
     if (!canSetTotalParts || setTotalParts.isPending) return;
     try {
       await setTotalParts.mutateAsync({ groupId, receiptId, itemId, totalParts });
+      setApprovedPartsSnapshot(null);
       await utils.receipts.getReceiptItems.invalidate({ receiptId });
       setTotalPartsDrafts((drafts) => {
         const next = { ...drafts };
@@ -385,10 +387,26 @@ export function ItemAssignment({
     }),
   );
   const allAssigned = items.length > 0 && assignedItemCount === items.length && (!receipt?.isManual || partsAreValid);
+  const knownParts = useMemo(() => {
+    try {
+      return manualKnownPartsBalance({
+        itemIds: items.map((item) => item.id),
+        declaredTotalPartsByItem: extracted?.declaredTotalPartsByItem,
+        assignments: Object.entries(assignments).map(([receiptItemId, users]) => ({
+          receiptItemId,
+          parts: [...users].map((userId) => partsByItem[receiptItemId]?.[userId] ?? 1),
+        })),
+      });
+    } catch {
+      return { progressByItem: {}, overclaimed: true, hasRemaining: true };
+    }
+  }, [items, extracted, assignments, partsByItem]);
+  const canConfirmParts = allAssigned && !knownParts.overclaimed && !knownParts.hasRemaining;
   const currentPartsSnapshot = useMemo(
     () =>
       manualPartsConfirmationSnapshot({
         items,
+        declaredTotalPartsByItem: extracted?.declaredTotalPartsByItem,
         assignments: Object.entries(assignments)
           .filter(([receiptItemId, userIds]) => userIds.size > 0 && items.some((item) => item.id === receiptItemId))
           .map(([receiptItemId, userIds]) => ({
@@ -396,10 +414,10 @@ export function ItemAssignment({
             people: [...userIds].map((userId) => ({ userId, parts: partsByItem[receiptItemId]?.[userId] ?? 1 })),
           })),
       }),
-    [items, assignments, partsByItem],
+    [items, extracted, assignments, partsByItem],
   );
   const isManualCreator = !!receipt?.isManual && !!currentUserId && receipt.creatorId === currentUserId;
-  const partsConfirmed = approvedPartsSnapshot === currentPartsSnapshot && allAssigned;
+  const partsConfirmed = approvedPartsSnapshot === currentPartsSnapshot && canConfirmParts;
 
   // Precompute member initials to avoid recalculation every render (Finding #37)
   const memberInitials = useMemo(
@@ -1107,7 +1125,15 @@ export function ItemAssignment({
                         ? t('totalPartsInvalidConsumed')
                         : t('totalPartsCounted', { count: consumedCount })}
                     </p>
-                    {savedTotalParts === null && <p>{t('totalPartsUnknown')}</p>}
+                    {savedTotalParts === null ? (
+                      <p>{t('totalPartsUnknown')}</p>
+                    ) : (
+                      <p className={remainingParts !== null && remainingParts < 0 ? 'text-destructive' : ''}>
+                        {remainingParts !== null && remainingParts < 0
+                          ? t('totalPartsOverclaimed', { count: -remainingParts })
+                          : t('totalPartsRemaining', { count: remainingParts ?? 0 })}
+                      </p>
+                    )}
                   </div>
                 )}
                 {receipt?.isManual && assigned.size > 0 && (
@@ -1205,6 +1231,14 @@ export function ItemAssignment({
         </Card>
       )}
 
+      {receipt?.isManual && (knownParts.overclaimed || knownParts.hasRemaining) && (
+        <p
+          className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-destructive [overflow-wrap:anywhere]"
+          data-testid="known-parts-must-reconcile"
+        >
+          {knownParts.overclaimed ? t('totalPartsSaveOverclaimed') : t('totalPartsFinishRemaining')}
+        </p>
+      )}
       {receipt?.isManual && (
         <div className="min-w-0 rounded-lg border p-3 text-sm" data-testid="group-parts-confirmation">
           {isManualCreator ? (
@@ -1214,7 +1248,7 @@ export function ItemAssignment({
                 className="mt-1 size-5 shrink-0"
                 data-testid="group-parts-confirm-checkbox"
                 checked={partsConfirmed}
-                disabled={!allAssigned || createExpense.isPending}
+                disabled={!canConfirmParts || createExpense.isPending}
                 onChange={(event) => setApprovedPartsSnapshot(event.target.checked ? currentPartsSnapshot : null)}
               />
               <span className="min-w-0 [overflow-wrap:anywhere]">{t('partsConfirmComplete')}</span>
@@ -1255,7 +1289,7 @@ export function ItemAssignment({
           variant="outline"
           className="min-h-11 w-full"
           onClick={handleSaveForLater}
-          disabled={saveForLater.isPending || (receipt?.isManual && !partsAreValid)}
+          disabled={saveForLater.isPending || (receipt?.isManual && (!partsAreValid || knownParts.overclaimed))}
           data-testid="save-for-later-btn"
         >
           <Bookmark className="mr-2 h-4 w-4" />

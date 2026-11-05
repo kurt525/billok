@@ -185,6 +185,21 @@ test('manual receipt creator saves, reloads and clears optional original portion
   await originalSave.click();
   await expect(originalInput).toHaveValue('10');
   await expect(originalProgress).toContainText('Осталось нераспределённых частей: 2');
+  // 2.20.1: known remainder cannot be silently marked complete.
+  const approve = page.getByTestId('group-parts-confirm-checkbox');
+  await expect(approve).toBeDisabled();
+  await expect(page.getByTestId('create-expense-btn')).toBeDisabled();
+  await expect(page.getByTestId('known-parts-must-reconcile')).toContainText('Есть нераспределённые части');
+  // A manual over-limit draft must not be saved or finalized.
+  await pizza.getByLabel('Частей: Bob').fill('6');
+  await expect(originalProgress).toContainText('Превышение исходного количества на 1 частей');
+  await expect(page.getByTestId('known-parts-must-reconcile')).toContainText('больше частей');
+  await expect(page.getByTestId('save-for-later-btn')).toBeDisabled();
+  await expect(approve).toBeDisabled();
+  await pizza.getByLabel('Частей: Bob').fill('3');
+  await expect(originalProgress).toContainText('Осталось нераспределённых частей: 2');
+  await expect(page.getByTestId('save-for-later-btn')).toBeEnabled();
+
   for (const width of [320, 360, 430, 480, 600, 720]) {
     await page.setViewportSize({ width, height: 520 });
     await originalInput.scrollIntoViewIfNeeded();
@@ -232,6 +247,9 @@ test('manual receipt creator saves, reloads and clears optional original portion
     await alicePage.goto(createdUrl, { waitUntil: 'networkidle' });
     await expect(alicePage.getByTestId('item-assignment-form')).toBeVisible();
     await expect(alicePage.locator('[data-testid^="item-total-parts-input-"]')).toHaveCount(0);
+    const memberProgress = alicePage.locator('[data-testid^="item-consumed-parts-progress-"]');
+    await expect(memberProgress).toContainText('Участниками учтено частей: 8');
+    await expect(memberProgress).toContainText('Осталось нераспределённых частей: 2');
   } finally {
     await aliceContext.close();
   }

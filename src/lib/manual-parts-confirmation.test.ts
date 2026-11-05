@@ -30,6 +30,18 @@ describe('2.19.2.1: confirm the exact group receipt before finalization', () => 
     };
     expect(snapshot(reorder)).toBe(snapshot(input));
   });
+  test('changing the original known count invalidates creator sign-off', () => {
+    const complete = snapshot({ ...input, declaredTotalPartsByItem: { pizza: 8 } });
+    expect(snapshot({ ...input, declaredTotalPartsByItem: { pizza: 10 } })).not.toBe(complete);
+    expect(snapshot({ ...input, declaredTotalPartsByItem: {} })).not.toBe(complete);
+    expect(
+      snapshot({
+        ...input,
+        declaredTotalPartsByItem: { pizza: 8, unusedDeletedDish: 50 },
+      }),
+    ).toBe(complete);
+  });
+
   test('changes if a declared portion, participant, dish or price changes', () => {
     const approved = snapshot(input);
     expect(

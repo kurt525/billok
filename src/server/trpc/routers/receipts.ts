@@ -13,6 +13,7 @@ import {
 } from '@/lib/manual-receipt-split';
 import { MAX_MONEY_CENTS } from '@/lib/money';
 import { manualPartsConfirmationSnapshot } from '@/lib/manual-parts-confirmation';
+import { manualKnownPartsBalance } from '@/lib/manual-known-parts';
 import { deleteUnusedSplitReceipts, removeReceiptFiles } from '../../lib/receipt-cleanup';
 
 /**
@@ -614,6 +615,7 @@ export const receiptsRouter = createTRPCRouter({
           }
           const snapshot = manualPartsConfirmationSnapshot({
             items: currentReceipt.items,
+            declaredTotalPartsByItem: currentData.declaredTotalPartsByItem,
             assignments: input.assignments.map((assignment) => ({
               receiptItemId: assignment.receiptItemId,
               people: assignment.userIds.map((userId, index) => ({
@@ -633,6 +635,30 @@ export const receiptsRouter = createTRPCRouter({
             )
           ) {
             throw new AppError('CONFLICT', 'receiptNotReady');
+          }
+
+          // 2.20.1: even a valid creator approval cannot finalize a known
+          // original count until its every portion has been claimed. Check the
+          // current receipt under the row lock: changing the count on another
+          // device must not let an older confirmation finish stale shares.
+          let knownBalance: ReturnType<typeof manualKnownPartsBalance>;
+          try {
+            knownBalance = manualKnownPartsBalance({
+              itemIds: currentReceipt.items.map((item) => item.id),
+              declaredTotalPartsByItem: currentData.declaredTotalPartsByItem,
+              assignments: input.assignments.map((assignment) => ({
+                receiptItemId: assignment.receiptItemId,
+                parts: assignment.userIds.map((_, i) => assignment.parts?.[i] ?? 1),
+              })),
+            });
+          } catch {
+            throw new AppError('BAD_REQUEST', 'receiptNotReady');
+          }
+          if (knownBalance.overclaimed) {
+            throw new AppError('PRECONDITION_FAILED', 'receiptKnownPartsOverclaimed');
+          }
+          if (knownBalance.hasRemaining) {
+            throw new AppError('PRECONDITION_FAILED', 'receiptKnownPartsRemaining');
           }
 
           try {
@@ -783,6 +809,34 @@ export const receiptsRouter = createTRPCRouter({
           }
         }
 
+        if (input.assignments?.some((a) => a.parts && a.parts.length !== a.userIds.length)) {
+          throw new AppError('BAD_REQUEST', 'receiptNotReady');
+        }
+
+        // A resumable draft can leave known portions unassigned; however an
+        // over-limit draft must never be persisted, even via the direct API.
+        if (receipt.originalName === 'billok-manual' && input.assignments) {
+          const known = parseExtractedData(receipt.extractedData).declaredTotalPartsByItem;
+          if (known !== undefined && known !== null) {
+            let balance: ReturnType<typeof manualKnownPartsBalance>;
+            try {
+              balance = manualKnownPartsBalance({
+                itemIds: typeof known === 'object' && !Array.isArray(known) ? Object.keys(known) : [],
+                declaredTotalPartsByItem: known,
+                assignments: input.assignments.map((assignment) => ({
+                  receiptItemId: assignment.receiptItemId,
+                  parts: assignment.userIds.map((_, i) => assignment.parts?.[i] ?? 1),
+                })),
+              });
+            } catch {
+              throw new AppError('BAD_REQUEST', 'receiptNotReady');
+            }
+            if (balance.overclaimed) {
+              throw new AppError('PRECONDITION_FAILED', 'receiptKnownPartsOverclaimed');
+            }
+          }
+        }
+
         await tx.receipt.update({
           where: { id: input.receiptId },
           data: {
@@ -791,10 +845,6 @@ export const receiptsRouter = createTRPCRouter({
             ...(input.paidById !== undefined ? { paidById: input.paidById } : {}),
           },
         });
-
-        if (input.assignments?.some((a) => a.parts && a.parts.length !== a.userIds.length)) {
-          throw new AppError('BAD_REQUEST', 'receiptNotReady');
-        }
 
         // Save partial assignments if provided (empty array clears existing)
         if (input.assignments) {

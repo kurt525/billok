@@ -152,7 +152,9 @@
     "organizerRoundingCorrection": "Receipt creator {name} rounding adjustment (already included)",
     "partsPreliminary": "Provisional totals based on claimed portions. Before finalization the receipt organizer will confirm everyone has declared their portions.",
     "partsConfirmComplete": "I confirm that every participant has declared the portions they consumed and the amounts are correct.",
-    "partsConfirmCreatorOnly": "Only the receipt creator can confirm all portions and finalize this receipt."
+    "partsConfirmCreatorOnly": "Only the receipt creator can confirm all portions and finalize this receipt.",
+    "totalPartsSaveOverclaimed": "Declared portions exceed the known original. Reduce claimed portions or correct the original count.",
+    "totalPartsFinishRemaining": "Known portions remain unassigned. The creator must assign the remaining portions or correct the original count before finishing."
   },
   "splits": {
     "selectAll": "Select all",

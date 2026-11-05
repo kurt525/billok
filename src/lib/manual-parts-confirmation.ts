@@ -6,6 +6,7 @@
  */
 export function manualPartsConfirmationSnapshot(input: {
   items: readonly { id: string; totalPrice: number }[];
+  declaredTotalPartsByItem?: unknown;
   assignments: readonly {
     receiptItemId: string;
     people: readonly { userId: string; parts: number }[];
@@ -14,6 +15,16 @@ export function manualPartsConfirmationSnapshot(input: {
   return JSON.stringify({
     items: input.items
       .map((item) => [item.id, item.totalPrice])
+      .sort(([idA], [idB]) => String(idA).localeCompare(String(idB))),
+    knownParts: input.items
+      .filter(
+        (item) =>
+          input.declaredTotalPartsByItem != null &&
+          typeof input.declaredTotalPartsByItem === 'object' &&
+          !Array.isArray(input.declaredTotalPartsByItem) &&
+          Object.hasOwn(input.declaredTotalPartsByItem, item.id),
+      )
+      .map((item) => [item.id, (input.declaredTotalPartsByItem as Record<string, unknown>)[item.id]])
       .sort(([idA], [idB]) => String(idA).localeCompare(String(idB))),
     assignments: input.assignments
       .map((assignment) => [
