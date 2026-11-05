@@ -112,7 +112,7 @@ export function RegistrationControlSection() {
                 placeholder={t('registration.labelPlaceholder')}
                 value={inviteLabel}
                 onChange={(e) => setInviteLabel(e.target.value)}
-                className="min-h-11 min-w-0 flex-1 basis-40"
+                className="min-h-11 min-w-0 flex-1 basis-40 scroll-mt-20 text-base"
               />
               <Button
                 data-testid="admin-registration-create-invite"

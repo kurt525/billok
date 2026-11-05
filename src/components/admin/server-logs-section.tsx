@@ -117,7 +117,7 @@ export function ServerLogsSection() {
                 placeholder={t('serverLogs.filterPlaceholder')}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="min-h-11 pl-8 text-sm"
+                className="min-h-11 min-w-0 w-full scroll-mt-20 pl-8 text-base"
               />
             </div>
 

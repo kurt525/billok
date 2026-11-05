@@ -1839,3 +1839,106 @@ test('mobile group and expense dialogs remain reachable without mutations', asyn
     await group.dispose();
   }
 });
+
+test('admin forms remain keyboard-accessible at 300 CSS px on six mobile widths', async ({ page }) => {
+  test.setTimeout(220_000);
+  await signInAsSeedAdmin(page);
+  let blockedWrites = 0;
+  const adminMutations = new Set([
+    'admin.deleteUser',
+    'admin.deleteGroup',
+    'admin.revokeInvitation',
+    'admin.createInvitation',
+    'admin.setAnnouncement',
+    'admin.cleanupExpiredSplits',
+    'admin.cleanupOrphans',
+    'admin.cleanupUnusedReceipts',
+  ]);
+  await page.route('**/api/trpc/**', async (route) => {
+    const procedures = new URL(route.request().url()).pathname.split('/api/trpc/')[1]?.split(',') ?? [];
+    if (procedures.some((procedure) => adminMutations.has(procedure))) {
+      blockedWrites++;
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 300 });
+    await page.goto('/admin', { waitUntil: 'networkidle' });
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+
+    for (const [testId, value] of [
+      ['admin-users-search', 'bob@example.com'],
+      ['admin-groups-search', 'ОченьДлинноеИмяГруппыБезПробелов'],
+      ['admin-registration-invite-label', 'МобильныйЧерновикПриглашения'],
+      ['admin-announcement-input', 'ЧерновикОбъявленияБезСохранения'],
+      ['admin-logs-search', 'mobile-logs-keyboard'],
+    ] as const) {
+      const input = page.getByTestId(testId);
+      await input.fill(value);
+      await input.focus();
+      await input.scrollIntoViewIfNeeded();
+      const geometry = await input.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return {
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          bottom: rect.bottom,
+          height: rect.height,
+          fontSize: style.fontSize,
+          clientWidth: element.clientWidth,
+          scrollWidth: element.scrollWidth,
+        };
+      });
+      expect(geometry.left, testId + ' left at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(geometry.right, testId + ' right at ' + width).toBeLessThanOrEqual(width + 1);
+      expect(geometry.top, testId + ' top at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(geometry.bottom, testId + ' bottom at ' + width).toBeLessThanOrEqual(301);
+      expect(geometry.height, testId + ' touch height at ' + width).toBeGreaterThanOrEqual(44);
+      expect(parseFloat(geometry.fontSize), testId + ' text size at ' + width).toBeGreaterThanOrEqual(16);
+      await checkPhoneLayout(page, width, true);
+    }
+
+    // Status filters still work when the Android keyboard shortens the viewport.
+    const groupsActive = page.getByTestId('admin-groups-filter-active');
+    await groupsActive.click();
+    await expect(groupsActive).toHaveAttribute('aria-pressed', 'true');
+    await page.getByTestId('admin-groups-filter-all').click();
+
+    // Administrative destructive confirmation: inspect and cancel, never delete.
+    const bobRow = page.getByTestId('admin-user-management').locator('tbody tr').filter({
+      hasText: 'bob@example.com',
+    });
+    await expect(bobRow).toHaveCount(1, { timeout: 15_000 });
+    await bobRow.getByRole('button', { name: /Удалить пользователя/ }).click();
+    const dialog = page.getByTestId('admin-user-delete-dialog');
+    await expect(dialog).toBeVisible();
+    const dialogGeometry = await dialog.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+    });
+    expect(dialogGeometry.left, 'Delete dialog left at ' + width).toBeGreaterThanOrEqual(-1);
+    expect(dialogGeometry.right, 'Delete dialog right at ' + width).toBeLessThanOrEqual(width + 1);
+    expect(dialogGeometry.top, 'Delete dialog top at ' + width).toBeGreaterThanOrEqual(-1);
+    expect(dialogGeometry.bottom, 'Delete dialog bottom at ' + width).toBeLessThanOrEqual(301);
+
+    for (const label of ['Отмена', 'Удалить']) {
+      const button = dialog.getByRole('button', { name: label, exact: true });
+      await button.scrollIntoViewIfNeeded();
+      const bounds = await button.boundingBox();
+      expect(bounds, label + ' bounds at ' + width).not.toBeNull();
+      expect(bounds!.height, label + ' height at ' + width).toBeGreaterThanOrEqual(44);
+      expect(bounds!.y, label + ' top at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.y + bounds!.height, label + ' bottom at ' + width).toBeLessThanOrEqual(301);
+    }
+    await dialog.getByRole('button', { name: 'Отмена', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(bobRow).toHaveCount(1);
+    expect(blockedWrites, 'No administrative mutations at ' + width).toBe(0);
+    await checkPhoneLayout(page, width, true);
+  }
+});

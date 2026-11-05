@@ -177,11 +177,12 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
         <div className="relative min-w-0 basis-full flex-1 sm:min-w-[180px] sm:basis-auto">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
+            data-testid="admin-users-search"
             aria-label={t('users.searchAriaLabel')}
             placeholder={t('users.searchPlaceholder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="min-h-11 pl-8 text-sm"
+            className="min-h-11 min-w-0 w-full scroll-mt-20 pl-8 text-base"
           />
         </div>
       </div>
@@ -353,11 +354,11 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <DialogContent
           data-testid="admin-user-delete-dialog"
-          className="min-w-0 [overflow-wrap:anywhere] [&_[data-slot=dialog-close]]:size-11"
+          className="min-w-0 overflow-x-hidden [overflow-wrap:anywhere] [&_[data-slot=dialog-close]]:size-11"
         >
-          <DialogHeader>
-            <DialogTitle>{t('users.deleteTitle')}</DialogTitle>
-            <DialogDescription>
+          <DialogHeader className="min-w-0 pr-11">
+            <DialogTitle className="min-w-0 [overflow-wrap:anywhere]">{t('users.deleteTitle')}</DialogTitle>
+            <DialogDescription className="min-w-0 [overflow-wrap:anywhere]">
               {t.rich('users.deleteDescription', {
                 name: deleteTarget?.name ?? deleteTarget?.email ?? '',
                 strong: (chunks) => <strong>{chunks}</strong>,

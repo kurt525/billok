@@ -148,7 +148,7 @@ export function GroupOverviewSection() {
             placeholder={t('groups.searchPlaceholder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="min-h-11 w-full min-w-0 max-w-full pl-8 text-base"
+            className="min-h-11 w-full min-w-0 max-w-full scroll-mt-20 pl-8 text-base"
           />
         </div>
       </div>

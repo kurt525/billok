@@ -47,7 +47,7 @@ export function AnnouncementSection() {
           <textarea
             data-testid="admin-announcement-input"
             aria-label={t('announcement.placeholder')}
-            className="min-h-28 w-full min-w-0 max-w-full resize-y rounded-md border bg-background px-3 py-2 text-base [overflow-wrap:anywhere] focus:outline-none focus:ring-2 focus:ring-ring"
+            className="min-h-28 w-full min-w-0 max-w-full scroll-mt-20 resize-y rounded-md border bg-background px-3 py-2 text-base [overflow-wrap:anywhere] focus:outline-none focus:ring-2 focus:ring-ring"
             rows={3}
             placeholder={t('announcement.placeholder')}
             value={draft}
