@@ -666,6 +666,120 @@ test('Issue 2.14: two guest phones save personal parts 3/5 without knowing the o
   }
 });
 
+test('Issue 2.16.3: nine one-kopeck guest dishes balance 3:3:3 in preview, final result and six mobile widths', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const otherDevice = await browser.newContext({
+    viewport: { width: 320, height: 520 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  try {
+    const inputItems = Array.from({ length: 9 }, (_, index) => ({
+      name: 'Блюдо ' + (index + 1),
+      quantity: 1,
+      unitPrice: 1,
+      totalPrice: 1,
+    }));
+    const creation = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Девять копеек', subtotal: 9, tax: 0, tip: 0, total: 9, currency: 'RUB' },
+      items: inputItems,
+      people: ['Анна', 'Борис', 'Виктор'],
+      creatorName: 'Анна',
+      paidByName: 'Борис',
+      joinCreator: true,
+    });
+    const creationBody = await creation.text();
+    expect(creation.ok(), creationBody).toBe(true);
+    const created = JSON.parse(creationBody).result.data.json as {
+      shareToken: string;
+      creator: { personId: string; personToken: string; name: string };
+    };
+    const token = created.shareToken;
+    const anna = created.creator;
+    const boris = await joinGuestSession(otherDevice.request, { token, name: 'Борис' });
+    const victor = await joinGuestSession(owner, { token, name: 'Виктор' });
+    await rememberClaimIdentity(page.context(), token, anna);
+    for (const participant of [anna, boris, victor]) {
+      const ctx = participant.personId === boris.personId ? otherDevice.request : owner;
+      const response = await trpcMutation(ctx, 'guest.claimItems', {
+        token,
+        personId: participant.personId,
+        personToken: participant.personToken,
+        claimedItemIndices: inputItems.map((_, index) => index),
+      });
+      expect(response.ok(), await response.text()).toBe(true);
+    }
+    const stored = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(stored.receiptData.roundingBalanced).toBe(true);
+    expect(stored.items.map((entry: { totalPrice: number }) => entry.totalPrice)).toEqual(Array(9).fill(1));
+    expect(stored.assignments).toHaveLength(9);
+
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    for (const index of [0, 1, 2]) {
+      await expect(page.getByTestId('person-total-' + index)).toContainText('0,03', { timeout: 15_000 });
+    }
+    await expect(page.getByTestId('unclaimed-total')).toHaveCount(0);
+
+    for (const width of [320, 360, 430, 480, 600, 720]) {
+      await page.setViewportSize({ width, height: 520 });
+      const card = page.getByTestId('person-total-0');
+      await card.scrollIntoViewIfNeeded();
+      const bounds = await card.boundingBox();
+      expect(bounds, 'Guest rounding preview at ' + width).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width + 1);
+      await fitsPhone(page);
+    }
+
+    const finish = await trpcMutation(owner, 'guest.finalizeSession', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+    });
+    expect(finish.ok(), await finish.text()).toBe(true);
+    const result = await trpcResult(await trpcQuery(owner, 'guest.getSplit', { token }));
+    expect(result.receiptData.total).toBe(9);
+    expect(result.summary.map((entry: { itemTotal: number }) => entry.itemTotal)).toEqual([3, 3, 3]);
+    expect(result.summary.reduce((sum: number, entry: { total: number }) => sum + entry.total, 0)).toBe(9);
+    expect(
+      result.summary.every((entry: { itemTotal: number; total: number }) => entry.itemTotal >= 0 && entry.total >= 0),
+    ).toBe(true);
+
+    await page.goto('/split/' + token, { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('split-result')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('split-result-total')).toContainText('0,09');
+    for (const width of [320, 360, 430, 480, 600, 720]) {
+      await page.setViewportSize({ width, height: 520 });
+      for (const index of [0, 1, 2]) {
+        const card = page.getByTestId('person-card-' + index);
+        await expect(card.getByTestId('person-total-' + index)).toContainText('0,03');
+        const lines = await card.getByTestId('line-amount').allTextContents();
+        expect(lines).toHaveLength(9);
+        const totalLines = lines.reduce((sum, value) => {
+          const cents = Number(value.replace(/[^\d,]/g, '').replace(',', '.')) * 100;
+          expect(Number.isInteger(cents)).toBe(true);
+          expect(cents).toBeGreaterThanOrEqual(0);
+          return sum + cents;
+        }, 0);
+        expect(totalLines).toBe(3);
+        await card.scrollIntoViewIfNeeded();
+        const bounds = await card.boundingBox();
+        expect(bounds, 'Finalized guest card ' + index + ' at ' + width).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(-1);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width + 1);
+      }
+      await fitsPhone(page);
+    }
+  } finally {
+    await otherDevice.close();
+    await owner.dispose();
+  }
+});
+
 test('mobile guest finalization reconciles personal tips for three dining participants', async ({ page, browser }) => {
   test.setTimeout(150_000);
   const owner = await authedContext(users.alice.email, users.alice.password);

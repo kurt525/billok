@@ -1109,7 +1109,11 @@ export function ItemAssignment({
         })}
       </div>
 
-      {receipt?.isManual && <p className="text-xs text-muted-foreground">{t('roundingCreator')}</p>}
+      {receipt?.isManual && (
+        <p className="text-xs text-muted-foreground" data-testid="manual-rounding-guidance">
+          {t(items.length > 1 ? 'roundingBalancedReceipt' : 'roundingCreator')}
+        </p>
+      )}
 
       {/* Per-person summary */}
       {perPersonTotals.size > 0 && (

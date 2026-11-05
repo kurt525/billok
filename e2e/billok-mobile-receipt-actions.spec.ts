@@ -250,6 +250,97 @@ test('manual receipt creator saves, reloads and clears optional original portion
   expect(cleared.items[0].totalPrice).toBe(8000);
 });
 
+test('Issue 2.16.3: manual group receipt balances two dishes and persists exact kopecks at six mobile widths', async ({
+  page,
+}) => {
+  test.skip(!groupId, 'Requires disposable RUB group fixture');
+  test.setTimeout(180_000);
+  await page.goto('/login', { waitUntil: 'networkidle' });
+  await page.locator('input[type=email]').fill('bob@example.com');
+  await page.locator('input[type=password]').fill('password123');
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard/);
+  await page.goto('/groups/' + groupId + '/expenses/new', { waitUntil: 'networkidle' });
+  await page.getByTestId('create-manual-group-receipt').click();
+  await expect(page).toHaveURL(/\/scan\?receiptId=/);
+  const receiptUrl = page.url();
+  const createdReceiptId = new URL(receiptUrl).searchParams.get('receiptId');
+  expect(createdReceiptId).toBeTruthy();
+
+  for (const name of ['Блюдо А', 'Блюдо Б']) {
+    await page.getByTestId('add-item-btn').click();
+    const form = page.getByTestId('add-item-form');
+    await form.locator('input').nth(0).fill(name);
+    await form.locator('input').nth(1).fill('1');
+    await form.locator('input').nth(2).fill('1,01');
+    await form.getByRole('button', { name: 'Добавить', exact: true }).click();
+    const card = item(page, name);
+    await expect(card).toHaveCount(1);
+    for (const [member, parts] of [
+      ['Bob', '1'],
+      ['Alice', '2'],
+    ] as const) {
+      await card.locator('[data-testid^="member-toggle-"]').filter({ hasText: member }).click();
+      await card.getByLabel('Частей: ' + member).fill(parts);
+    }
+  }
+
+  const totals = page.getByTestId('per-person-totals');
+  await expect(totals).toContainText('0,67');
+  await expect(totals).toContainText('1,35');
+  await expect(page.getByTestId('manual-rounding-guidance')).toContainText('по всему чеку');
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 520 });
+    await totals.scrollIntoViewIfNeeded();
+    const bounds = await totals.boundingBox();
+    expect(bounds, 'Rounding summary at ' + width).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(-1);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width + 1);
+    await noDocumentOverflow(page);
+  }
+
+  await page.getByTestId('save-for-later-btn').click();
+  await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'));
+  await page.goto(receiptUrl, { waitUntil: 'networkidle' });
+  await expect(page.getByTestId('per-person-totals')).toContainText('0,67');
+  await expect(page.getByTestId('per-person-totals')).toContainText('1,35');
+
+  const response = await trpcResult(
+    await trpcQuery(page.request, 'receipts.getReceiptItems', { receiptId: createdReceiptId }),
+  );
+  expect(response.items).toHaveLength(2);
+  expect(response.items.reduce((sum: number, entry: { totalPrice: number }) => sum + entry.totalPrice, 0)).toBe(202);
+
+  await page.getByTestId('create-expense-btn').click();
+  await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'));
+  await expect
+    .poll(
+      async () => {
+        const result = await trpcResult(await trpcQuery(page.request, 'expenses.list', { groupId }));
+        return (result.expenses as { receiptId: string | null }[]).some(
+          (expense) => expense.receiptId === createdReceiptId,
+        );
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  const result = await trpcResult(await trpcQuery(page.request, 'expenses.list', { groupId }));
+  const stored = (
+    result.expenses as {
+      receiptId: string | null;
+      amount: number;
+      currency: string;
+      shares: { amount: number }[];
+    }[]
+  ).find((expense) => expense.receiptId === createdReceiptId);
+  expect(stored).toBeTruthy();
+  expect(stored!.currency).toBe('RUB');
+  expect(stored!.amount).toBe(202);
+  expect(stored!.shares.map((share) => share.amount).sort((a, b) => a - b)).toEqual([67, 135]);
+  expect(stored!.shares.reduce((sum, share) => sum + share.amount, 0)).toBe(202);
+  expect(stored!.shares.every((share) => share.amount >= 0)).toBe(true);
+});
+
 test('two registered group members independently save voluntary RUB tips on a mobile manual receipt', async ({
   page,
   browser,
