@@ -516,6 +516,13 @@ test('Issue 2.14: two guest phones save personal parts 3/5 without knowing the o
     await rememberClaimIdentity(page.context(), token, anna);
     await rememberClaimIdentity(second, token, boris);
 
+    // Before anyone selects this pizza, zero declared portions are visible.
+    // The whole receipt remains unclaimed, never automatically charged.
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 0');
+    await expect(page.getByTestId('unclaimed-total')).toContainText('8,00');
+    await expect(page.getByTestId('guest-parts-preliminary')).toBeVisible();
+
     for (const guest of [anna, boris]) {
       const ctx = guest.personId === anna.personId ? owner : second.request;
       const res = await trpcMutation(ctx, 'guest.claimItems', {
@@ -533,6 +540,9 @@ test('Issue 2.14: two guest phones save personal parts 3/5 without knowing the o
     await bobPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
     const aliceInput = alicePage.getByTestId('personal-parts-input-0');
     const bobInput = bobPage.getByTestId('personal-parts-input-0');
+    await expect(alicePage.getByTestId('guest-parts-preliminary')).toContainText('Предварительный расчёт');
+    await expect(alicePage.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 2');
+    await expect(bobPage.getByTestId('guest-claimed-parts-progress-0')).not.toContainText('Осталось');
     await expect(aliceInput).toHaveValue('1', { timeout: 15_000 });
     await expect(bobInput).toHaveValue('1', { timeout: 15_000 });
     await aliceInput.fill('0');
@@ -555,6 +565,13 @@ test('Issue 2.14: two guest phones save personal parts 3/5 without knowing the o
       .toEqual({ [anna.personId]: 3, [boris.personId]: 5 });
     const snapshot = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     expect(snapshot.items[0].totalPrice).toBe(800);
+    await expect(alicePage.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 8', {
+      timeout: 15_000,
+    });
+    await expect(bobPage.getByTestId('guest-claimed-parts-progress-0')).toContainText(
+      'Исходное количество неизвестно',
+      { timeout: 15_000 },
+    );
 
     // Both devices can write the same session concurrently. The row-level
     // transaction retry must preserve both changes rather than last-write-wins.

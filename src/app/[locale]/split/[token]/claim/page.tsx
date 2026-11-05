@@ -1912,6 +1912,24 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         </div>
                       </div>
 
+                      {/* Unknown original count: every participant sees only the
+                          portions actually recorded for this item, including zero. */}
+                      <div
+                        className="mt-1 text-xs text-muted-foreground"
+                        data-testid={'guest-claimed-parts-progress-' + idx}
+                      >
+                        {t('partsCounted', {
+                          count: guestPortionProgress(
+                            data.assignments.find((assignment) => assignment.itemIndex === idx) ?? {
+                              itemIndex: idx,
+                              personIndices: [],
+                            },
+                            data.people,
+                          ).countedParts,
+                        })}
+                        <span className="ml-2">{t('partsUnknownOriginal')}</span>
+                      </div>
+
                       {/* Split form */}
                       {splittingItemIdx === idx &&
                         (() => {
@@ -2081,6 +2099,13 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           );
         })}
       </div>
+
+      <p
+        className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground [overflow-wrap:anywhere]"
+        data-testid="guest-parts-preliminary"
+      >
+        {t('partsPreliminary')}
+      </p>
 
       {/* Per-person totals */}
       {(splitTotals.people.length > 0 || splitTotals.unclaimed) && (

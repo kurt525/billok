@@ -286,6 +286,13 @@ test('Issue 2.16.3: manual group receipt balances two dishes and persists exact 
   }
 
   const totals = page.getByTestId('per-person-totals');
+  await expect(page.getByTestId('group-parts-preliminary')).toContainText('Предварительный расчёт');
+  for (const name of ['Блюдо А', 'Блюдо Б']) {
+    const progress = item(page, name).locator('[data-testid^="item-total-parts-progress-"]');
+    await expect(progress).toContainText('Участниками учтено частей: 3');
+    await expect(progress).toContainText('Исходное количество частей не указано');
+    await expect(progress).not.toContainText('Осталось нераспределённых');
+  }
   await expect(totals).toContainText('0,67');
   await expect(totals).toContainText('1,35');
   await expect(page.getByTestId('manual-rounding-guidance')).toContainText('по всему чеку');

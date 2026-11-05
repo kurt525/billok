@@ -149,7 +149,8 @@
     "personalTipPendingTotals": "The table below shows dish costs only. Saved personal tips are added to each member’s share when the receipt is finalized.",
     "personalTipMembersTitle": "Participant tips",
     "personalTipMembersLive": "Saved amounts update automatically. Each member can change only their own tip.",
-    "organizerRoundingCorrection": "Receipt creator {name} rounding adjustment (already included)"
+    "organizerRoundingCorrection": "Receipt creator {name} rounding adjustment (already included)",
+    "partsPreliminary": "Provisional totals based on claimed portions. Before finalization the receipt organizer will confirm everyone has declared their portions."
   },
   "splits": {
     "selectAll": "Select all",

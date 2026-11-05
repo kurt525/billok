@@ -1068,6 +1068,19 @@ export function ItemAssignment({
                     </div>
                   </div>
                 )}
+                {receipt?.isManual && !canSetTotalParts && (
+                  <div
+                    className="mt-2 space-y-1 text-xs text-muted-foreground"
+                    data-testid={'item-consumed-parts-progress-' + item.id}
+                  >
+                    <p>
+                      {consumedCount === null
+                        ? t('totalPartsInvalidConsumed')
+                        : t('totalPartsCounted', { count: consumedCount })}
+                    </p>
+                    {savedTotalParts === null && <p>{t('totalPartsUnknown')}</p>}
+                  </div>
+                )}
                 {receipt?.isManual && assigned.size > 0 && (
                   <div className="mt-3 space-y-2" data-testid={'portions-for-' + item.id}>
                     <p className="text-xs text-muted-foreground">{t('partsHint')}</p>
@@ -1110,6 +1123,14 @@ export function ItemAssignment({
         })}
       </div>
 
+      {receipt?.isManual && (
+        <p
+          className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground [overflow-wrap:anywhere]"
+          data-testid="group-parts-preliminary"
+        >
+          {t('partsPreliminary')}
+        </p>
+      )}
       {receipt?.isManual && (
         <p className="text-xs text-muted-foreground" data-testid="manual-rounding-guidance">
           {t(items.length > 1 ? 'roundingBalancedReceipt' : 'roundingCreator')}
