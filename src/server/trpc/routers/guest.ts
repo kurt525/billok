@@ -601,6 +601,7 @@ export const guestRouter = createTRPCRouter({
         tip: number;
         total: number;
         currency: string;
+        roundingBalanced?: boolean;
       },
       items: split.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[],
       people: toPublicPeople(split.people as GuestSessionPerson[]),
@@ -720,7 +721,9 @@ export const guestRouter = createTRPCRouter({
         return tx.guestSplit.create({
           data: {
             ...(receiptId !== undefined ? { receiptId, receiptShared: true } : {}),
-            receiptData: input.receiptData as unknown as Prisma.InputJsonValue,
+            // New personal-link claims use one cross-item rounding strategy.
+            // Direct finalized splits keep their historical settlement rules.
+            receiptData: { ...input.receiptData, roundingBalanced: true } as unknown as Prisma.InputJsonValue,
             items: expandedItems as unknown as Prisma.InputJsonValue,
             people: people as unknown as Prisma.InputJsonValue,
             assignments: [] as unknown as Prisma.InputJsonValue,
@@ -1347,6 +1350,7 @@ export const guestRouter = createTRPCRouter({
         tip: number;
         total: number;
         currency: string;
+        roundingBalanced?: boolean;
       },
       items: session.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[],
       // Everyone has an id by now (savePersonIds above)
@@ -1411,6 +1415,7 @@ export const guestRouter = createTRPCRouter({
           tax: receiptData.tax,
           tip,
           peopleCount: people.length,
+          balanceAcrossItems: receiptData.roundingBalanced === true,
           ...groupSizeWeights(people),
         });
         let summary: ReturnType<typeof calculateSplitTotals>;

@@ -11,8 +11,11 @@ export function calculateSplitTotals(params: {
   tip: number;
   peopleCount: number;
   personWeights?: number[]; // weight for each person index (default all 1)
+  balanceAcrossItems?: boolean; // only new personal-link claim sessions; legacy splits stay unchanged
 }): { personIndex: number; itemTotal: number; tax: number; tip: number; total: number }[] {
   const { items, assignments, tax, tip, personWeights } = params;
+  const balanced =
+    params.balanceAcrossItems && items.length > 1 ? balancedGuestItemShares(items, assignments, personWeights) : null;
 
   // Calculate per-person item subtotals
   const personSubtotals = new Map<number, number>();
@@ -21,7 +24,9 @@ export function calculateSplitTotals(params: {
     const item = items[assignment.itemIndex];
     if (!item || assignment.personIndices.length === 0) continue;
 
-    const amounts = splitItemPrice(item.totalPrice, assignment.personIndices, personWeights, assignment.portions);
+    const amounts =
+      balanced?.get(assignment.itemIndex) ??
+      splitItemPrice(item.totalPrice, assignment.personIndices, personWeights, assignment.portions);
     for (const [i, personIdx] of assignment.personIndices.entries()) {
       personSubtotals.set(personIdx, (personSubtotals.get(personIdx) ?? 0) + amounts[i]!);
     }
@@ -145,6 +150,67 @@ function splitItemPrice(
   return personIndices.map((_, i) => perPerson + (i < remainder ? 1 : 0));
 }
 
+/**
+ * Round within each item, but carry each diner's fractional shortfall across
+ * the receipt. Awards are limited to actual consumers of the current dish;
+ * this prevents a rounding penny from becoming a fictitious purchased item.
+ * The same allocation map is used for preview, finalization and line detail.
+ */
+function balancedGuestItemShares(
+  items: readonly { totalPrice: number }[],
+  assignments: readonly { itemIndex: number; personIndices: number[]; portions?: number[] }[],
+  personWeights?: number[],
+): Map<number, number[]> {
+  const deficits = new Map<number, number>();
+  const allocation = new Map<number, number[]>();
+  for (const assignment of assignments) {
+    const item = items[assignment.itemIndex];
+    const people = assignment.personIndices;
+    if (!item || people.length === 0) continue;
+    if (!Number.isSafeInteger(item.totalPrice) || item.totalPrice < 0 || item.totalPrice > MAX_MONEY_CENTS) {
+      throw new RangeError('Invalid guest receipt item amount');
+    }
+    if (new Set(people).size !== people.length) throw new RangeError('Duplicate guest consumer');
+    const portions = assignment.portions;
+    if (portions && portions.length !== people.length) throw new RangeError('Invalid personal portions');
+    const weights = people.map((personIndex, index) => {
+      const value = portions ? portions[index] : (personWeights?.[personIndex] ?? 1);
+      if (value === undefined || !Number.isSafeInteger(value) || value < 1 || value > 10000) {
+        throw new RangeError('Invalid guest portion weight');
+      }
+      return value;
+    });
+    const denominator = weights.reduce((sum, weight) => sum + weight, 0);
+    const prices = weights.map((weight) => Number((BigInt(item.totalPrice) * BigInt(weight)) / BigInt(denominator)));
+    const fractions = weights.map(
+      (weight) => Number((BigInt(item.totalPrice) * BigInt(weight)) % BigInt(denominator)) / denominator,
+    );
+    const candidates = people.map((personIndex, index) => {
+      deficits.set(personIndex, (deficits.get(personIndex) ?? 0) + fractions[index]!);
+      return { personIndex, index };
+    });
+    let remaining = item.totalPrice - prices.reduce((sum, price) => sum + price, 0);
+    const awarded = new Set<number>();
+    while (remaining > 0) {
+      const chosen = candidates
+        .filter((candidate) => !awarded.has(candidate.index))
+        .sort(
+          (a, b) =>
+            (deficits.get(b.personIndex) ?? 0) - (deficits.get(a.personIndex) ?? 0) ||
+            fractions[b.index]! - fractions[a.index]! ||
+            a.personIndex - b.personIndex,
+        )[0];
+      if (!chosen) throw new RangeError('Invalid guest remainder');
+      prices[chosen.index]!++;
+      deficits.set(chosen.personIndex, (deficits.get(chosen.personIndex) ?? 0) - 1);
+      awarded.add(chosen.index);
+      remaining--;
+    }
+    allocation.set(assignment.itemIndex, prices);
+  }
+  return allocation;
+}
+
 function itemWeight(personIndices: number[], personWeights: number[]): number {
   return Math.max(
     1,
@@ -159,15 +225,20 @@ function itemWeight(personIndices: number[], personWeights: number[]): number {
  */
 export function personItemShares(
   personIndex: number,
-  params: Pick<Parameters<typeof calculateSplitTotals>[0], 'items' | 'assignments' | 'personWeights'>,
+  params: Pick<
+    Parameters<typeof calculateSplitTotals>[0],
+    'items' | 'assignments' | 'personWeights' | 'balanceAcrossItems'
+  >,
 ): { itemIndex: number; amount: number; share: { numerator: number; denominator: number } }[] {
   const { items, assignments, personWeights } = params;
+  const balanced =
+    params.balanceAcrossItems && items.length > 1 ? balancedGuestItemShares(items, assignments, personWeights) : null;
   const shares: ReturnType<typeof personItemShares> = [];
   for (const { itemIndex, personIndices, portions } of assignments) {
     const item = items[itemIndex];
     if (!item || !personIndices.includes(personIndex)) continue;
 
-    const amounts = splitItemPrice(item.totalPrice, personIndices, personWeights, portions);
+    const amounts = balanced?.get(itemIndex) ?? splitItemPrice(item.totalPrice, personIndices, personWeights, portions);
     let amount = 0;
     let numerator = 0;
     for (const [i, personIdx] of personIndices.entries()) {

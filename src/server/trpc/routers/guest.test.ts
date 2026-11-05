@@ -495,7 +495,14 @@ function claimSession(
     ...overrides
   }: {
     status?: string;
-    receiptData?: { subtotal: number; tax: number; tip: number; total: number; currency: string };
+    receiptData?: {
+      subtotal: number;
+      tax: number;
+      tip: number;
+      total: number;
+      currency: string;
+      roundingBalanced?: boolean;
+    };
     expiresAt?: Date;
     assignments?: { itemIndex: number; personIndices: number[]; partsByPersonId?: Record<string, number> }[];
     items?: { name: string; quantity: number; unitPrice: number; totalPrice: number }[];
@@ -866,6 +873,15 @@ describe('guest.createClaimSession', () => {
 
   beforeEach(() => {
     mockDb.guestSplit.create.mockResolvedValue({ id: 'gs1', shareToken: 'share-token-123' });
+  });
+
+  test('marks a new personal-link session for cross-item rounding without changing the receipt amount', async () => {
+    await (await caller(signedIn)).createClaimSession({ ...session, creatorName: 'Host', paidByName: 'Payer' });
+    const saved = mockDb.guestSplit.create.mock.calls[0]![0].data as {
+      receiptData: { roundingBalanced?: boolean; subtotal: number; total: number };
+    };
+    expect(saved.receiptData.roundingBalanced).toBe(true);
+    expect(saved.receiptData.total).toBe(saved.receiptData.subtotal);
   });
 
   test('gives the creator and the payer ids', async () => {
@@ -1672,6 +1688,32 @@ describe('guest.finalizeSession', () => {
     everyItemClaimed();
     await (await caller()).finalizeSession({ token: 'share-1', personToken: OTHER_TOKEN, personId: pid(2) });
     expect(savedStatus()).toBe('FINALIZED');
+  });
+
+  test('2.16 finalization balances two guest dishes and does not change the paid bill', async () => {
+    claimSession(
+      [
+        { name: 'Анна', personToken: ALICE_TOKEN },
+        { name: 'Борис', personToken: OTHER_TOKEN },
+      ],
+      {
+        items: [
+          { name: 'Пицца', quantity: 1, unitPrice: 101, totalPrice: 101 },
+          { name: 'Салат', quantity: 1, unitPrice: 101, totalPrice: 101 },
+        ],
+        receiptData: { subtotal: 202, total: 202, tax: 0, tip: 0, currency: 'RUB', roundingBalanced: true },
+        assignments: [
+          { itemIndex: 0, personIndices: [0, 1], partsByPersonId: { [pid(0)]: 1, [pid(1)]: 2 } },
+          { itemIndex: 1, personIndices: [0, 1], partsByPersonId: { [pid(0)]: 1, [pid(1)]: 2 } },
+        ],
+      },
+    );
+    await (await caller()).finalizeSession({ token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN });
+    const saved = mockDb.guestSplit.update.mock.calls.at(-1)![0] as {
+      data: { summary: { personIndex: number; itemTotal: number; total: number }[] };
+    };
+    expect(saved.data.summary.map((person) => person.itemTotal)).toEqual([67, 135]);
+    expect(saved.data.summary.reduce((sum, person) => sum + person.total, 0)).toBe(202);
   });
 
   test('uses only current personal tips when finalizing guest shares in the same transaction', async () => {

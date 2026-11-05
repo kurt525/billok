@@ -555,3 +555,103 @@ describe('BillOK voluntary personal guest tips', () => {
     expect(() => addPersonalGuestTips(shares, [])).toThrow(RangeError);
   });
 });
+
+describe('2.16 balanced guest receipt across several dishes', () => {
+  const items = [{ totalPrice: 101 }, { totalPrice: 101 }];
+  const portions = [
+    { itemIndex: 0, personIndices: [0, 1], portions: [3, 5] },
+    { itemIndex: 1, personIndices: [0, 1], portions: [3, 5] },
+  ];
+  const params = {
+    items,
+    assignments: portions,
+    tax: 0,
+    tip: 0,
+    peopleCount: 2,
+    balanceAcrossItems: true,
+  };
+
+  test('balances fractions globally while retaining all item prices in integer kopecks', () => {
+    const totals = calculateSplitTotals(params);
+    expect(totals.map((person) => person.itemTotal)).toEqual([76, 126]);
+    expect(totals.reduce((sum, person) => sum + person.total, 0)).toBe(202);
+    const alice = personItemShares(0, params);
+    const bob = personItemShares(1, params);
+    expect(alice.reduce((sum, item) => sum + item.amount, 0)).toBe(76);
+    expect(bob.reduce((sum, item) => sum + item.amount, 0)).toBe(126);
+    for (const i of [0, 1]) {
+      expect(alice[i]!.amount + bob[i]!.amount).toBe(101);
+      expect(alice[i]!.share).toEqual({ numerator: 3, denominator: 8 });
+      expect(bob[i]!.share).toEqual({ numerator: 5, denominator: 8 });
+    }
+  });
+
+  test('unchanged legacy direct split keeps old allocation without balance flag', () => {
+    const legacy = calculateSplitTotals({ ...params, balanceAcrossItems: false });
+    expect(legacy.map((person) => person.itemTotal)).toEqual([76, 126]);
+    const uneven = [
+      { itemIndex: 0, personIndices: [0, 1], portions: [1, 2] },
+      { itemIndex: 1, personIndices: [0, 1], portions: [1, 2] },
+    ];
+    const legacyUneven = calculateSplitTotals({ ...params, assignments: uneven, balanceAcrossItems: false });
+    const unchanged = calculateSplitTotals({ items, assignments: uneven, tax: 0, tip: 0, peopleCount: 2 });
+    const balanced = calculateSplitTotals({ ...params, assignments: uneven });
+    // Explicit enable is necessary; an old already-finalized receipt stays unchanged.
+    expect(unchanged).toEqual(legacyUneven);
+    expect(legacyUneven.map((person) => person.itemTotal)).toEqual([68, 134]);
+    expect(balanced.map((person) => person.itemTotal)).toEqual([67, 135]);
+  });
+
+  test('carries fractional deficits between separate dishes with opposite portions', () => {
+    const mixed = [
+      { itemIndex: 0, personIndices: [0, 1], portions: [3, 5] },
+      { itemIndex: 1, personIndices: [0, 1], portions: [5, 3] },
+    ];
+    const totals = calculateSplitTotals({ ...params, assignments: mixed });
+    expect(totals.map((person) => person.total)).toEqual([101, 101]);
+    const preview = calculateClaimTotals({ ...params, assignments: mixed });
+    expect(preview.unclaimed).toBeNull();
+    expect(preview.people).toEqual(totals);
+  });
+
+  test('balances nine one-kopeck dishes among three guests', () => {
+    const nine = Array.from({ length: 9 }, () => ({ totalPrice: 1 }));
+    const selected = nine.map((_, itemIndex) => ({ itemIndex, personIndices: [0, 1, 2] }));
+    const totals = calculateSplitTotals({
+      items: nine,
+      assignments: selected,
+      peopleCount: 3,
+      tax: 0,
+      tip: 0,
+      balanceAcrossItems: true,
+    });
+    expect(totals.map((person) => person.itemTotal)).toEqual([3, 3, 3]);
+    for (const itemIndex of nine.keys()) {
+      expect(
+        [0, 1, 2].reduce(
+          (sum, personIndex) =>
+            sum +
+            personItemShares(personIndex, {
+              items: nine,
+              assignments: selected,
+              balanceAcrossItems: true,
+            })[itemIndex]!.amount,
+          0,
+        ),
+      ).toBe(1);
+    }
+  });
+
+  test('a dish cannot charge a nonconsumer; preview retains unselected price', () => {
+    const claimed = [{ itemIndex: 0, personIndices: [0, 1], portions: [1, 1] }];
+    const preview = calculateClaimTotals({ ...params, assignments: claimed });
+    expect(preview.unclaimed?.itemTotal).toBe(101);
+    expect(preview.people.reduce((sum, person) => sum + person.itemTotal, 0)).toBe(101);
+    expect(preview.people.every((person) => person.itemTotal >= 0)).toBe(true);
+  });
+
+  test('one-item receipts keep their prior allocation and never invent money', () => {
+    const single = { ...params, items: [{ totalPrice: 101 }], assignments: [portions[0]!] };
+    expect(calculateSplitTotals(single)).toEqual(calculateSplitTotals({ ...single, balanceAcrossItems: false }));
+  });
+});

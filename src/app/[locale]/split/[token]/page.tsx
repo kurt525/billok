@@ -191,6 +191,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
           const personItems = personItemShares(person.personIndex, {
             items: data.items,
             assignments: data.assignments,
+            balanceAcrossItems: data.receiptData.roundingBalanced === true,
             ...weights,
           });
 
