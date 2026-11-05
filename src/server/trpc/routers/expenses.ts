@@ -87,7 +87,7 @@ export const expensesRouter = createTRPCRouter({
           .default('RUB'),
         // Reject rather than silently ignore a legacy manual-rate override.
         exchangeRate: z.never().optional(),
-        category: z.string().max(50).optional(),
+        category: z.never().optional(),
         expenseDate: z.string().datetime().optional(),
         paidById: z.string(),
         splitMode: z.nativeEnum(SplitMode),
@@ -157,7 +157,6 @@ export const expensesRouter = createTRPCRouter({
             currency: 'RUB',
             exchangeRate: 1.0,
             baseCurrencyAmount: null,
-            ...(input.category !== undefined ? { category: input.category } : {}),
             expenseDate: input.expenseDate ? new Date(input.expenseDate) : new Date(),
             paidById: input.paidById,
             addedById: ctx.user.id,
@@ -205,7 +204,7 @@ export const expensesRouter = createTRPCRouter({
           // Reject attempts to change the currency or pass a manual rate.
           currency: z.never().optional(),
           exchangeRate: z.never().optional(),
-          category: z.string().max(50).optional(),
+          category: z.never().optional(),
           expenseDate: z.string().datetime().optional(),
           paidById: z.string().optional(),
           splitMode: z.nativeEnum(SplitMode).optional(),

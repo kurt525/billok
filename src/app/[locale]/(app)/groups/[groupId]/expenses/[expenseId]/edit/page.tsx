@@ -101,7 +101,6 @@ function EditExpenseForm({
 
   const [title, setTitle] = useState(expense.title);
   const [amountStr, setAmountStr] = useState(() => centsToDecimal(expense.amount));
-  const [category, setCategory] = useState(expense.category ?? '');
   // A placeholder removed from the group keeps the part they had in this
   // expense, the payment or a share, so editing it doesn't move that part onto
   // someone else; the server refuses them anywhere else (#284).
@@ -221,7 +220,6 @@ function EditExpenseForm({
       expenseId,
       title,
       amount: amountCents,
-      category: category || undefined,
       paidById,
       splitMode,
       shares,
@@ -298,17 +296,6 @@ function EditExpenseForm({
                 required
                 disabled={!isRubExpense}
                 className="h-11 min-w-0 scroll-mt-20 text-base"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="category">{t('new.category')}</Label>
-              <Input
-                id="category"
-                className="h-11 min-w-0 scroll-mt-20 text-base"
-                placeholder={t('new.categoryPlaceholder')}
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
               />
             </div>
 

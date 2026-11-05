@@ -45,7 +45,6 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
 
   const [title, setTitle] = useState('');
   const [amountStr, setAmountStr] = useState('');
-  const [category, setCategory] = useState('');
   const [paidById, setPaidById] = useState('');
   const [splitMode, setSplitMode] = useState<SplitMode>('EQUAL');
   const [shares, setShares] = useState<ShareEntry[]>([]);
@@ -102,7 +101,6 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
       title,
       amount: amountCents,
       currency: 'RUB',
-      category: category || undefined,
       paidById: effectivePaidById,
       splitMode,
       shares,
@@ -190,17 +188,6 @@ export default function NewExpensePage({ params }: { params: Promise<{ groupId: 
                 onChange={(e) => setAmountStr(e.target.value)}
                 required
                 className="h-11 min-w-0 text-base"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="category">{t('new.category')}</Label>
-              <Input
-                id="category"
-                className="h-11 min-w-0 scroll-mt-20 text-base"
-                placeholder={t('new.categoryPlaceholder')}
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
               />
             </div>
 

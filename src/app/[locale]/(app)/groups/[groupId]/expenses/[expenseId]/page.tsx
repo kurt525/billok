@@ -128,12 +128,6 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
                 {new Date(e.expenseDate).toLocaleDateString(locale)}
               </p>
             </div>
-            {e.category && (
-              <div className="min-w-0">
-                <p className="text-muted-foreground">{t('detail.category')}</p>
-                <p className="min-w-0 font-medium [overflow-wrap:anywhere]">{e.category}</p>
-              </div>
-            )}
             <div className="min-w-0">
               <p className="text-muted-foreground">{t('detail.addedBy')}</p>
               <p className="min-w-0 font-medium [overflow-wrap:anywhere]">{e.addedBy.name ?? t('detail.unknown')}</p>

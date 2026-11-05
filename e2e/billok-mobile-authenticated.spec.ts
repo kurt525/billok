@@ -1808,7 +1808,7 @@ test('mobile group and expense dialogs remain reachable without mutations', asyn
       await page.locator('#title').fill('ПозицииЧекаДляПроверки');
       await checkControl(page.locator('#title'), width, 'New expense title');
       await checkControl(page.locator('#amount'), width, 'New expense amount');
-      await checkControl(page.locator('#category'), width, 'New expense category');
+      await expect(page.locator('#category')).toHaveCount(0);
       await checkControl(page.locator('form button[type=submit]'), width, 'Create expense action');
       await checkPhoneLayout(page, width);
 
@@ -1817,6 +1817,7 @@ test('mobile group and expense dialogs remain reachable without mutations', asyn
       await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
       await page.locator('#title').fill('ЧерновикРедактированияЧека');
       await checkControl(page.locator('#title'), width, 'Edit expense title');
+      await expect(page.locator('#category')).toHaveCount(0);
       await checkControl(page.locator('#amount'), width, 'Edit expense amount');
       await checkControl(page.locator('form button[type=submit]'), width, 'Save expense action');
       await checkPhoneLayout(page, width);
