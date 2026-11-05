@@ -69,15 +69,81 @@ export function calculateManualReceiptTotals(params: {
 }): Map<string, number> {
   const totals = new Map<string, number>();
   const itemMap = new Map(params.items.map((item) => [item.id, item.totalPrice]));
+  // A single dish still follows the existing creator-rounding rule. The
+  // cross-item balancing path is only used once there are multiple positions.
+  if (params.assignments.length <= 1) {
+    for (const assignment of params.assignments) {
+      const amount = itemMap.get(assignment.receiptItemId);
+      if (amount === undefined || !assignment.people.length) {
+        throw new RangeError('Receipt item not found or has no portions');
+      }
+      for (const [userId, share] of splitCents(amount, assignment.people, params.creatorId)) {
+        totals.set(userId, (totals.get(userId) ?? 0) + share);
+      }
+    }
+    return totals;
+  }
+
+  // Exact per-item floors are computed using integers. Each outstanding
+  // kopeck stays on its own item and may go only to a person who consumed
+  // that item. Carry the fractional deficit across item boundaries so the
+  // next kopeck compensates whoever was rounded down by earlier dishes.
+  const fractionalDeficit = new Map<string, number>();
   for (const assignment of params.assignments) {
     const amount = itemMap.get(assignment.receiptItemId);
-    if (amount === undefined || !assignment.people.length) {
-      throw new RangeError('Receipt item not found or has no portions');
+    if (
+      amount === undefined ||
+      !assignment.people.length ||
+      !Number.isSafeInteger(amount) ||
+      amount < 0 ||
+      amount > MAX_MONEY_CENTS
+    ) {
+      throw new RangeError('Receipt item not found or has invalid price/portions');
     }
-    for (const [userId, share] of splitCents(amount, assignment.people, params.creatorId)) {
-      totals.set(userId, (totals.get(userId) ?? 0) + share);
+    const parts = assignment.people.reduce((sum, p) => sum + p.parts, 0);
+    if (!Number.isSafeInteger(parts) || parts <= 0) throw new RangeError('Invalid total parts');
+    const seen = new Set<string>();
+    let used = 0;
+    const candidates = assignment.people.map((person) => {
+      if (
+        !person.userId ||
+        !Number.isSafeInteger(person.parts) ||
+        person.parts < 1 ||
+        person.parts > 10000 ||
+        seen.has(person.userId)
+      ) {
+        throw new RangeError('Invalid or duplicate portion participant');
+      }
+      seen.add(person.userId);
+      const numerator = BigInt(amount) * BigInt(person.parts);
+      const floor = Number(numerator / BigInt(parts));
+      const fractional = Number(numerator % BigInt(parts)) / parts;
+      totals.set(person.userId, (totals.get(person.userId) ?? 0) + floor);
+      fractionalDeficit.set(person.userId, (fractionalDeficit.get(person.userId) ?? 0) + fractional);
+      used += floor;
+      return { userId: person.userId, fractional };
+    });
+    let remaining = amount - used;
+    const awarded = new Set<string>();
+    while (remaining > 0) {
+      const next = candidates
+        .filter((candidate) => !awarded.has(candidate.userId))
+        .sort(
+          (a, b) =>
+            (fractionalDeficit.get(b.userId) ?? 0) - (fractionalDeficit.get(a.userId) ?? 0) ||
+            b.fractional - a.fractional ||
+            a.userId.localeCompare(b.userId),
+        )[0];
+      if (!next) throw new RangeError('Receipt rounding cannot be reconciled');
+      totals.set(next.userId, (totals.get(next.userId) ?? 0) + 1);
+      fractionalDeficit.set(next.userId, (fractionalDeficit.get(next.userId) ?? 0) - 1);
+      awarded.add(next.userId);
+      remaining--;
     }
   }
+  // Preserve a stable zero-valued creator entry for downstream receipt
+  // summaries. Adjustments reserved for section 2.17 are not added here.
+  if (!totals.has(params.creatorId)) totals.set(params.creatorId, 0);
   return totals;
 }
 

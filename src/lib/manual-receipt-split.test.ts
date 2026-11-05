@@ -66,6 +66,112 @@ describe('manual item splitting by consumed parts', () => {
     });
     expect([...totals.values()].reduce((sum, x) => sum + x, 0)).toBe(303);
   });
+  test('2.16 balances cross-item remainders among actual consumers rather than charging creator', () => {
+    const totals = calculateManualReceiptTotals({
+      items: [
+        { id: 'a', totalPrice: 101 },
+        { id: 'b', totalPrice: 101 },
+      ],
+      assignments: [
+        {
+          receiptItemId: 'a',
+          people: [
+            { userId: 'alice', parts: 3 },
+            { userId: 'bob', parts: 5 },
+          ],
+        },
+        {
+          receiptItemId: 'b',
+          people: [
+            { userId: 'alice', parts: 3 },
+            { userId: 'bob', parts: 5 },
+          ],
+        },
+      ],
+      creatorId: 'organizer',
+    });
+    // Alice's exact share is 75.75 kopecks, Bob's 126.25.
+    expect([...totals]).toEqual([
+      ['alice', 76],
+      ['bob', 126],
+      ['organizer', 0],
+    ]);
+  });
+
+  test('2.16 opposite fractional deficits cancel across independent items', () => {
+    const totals = calculateManualReceiptTotals({
+      items: [
+        { id: 'a', totalPrice: 101 },
+        { id: 'b', totalPrice: 101 },
+      ],
+      assignments: [
+        {
+          receiptItemId: 'a',
+          people: [
+            { userId: 'alice', parts: 3 },
+            { userId: 'bob', parts: 5 },
+          ],
+        },
+        {
+          receiptItemId: 'b',
+          people: [
+            { userId: 'alice', parts: 5 },
+            { userId: 'bob', parts: 3 },
+          ],
+        },
+      ],
+      creatorId: 'organizer',
+    });
+    expect([...totals]).toEqual([
+      ['alice', 101],
+      ['bob', 101],
+      ['organizer', 0],
+    ]);
+  });
+
+  test('2.16 handles multiple 1-kopeck dishes with three consumers', () => {
+    const items = Array.from({ length: 9 }, (_, i) => ({ id: String(i), totalPrice: 1 }));
+    const assignments = items.map(({ id }) => ({
+      receiptItemId: id,
+      people: [
+        { userId: 'alice', parts: 1 },
+        { userId: 'bob', parts: 1 },
+        { userId: 'carol', parts: 1 },
+      ],
+    }));
+    const totals = calculateManualReceiptTotals({ items, assignments, creatorId: 'organizer' });
+    expect([...totals]).toEqual([
+      ['alice', 3],
+      ['bob', 3],
+      ['carol', 3],
+      ['organizer', 0],
+    ]);
+  });
+
+  test('2.16 never creates negative shares or distributes an item to non-consumers', () => {
+    const totals = calculateManualReceiptTotals({
+      items: [
+        { id: 'a', totalPrice: 1 },
+        { id: 'b', totalPrice: 100 },
+      ],
+      assignments: [
+        {
+          receiptItemId: 'a',
+          people: [
+            { userId: 'alice', parts: 1 },
+            { userId: 'bob', parts: 1 },
+          ],
+        },
+        { receiptItemId: 'b', people: [{ userId: 'carol', parts: 1 }] },
+      ],
+      creatorId: 'organizer',
+    });
+    expect([...totals.values()].reduce((sum, amount) => sum + amount, 0)).toBe(101);
+    expect(totals.get('carol')).toBe(100);
+    expect([...totals.values()].every((amount) => amount >= 0)).toBe(true);
+    expect(totals.get('organizer')).toBe(0);
+  });
+
   test('splitting 505 kopecks adds no mandatory tax or shared tip', () => {
     const result = split(505, [2, 3]);
     expect([...result.values()].reduce((sum, share) => sum + share, 0)).toBe(505);
