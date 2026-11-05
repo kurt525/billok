@@ -632,3 +632,123 @@ test('manual group bill starts without upload and keeps its positions', async ({
   await expect(restored.nth(1)).toHaveValue('5');
   expect(uploads).toEqual([]);
 });
+
+test('Issue 2.19.3: original portions unknown, organizer re-approves current claims and RUB expense stays exact', async ({
+  page,
+}) => {
+  test.skip(!groupId, 'Requires isolated disposable RUB group fixture');
+  test.setTimeout(180_000);
+
+  await page.goto('/login', { waitUntil: 'networkidle' });
+  await page.locator('input[type=email]').fill('bob@example.com');
+  await page.locator('input[type=password]').fill('password123');
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard/);
+  await page.goto('/groups/' + groupId + '/expenses/new', { waitUntil: 'networkidle' });
+  await page.getByTestId('create-manual-group-receipt').click();
+  await expect(page).toHaveURL(/\/scan\?receiptId=/);
+  const receiptId = new URL(page.url()).searchParams.get('receiptId');
+  expect(receiptId).toBeTruthy();
+
+  for (const [name, amount] of [
+    ['Пицца без общего количества', '10,01'],
+    ['Напиток без общего количества', '2,00'],
+  ] as const) {
+    await page.getByTestId('add-item-btn').click();
+    const form = page.getByTestId('add-item-form');
+    await form.locator('input').nth(0).fill(name);
+    await form.locator('input').nth(1).fill('1');
+    await form.locator('input').nth(2).fill(amount);
+    await form.getByRole('button', { name: 'Добавить', exact: true }).click();
+    const card = item(page, name);
+    await expect(card).toHaveCount(1);
+    const progress = card.locator('[data-testid^="item-total-parts-progress-"]');
+    await expect(progress).toContainText('Участниками учтено частей: 0');
+    await expect(progress).toContainText('Исходное количество частей не указано');
+    await expect(progress).not.toContainText('Осталось нераспределённых');
+  }
+  const pizza = item(page, 'Пицца без общего количества');
+  const drink = item(page, 'Напиток без общего количества');
+  const pizzaProgress = pizza.locator('[data-testid^="item-total-parts-progress-"]');
+  const submit = page.getByTestId('create-expense-btn');
+  const confirmation = page.getByTestId('group-parts-confirm-checkbox');
+  await expect(page.getByTestId('group-parts-preliminary')).toContainText('Предварительный расчёт');
+  await expect(submit).toBeDisabled();
+  await expect(confirmation).toBeDisabled();
+
+  await pizza.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Bob' }).click();
+  await pizza.getByLabel('Частей: Bob').fill('3');
+  await expect(pizzaProgress).toContainText('Участниками учтено частей: 3');
+  await expect(submit).toBeDisabled(); // the drink is still unassigned
+  await pizza.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Alice' }).click();
+  await pizza.getByLabel('Частей: Alice').fill('5');
+  await expect(pizzaProgress).toContainText('Участниками учтено частей: 8');
+  await expect(pizzaProgress).not.toContainText('Осталось нераспределённых');
+  await expect(submit).toBeDisabled();
+  await expect(confirmation).toBeDisabled();
+
+  await drink.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Bob' }).click();
+  await expect(drink.locator('[data-testid^="item-total-parts-progress-"]')).toContainText(
+    'Участниками учтено частей: 1',
+  );
+  await page.locator('#title').fill('Приёмка 2.19.3 — точные копейки');
+  await expect(confirmation).toBeEnabled();
+  await expect(submit).toBeDisabled();
+  await confirmation.check();
+  await expect(submit).toBeEnabled();
+
+  // Changing a single consumed portion invalidates the previously accepted
+  // receipt, even if the creator later restores the former value.
+  await pizza.getByLabel('Частей: Bob').fill('4');
+  await expect(confirmation).not.toBeChecked();
+  await expect(submit).toBeDisabled();
+  await pizza.getByLabel('Частей: Bob').fill('3');
+  await expect(confirmation).not.toBeChecked();
+  await expect(pizzaProgress).toContainText('Участниками учтено частей: 8');
+
+  // Check the exact progress and confirmation controls, not only document
+  // scrollWidth. Blur the mobile numeric input to release visual viewport pan.
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    window.scrollTo({ left: 0, top: window.scrollY, behavior: 'instant' });
+  });
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 520 });
+    const geometry = await pizzaProgress.evaluate((element) => {
+      const before = element.getBoundingClientRect();
+      window.scrollTo({ top: window.scrollY + before.top - 75, left: 0, behavior: 'instant' });
+      const rect = element.getBoundingClientRect();
+      return {
+        left: rect.left,
+        right: rect.right,
+        documentWidth: document.documentElement.scrollWidth,
+        viewportWidth: document.documentElement.clientWidth,
+      };
+    });
+    expect(geometry.viewportWidth, 'Viewport at ' + width).toBe(width);
+    expect(geometry.documentWidth, 'Overflow at ' + width).toBeLessThanOrEqual(width + 1);
+    expect(geometry.left, 'Parts status left at ' + width).toBeGreaterThanOrEqual(-1);
+    expect(geometry.right, 'Parts status right at ' + width).toBeLessThanOrEqual(width + 1);
+    await noDocumentOverflow(page);
+  }
+
+  await confirmation.check();
+  await expect(submit).toBeEnabled();
+  await submit.click();
+  await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'), { timeout: 20_000 });
+  const { expenses } = await trpcResult(await trpcQuery(page.request, 'expenses.list', { groupId, limit: 100 }));
+  const saved = (
+    expenses as {
+      receiptId: string | null;
+      amount: number;
+      currency: string;
+      shares: { amount: number }[];
+    }[]
+  ).find((expense) => expense.receiptId === receiptId);
+  expect(saved).toBeTruthy();
+  expect(saved!.currency).toBe('RUB');
+  expect(saved!.amount).toBe(1201);
+  expect(saved!.shares.reduce((sum, share) => sum + share.amount, 0)).toBe(1201);
+  expect(saved!.shares).toHaveLength(2);
+  expect(saved!.shares.every((share) => share.amount >= 0)).toBe(true);
+});

@@ -1508,3 +1508,197 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
     await owner.dispose();
   }
 });
+
+test('Issue 2.19.3: guest personal links count 0, 3, 8 portions and cannot finalize unapproved RUB claims', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const second = await browser.newContext({
+    viewport: { width: 320, height: 520 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  try {
+    const creation = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: {
+        merchantName: 'Приёмка 2.19.3',
+        subtotal: 1001,
+        tax: 0,
+        tip: 0,
+        total: 1001,
+        currency: 'RUB',
+      },
+      items: [
+        { name: 'Пицца', quantity: 1, unitPrice: 800, totalPrice: 800 },
+        { name: 'Вода', quantity: 1, unitPrice: 201, totalPrice: 201 },
+      ],
+      people: ['Анна', 'Борис'],
+      creatorName: 'Анна',
+      paidByName: 'Борис',
+      joinCreator: true,
+    });
+    const raw = await creation.text();
+    expect(creation.ok(), raw).toBe(true);
+    const created = JSON.parse(raw).result.data.json as {
+      shareToken: string;
+      creator: { personId: string; personToken: string; name: string };
+    };
+    const token = created.shareToken;
+    const anna = created.creator;
+    const boris = await joinGuestSession(second.request, { token, name: 'Борис' });
+    await rememberClaimIdentity(page.context(), token, anna);
+    await rememberClaimIdentity(second, token, boris);
+
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    const pizzaProgress = page.getByTestId('guest-claimed-parts-progress-0');
+    const waterProgress = page.getByTestId('guest-claimed-parts-progress-1');
+    await expect(pizzaProgress).toContainText('Всего заявлено частей: 0');
+    await expect(waterProgress).toContainText('Всего заявлено частей: 0');
+    await expect(page.getByTestId('unclaimed-total')).toContainText('10,01');
+    await expect(page.getByTestId('guest-parts-preliminary')).toContainText('Предварительный расчёт');
+    await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
+    const earlyApproval = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
+    expect(earlyApproval.ok()).toBe(false);
+    const earlyFinish = await trpcMutation(owner, 'guest.finalizeSession', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+    });
+    expect(earlyFinish.ok()).toBe(false);
+    const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(initial.status).toBe('CLAIMING');
+    expect(initial.partsConfirmed).toBe(false);
+    expect(initial.items.map((entry: { totalPrice: number }) => entry.totalPrice)).toEqual([800, 201]);
+
+    const annaClaim = await trpcMutation(owner, 'guest.claimItems', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+      claimedItemIndices: [0],
+    });
+    expect(annaClaim.ok(), await annaClaim.text()).toBe(true);
+    const three = await trpcMutation(owner, 'guest.setMyItemParts', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+      itemIndex: 0,
+      parts: 3,
+    });
+    expect(three.ok(), await three.text()).toBe(true);
+    await expect(pizzaProgress).toContainText('Всего заявлено частей: 3', { timeout: 15_000 });
+    await expect(waterProgress).toContainText('Всего заявлено частей: 0');
+    await expect(pizzaProgress).toContainText('Исходное количество неизвестно');
+    await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
+
+    const borisClaim = await trpcMutation(second.request, 'guest.claimItems', {
+      token,
+      personId: boris.personId,
+      personToken: boris.personToken,
+      claimedItemIndices: [0, 1],
+    });
+    expect(borisClaim.ok(), await borisClaim.text()).toBe(true);
+    const five = await trpcMutation(second.request, 'guest.setMyItemParts', {
+      token,
+      personId: boris.personId,
+      personToken: boris.personToken,
+      itemIndex: 0,
+      parts: 5,
+    });
+    expect(five.ok(), await five.text()).toBe(true);
+    await expect(pizzaProgress).toContainText('Всего заявлено частей: 8', { timeout: 15_000 });
+    await expect(waterProgress).toContainText('Всего заявлено частей: 1');
+    await expect(pizzaProgress).not.toContainText('Осталось');
+    await expect(page.getByTestId('guest-parts-awaiting-confirmation')).toBeVisible();
+    await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
+    await expect(page.getByTestId('person-total-0')).toContainText('3,00');
+    await expect(page.getByTestId('person-total-1')).toContainText('7,01');
+
+    // Two real devices: the guest's anonymous link never approves the receipt
+    // for the signed-in creator, but both see the saved counts and provisional amount.
+    const guestPage = await second.newPage();
+    await guestPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await expect(guestPage.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 8');
+    await expect(guestPage.getByTestId('guest-confirm-parts-btn')).toHaveCount(0);
+    for (const width of [320, 360, 430, 480, 600, 720]) {
+      await page.setViewportSize({ width, height: 360 });
+      await page.reload({ waitUntil: 'networkidle' });
+      await expect(page.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 8', {
+        timeout: 15_000,
+      });
+      await expect(page.getByTestId('guest-parts-awaiting-confirmation')).toBeVisible();
+      const geometry = await page.getByTestId('guest-claimed-parts-progress-0').evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return {
+          left: bounds.left,
+          right: bounds.right,
+          viewportWidth: document.documentElement.clientWidth,
+          documentWidth: document.documentElement.scrollWidth,
+        };
+      });
+      expect(geometry.viewportWidth, 'Viewport ' + width).toBe(width);
+      expect(geometry.documentWidth, 'Overflow ' + width).toBeLessThanOrEqual(width + 1);
+      expect(geometry.left, 'Progress left at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(geometry.right, 'Progress right at ' + width).toBeLessThanOrEqual(width + 1);
+      await fitsPhone(page);
+    }
+
+    const approval = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
+    expect(approval.ok(), await approval.text()).toBe(true);
+    await expect
+      .poll(async () => (await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).partsConfirmed)
+      .toBe(true);
+    await expect(page.getByTestId('finalize-btn')).toBeVisible({ timeout: 15_000 });
+
+    // Any further claim change invalidates even a previously approved receipt.
+    const modified = await trpcMutation(second.request, 'guest.setMyItemParts', {
+      token,
+      personId: boris.personId,
+      personToken: boris.personToken,
+      itemIndex: 0,
+      parts: 6,
+    });
+    expect(modified.ok(), await modified.text()).toBe(true);
+    await expect
+      .poll(async () => (await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).partsConfirmed)
+      .toBe(false);
+    await expect(page.getByTestId('finalize-btn')).toHaveCount(0, { timeout: 15_000 });
+    const staleFinish = await trpcMutation(owner, 'guest.finalizeSession', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+    });
+    expect(staleFinish.ok()).toBe(false);
+    const stillClaiming = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(stillClaiming.status).toBe('CLAIMING');
+    const restore = await trpcMutation(second.request, 'guest.setMyItemParts', {
+      token,
+      personId: boris.personId,
+      personToken: boris.personToken,
+      itemIndex: 0,
+      parts: 5,
+    });
+    expect(restore.ok(), await restore.text()).toBe(true);
+    await expect(page.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 8', {
+      timeout: 15_000,
+    });
+    const approvedAgain = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
+    expect(approvedAgain.ok(), await approvedAgain.text()).toBe(true);
+    const finish = await trpcMutation(owner, 'guest.finalizeSession', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+    });
+    expect(finish.ok(), await finish.text()).toBe(true);
+    const result = await trpcResult(await trpcQuery(owner, 'guest.getSplit', { token }));
+    expect(result.receiptData.total).toBe(1001);
+    expect(result.items.map((entry: { totalPrice: number }) => entry.totalPrice)).toEqual([800, 201]);
+    expect(result.summary.map((entry: { itemTotal: number }) => entry.itemTotal)).toEqual([300, 701]);
+    expect(result.summary.reduce((sum: number, entry: { total: number }) => sum + entry.total, 0)).toBe(1001);
+    expect(result.summary.every((entry: { tip: number }) => entry.tip === 0)).toBe(true);
+  } finally {
+    await second.close();
+    await owner.dispose();
+  }
+});
