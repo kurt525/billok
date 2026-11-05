@@ -72,4 +72,29 @@ describe('BillOK does not ship OCR or AI service code', () => {
     expect(receipts).toContain('assignItemsAndCreateExpense:');
     expect(receipts).toContain('getReceiptItems:');
   });
+
+  test('manual group receipt never needs an image or a processing stage', () => {
+    const receipts = read('src/server/trpc/routers/receipts.ts');
+    const manual = receipts.split('createManual:')[1]?.split('getReceiptItems:')[0];
+    expect(manual, 'manual receipt procedure must exist').toBeDefined();
+    expect(manual).toContain("imagePath: ''");
+    expect(manual).toContain("originalName: 'billok-manual'");
+    expect(manual).toContain("mimeType: 'application/x-billok-manual'");
+    expect(manual).toContain('fileSize: 0');
+    expect(manual).toContain("status: 'COMPLETED'");
+    expect(manual).not.toMatch(/(?:extract|transcribe|processReceipt|uploadFile)\s*\(/);
+  });
+
+  test('legacy receipt images are read-only and cannot re-enable uploads', () => {
+    const legacyRoute = read('src/app/api/uploads/[...path]/route.ts');
+    expect(legacyRoute).toMatch(/export\s+async\s+function\s+GET\s*\(/);
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      expect(legacyRoute).not.toMatch(new RegExp('export\\s+(?:async\\s+)?function\\s+' + method + '\\s*\\('));
+    }
+    expect(legacyRoute).toContain('resolveUploadPath');
+    expect(legacyRoute).toContain('imagePath: filePath');
+    expect(legacyRoute).toContain('receipt.uploadedById === session.user.id');
+    const historicalEditor = read('src/app/[locale]/(app)/groups/[groupId]/scan/page.tsx');
+    expect(historicalEditor).toContain("if (!receiptId) router.replace('/groups/' + groupId + '/expenses/new')");
+  });
 });
