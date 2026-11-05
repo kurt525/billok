@@ -35,6 +35,7 @@ describe('manual group receipt: final waiter tip reconciliation', () => {
       payerShare: 501,
       reimbursementTotal: 650,
       reimbursements: [{ fromId: 'alice', amount: 650 }],
+      organizerCorrection: { userId: 'bob', amount: 1 },
     });
     expect(manualExpenseBreakdown(fixture)?.foodTotal).toBe(1001);
   });
@@ -59,6 +60,7 @@ describe('manual group receipt: final waiter tip reconciliation', () => {
       payerShare: 501,
       reimbursementTotal: 500,
       reimbursements: [{ fromId: 'alice', amount: 500 }],
+      organizerCorrection: { userId: 'bob', amount: 1 },
     });
   });
   test('rounding always belongs to creator, not an arbitrarily selected payer', () => {
@@ -121,6 +123,63 @@ describe('manual group receipt: final waiter tip reconciliation', () => {
         },
       }),
     ).toBeNull();
+  });
+});
+
+describe('Issue 2.17.1: separate rounding adjustment without a fictitious eaten dish', () => {
+  const input = {
+    receipt: { creatorId: 'host', extractedData: { currency: 'RUB', tax: 0, tip: 0 } },
+    items: [
+      {
+        id: 'dish',
+        totalPrice: 101,
+        assignments: [
+          { userId: 'alice', shareOfItem: 3 },
+          { userId: 'bob', shareOfItem: 5 },
+        ],
+      },
+    ],
+    expense: {
+      amount: 101,
+      currency: 'RUB',
+      paidById: 'alice',
+      shares: [
+        { userId: 'alice', amount: 37 },
+        { userId: 'bob', amount: 63 },
+        { userId: 'host', amount: 1 },
+      ],
+    },
+  };
+
+  test('rounding correction belongs to receipt creator, not the selected payer or dish consumers', () => {
+    const result = manualExpenseBreakdown(input);
+    expect(result).toMatchObject({
+      foodTotal: 101,
+      tipTotal: 0,
+      total: 101,
+      organizerCorrection: { userId: 'host', amount: 1 },
+      payerShare: 37,
+      reimbursementTotal: 64,
+      reimbursements: [
+        { fromId: 'bob', amount: 63 },
+        { fromId: 'host', amount: 1 },
+      ],
+    });
+    expect(input.items[0]!.assignments.map((part) => part.userId)).toEqual(['alice', 'bob']);
+  });
+
+  test('if the organizer also paid, there is no transfer to themselves', () => {
+    const result = manualExpenseBreakdown({ ...input, expense: { ...input.expense, paidById: 'host' } });
+    expect(result).toMatchObject({
+      organizerCorrection: { userId: 'host', amount: 1 },
+      payerShare: 1,
+      reimbursementTotal: 100,
+      reimbursements: [
+        { fromId: 'alice', amount: 37 },
+        { fromId: 'bob', amount: 63 },
+      ],
+    });
+    expect(result?.reimbursements.every((row) => row.fromId !== 'host')).toBe(true);
   });
 });
 

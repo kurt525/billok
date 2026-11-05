@@ -1,11 +1,6 @@
 import { MAX_MONEY_CENTS } from './money';
 
 /**
- * Integer-only proportional splitting. Each participant gets the floor of their
- * proportional item cost; remaining kopecks always belong to the receipt creator,
- * even if they consumed nothing and another member paid the bill.
- */
-/**
  * A known original number of portions is optional. A missing total is not
  * inferred from item.quantity: that's the number of products on the bill.
  */
@@ -37,6 +32,7 @@ export type ManualAssignment = {
   people: { userId: string; parts: number }[];
 };
 
+/** For the single-item legacy mode, keep the organizer's correction separate from food consumption. */
 function splitCents(amount: number, people: { userId: string; parts: number }[], creatorId: string) {
   const totalParts = people.reduce((sum, p) => sum + p.parts, 0);
   if (!Number.isSafeInteger(amount) || amount < 0 || !Number.isSafeInteger(totalParts) || totalParts <= 0) {
@@ -58,16 +54,29 @@ function splitCents(amount: number, people: { userId: string; parts: number }[],
     result.set(person.userId, share);
     used += share;
   }
-  result.set(creatorId, (result.get(creatorId) ?? 0) + amount - used);
-  return result;
+  const organizerCorrectionCents = amount - used;
+  result.set(creatorId, (result.get(creatorId) ?? 0) + organizerCorrectionCents);
+  return { totals: result, organizerCorrectionCents };
 }
 
-export function calculateManualReceiptTotals(params: {
+export type ManualReceiptAllocation = {
+  totals: Map<string, number>;
+  /** Non-consumption rounding assigned to the specific receipt creator, never to a fictitious dish. */
+  organizerCorrectionCents: number;
+};
+
+/**
+ * Return the existing settlement amounts plus a separately identifiable
+ * creator-only rounding correction. The correction is not an item assignment:
+ * ReceiptItemAssignment remains the list of actual consumers.
+ */
+export function calculateManualReceiptAllocation(params: {
   items: { id: string; totalPrice: number }[];
   assignments: ManualAssignment[];
   creatorId: string;
-}): Map<string, number> {
+}): ManualReceiptAllocation {
   const totals = new Map<string, number>();
+  let organizerCorrectionCents = 0;
   const itemMap = new Map(params.items.map((item) => [item.id, item.totalPrice]));
   // A single dish still follows the existing creator-rounding rule. The
   // cross-item balancing path is only used once there are multiple positions.
@@ -77,11 +86,13 @@ export function calculateManualReceiptTotals(params: {
       if (amount === undefined || !assignment.people.length) {
         throw new RangeError('Receipt item not found or has no portions');
       }
-      for (const [userId, share] of splitCents(amount, assignment.people, params.creatorId)) {
+      const allocation = splitCents(amount, assignment.people, params.creatorId);
+      for (const [userId, share] of allocation.totals) {
         totals.set(userId, (totals.get(userId) ?? 0) + share);
       }
+      organizerCorrectionCents += allocation.organizerCorrectionCents;
     }
-    return totals;
+    return { totals, organizerCorrectionCents };
   }
 
   // Exact per-item floors are computed using integers. Each outstanding
@@ -144,7 +155,14 @@ export function calculateManualReceiptTotals(params: {
   // Preserve a stable zero-valued creator entry for downstream receipt
   // summaries. Adjustments reserved for section 2.17 are not added here.
   if (!totals.has(params.creatorId)) totals.set(params.creatorId, 0);
-  return totals;
+  return { totals, organizerCorrectionCents };
+}
+
+/** Stable existing API for preview, finalization and personal-tip accounting. */
+export function calculateManualReceiptTotals(
+  params: Parameters<typeof calculateManualReceiptAllocation>[0],
+): Map<string, number> {
+  return calculateManualReceiptAllocation(params).totals;
 }
 
 /**

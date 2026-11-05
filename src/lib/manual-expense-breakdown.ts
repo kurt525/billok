@@ -1,4 +1,4 @@
-import { calculateManualReceiptTotals, calculateTotalsWithPersonalTips } from './manual-receipt-split';
+import { calculateManualReceiptAllocation, calculateTotalsWithPersonalTips } from './manual-receipt-split';
 
 /**
  * Read-only reconciliation of a FINALIZED manual group receipt. Never infer
@@ -33,6 +33,8 @@ export function manualExpenseBreakdown(input: {
   payerShare: number;
   reimbursementTotal: number;
   reimbursements: { fromId: string; amount: number }[];
+  /** Separate adjustment, NOT a dish eaten by the organizer. */
+  organizerCorrection: { userId: string; amount: number } | null;
 } | null {
   const { receipt, items, expense } = input;
   const data = receipt.extractedData;
@@ -53,7 +55,7 @@ export function manualExpenseBreakdown(input: {
   }
 
   try {
-    const food = calculateManualReceiptTotals({
+    const allocation = calculateManualReceiptAllocation({
       items: items.map((item) => ({ id: item.id, totalPrice: item.totalPrice })),
       assignments: items.map((item) => ({
         receiptItemId: item.id,
@@ -70,7 +72,7 @@ export function manualExpenseBreakdown(input: {
       ...expense.shares.map((share) => share.userId),
       ...Object.keys(data.personalTips ?? {}),
     ]);
-    const calculated = calculateTotalsWithPersonalTips(food, data.personalTips, validMembers, consumers);
+    const calculated = calculateTotalsWithPersonalTips(allocation.totals, data.personalTips, validMembers, consumers);
     if (calculated.total !== expense.amount || calculated.userTotals.size !== expense.shares.length) return null;
     if (expense.shares.some((share) => calculated.userTotals.get(share.userId) !== share.amount)) return null;
 
@@ -90,6 +92,10 @@ export function manualExpenseBreakdown(input: {
       payerShare,
       reimbursementTotal,
       reimbursements,
+      organizerCorrection:
+        allocation.organizerCorrectionCents > 0
+          ? { userId: receipt.creatorId, amount: allocation.organizerCorrectionCents }
+          : null,
     };
   } catch (error) {
     if (error instanceof RangeError) return null;

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   calculateManualReceiptTotals,
+  calculateManualReceiptAllocation,
   calculateTotalsWithPersonalTips,
   manualPortionProgress,
 } from './manual-receipt-split';
@@ -41,6 +42,92 @@ describe('manual item splitting by consumed parts', () => {
       ['bob', 63],
     ]);
   });
+  test('2.17.1 exposes non-consumption organizer correction without adding a receipt item', () => {
+    const params = {
+      items: [{ id: 'pizza', totalPrice: 101 }],
+      assignments: [
+        {
+          receiptItemId: 'pizza',
+          people: [
+            { userId: 'alice', parts: 3 },
+            { userId: 'bob', parts: 5 },
+          ],
+        },
+      ],
+      creatorId: 'organizer',
+    };
+    const allocation = calculateManualReceiptAllocation(params);
+    expect(allocation.organizerCorrectionCents).toBe(1);
+    expect(allocation.totals).toEqual(
+      new Map([
+        ['alice', 37],
+        ['bob', 63],
+        ['organizer', 1],
+      ]),
+    );
+    // This meta-field is not another assignment or another line item.
+    expect(params.assignments[0]!.people.map((p) => p.userId)).toEqual(['alice', 'bob']);
+    expect(allocation.totals).toEqual(calculateManualReceiptTotals(params));
+    expect([...allocation.totals.values()].reduce((sum, x) => sum + x, 0)).toBe(101);
+  });
+
+  test('2.17.1 creator may also consume the dish; only the remainder is separate', () => {
+    const params = {
+      items: [{ id: 'pizza', totalPrice: 101 }],
+      assignments: [
+        {
+          receiptItemId: 'pizza',
+          people: [
+            { userId: 'alice', parts: 3 },
+            { userId: 'bob', parts: 5 },
+          ],
+        },
+      ],
+      creatorId: 'alice',
+    };
+    expect(calculateManualReceiptAllocation(params)).toEqual({
+      totals: new Map([
+        ['alice', 38],
+        ['bob', 63],
+      ]),
+      organizerCorrectionCents: 1,
+    });
+  });
+
+  test('2.17.1 balanced multi-item allocation has no separate organizer correction', () => {
+    const params = {
+      items: [
+        { id: 'a', totalPrice: 101 },
+        { id: 'b', totalPrice: 101 },
+      ],
+      assignments: [
+        {
+          receiptItemId: 'a',
+          people: [
+            { userId: 'alice', parts: 3 },
+            { userId: 'bob', parts: 5 },
+          ],
+        },
+        {
+          receiptItemId: 'b',
+          people: [
+            { userId: 'alice', parts: 3 },
+            { userId: 'bob', parts: 5 },
+          ],
+        },
+      ],
+      creatorId: 'organizer',
+    };
+    expect(calculateManualReceiptAllocation(params)).toEqual({
+      totals: new Map([
+        ['alice', 76],
+        ['bob', 126],
+        ['organizer', 0],
+      ]),
+      organizerCorrectionCents: 0,
+    });
+  });
+
   test('one kopeck also reconciles', () => {
     const result = split(1, [3, 5]);
     expect([...result.values()].reduce((sum, x) => sum + x, 0)).toBe(1);
