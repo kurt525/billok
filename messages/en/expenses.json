@@ -150,7 +150,9 @@
     "personalTipMembersTitle": "Participant tips",
     "personalTipMembersLive": "Saved amounts update automatically. Each member can change only their own tip.",
     "organizerRoundingCorrection": "Receipt creator {name} rounding adjustment (already included)",
-    "partsPreliminary": "Provisional totals based on claimed portions. Before finalization the receipt organizer will confirm everyone has declared their portions."
+    "partsPreliminary": "Provisional totals based on claimed portions. Before finalization the receipt organizer will confirm everyone has declared their portions.",
+    "partsConfirmComplete": "I confirm that every participant has declared the portions they consumed and the amounts are correct.",
+    "partsConfirmCreatorOnly": "Only the receipt creator can confirm all portions and finalize this receipt."
   },
   "splits": {
     "selectAll": "Select all",

@@ -12,6 +12,7 @@ import {
   manualPortionProgress,
 } from '@/lib/manual-receipt-split';
 import { MAX_MONEY_CENTS } from '@/lib/money';
+import { manualPartsConfirmationSnapshot } from '@/lib/manual-parts-confirmation';
 import { deleteUnusedSplitReceipts, removeReceiptFiles } from '../../lib/receipt-cleanup';
 
 /**
@@ -409,6 +410,7 @@ export const receiptsRouter = createTRPCRouter({
         title: z.string().min(1).max(200),
         paidById: z.string(),
         tipOverride: z.never().optional(), // shared tips are not part of BillOK receipts
+        confirmedPartsSnapshot: z.string().max(500000).optional(),
         assignments: z.array(
           z.object({
             receiptItemId: z.string(),
@@ -586,7 +588,7 @@ export const receiptsRouter = createTRPCRouter({
         if (receipt.originalName === 'billok-manual') {
           const currentReceipt = await tx.receipt.findUnique({
             where: { id: input.receiptId },
-            select: { groupId: true, status: true, originalName: true, extractedData: true },
+            include: { items: { select: { id: true, totalPrice: true } } },
           });
           if (
             !currentReceipt ||
@@ -602,6 +604,35 @@ export const receiptsRouter = createTRPCRouter({
           }
           if (currentData.tax !== 0 || currentData.tip !== 0) {
             throw new AppError('BAD_REQUEST', 'receiptExtraChargesNotSupported');
+          }
+
+          // Only the creator can affirm completeness of this manual receipt.
+          // The exact approved portions and prices must still match the locked
+          // receipt; no stale or fabricated checkbox can finalize the expense.
+          if (currentReceipt.uploadedById !== ctx.user.id) {
+            throw new AppError('FORBIDDEN');
+          }
+          const snapshot = manualPartsConfirmationSnapshot({
+            items: currentReceipt.items,
+            assignments: input.assignments.map((assignment) => ({
+              receiptItemId: assignment.receiptItemId,
+              people: assignment.userIds.map((userId, index) => ({
+                userId,
+                parts: assignment.parts?.[index] ?? 1,
+              })),
+            })),
+          });
+          if (input.confirmedPartsSnapshot !== snapshot) {
+            throw new AppError('PRECONDITION_FAILED', 'receiptPartsConfirmationRequired');
+          }
+          if (
+            currentReceipt.items.length !== receipt.items.length ||
+            currentReceipt.items.some(
+              (item) =>
+                !receipt.items.some((original) => original.id === item.id && original.totalPrice === item.totalPrice),
+            )
+          ) {
+            throw new AppError('CONFLICT', 'receiptNotReady');
           }
 
           try {

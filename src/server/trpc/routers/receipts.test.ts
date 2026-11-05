@@ -1,4 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { manualPartsConfirmationSnapshot } from '@/lib/manual-parts-confirmation';
 
 vi.mock('next/headers', () => ({
   cookies: vi.fn().mockResolvedValue({ get: vi.fn().mockReturnValue(null) }),
@@ -368,7 +369,59 @@ describe('manual receipt: consumed portions and creator rounding', () => {
     title: 'Пицца',
     paidById: 'u2',
     assignments: [{ receiptItemId: 'pizza', userIds: ['u2', 'u3'], parts: [3, 5] }],
+    confirmedPartsSnapshot: manualPartsConfirmationSnapshot({
+      items: [{ id: 'pizza', totalPrice: 101 }],
+      assignments: [
+        {
+          receiptItemId: 'pizza',
+          people: [
+            { userId: 'u2', parts: 3 },
+            { userId: 'u3', parts: 5 },
+          ],
+        },
+      ],
+    }),
   };
+
+  test('2.19.2.1 refuses finishing without an explicit complete-parts confirmation', async () => {
+    await expect(
+      (await caller()).assignItemsAndCreateExpense({
+        ...finish,
+        confirmedPartsSnapshot: undefined,
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+
+  test('2.19.2.1 rejects stale approval after changes to a portion, eater or price', async () => {
+    const api = await caller();
+    await expect(
+      api.assignItemsAndCreateExpense({
+        ...finish,
+        assignments: [{ receiptItemId: 'pizza', userIds: ['u2', 'u3'], parts: [4, 5] }],
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    mockDb.receipt.findUnique.mockResolvedValue({
+      id: 'r1',
+      originalName: 'billok-manual',
+      uploadedById: 'u1',
+      groupId: 'g1',
+      status: 'COMPLETED',
+      extractedData: { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' },
+      items: [{ id: 'pizza', totalPrice: 102 }],
+    });
+    await expect(api.assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
+
+  test('2.19.2.1 only the actual receipt creator may confirm, not the payer', async () => {
+    await expect((await caller('u2')).assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+  });
 
   test('saves actual portions; the rounding kopeck goes to creator, not payer', async () => {
     await (await caller()).assignItemsAndCreateExpense(finish);
@@ -415,6 +468,23 @@ describe('manual receipt: consumed portions and creator rounding', () => {
     ).assignItemsAndCreateExpense({
       ...finish,
       paidById: 'u5',
+      confirmedPartsSnapshot: manualPartsConfirmationSnapshot({
+        items: [
+          { id: 'dish', totalPrice: 1 },
+          { id: 'drink', totalPrice: 1 },
+        ],
+        assignments: [
+          {
+            receiptItemId: 'dish',
+            people: [
+              { userId: 'u2', parts: 1 },
+              { userId: 'u3', parts: 1 },
+              { userId: 'u4', parts: 1 },
+            ],
+          },
+          { receiptItemId: 'drink', people: [{ userId: 'u5', parts: 1 }] },
+        ],
+      }),
       assignments: [
         { receiptItemId: 'dish', userIds: ['u2', 'u3', 'u4'], parts: [1, 1, 1] },
         { receiptItemId: 'drink', userIds: ['u5'], parts: [1] },

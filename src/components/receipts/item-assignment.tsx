@@ -7,6 +7,7 @@ import { formatCents, centsToDecimal, parseToCents, isValidMoneyInput, MAX_MONEY
 import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
 import { calculateManualReceiptAllocation, manualPortionProgress } from '@/lib/manual-receipt-split';
+import { manualPartsConfirmationSnapshot } from '@/lib/manual-parts-confirmation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -53,6 +54,8 @@ export function ItemAssignment({
   const utils = trpc.useUtils();
 
   const [assignments, setAssignments] = useState<Assignments>({});
+  // A changed item, consumer or portion invalidates a previous confirmation.
+  const [approvedPartsSnapshot, setApprovedPartsSnapshot] = useState<string | null>(null);
   const [partsByItem, setPartsByItem] = useState<Record<string, Record<string, number>>>({});
   const [totalPartsDrafts, setTotalPartsDrafts] = useState<Record<string, string>>({});
   const [title, setTitle] = useState('');
@@ -84,16 +87,21 @@ export function ItemAssignment({
   const updateItem = trpc.receipts.updateItem.useMutation({
     onSuccess: () => {
       setEditingItem(null);
+      setApprovedPartsSnapshot(null);
       utils.receipts.getReceiptItems.invalidate({ receiptId });
     },
     onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const deleteItem = trpc.receipts.deleteItem.useMutation({
-    onSuccess: () => utils.receipts.getReceiptItems.invalidate({ receiptId }),
+    onSuccess: () => {
+      setApprovedPartsSnapshot(null);
+      utils.receipts.getReceiptItems.invalidate({ receiptId });
+    },
     onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const addItem = trpc.receipts.addItem.useMutation({
     onSuccess: () => {
+      setApprovedPartsSnapshot(null);
       setAddingItem(false);
       setNewItem({ name: '', quantity: '1', totalPrice: '' });
       utils.receipts.getReceiptItems.invalidate({ receiptId });
@@ -101,7 +109,10 @@ export function ItemAssignment({
     onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const splitItem = trpc.receipts.splitItem.useMutation({
-    onSuccess: () => utils.receipts.getReceiptItems.invalidate({ receiptId }),
+    onSuccess: () => {
+      setApprovedPartsSnapshot(null);
+      utils.receipts.getReceiptItems.invalidate({ receiptId });
+    },
     onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const saveForLater = trpc.receipts.saveForLater.useMutation({
@@ -231,6 +242,7 @@ export function ItemAssignment({
   // (id-based) while split/page uses Record<number, Set<number>> (index-based).
   // The different key types make a shared abstraction more complex than the duplication.
   function toggleAssignment(itemId: string, userId: string) {
+    setApprovedPartsSnapshot(null);
     setPartsByItem((prev) => ({
       ...prev,
       [itemId]: { ...prev[itemId], [userId]: 1 },
@@ -249,6 +261,7 @@ export function ItemAssignment({
   }
 
   function assignAllToEveryone() {
+    setApprovedPartsSnapshot(null);
     const next: Assignments = {};
     for (const item of items) {
       next[item.id] = new Set(members.map((m) => m.id));
@@ -372,6 +385,21 @@ export function ItemAssignment({
     }),
   );
   const allAssigned = items.length > 0 && assignedItemCount === items.length && (!receipt?.isManual || partsAreValid);
+  const currentPartsSnapshot = useMemo(
+    () =>
+      manualPartsConfirmationSnapshot({
+        items,
+        assignments: Object.entries(assignments)
+          .filter(([receiptItemId, userIds]) => userIds.size > 0 && items.some((item) => item.id === receiptItemId))
+          .map(([receiptItemId, userIds]) => ({
+            receiptItemId,
+            people: [...userIds].map((userId) => ({ userId, parts: partsByItem[receiptItemId]?.[userId] ?? 1 })),
+          })),
+      }),
+    [items, assignments, partsByItem],
+  );
+  const isManualCreator = !!receipt?.isManual && !!currentUserId && receipt.creatorId === currentUserId;
+  const partsConfirmed = approvedPartsSnapshot === currentPartsSnapshot && allAssigned;
 
   // Precompute member initials to avoid recalculation every render (Finding #37)
   const memberInitials = useMemo(
@@ -416,13 +444,14 @@ export function ItemAssignment({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!effectivePaidById || !allAssigned) return;
+    if (!effectivePaidById || !allAssigned || (receipt?.isManual && (!isManualCreator || !partsConfirmed))) return;
 
     createExpense.mutate({
       groupId,
       receiptId,
       title,
       paidById: effectivePaidById,
+      ...(receipt?.isManual ? { confirmedPartsSnapshot: currentPartsSnapshot } : {}),
       assignments: Object.entries(assignments)
         .filter(([itemId, userIds]) => userIds.size > 0 && items.some((item) => item.id === itemId))
         .map(([receiptItemId, userIds]) => ({
@@ -1102,15 +1131,16 @@ export function ItemAssignment({
                               step={1}
                               className="h-11 min-w-0"
                               value={partsByItem[item.id]?.[m.id] ?? 1}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                setApprovedPartsSnapshot(null);
                                 setPartsByItem((prev) => ({
                                   ...prev,
                                   [item.id]: {
                                     ...prev[item.id],
                                     [m.id]: e.target.value === '' ? 0 : Number(e.target.value),
                                   },
-                                }))
-                              }
+                                }));
+                              }}
                             />
                           </div>
                         ))}
@@ -1175,6 +1205,26 @@ export function ItemAssignment({
         </Card>
       )}
 
+      {receipt?.isManual && (
+        <div className="min-w-0 rounded-lg border p-3 text-sm" data-testid="group-parts-confirmation">
+          {isManualCreator ? (
+            <label className="flex min-w-0 items-start gap-3">
+              <input
+                type="checkbox"
+                className="mt-1 size-5 shrink-0"
+                data-testid="group-parts-confirm-checkbox"
+                checked={partsConfirmed}
+                disabled={!allAssigned || createExpense.isPending}
+                onChange={(event) => setApprovedPartsSnapshot(event.target.checked ? currentPartsSnapshot : null)}
+              />
+              <span className="min-w-0 [overflow-wrap:anywhere]">{t('partsConfirmComplete')}</span>
+            </label>
+          ) : (
+            <p className="text-muted-foreground">{t('partsConfirmCreatorOnly')}</p>
+          )}
+        </div>
+      )}
+
       {createExpense.error && (
         <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
           {localizedTrpcError(createExpense.error, tc('errors.generic'))}
@@ -1184,7 +1234,12 @@ export function ItemAssignment({
       <Button
         type="submit"
         className="min-h-11 w-full"
-        disabled={createExpense.isPending || !allAssigned || !effectivePaidById}
+        disabled={
+          createExpense.isPending ||
+          !allAssigned ||
+          !effectivePaidById ||
+          (receipt?.isManual && (!isManualCreator || !partsConfirmed))
+        }
         data-testid="create-expense-btn"
       >
         {createExpense.isPending

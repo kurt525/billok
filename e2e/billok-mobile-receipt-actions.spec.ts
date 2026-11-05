@@ -355,6 +355,10 @@ test('Issue 2.16.3: manual group receipt balances two dishes and persists exact 
   // A new manual bill has no merchant/title by default. HTML form
   // validation correctly prevents submission until this required field is set.
   await page.locator('#title').fill('Проверка округления 2.16.3');
+  await expect(page.getByTestId('create-expense-btn')).toBeDisabled();
+  const approval = page.getByTestId('group-parts-confirm-checkbox');
+  await expect(approval).toBeEnabled();
+  await approval.check();
   await expect(page.getByTestId('create-expense-btn')).toBeEnabled();
   await page.getByTestId('create-expense-btn').click();
   await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'));
@@ -496,7 +500,19 @@ test('two registered group members independently save voluntary RUB tips on a mo
     // The correction is NOT another line item or another payment.
     await expect(page.getByTestId('group-rounding-correction-preview')).toContainText('0,01');
     await expect(page.getByTestId('group-rounding-correction-preview')).toContainText('Bob');
-    await page.getByTestId('create-expense-btn').click();
+    const approval = page.getByTestId('group-parts-confirm-checkbox');
+    const submit = page.getByTestId('create-expense-btn');
+    await expect(submit).toBeDisabled();
+    await approval.check();
+    await expect(submit).toBeEnabled();
+    const bobParts = dessert.getByLabel('Частей: Bob');
+    await bobParts.fill('2');
+    await expect(approval).not.toBeChecked();
+    await expect(submit).toBeDisabled();
+    await bobParts.fill('1');
+    await approval.check();
+    await expect(submit).toBeEnabled();
+    await submit.click();
     await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'), { timeout: 20_000 });
 
     const response = await trpcResult(await trpcQuery(page.request, 'expenses.list', { groupId, limit: 100 }));
