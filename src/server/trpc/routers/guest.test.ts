@@ -503,7 +503,9 @@ function claimSession(
       currency: string;
       roundingBalanced?: boolean;
       organizerPersonId?: string;
+      partsApprovalHash?: string;
     };
+    userId?: string | null;
     expiresAt?: Date;
     paidByIndex?: number;
     assignments?: { itemIndex: number; personIndices: number[]; partsByPersonId?: Record<string, number> }[];
@@ -1762,12 +1764,29 @@ describe('guest.finalizeSession', () => {
           organizerPersonId: pid(4),
         },
         paidByIndex: 3,
+        userId: 'user-1',
         assignments: [
           { itemIndex: 0, personIndices: [0, 1, 2] },
           { itemIndex: 1, personIndices: [3] },
         ],
       },
     );
+    const before = await mockDb.guestSplit.findUnique();
+    await expect(
+      (await caller()).finalizeSession({
+        token: 'share-1',
+        personId: pid(0),
+        personToken: ALICE_TOKEN,
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    await expect(
+      (await caller({ user: { id: 'payer-not-creator' } })).confirmSessionParts({
+        token: 'share-1',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await (await caller(signedIn)).confirmSessionParts({ token: 'share-1' });
+    const approval = mockDb.guestSplit.update.mock.calls.at(-1)![0].data.receiptData;
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...before, receiptData: approval });
     await (await caller()).finalizeSession({ token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN });
     const saved = mockDb.guestSplit.update.mock.calls.at(-1)![0] as {
       data: { summary: { personIndex: number; itemTotal: number; roundingCorrectionCents?: number; total: number }[] };
@@ -1775,6 +1794,103 @@ describe('guest.finalizeSession', () => {
     expect(saved.data.summary.map((person) => person.itemTotal)).toEqual([0, 0, 0, 1, 1]);
     expect(saved.data.summary[4]).toMatchObject({ personIndex: 4, roundingCorrectionCents: 1, total: 1 });
     expect(saved.data.summary.reduce((sum, person) => sum + person.total, 0)).toBe(2);
+  });
+
+  test('2.19.2.2 approval is creator-only and a changed portion invalidates it in the same transaction', async () => {
+    claimSession(
+      [
+        { name: 'Creator', personToken: ALICE_TOKEN },
+        { name: 'Guest', personToken: OTHER_TOKEN },
+      ],
+      {
+        userId: 'user-1',
+        items: [{ name: 'Пицца', quantity: 1, unitPrice: 800, totalPrice: 800 }],
+        receiptData: {
+          subtotal: 800,
+          total: 800,
+          tax: 0,
+          tip: 0,
+          currency: 'RUB',
+          roundingBalanced: true,
+          organizerPersonId: pid(0),
+        },
+        assignments: [{ itemIndex: 0, personIndices: [0, 1], partsByPersonId: { [pid(0)]: 3, [pid(1)]: 5 } }],
+      },
+    );
+    const previous = await mockDb.guestSplit.findUnique();
+    const api = await caller(signedIn);
+    await expect((await caller()).confirmSessionParts({ token: 'share-1' })).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
+    await expect(
+      (await caller({ user: { id: 'stranger' } })).confirmSessionParts({ token: 'share-1' }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await api.confirmSessionParts({ token: 'share-1' });
+    const approval = mockDb.guestSplit.update.mock.calls.at(-1)![0].data.receiptData;
+    expect(approval.partsApprovalHash).toMatch(/^[a-f0-9]{64}$/);
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...previous, receiptData: approval });
+    expect((await (await caller()).getSession({ token: 'share-1' })).partsConfirmed).toBe(true);
+
+    await (
+      await caller()
+    ).setMyItemParts({
+      token: 'share-1',
+      personId: pid(1),
+      personToken: OTHER_TOKEN,
+      itemIndex: 0,
+      parts: 6,
+    });
+    const mutated = mockDb.guestSplit.update.mock.calls.at(-1)![0].data;
+    expect(mutated.receiptData.partsApprovalHash).toBeUndefined();
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...previous,
+      receiptData: mutated.receiptData,
+      assignments: mutated.assignments,
+    });
+    expect((await (await caller()).getSession({ token: 'share-1' })).partsConfirmed).toBe(false);
+    await expect(
+      (await caller()).finalizeSession({
+        token: 'share-1',
+        personId: pid(0),
+        personToken: ALICE_TOKEN,
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    await api.confirmSessionParts({ token: 'share-1' });
+    const approvedAgain = mockDb.guestSplit.update.mock.calls.at(-1)![0].data.receiptData;
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...previous,
+      assignments: mutated.assignments,
+      receiptData: approvedAgain,
+    });
+    await (
+      await caller()
+    ).finalizeSession({
+      token: 'share-1',
+      personId: pid(0),
+      personToken: ALICE_TOKEN,
+    });
+    expect(mockDb.guestSplit.update.mock.calls.at(-1)![0].data.status).toBe('FINALIZED');
+  });
+
+  test('2.19.2.2 refuses to approve a receipt with unclaimed items', async () => {
+    claimSession([{ name: 'Creator', personToken: ALICE_TOKEN }], {
+      userId: 'user-1',
+      items: [{ name: 'Soup', quantity: 1, unitPrice: 100, totalPrice: 100 }],
+      receiptData: {
+        subtotal: 100,
+        tax: 0,
+        tip: 0,
+        total: 100,
+        currency: 'RUB',
+        organizerPersonId: pid(0),
+        roundingBalanced: true,
+      },
+      assignments: [],
+    });
+    await expect((await caller(signedIn)).confirmSessionParts({ token: 'share-1' })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
   test('uses only current personal tips when finalizing guest shares in the same transaction', async () => {

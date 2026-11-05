@@ -295,6 +295,14 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
 
+  const confirmSessionParts = trpc.guest.confirmSessionParts.useMutation({
+    onSuccess: async () => {
+      await utils.guest.getSession.invalidate({ token });
+      toast.success(t('partsConfirmationSaved'));
+    },
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
+  });
+
   const finalizeSession = trpc.guest.finalizeSession.useMutation({
     onSuccess: () => {
       session.refetch();
@@ -2230,13 +2238,36 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         data-testid="claim-actions"
       >
         <div className="mx-auto w-full min-w-0 max-w-lg">
-          {/* Finalize button -- only when no unsaved changes and all items claimed */}
+          {/* The registered receipt creator explicitly approves the current
+              claims; guests can still submit their own portions, but cannot
+              approve completeness for the creator. */}
+          {data.isCreator && !data.partsConfirmed && allItemsClaimed && (
+            <Button
+              variant="outline"
+              className="mb-2 min-h-12 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere]"
+              data-testid="guest-confirm-parts-btn"
+              disabled={confirmSessionParts.isPending || hasAnyUnsavedChanges || saving || anyParked}
+              onClick={() => confirmSessionParts.mutate({ token })}
+            >
+              {t('confirmPartsComplete')}
+            </Button>
+          )}
+          {!data.partsConfirmed && (
+            <p
+              className="mb-2 text-xs text-muted-foreground [overflow-wrap:anywhere]"
+              data-testid="guest-parts-awaiting-confirmation"
+            >
+              {t('partsAwaitingConfirmation')}
+            </p>
+          )}
+          {/* Finalize button -- only after creator approval, with no unsaved changes */}
           {!hasAnyUnsavedChanges &&
             personToken &&
             myPersonId !== null &&
             myPersonIndex !== null &&
             !finalizeSession.isPending &&
-            allItemsClaimed && (
+            allItemsClaimed &&
+            data.partsConfirmed && (
               <Button
                 variant="outline"
                 className="w-full h-12 mb-2"

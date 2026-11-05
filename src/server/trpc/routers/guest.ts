@@ -23,6 +23,7 @@ import {
 } from '../../lib/json-schemas';
 import { calculateSplitTotals, addPersonalGuestTips, groupSizeWeights } from '@/lib/split-calculator';
 import { guestPortionAssignments, type GuestPortionAssignment } from '@/lib/guest-portions';
+import { guestPartsConfirmationSnapshot } from '@/lib/guest-parts-confirmation';
 import { normalizeGuestName } from '@/lib/guest-session';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { MAX_MONEY_CENTS } from '@/lib/money';
@@ -51,6 +52,25 @@ async function getCreatorPayerVenmoHandle(
     return creator.venmoUsername;
   }
   return null;
+}
+
+/** Clear an organizer's acknowledgement only for sessions with a saved one.
+ * No extra JSON writes for unchanged/legacy sessions or personal tip updates.
+ */
+function invalidatePartsApproval(value: Prisma.JsonValue): { receiptData?: Prisma.InputJsonValue } {
+  const data = parseExtractedData(value);
+  if (!data.partsApprovalHash) return {};
+  const next = { ...data };
+  delete next.partsApprovalHash;
+  return { receiptData: next as Prisma.InputJsonValue };
+}
+
+function guestPartsDigest(input: {
+  items: readonly { name: string; quantity: number; totalPrice: number }[];
+  people: readonly { id?: string | undefined; groupSize?: number | undefined }[];
+  assignments: readonly GuestPortionAssignment[];
+}): string {
+  return createHash('sha256').update(guestPartsConfirmationSnapshot(input)).digest('hex');
 }
 
 // How long a join can be replayed with its join key (Stripe prunes idempotency keys once they are at least 24 hours old)
@@ -801,7 +821,10 @@ export const guestRouter = createTRPCRouter({
         const savePeople = () =>
           tx.guestSplit.update({
             where: { id: session.id },
-            data: { people: people as unknown as Prisma.InputJsonValue },
+            data: {
+              people: people as unknown as Prisma.InputJsonValue,
+              ...invalidatePartsApproval(session.receiptData),
+            },
           });
         const normalizedName = normalizeGuestName(input.name);
 
@@ -956,7 +979,10 @@ export const guestRouter = createTRPCRouter({
         };
         await tx.guestSplit.update({
           where: { id: session.id },
-          data: { people: people as unknown as Prisma.InputJsonValue },
+          data: {
+            people: people as unknown as Prisma.InputJsonValue,
+            ...invalidatePartsApproval(session.receiptData),
+          },
         });
         return { success: true };
       });
@@ -1021,6 +1047,7 @@ export const guestRouter = createTRPCRouter({
             people: people as unknown as Prisma.InputJsonValue,
             assignments: assignments as unknown as Prisma.InputJsonValue,
             paidByIndex,
+            ...invalidatePartsApproval(session.receiptData),
           },
         });
         return { success: true };
@@ -1093,6 +1120,7 @@ export const guestRouter = createTRPCRouter({
           data: {
             items: items as unknown as Prisma.InputJsonValue,
             assignments: assignments as unknown as Prisma.InputJsonValue,
+            ...invalidatePartsApproval(session.receiptData),
           },
         });
         return { success: true, itemCount: items.length };
@@ -1194,7 +1222,10 @@ export const guestRouter = createTRPCRouter({
           });
           await tx.guestSplit.update({
             where: { id: session.id },
-            data: { assignments: assignments as unknown as Prisma.InputJsonValue },
+            data: {
+              assignments: assignments as unknown as Prisma.InputJsonValue,
+              ...invalidatePartsApproval(session.receiptData),
+            },
           });
         }
         return { success: true, parts: input.parts };
@@ -1323,6 +1354,7 @@ export const guestRouter = createTRPCRouter({
           where: { id: session.id },
           data: {
             assignments: cleanedAssignments as unknown as Prisma.InputJsonValue,
+            ...invalidatePartsApproval(session.receiptData),
             ...(withSaveKey ? { people: withSaveKey as unknown as Prisma.InputJsonValue } : {}),
           },
         });
@@ -1372,6 +1404,19 @@ export const guestRouter = createTRPCRouter({
       // Everyone has an id by now (savePersonIds above)
       people: toClaimPeople(session.people as IdentifiedGuestPerson[]),
       assignments: session.assignments as GuestPortionAssignment[],
+      partsConfirmed: (() => {
+        const data = parseExtractedData(session.receiptData);
+        if (typeof data.organizerPersonId !== 'string') return true; // old sessions
+        return (
+          typeof data.partsApprovalHash === 'string' &&
+          data.partsApprovalHash ===
+            guestPartsDigest({
+              items: parseGuestItems(session.items),
+              people: session.people as GuestSessionPerson[],
+              assignments: parseGuestAssignments(session.assignments),
+            })
+        );
+      })(),
       summary: session.summary as
         | {
             personIndex: number;
@@ -1391,6 +1436,40 @@ export const guestRouter = createTRPCRouter({
       expiresAt: session.expiresAt,
     };
   }),
+
+  // The registered receipt creator, not the bill payer or another diner, approves
+  // the exact stored guest claims. A subsequent edit removes this approval.
+  confirmSessionParts: protectedProcedure
+    .input(z.object({ token: shareTokenSchema }))
+    .mutation(async ({ ctx, input }) =>
+      guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionAlreadyFinalized');
+        if (!session.userId || session.userId !== ctx.user.id) throw new AppError('FORBIDDEN');
+        const data = parseExtractedData(session.receiptData);
+        const people = parseGuestPeople(session.people);
+        if (
+          typeof data.organizerPersonId !== 'string' ||
+          !people.some((person) => person.id === data.organizerPersonId)
+        ) {
+          throw new AppError('PRECONDITION_FAILED', 'invalidData', { label: 'receipt organizer' });
+        }
+        const items = parseGuestItems(session.items);
+        const assignments = parseGuestAssignments(session.assignments);
+        const claimed = new Set(assignments.filter((a) => a.personIndices.length > 0).map((a) => a.itemIndex));
+        if (!items.length || items.some((_, index) => !claimed.has(index))) {
+          throw new AppError('PRECONDITION_FAILED', 'itemsUnassigned');
+        }
+        const hash = guestPartsDigest({ items, people, assignments });
+        await tx.guestSplit.update({
+          where: { id: session.id },
+          data: { receiptData: { ...data, partsApprovalHash: hash } as Prisma.InputJsonValue },
+        });
+        return { success: true };
+      }),
+    ),
 
   finalizeSession: publicProcedure
     .input(
@@ -1429,6 +1508,16 @@ export const guestRouter = createTRPCRouter({
         const claimed = new Set(assignments.filter((a) => a.personIndices.length > 0).map((a) => a.itemIndex));
         if (items.some((_, index) => !claimed.has(index))) {
           throw new AppError('PRECONDITION_FAILED', 'itemsUnassigned');
+        }
+
+        // A receipt creator must have acknowledged this exact set of claims
+        // in the same repeatable-read snapshot used to produce the final shares.
+        if (
+          typeof receiptData.organizerPersonId === 'string' &&
+          (typeof receiptData.partsApprovalHash !== 'string' ||
+            receiptData.partsApprovalHash !== guestPartsDigest({ items, people, assignments }))
+        ) {
+          throw new AppError('PRECONDITION_FAILED', 'receiptPartsConfirmationRequired');
         }
 
         const tip = receiptData.tip;

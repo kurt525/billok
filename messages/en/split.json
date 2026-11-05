@@ -211,7 +211,10 @@
     "paymentVerifiedNotice": "The payer confirmed receipt of your transfer.",
     "organizerRoundingCorrection": "Creator rounding adjustment (already included)",
     "partsUnknownOriginal": "Original total unknown; remaining portions are not estimated.",
-    "partsPreliminary": "Provisional totals. Participants can still change their portions; before finalizing the organizer will confirm that all portions have been reported."
+    "partsPreliminary": "Provisional totals. Participants can still change their portions; before finalizing the organizer will confirm that all portions have been reported.",
+    "confirmPartsComplete": "Confirm everyone declared their portions",
+    "partsAwaitingConfirmation": "Provisional: waiting for the receipt creator to confirm everyone’s portions.",
+    "partsConfirmationSaved": "Declared portions confirmed."
   },
   "result": {
     "loading": "Loading split...",

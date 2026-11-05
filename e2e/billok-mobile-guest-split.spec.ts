@@ -679,6 +679,11 @@ test('Issue 2.14: two guest phones save personal parts 3/5 without knowing the o
       )
       .toBe(3);
     await expect(aliceInput).toHaveValue('3', { timeout: 15_000 });
+    const approved = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
+    expect(approved.ok(), await approved.text()).toBe(true);
+    await expect
+      .poll(async () => (await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).partsConfirmed)
+      .toBe(true);
     const finalize = await trpcMutation(owner, 'guest.finalizeSession', {
       token,
       personId: anna.personId,
@@ -766,6 +771,8 @@ test('Issue 2.16.3: nine one-kopeck guest dishes balance 3:3:3 in preview, final
       await fitsPhone(page);
     }
 
+    const approved = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
+    expect(approved.ok(), await approved.text()).toBe(true);
     const finish = await trpcMutation(owner, 'guest.finalizeSession', {
       token,
       personId: anna.personId,
@@ -869,6 +876,14 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     expect(victorTip.ok(), await victorTip.text()).toBe(true);
 
     await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
+    await expect(page.getByTestId('guest-parts-awaiting-confirmation')).toBeVisible();
+    // The anonymous personal-link page cannot approve for the registered creator.
+    await expect(page.getByTestId('guest-confirm-parts-btn')).toHaveCount(0);
+    const approved = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
+    expect(approved.ok(), await approved.text()).toBe(true);
+    // A live poll updates the guest's open page without a reload.
+    await expect(page.getByTestId('guest-parts-awaiting-confirmation')).toHaveCount(0, { timeout: 15_000 });
     const finish = page.getByTestId('finalize-btn');
     await expect(finish).toBeVisible({ timeout: 15_000 });
     await finish.click();
