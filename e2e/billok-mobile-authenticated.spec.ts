@@ -1880,8 +1880,18 @@ test('admin forms remain keyboard-accessible at 300 CSS px on six mobile widths'
     ] as const) {
       const input = page.getByTestId(testId);
       await input.fill(value);
+      // Both filters debounce network-backed results. Wait for their layout to
+      // settle before measuring: otherwise a late list shrink moves the focused
+      // input out of the 300px visual viewport after scrollIntoViewIfNeeded.
+      if (testId === 'admin-users-search') {
+        await expect(page.getByTestId('admin-user-management').locator('tbody tr')).toHaveCount(1);
+      }
+      if (testId === 'admin-groups-search') {
+        await expect(page.getByTestId('admin-groups-section').getByText('Группы не найдены.')).toBeVisible();
+      }
       await input.focus();
       await input.scrollIntoViewIfNeeded();
+      await expect(input).toBeInViewport({ ratio: 1 });
       const geometry = await input.evaluate((element) => {
         const rect = element.getBoundingClientRect();
         const style = getComputedStyle(element);
