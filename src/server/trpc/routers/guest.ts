@@ -75,6 +75,22 @@ function guestPartsDigest(input: {
   return createHash('sha256').update(guestPartsConfirmationSnapshot(input)).digest('hex');
 }
 
+/** 3.4: a signed-in creator or a single creator-appointed registered organizer can
+ * approve and finalize a guest bill. A payer/guest token never grants this role.
+ * Store the delegation in the existing receipt JSON: no unused DB column.
+ */
+function canFinalizeGuestSession(
+  creatorUserId: string | null | undefined,
+  data: ReturnType<typeof parseExtractedData>,
+  callerUserId: string | null | undefined,
+): boolean {
+  return (
+    !!creatorUserId &&
+    !!callerUserId &&
+    (creatorUserId === callerUserId || data.finalizationOrganizerUserId === callerUserId)
+  );
+}
+
 /** 2.20.2: known totals are optional, but strict where provided.
  * All checks happen in guestTransaction using its current data snapshot.
  */
@@ -638,7 +654,11 @@ export const guestRouter = createTRPCRouter({
     return {
       id: split.id,
       shareToken: split.shareToken,
-      receiptData: split.receiptData as {
+      receiptData: (() => {
+        const { finalizationOrganizerUserId: _privateOrganizer, ...visible } = parseExtractedData(split.receiptData);
+        void _privateOrganizer;
+        return visible;
+      })() as {
         merchantName?: string;
         date?: string;
         subtotal: number;
@@ -1452,7 +1472,11 @@ export const guestRouter = createTRPCRouter({
       id: session.id,
       shareToken: session.shareToken,
       status: session.status,
-      receiptData: session.receiptData as {
+      receiptData: (() => {
+        const { finalizationOrganizerUserId: _privateOrganizer, ...visible } = parseExtractedData(session.receiptData);
+        void _privateOrganizer;
+        return visible;
+      })() as {
         merchantName?: string;
         date?: string;
         subtotal: number;
@@ -1496,6 +1520,12 @@ export const guestRouter = createTRPCRouter({
       paidByIndex: session.paidByIndex,
       payerVenmoHandle: session.payerVenmoHandle,
       isCreator: !!session.userId && session.userId === ctx.session?.user?.id,
+      canFinalize: canFinalizeGuestSession(
+        session.userId,
+        parseExtractedData(session.receiptData),
+        ctx.session?.user?.id,
+      ),
+      hasFinalizationOrganizer: typeof parseExtractedData(session.receiptData).finalizationOrganizerUserId === 'string',
       receiptImagePath,
       createdAt: session.createdAt,
       expiresAt: session.expiresAt,
@@ -1549,7 +1579,63 @@ export const guestRouter = createTRPCRouter({
       }),
     ),
 
-  // The registered receipt creator, not the bill payer or another diner, approves
+  // Only the signed-in creator can appoint or revoke one registered co-organizer.
+  // No guest token, payer identity or guessed share link grants this permission.
+  setFinalizationOrganizer: protectedProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        email: z.string().trim().email().max(254).nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) =>
+      guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) {
+          throw new AppError('BAD_REQUEST', 'sessionAlreadyFinalized');
+        }
+        if (!session.userId || session.userId !== ctx.user.id) throw new AppError('FORBIDDEN');
+        const data = parseExtractedData(session.receiptData);
+        let organizerId: string | null = null;
+        if (input.email !== null) {
+          const account = await tx.user.findUnique({
+            where: { email: input.email.toLowerCase() },
+            select: {
+              id: true,
+              suspendedAt: true,
+              isPlaceholder: true,
+              emailVerified: true,
+              registrationEmailVerificationRequired: true,
+            },
+          });
+          if (
+            !account ||
+            account.suspendedAt ||
+            account.isPlaceholder ||
+            (account.registrationEmailVerificationRequired && !account.emailVerified) ||
+            account.id === ctx.user.id
+          ) {
+            throw new AppError('BAD_REQUEST', 'invalidData', { label: 'registered co-organizer' });
+          }
+          organizerId = account.id;
+        }
+        const next = { ...data };
+        delete next.finalizationOrganizerUserId;
+        if (organizerId) next.finalizationOrganizerUserId = organizerId;
+        // A delegation change invalidates the previous approval: the newly
+        // authorized organizer must confirm the same current assignments again.
+        delete next.partsApprovalHash;
+        await tx.guestSplit.update({
+          where: { id: session.id },
+          data: { receiptData: next as Prisma.InputJsonValue },
+        });
+        return { success: true, delegated: !!organizerId };
+      }),
+    ),
+
+  // The registered creator or their explicitly appointed co-organizer approves
   // the exact stored guest claims. A subsequent edit removes this approval.
   confirmSessionParts: protectedProcedure
     .input(z.object({ token: shareTokenSchema }))
@@ -1559,7 +1645,9 @@ export const guestRouter = createTRPCRouter({
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionAlreadyFinalized');
-        if (!session.userId || session.userId !== ctx.user.id) throw new AppError('FORBIDDEN');
+        if (!canFinalizeGuestSession(session.userId, parseExtractedData(session.receiptData), ctx.user.id)) {
+          throw new AppError('FORBIDDEN');
+        }
         const data = parseExtractedData(session.receiptData);
         const people = parseGuestPeople(session.people);
         if (
@@ -1584,15 +1672,20 @@ export const guestRouter = createTRPCRouter({
       }),
     ),
 
-  finalizeSession: publicProcedure
+  finalizeSession: protectedProcedure
     .input(
-      z.object({
-        token: shareTokenSchema,
-        // Who is finalizing, by id; must be the holder of personToken
-        personId: personIdSchema,
-        personToken: z.string().uuid(),
-        tipOverride: z.never().optional(), // no shared tip override
-      }),
+      z
+        .object({
+          token: shareTokenSchema,
+          // Optional legacy personal identity. An authorized registered organizer
+          // can finalize without becoming a bill participant who owes money.
+          personId: personIdSchema.optional(),
+          personToken: z.string().uuid().optional(),
+          tipOverride: z.never().optional(), // no shared tip override
+        })
+        .refine((value) => (value.personId === undefined) === (value.personToken === undefined), {
+          message: 'Person ID and personal token must be supplied together',
+        }),
     )
     .mutation(async ({ ctx, input }) => {
       const { shareToken, finalizeLog } = await guestTransaction(ctx.db, async (tx) => {
@@ -1607,10 +1700,17 @@ export const guestRouter = createTRPCRouter({
         const people = parseGuestPeople(session.people);
         const assignments = parseGuestAssignments(session.assignments);
         const receiptData = parseExtractedData(session.receiptData);
+        if (!canFinalizeGuestSession(session.userId, receiptData, ctx.user.id)) {
+          throw new AppError('FORBIDDEN');
+        }
 
-        const person = people[targetIndexOrThrow(people, input.personId)];
-        if (!person?.personToken || person.personToken !== input.personToken) {
-          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        // A registered organizer need not claim dishes to be authorized:
+        // optional legacy personal credentials are still validated if supplied.
+        if (input.personId !== undefined && input.personToken !== undefined) {
+          const person = people[targetIndexOrThrow(people, input.personId)];
+          if (!person?.personToken || person.personToken !== input.personToken) {
+            throw new AppError('FORBIDDEN', 'invalidPersonToken');
+          }
         }
 
         // Every item needs a claimant. The claim page only offers Finalize when it sees that, but

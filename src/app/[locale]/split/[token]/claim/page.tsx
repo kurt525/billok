@@ -122,6 +122,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const [personalTipDraft, setPersonalTipDraft] = useState<string | null>(null);
   const [portionDrafts, setPortionDrafts] = useState<Record<number, string>>({});
   const [knownPartsDrafts, setKnownPartsDrafts] = useState<Record<number, string>>({});
+  const [finalizationOrganizerEmail, setFinalizationOrganizerEmail] = useState('');
   // People are tracked by id, not index: someone's index changes when anyone listed before them
   // is removed, on any device. Indexes are looked up in the session as last loaded (below).
   // This device's person, once it joined or resumed
@@ -306,6 +307,15 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       });
       await utils.guest.getSession.invalidate({ token });
       toast.success(t('knownPartsSaved'));
+    },
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
+  });
+
+  const setFinalizationOrganizer = trpc.guest.setFinalizationOrganizer.useMutation({
+    onSuccess: async () => {
+      setFinalizationOrganizerEmail('');
+      await utils.guest.getSession.invalidate({ token });
+      toast.success(t('finalizationOrganizerSaved'));
     },
     onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
   });
@@ -1491,6 +1501,50 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
         {linkOfferCard}
 
+        {/* A registered, explicitly appointed organizer can finish the receipt
+            without claiming any food or creating a fictitious guest. */}
+        {data.canFinalize && (
+          <Card className="min-w-0" data-testid="finalization-organizer-no-claim">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">{t('finalizationOrganizerNoClaimTitle')}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">{t('finalizationOrganizerNoClaimHint')}</p>
+              {!data.partsConfirmed && allItemsClaimed && knownPartsReady && (
+                <Button
+                  type="button"
+                  className="min-h-11 w-full whitespace-normal"
+                  disabled={confirmSessionParts.isPending}
+                  data-testid="guest-confirm-parts-btn"
+                  onClick={() => confirmSessionParts.mutate({ token })}
+                >
+                  {t('confirmPartsComplete')}
+                </Button>
+              )}
+              {data.partsConfirmed && allItemsClaimed && knownPartsReady && (
+                <Button
+                  type="button"
+                  className="min-h-11 w-full whitespace-normal"
+                  disabled={finalizeSession.isPending}
+                  data-testid="finalize-btn"
+                  onClick={() => setConfirmFinalize(true)}
+                >
+                  {t('finalizeSplit')}
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        )}
+        <ConfirmDialog
+          open={confirmFinalize}
+          onOpenChange={setConfirmFinalize}
+          title={t('finalizeTitle')}
+          description={t('finalizeDescription')}
+          confirmLabel={t('finalizeSplit')}
+          destructive={false}
+          onConfirm={() => data.canFinalize && finalizeSession.mutate({ token })}
+        />
+
         {/* Join form */}
         <Card data-testid="claim-join-form">
           <CardHeader className="pb-2">
@@ -2228,6 +2282,66 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         })}
       </div>
 
+      {data.isCreator && data.status === 'CLAIMING' && (
+        <Card className="w-full min-w-0 max-w-full" data-testid="finalization-organizer-panel">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">{t('finalizationOrganizerTitle')}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">{t('finalizationOrganizerHint')}</p>
+            {data.hasFinalizationOrganizer && (
+              <p className="text-sm" data-testid="finalization-organizer-active">
+                {t('finalizationOrganizerActive')}
+              </p>
+            )}
+            <label htmlFor="finalization-organizer-email" className="block text-sm font-medium">
+              {t('finalizationOrganizerEmail')}
+            </label>
+            <Input
+              id="finalization-organizer-email"
+              type="email"
+              inputMode="email"
+              autoComplete="off"
+              className="h-11 min-w-0 text-base"
+              value={finalizationOrganizerEmail}
+              onChange={(event) => setFinalizationOrganizerEmail(event.target.value)}
+              data-testid="finalization-organizer-email"
+            />
+            <div className="flex min-w-0 flex-wrap gap-2">
+              <Button
+                type="button"
+                className="min-h-11 min-w-11"
+                disabled={
+                  setFinalizationOrganizer.isPending ||
+                  !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(finalizationOrganizerEmail.trim())
+                }
+                data-testid="finalization-organizer-appoint"
+                onClick={() =>
+                  setFinalizationOrganizer.mutate({
+                    token,
+                    email: finalizationOrganizerEmail.trim().toLowerCase(),
+                  })
+                }
+              >
+                {t('finalizationOrganizerAppoint')}
+              </Button>
+              {data.hasFinalizationOrganizer && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 min-w-11"
+                  disabled={setFinalizationOrganizer.isPending}
+                  data-testid="finalization-organizer-revoke"
+                  onClick={() => setFinalizationOrganizer.mutate({ token, email: null })}
+                >
+                  {t('finalizationOrganizerRevoke')}
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <p
         className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground [overflow-wrap:anywhere]"
         data-testid="guest-parts-preliminary"
@@ -2382,7 +2496,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           {/* The registered receipt creator explicitly approves the current
               claims; guests can still submit their own portions, but cannot
               approve completeness for the creator. */}
-          {data.isCreator && !data.partsConfirmed && allItemsClaimed && knownPartsReady && (
+          {data.canFinalize && !data.partsConfirmed && allItemsClaimed && knownPartsReady && (
             <Button
               variant="outline"
               className="mb-2 min-h-12 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere]"
@@ -2394,7 +2508,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             </Button>
           )}
           {/* Finalize button -- only after creator approval, with no unsaved changes */}
-          {!hasAnyUnsavedChanges &&
+          {data.canFinalize &&
+            !hasAnyUnsavedChanges &&
             personToken &&
             myPersonId !== null &&
             myPersonIndex !== null &&
@@ -2470,6 +2585,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         confirmLabel={t('finalizeSplit')}
         destructive={false}
         onConfirm={() =>
+          data.canFinalize &&
           personToken &&
           myPersonId !== null &&
           finalizeSession.mutate({

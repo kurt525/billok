@@ -402,7 +402,7 @@ describe('share tokens longer than any real one (#208)', () => {
   ];
 
   test.each(calls)('%s refuses it before any rate limit or database read', async (_name, call) => {
-    await expect(call(await caller())).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(call(await caller(signedIn))).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(checkRateLimit).not.toHaveBeenCalled();
     expect(peekRateLimit).not.toHaveBeenCalled();
     expect(mockDb.guestSplit.findUnique).not.toHaveBeenCalled();
@@ -527,7 +527,7 @@ function claimSession(
     summary: null,
     paidByIndex: 0,
     payerVenmoHandle: null,
-    userId: null,
+    userId: 'user-1',
     createdAt: new Date(),
     ...overrides,
   });
@@ -1199,7 +1199,7 @@ describe('2.20.2 guest known original count: creator control and transaction saf
       code: 'PRECONDITION_FAILED',
     });
     await expect(
-      (await caller()).finalizeSession({
+      (await caller(signedIn)).finalizeSession({
         token: 'share-1',
         personId: pid(0),
         personToken: ALICE_TOKEN,
@@ -1212,7 +1212,7 @@ describe('2.20.2 guest known original count: creator control and transaction saf
     expect(confirmed.partsApprovalHash).toMatch(/^[a-f0-9]{64}$/);
     fixture({ 0: 8 }, confirmed.partsApprovalHash);
     await (
-      await caller()
+      await caller(signedIn)
     ).finalizeSession({
       token: 'share-1',
       personId: pid(0),
@@ -1378,7 +1378,7 @@ describe('2.14 guest personal parts cannot change another participant', () => {
       receiptData: { subtotal: 101, tax: 0, tip: 0, total: 101, currency: 'RUB' },
       assignments: [{ itemIndex: 0, personIndices: [0, 1], partsByPersonId: { [pid(0)]: 3, [pid(1)]: 5 } }],
     });
-    await (await caller()).finalizeSession({ token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN });
+    await (await caller(signedIn)).finalizeSession({ token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN });
     const saved = mockDb.guestSplit.update.mock.calls.at(-1)![0] as { data: { summary: { itemTotal: number }[] } };
     expect(saved.data.summary.map((entry) => entry.itemTotal)).toEqual([38, 63]);
   });
@@ -1832,6 +1832,179 @@ describe('guest.editPersonName by index (#225)', () => {
   });
 });
 
+describe('Issue 3.4: only registered finalization organizers can close a guest receipt', () => {
+  const request = { token: 'share-1', personId: pid(1), personToken: OTHER_TOKEN };
+  const people = [
+    { name: 'Creator', personToken: ALICE_TOKEN },
+    { name: 'Payer', personToken: OTHER_TOKEN },
+  ];
+  function prepared(data?: Record<string, unknown>) {
+    claimSession(people, {
+      userId: 'user-1',
+      paidByIndex: 1,
+      items: [{ name: 'Dinner', quantity: 1, unitPrice: 1001, totalPrice: 1001 }],
+      assignments: [{ itemIndex: 0, personIndices: [0, 1] }],
+      receiptData: {
+        subtotal: 1001,
+        total: 1001,
+        tax: 0,
+        tip: 0,
+        currency: 'RUB',
+        ...(data ?? {}),
+      },
+    });
+  }
+
+  test('an anonymous guest cannot finalize, even with the payer personal token and complete claims', async () => {
+    prepared();
+    await expect((await caller()).finalizeSession(request)).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('a signed-in payer and ordinary registered participant cannot finalize without delegation', async () => {
+    prepared();
+    for (const userId of ['registered-payer', 'registered-diner']) {
+      await expect((await caller({ user: { id: userId } })).finalizeSession(request)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('the authenticated creator finalizes without having to be the payer', async () => {
+    prepared();
+    await (await caller(signedIn)).finalizeSession(request);
+    const saved = mockDb.guestSplit.update.mock.calls.at(-1)![0].data;
+    expect(saved.status).toBe('FINALIZED');
+    expect(saved.summary.reduce((sum: number, entry: { total: number }) => sum + entry.total, 0)).toBe(1001);
+  });
+
+  test('only the creator can appoint a real active verified co-organizer', async () => {
+    prepared();
+    const original = await mockDb.guestSplit.findUnique();
+    for (const session of [null, { user: { id: 'registered-payer' } }]) {
+      await expect(
+        (await caller(session)).setFinalizationOrganizer({
+          token: 'share-1',
+          email: 'helper@example.com',
+        }),
+      ).rejects.toMatchObject({ code: session ? 'FORBIDDEN' : 'UNAUTHORIZED' });
+    }
+    mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id?: string; email?: string } }) =>
+      where.email
+        ? {
+            id: 'registered-helper',
+            suspendedAt: null,
+            isPlaceholder: false,
+            registrationEmailVerificationRequired: true,
+            emailVerified: new Date(),
+          }
+        : { suspendedAt: null },
+    );
+    await (
+      await caller(signedIn)
+    ).setFinalizationOrganizer({
+      token: 'share-1',
+      email: 'HELPER@example.com',
+    });
+    expect(mockDb.user.findUnique).toHaveBeenCalledWith({
+      where: { email: 'helper@example.com' },
+      select: {
+        id: true,
+        suspendedAt: true,
+        isPlaceholder: true,
+        emailVerified: true,
+        registrationEmailVerificationRequired: true,
+      },
+    });
+    const delegated = mockDb.guestSplit.update.mock.calls.at(-1)![0].data.receiptData;
+    expect(delegated.finalizationOrganizerUserId).toBe('registered-helper');
+    expect(delegated.partsApprovalHash).toBeUndefined();
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...original, receiptData: delegated });
+    const readAsGuest = await (await caller()).getSession({ token: 'share-1' });
+    expect(readAsGuest.canFinalize).toBe(false);
+    expect(readAsGuest.hasFinalizationOrganizer).toBe(true);
+    expect(JSON.stringify(readAsGuest)).not.toContain('registered-helper');
+    const readAsDelegate = await (
+      await caller({ user: { id: 'registered-helper' } })
+    ).getSession({
+      token: 'share-1',
+    });
+    expect(readAsDelegate.canFinalize).toBe(true);
+    expect(readAsDelegate.isCreator).toBe(false);
+  });
+
+  test('delegated registered organizer can approve and finalize; revocation removes both rights', async () => {
+    prepared({
+      organizerPersonId: pid(0),
+      roundingBalanced: true,
+      finalizationOrganizerUserId: 'registered-helper',
+    });
+    const original = await mockDb.guestSplit.findUnique();
+    const helper = await caller({ user: { id: 'registered-helper' } });
+    await helper.confirmSessionParts({ token: 'share-1' });
+    const approval = mockDb.guestSplit.update.mock.calls.at(-1)![0].data.receiptData;
+    expect(approval.partsApprovalHash).toMatch(/^[0-9a-f]{64}$/);
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...original, receiptData: approval });
+    // Co-organizer is a registered account, not necessarily a food claimant.
+    await helper.finalizeSession({ token: 'share-1' });
+    expect(mockDb.guestSplit.update.mock.calls.at(-1)![0].data.status).toBe('FINALIZED');
+
+    // Rewind only the disposable mock to test revocation before finalizing.
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...original, receiptData: approval });
+    await (await caller(signedIn)).setFinalizationOrganizer({ token: 'share-1', email: null });
+    const revoked = mockDb.guestSplit.update.mock.calls.at(-1)![0].data.receiptData;
+    expect(revoked.finalizationOrganizerUserId).toBeUndefined();
+    expect(revoked.partsApprovalHash).toBeUndefined();
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...original, receiptData: revoked });
+    await expect(helper.confirmSessionParts({ token: 'share-1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(helper.finalizeSession(request)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  test.each([
+    { label: 'missing account', account: null },
+    { label: 'suspended account', account: { id: 'x', suspendedAt: new Date(), isPlaceholder: false } },
+    { label: 'placeholder', account: { id: 'x', suspendedAt: null, isPlaceholder: true } },
+    {
+      label: 'unverified registration',
+      account: {
+        id: 'x',
+        suspendedAt: null,
+        isPlaceholder: false,
+        registrationEmailVerificationRequired: true,
+        emailVerified: null,
+      },
+    },
+  ])('cannot delegate to $label', async ({ account }) => {
+    prepared();
+    mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { email?: string } }) =>
+      where.email ? account : { suspendedAt: null },
+    );
+    await expect(
+      (await caller(signedIn)).setFinalizationOrganizer({
+        token: 'share-1',
+        email: 'helper@example.com',
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('a valid registered user cannot finalize with someone else person token', async () => {
+    prepared({ finalizationOrganizerUserId: 'registered-helper' });
+    const helper = await caller({ user: { id: 'registered-helper' } });
+    await expect(
+      helper.finalizeSession({
+        token: 'share-1',
+        personId: pid(0),
+        personToken: OTHER_TOKEN,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('guest.finalizeSession', () => {
   function savedStatus() {
     const call = mockDb.guestSplit.update.mock.calls.at(-1)?.[0] as { data: { status?: string } } | undefined;
@@ -1859,7 +2032,7 @@ describe('guest.finalizeSession', () => {
 
   test('finalizes as the person the id names, wherever they are now', async () => {
     everyItemClaimed();
-    await (await caller()).finalizeSession({ token: 'share-1', personToken: OTHER_TOKEN, personId: pid(2) });
+    await (await caller(signedIn)).finalizeSession({ token: 'share-1', personToken: OTHER_TOKEN, personId: pid(2) });
     expect(savedStatus()).toBe('FINALIZED');
   });
 
@@ -1881,7 +2054,7 @@ describe('guest.finalizeSession', () => {
         ],
       },
     );
-    await (await caller()).finalizeSession({ token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN });
+    await (await caller(signedIn)).finalizeSession({ token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN });
     const saved = mockDb.guestSplit.update.mock.calls.at(-1)![0] as {
       data: { summary: { personIndex: number; itemTotal: number; total: number }[] };
     };
@@ -1922,7 +2095,7 @@ describe('guest.finalizeSession', () => {
     );
     const before = await mockDb.guestSplit.findUnique();
     await expect(
-      (await caller()).finalizeSession({
+      (await caller(signedIn)).finalizeSession({
         token: 'share-1',
         personId: pid(0),
         personToken: ALICE_TOKEN,
@@ -1936,7 +2109,7 @@ describe('guest.finalizeSession', () => {
     await (await caller(signedIn)).confirmSessionParts({ token: 'share-1' });
     const approval = mockDb.guestSplit.update.mock.calls.at(-1)![0].data.receiptData;
     mockDb.guestSplit.findUnique.mockResolvedValue({ ...before, receiptData: approval });
-    await (await caller()).finalizeSession({ token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN });
+    await (await caller(signedIn)).finalizeSession({ token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN });
     const saved = mockDb.guestSplit.update.mock.calls.at(-1)![0] as {
       data: { summary: { personIndex: number; itemTotal: number; roundingCorrectionCents?: number; total: number }[] };
     };
@@ -1998,7 +2171,7 @@ describe('guest.finalizeSession', () => {
     });
     expect((await (await caller()).getSession({ token: 'share-1' })).partsConfirmed).toBe(false);
     await expect(
-      (await caller()).finalizeSession({
+      (await caller(signedIn)).finalizeSession({
         token: 'share-1',
         personId: pid(0),
         personToken: ALICE_TOKEN,
@@ -2012,7 +2185,7 @@ describe('guest.finalizeSession', () => {
       receiptData: approvedAgain,
     });
     await (
-      await caller()
+      await caller(signedIn)
     ).finalizeSession({
       token: 'share-1',
       personId: pid(0),
@@ -2054,7 +2227,7 @@ describe('guest.finalizeSession', () => {
         assignments: [{ itemIndex: 0, personIndices: [0, 1, 2] }],
       },
     );
-    await (await caller()).finalizeSession({ token: 'share-1', personToken: ALICE_TOKEN, personId: pid(0) });
+    await (await caller(signedIn)).finalizeSession({ token: 'share-1', personToken: ALICE_TOKEN, personId: pid(0) });
     expect(mockDb.guestSplit.update).toHaveBeenCalledWith({
       where: { id: 'gs1' },
       data: expect.objectContaining({
@@ -2081,7 +2254,7 @@ describe('guest.finalizeSession', () => {
       },
     );
     await expect(
-      (await caller()).finalizeSession({ token: 'share-1', personToken: ALICE_TOKEN, personId: pid(0) }),
+      (await caller(signedIn)).finalizeSession({ token: 'share-1', personToken: ALICE_TOKEN, personId: pid(0) }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
@@ -2096,7 +2269,7 @@ describe('guest.finalizeSession', () => {
       assignments: [{ itemIndex: 0, personIndices: [0] }],
     });
     await expect(
-      (await caller()).finalizeSession({ token: 'share-1', personToken: ALICE_TOKEN, personId: pid(0) }),
+      (await caller(signedIn)).finalizeSession({ token: 'share-1', personToken: ALICE_TOKEN, personId: pid(0) }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
@@ -2115,7 +2288,7 @@ describe('guest.finalizeSession', () => {
     // Items 0 and 2 are unclaimed
     sessionAfterBWasRemoved();
     await expect(
-      (await caller()).finalizeSession({ token: 'share-1', personToken: OTHER_TOKEN, personId: pid(2) }),
+      (await caller(signedIn)).finalizeSession({ token: 'share-1', personToken: OTHER_TOKEN, personId: pid(2) }),
     ).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
       message: 'Every item needs someone before the split can be finalized.',
@@ -2129,14 +2302,14 @@ describe('guest.finalizeSession', () => {
       assignments: [{ itemIndex: 0, personIndices: [] }],
     });
     await expect(
-      (await caller()).finalizeSession({ token: 'share-1', personToken: ALICE_TOKEN, personId: pid(0) }),
+      (await caller(signedIn)).finalizeSession({ token: 'share-1', personToken: ALICE_TOKEN, personId: pid(0) }),
     ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
   test('checks the caller before the claims: a bad id or token is still CONFLICT or FORBIDDEN', async () => {
     sessionAfterBWasRemoved();
-    const api = await caller();
+    const api = await caller(signedIn);
     await expect(
       api.finalizeSession({ token: 'share-1', personToken: OTHER_TOKEN, personId: pid(1) }),
     ).rejects.toMatchObject({ code: 'CONFLICT' });
@@ -2148,7 +2321,7 @@ describe('guest.finalizeSession', () => {
   test('refuses an id nobody has any more with CONFLICT', async () => {
     sessionAfterBWasRemoved();
     await expect(
-      (await caller()).finalizeSession({ token: 'share-1', personToken: OTHER_TOKEN, personId: pid(1) }),
+      (await caller(signedIn)).finalizeSession({ token: 'share-1', personToken: OTHER_TOKEN, personId: pid(1) }),
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
@@ -2156,14 +2329,14 @@ describe('guest.finalizeSession', () => {
   test("refuses someone else's id with the caller's token", async () => {
     sessionAfterBWasRemoved();
     await expect(
-      (await caller()).finalizeSession({ token: 'share-1', personToken: OTHER_TOKEN, personId: pid(3) }),
+      (await caller(signedIn)).finalizeSession({ token: 'share-1', personToken: OTHER_TOKEN, personId: pid(3) }),
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
   test('refuses a person index, and no id at all (#225)', async () => {
     sessionAfterBWasRemoved();
-    const finalizeSession = (await caller()).finalizeSession as unknown as (
+    const finalizeSession = (await caller(signedIn)).finalizeSession as unknown as (
       input: Record<string, unknown>,
     ) => Promise<unknown>;
     await expect(finalizeSession({ token: 'share-1', personToken: OTHER_TOKEN, personIndex: 1 })).rejects.toMatchObject(

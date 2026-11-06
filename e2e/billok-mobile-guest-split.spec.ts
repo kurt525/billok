@@ -1986,6 +1986,146 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
   }
 });
 
+test('Issue 3.4: mobile creator explicitly delegates approval and finalization, payer and guest cannot', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(210_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const payerAccount = await authedContext(users.bob.email, users.bob.password);
+  const organizerBrowser = await browser.newContext({
+    viewport: { width: 360, height: 680 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const delegateBrowser = await browser.newContext({
+    viewport: { width: 320, height: 680 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  try {
+    const create = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: {
+        merchantName: 'Проверка прав 3.4',
+        subtotal: 1001,
+        total: 1001,
+        tax: 0,
+        tip: 0,
+        currency: 'RUB',
+      },
+      items: [
+        { name: 'Пицца', quantity: 1, unitPrice: 800, totalPrice: 800 },
+        { name: 'Чай', quantity: 1, unitPrice: 201, totalPrice: 201 },
+      ],
+      people: ['Анна', 'Борис'],
+      creatorName: 'Анна',
+      paidByName: 'Борис',
+      joinCreator: true,
+    });
+    const body = await create.text();
+    expect(create.ok(), body).toBe(true);
+    const created = JSON.parse(body).result.data.json as {
+      shareToken: string;
+      creator: { personId: string; personToken: string; name: string };
+    };
+    const token = created.shareToken;
+    const anna = created.creator;
+
+    // The payer is a registered account but has no organizer authority.
+    const boris = await joinGuestSession(payerAccount, { token, name: 'Борис' });
+    for (const [ctx, person, indices] of [
+      [owner, anna, [0]],
+      [payerAccount, boris, [0, 1]],
+    ] as const) {
+      const result = await trpcMutation(ctx, 'guest.claimItems', {
+        token,
+        personId: person.personId,
+        personToken: person.personToken,
+        claimedItemIndices: indices,
+      });
+      expect(result.ok(), await result.text()).toBe(true);
+    }
+
+    // Personal tokens give guest participation only, even when all items are claimed.
+    await rememberClaimIdentity(page.context(), token, boris);
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('claim-item-0')).toBeVisible();
+    await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
+    await expect(page.getByTestId('guest-confirm-parts-btn')).toHaveCount(0);
+    const rejectedGuest = await trpcMutation(page.request, 'guest.finalizeSession', {
+      token,
+      personId: boris.personId,
+      personToken: boris.personToken,
+    });
+    expect((await trpcError(rejectedGuest))?.data?.code).toBe('UNAUTHORIZED');
+
+    const rejectedPayer = await trpcMutation(payerAccount, 'guest.finalizeSession', {
+      token,
+      personId: boris.personId,
+      personToken: boris.personToken,
+    });
+    expect((await trpcError(rejectedPayer))?.data?.code).toBe('FORBIDDEN');
+
+    const ownerPage = await organizerBrowser.newPage();
+    await ownerPage.goto('/login', { waitUntil: 'networkidle' });
+    await ownerPage.locator('input[type=email]').fill(users.alice.email);
+    await ownerPage.locator('input[type=password]').fill(users.alice.password);
+    await ownerPage.getByRole('button', { name: 'Войти', exact: true }).click();
+    await expect(ownerPage).toHaveURL(/\/dashboard/);
+    await rememberClaimIdentity(organizerBrowser, token, anna);
+    await ownerPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    const panel = ownerPage.getByTestId('finalization-organizer-panel');
+    await expect(panel).toBeVisible({ timeout: 15_000 });
+    await panel.getByTestId('finalization-organizer-email').fill(users.charlie.email);
+    await panel.getByTestId('finalization-organizer-appoint').click();
+    await expect(panel.getByTestId('finalization-organizer-active')).toBeVisible({ timeout: 15_000 });
+
+    const delegatePage = await delegateBrowser.newPage();
+    await delegatePage.goto('/login', { waitUntil: 'networkidle' });
+    await delegatePage.locator('input[type=email]').fill(users.charlie.email);
+    await delegatePage.locator('input[type=password]').fill(users.charlie.password);
+    await delegatePage.getByRole('button', { name: 'Войти', exact: true }).click();
+    await expect(delegatePage).toHaveURL(/\/dashboard/);
+    await delegatePage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    // The co-organizer did not eat: no fictitious guest or personal token.
+    await expect(delegatePage.getByTestId('finalization-organizer-panel')).toHaveCount(0);
+    await expect(delegatePage.getByTestId('finalization-organizer-no-claim')).toBeVisible();
+    await expect(delegatePage.getByTestId('claim-join-form')).toBeVisible();
+    await expect(delegatePage.getByTestId('guest-confirm-parts-btn')).toBeVisible({ timeout: 15_000 });
+    await fitsPhone(delegatePage);
+    await delegatePage.getByTestId('guest-confirm-parts-btn').click();
+    await expect
+      .poll(async () => (await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).partsConfirmed, {
+        timeout: 15_000,
+      })
+      .toBe(true);
+
+    // A payer or guest cannot bypass the creator/delegate check even after approval.
+    const forbiddenAfter = await trpcMutation(payerAccount, 'guest.finalizeSession', {
+      token,
+      personId: boris.personId,
+      personToken: boris.personToken,
+    });
+    expect((await trpcError(forbiddenAfter))?.data?.code).toBe('FORBIDDEN');
+    await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
+    await expect(delegatePage.getByTestId('finalize-btn')).toBeVisible({ timeout: 15_000 });
+
+    await delegatePage.getByTestId('finalize-btn').click();
+    const finalizeDialog = delegatePage.getByRole('alertdialog');
+    await expect(finalizeDialog).toBeVisible();
+    await finalizeDialog.getByRole('button', { name: 'Завершить распределение' }).click();
+    await expect(delegatePage.getByTestId('finalized-bill-total')).toContainText('10,01', { timeout: 20_000 });
+    const result = await trpcResult(await trpcQuery(owner, 'guest.getSplit', { token }));
+    expect(result.receiptData.total).toBe(1001);
+    expect(result.summary.reduce((sum: number, member: { total: number }) => sum + member.total, 0)).toBe(1001);
+  } finally {
+    await organizerBrowser.close();
+    await delegateBrowser.close();
+    await payerAccount.dispose();
+    await owner.dispose();
+  }
+});
+
 test('Issue 3.2: a registered owner independently creates groups, receipts and expenses; other account is isolated', async () => {
   test.setTimeout(180_000);
   const owner = await authedContext(users.alice.email, users.alice.password);
