@@ -312,5 +312,9 @@
   "roles": {
     "creator": "Creator",
     "payer": "Payer"
+  },
+  "accountStatus": {
+    "registered": "Registered",
+    "guest": "Guest"
   }
 }

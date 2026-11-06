@@ -2006,6 +2006,101 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
   }
 });
 
+test('Issue 3.11: account binding, not guest token or name, controls mobile Registered vs Guest labels', async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const creator = await authedContext(users.alice.email, users.alice.password);
+  const registeredGuest = await authedContext(users.bob.email, users.bob.password);
+  let token: string | undefined;
+  try {
+    const created = await trpcMutation(creator, 'guest.createClaimSession', {
+      receiptData: {
+        merchantName: 'Проверка 3.11',
+        subtotal: 2000,
+        tax: 0,
+        tip: 0,
+        total: 2000,
+        currency: 'RUB',
+      },
+      items: [{ name: 'Пицца', quantity: 1, unitPrice: 2000, totalPrice: 2000 }],
+      guestCount: 2,
+      joinCreator: true,
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    token = (JSON.parse(await created.text()).result.data.json as { shareToken: string }).shareToken;
+    const initial = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(initial.people.map((p: { isRegistered: boolean }) => p.isRegistered)).toEqual([true, false, false]);
+    expect(initial.people[0].name).toBe(users.alice.name);
+
+    // Possessing a valid personal bearer credential without an account is
+    // NOT equivalent to a confirmed server-side registration.
+    const joinedAnonymous = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[1].id,
+      name: 'Гость с токеном',
+    });
+    expect(joinedAnonymous.ok(), await joinedAnonymous.text()).toBe(true);
+    const anonymousToken = (
+      JSON.parse(await joinedAnonymous.text()).result.data.json as {
+        personToken: string;
+      }
+    ).personToken;
+    expect(anonymousToken).toBeTruthy();
+
+    const joinedRegistered = await trpcMutation(registeredGuest, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[2].id,
+      name: 'Борис',
+    });
+    expect(joinedRegistered.ok(), await joinedRegistered.text()).toBe(true);
+
+    const serverView = await trpcResult(await trpcQuery(page.request, 'guest.getSession', { token }));
+    expect(serverView.people.map((p: { isRegistered: boolean }) => p.isRegistered)).toEqual([true, false, true]);
+    expect(serverView.people.map((p: { hasJoined: boolean }) => p.hasJoined)).toEqual([true, true, true]);
+    expect(JSON.stringify(serverView)).not.toContain(anonymousToken);
+    expect(JSON.stringify(serverView)).not.toContain('accountUserId');
+
+    await page.goto('/split/' + token + '/claim');
+    const creatorRow = page.getByTestId('invited-person-0');
+    const anonymousRow = page.getByTestId('invited-person-1');
+    const registeredRow = page.getByTestId('invited-person-2');
+    await expect(creatorRow.getByTestId('account-status-registered')).toContainText('Зарегистрирован', {
+      timeout: 20_000,
+    });
+    await expect(creatorRow.getByTestId('receipt-role-creator')).toContainText('Создатель');
+    await expect(creatorRow.getByTestId('receipt-role-payer')).toContainText('Плательщик');
+    await expect(anonymousRow.getByTestId('account-status-guest')).toContainText('Гость');
+    await expect(anonymousRow.getByTestId('receipt-roles')).toHaveCount(0);
+    await expect(registeredRow.getByTestId('account-status-registered')).toContainText('Зарегистрирован');
+    await expect(registeredRow.getByTestId('receipt-roles')).toHaveCount(0);
+    // A creator can change a guest's label, but cannot change their account
+    // binding or copy registration status from the new name.
+    const rename = await trpcMutation(creator, 'guest.editPersonName', {
+      token,
+      targetId: initial.people[1].id,
+      newName: 'Борис Незарегистрированный',
+    });
+    expect(rename.ok(), await rename.text()).toBe(true);
+    await expect(anonymousRow).toContainText('Борис Незарегистрированный', { timeout: 15_000 });
+    await expect(anonymousRow.getByTestId('account-status-guest')).toBeVisible();
+    await page.reload();
+    await expect(page.getByTestId('invited-person-1').getByTestId('account-status-guest')).toBeVisible();
+    await expect(page.getByTestId('invited-person-2').getByTestId('account-status-registered')).toBeVisible();
+    for (const width of [320, 412, 720]) {
+      await page.setViewportSize({ width, height: 740 });
+      await fitsPhone(page);
+    }
+    const final = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(final.people.map((p: { id: string }) => p.id)).toEqual(initial.people.map((p: { id: string }) => p.id));
+    expect(final.people.map((p: { isRegistered: boolean }) => p.isRegistered)).toEqual([true, false, true]);
+  } finally {
+    if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
+    await registeredGuest.dispose();
+    await creator.dispose();
+  }
+});
+
 test('Issue 3.10: receipt creator and the one payer have independent visible roles on mobile', async ({ page }) => {
   test.setTimeout(150_000);
   const creator = await authedContext(users.alice.email, users.alice.password);

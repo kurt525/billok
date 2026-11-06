@@ -18,6 +18,7 @@ import { getInitials } from '@/lib/avatar';
 import { guestVisualColorStyle, guestVisualColorBorder } from '@/lib/guest-visual-color';
 import { guestReceiptRoleFlags } from '@/lib/guest-receipt-roles';
 import { GuestReceiptRoles } from '@/components/guest-receipt-roles';
+import { GuestAccountStatus } from '@/components/guest-account-status';
 import { buildVenmoPayUrl, isValidVenmoHandle } from '@/lib/venmo';
 import { groupSizeWeights, personItemShares } from '@/lib/split-calculator';
 
@@ -26,6 +27,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
   const locale = useLocale();
   const t = useTranslations('split.result');
   const tr = useTranslations('split.roles');
+  const ta = useTranslations('split.accountStatus');
   const tv = useTranslations('split.venmo');
   const tc = useTranslations('common');
   const format = useFormatter();
@@ -87,6 +89,13 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
       {...guestReceiptRoleFlags(index, data.organizerIndex, data.paidByIndex, data.people.length)}
       creatorLabel={tr('creator')}
       payerLabel={tr('payer')}
+    />
+  );
+  const accountMark = (index: number) => (
+    <GuestAccountStatus
+      isRegistered={data.people[index]?.isRegistered === true}
+      registeredLabel={ta('registered')}
+      guestLabel={ta('guest')}
     />
   );
   const expiredCreatorHistory = data.archivedCreatorView;
@@ -227,6 +236,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
                     </Avatar>
                     <span className="min-w-0 font-semibold [overflow-wrap:anywhere]">{person.name}</span>
                     {roleMarks(idx)}
+                    {accountMark(idx)}
                   </div>
                   <span
                     className="min-w-0 text-xl font-bold text-primary tabular-nums [overflow-wrap:anywhere]"

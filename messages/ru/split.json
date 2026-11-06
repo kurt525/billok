@@ -325,5 +325,9 @@
   "roles": {
     "creator": "Создатель",
     "payer": "Плательщик"
+  },
+  "accountStatus": {
+    "registered": "Зарегистрирован",
+    "guest": "Гость"
   }
 }

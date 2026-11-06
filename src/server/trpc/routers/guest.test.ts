@@ -954,8 +954,8 @@ describe('guest.getSession people', () => {
     ]);
     const session = await (await caller()).getSession({ token: 'share-1' });
     expect(session.people).toEqual([
-      { id: pid(0), name: 'Host', groupSize: 1, hasJoined: false, tipCents: 0 },
-      { id: pid(1), name: 'Alice', groupSize: 2, hasJoined: true, tipCents: 0 },
+      { id: pid(0), name: 'Host', groupSize: 1, hasJoined: false, isRegistered: false, tipCents: 0 },
+      { id: pid(1), name: 'Alice', groupSize: 2, hasJoined: true, isRegistered: false, tipCents: 0 },
     ]);
     expect(JSON.stringify(session)).not.toContain(ALICE_TOKEN);
     expect(JSON.stringify(session)).not.toContain(JOIN_KEY);
@@ -1007,8 +1007,8 @@ describe('guest.getSession people', () => {
     );
     const split = await (await caller()).getSplit({ token: 'share-1' });
     expect(split.people).toEqual([
-      { name: 'Host', groupSize: 1, hasJoined: false },
-      { name: 'Alice', groupSize: 1, hasJoined: true },
+      { name: 'Host', groupSize: 1, hasJoined: false, isRegistered: false },
+      { name: 'Alice', groupSize: 1, hasJoined: true, isRegistered: false },
     ]);
     expect(JSON.stringify(split)).not.toContain(ALICE_TOKEN);
     expect(JSON.stringify(split)).not.toContain(JOIN_KEY);
@@ -1508,6 +1508,69 @@ describe('Issue 3.8.4: creator revokes and rotates a personal link without mutat
     expect(registered.personalLinkEvents).toBeNull();
     expect(JSON.stringify(outside)).not.toContain(rotated.personToken);
     expect(JSON.stringify(outside)).not.toContain(requestKey);
+  });
+});
+
+describe('Issue 3.11: account registration is a verified server-side person binding', () => {
+  const receiptData = {
+    subtotal: 1200,
+    tax: 0,
+    tip: 0,
+    total: 1200,
+    currency: 'RUB',
+    guestSlotsMode: true,
+    guestCount: 3,
+    organizerPersonId: pid(0),
+  };
+  const people: TestPerson[] = [
+    { name: 'Создатель', accountUserId: 'user-1', personToken: ALICE_TOKEN },
+    { name: 'Зарегистрированный', accountUserId: 'user-2', personToken: OTHER_TOKEN, guestSlotNumber: 1 },
+    { name: 'Зарегистрированный (двойник)', guestSlotNumber: 2, personToken: '33333333-3333-4333-8333-333333333333' },
+    { name: 'Гость 3', guestSlotNumber: 3 },
+  ];
+  beforeEach(() => claimSession(people, { receiptData }));
+
+  test('public getSession reveals only safe account status for bound and unbound rows', async () => {
+    const result = await (await caller()).getSession({ token: 'share-1' });
+    expect(result.people.map((person) => person.isRegistered)).toEqual([true, true, false, false]);
+    expect(result.people.map((person) => person.hasJoined)).toEqual([true, true, true, false]);
+    const json = JSON.stringify(result);
+    expect(json).not.toContain('accountUserId');
+    expect(json).not.toContain('user-2');
+    expect(json).not.toContain(ALICE_TOKEN);
+    expect(json).not.toContain(OTHER_TOKEN);
+  });
+
+  test('name, personal token and ordinary guest receipt privileges cannot produce registered badge', async () => {
+    const result = await (
+      await caller({ user: { id: 'unbound-registered-viewer' } })
+    ).getSession({
+      token: 'share-1',
+    });
+    expect(result.people[2]).toMatchObject({
+      name: 'Зарегистрированный (двойник)',
+      hasJoined: true,
+      isRegistered: false,
+    });
+    expect(result.people[3]).toMatchObject({ name: 'Гость 3', isRegistered: false });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('finalized getSplit preserves the same account registration flags without exposing IDs', async () => {
+    claimSession(people, { receiptData, status: 'FINALIZED' });
+    const result = await (await caller()).getSplit({ token: 'share-1' });
+    expect(result.people.map((person) => person.isRegistered)).toEqual([true, true, false, false]);
+    expect(JSON.stringify(result)).not.toContain('accountUserId');
+    expect(JSON.stringify(result)).not.toContain('user-2');
+  });
+
+  test('registered account binding remains after guest rename or token replacement', async () => {
+    const rotated = people.map((person) => ({ ...person }));
+    rotated[1] = { ...rotated[1]!, name: 'Новое имя', personToken: '44444444-4444-4444-8444-444444444444' };
+    claimSession(rotated, { receiptData });
+    const result = await (await caller()).getSession({ token: 'share-1' });
+    expect(result.people[1]).toMatchObject({ name: 'Новое имя', isRegistered: true });
+    expect(result.people[2]?.isRegistered).toBe(false);
   });
 });
 
@@ -2773,8 +2836,8 @@ describe('guest.setPersonalTip: voluntary kopecks per authenticated participant'
     claimSession(people);
     const api = await caller();
     expect((await api.getSession({ token: 'share-1' })).people).toEqual([
-      { id: pid(0), name: 'Alice', groupSize: 1, hasJoined: true, tipCents: 0 },
-      { id: pid(1), name: 'Bob', groupSize: 1, hasJoined: true, tipCents: 400 },
+      { id: pid(0), name: 'Alice', groupSize: 1, hasJoined: true, isRegistered: false, tipCents: 0 },
+      { id: pid(1), name: 'Bob', groupSize: 1, hasJoined: true, isRegistered: false, tipCents: 400 },
     ]);
     expect(await api.setPersonalTip({ ...alice, tipCents: 0 })).toEqual({ success: true, tipCents: 0 });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();

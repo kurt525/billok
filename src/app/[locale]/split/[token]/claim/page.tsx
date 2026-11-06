@@ -79,6 +79,7 @@ import { getInitials } from '@/lib/avatar';
 import { guestVisualColorStyle, guestVisualColorBorder } from '@/lib/guest-visual-color';
 import { organizerPersonIndex, guestReceiptRoleFlags } from '@/lib/guest-receipt-roles';
 import { GuestReceiptRoles } from '@/components/guest-receipt-roles';
+import { GuestAccountStatus } from '@/components/guest-account-status';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
@@ -117,10 +118,11 @@ function OrganizerPresence({
   people,
   presence,
 }: {
-  people: { id: string; name: string }[];
+  people: { id: string; name: string; isRegistered: boolean }[];
   presence: { personId: string; status: 'not-joined' | 'joined' | 'online' | 'offline' }[];
 }) {
   const t = useTranslations('split.claim');
+  const ta = useTranslations('split.accountStatus');
   const statusById = new Map(presence.map((entry) => [entry.personId, entry.status]));
   const label = {
     'not-joined': t('presenceNotJoined'),
@@ -143,6 +145,11 @@ function OrganizerPresence({
               data-testid={'presence-person-' + person.id}
             >
               <span className="min-w-0 flex-1 font-medium [overflow-wrap:anywhere]">{person.name}</span>
+              <GuestAccountStatus
+                isRegistered={person.isRegistered}
+                registeredLabel={ta('registered')}
+                guestLabel={ta('guest')}
+              />
               <span
                 className="text-sm text-muted-foreground [overflow-wrap:anywhere]"
                 data-testid={'presence-status-' + person.id}
@@ -162,6 +169,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const locale = useLocale();
   const t = useTranslations('split.claim');
   const tr = useTranslations('split.roles');
+  const ta = useTranslations('split.accountStatus');
   const tv = useTranslations('split.venmo');
   const tc = useTranslations('common');
 
@@ -1356,6 +1364,16 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       payerLabel={tr('payer')}
     />
   );
+  const accountMark = (index: number) => {
+    const person = data.people[index];
+    return person ? (
+      <GuestAccountStatus
+        isRegistered={person.isRegistered}
+        registeredLabel={ta('registered')}
+        guestLabel={ta('guest')}
+      />
+    ) : null;
+  };
   const creatorGuestLinkControls = (
     person: { id: string; name: string; hasJoined: boolean; guestSlotNumber?: number; personalLinkReady?: boolean },
     idx: number,
@@ -1823,6 +1841,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       <span className="flex min-w-0 flex-wrap items-center gap-1 font-medium">
                         <span>{person.name}</span>
                         {roleMarks(person.personIndex)}
+                        {accountMark(person.personIndex)}
                       </span>
                     </div>
                     <span
@@ -2035,6 +2054,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           {person.groupSize > 1 && ' (×' + person.groupSize + ')'}
                         </span>
                         {roleMarks(idx)}
+                        {accountMark(idx)}
                         {data.isCreator && data.status === 'CLAIMING' && (
                           <button
                             type="button"
@@ -2178,6 +2198,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       >
                         <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{person.name}</span>
                         {roleMarks(data.people.findIndex((entry) => entry.id === person.id))}
+                        {accountMark(data.people.findIndex((entry) => entry.id === person.id))}
                         <span className="shrink-0 text-xs text-muted-foreground">
                           {person.hasJoined ? t('guestPlaceTaken') : t('guestPlaceFree')}
                         </span>
@@ -2222,6 +2243,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         </Avatar>
                         <span className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">{person.name}</span>
                         {roleMarks(idx)}
+                        {accountMark(idx)}
                       </button>
                     ),
                   )}
@@ -2491,6 +2513,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       {idx === myPersonIndex && ` ${t('you')}`}
                     </span>
                     {roleMarks(idx)}
+                    {accountMark(idx)}
                     {(data.isCreator || person.id === myPersonId) && data.status === 'CLAIMING' && (
                       <button
                         type="button"
@@ -2556,6 +2579,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 {idx === myPersonIndex && ` ${t('you')}`}
               </span>
               {roleMarks(idx)}
+              {accountMark(idx)}
             </button>
           ))}
         </div>
@@ -3035,6 +3059,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         {isMe && ` ${t('you')}`}
                       </span>
                       {roleMarks(person.personIndex)}
+                      {accountMark(person.personIndex)}
                     </div>
                     <span className="min-w-0 text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]">
                       {formatCents(person.total, currency, locale)}

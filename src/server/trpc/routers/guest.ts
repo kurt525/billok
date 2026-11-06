@@ -181,6 +181,9 @@ function toPublicPerson({ name, groupSize, personToken, accountUserId, visualCol
     name,
     groupSize: groupSize ?? 1,
     hasJoined: !!personToken || !!accountUserId,
+    // Only a trusted server-issued account binding qualifies, not a display
+    // name, phone, share URL, or possession of a guest bearer credential.
+    isRegistered: typeof accountUserId === 'string' && accountUserId.length > 0,
     ...(Number.isSafeInteger(visualColorId) && visualColorId! >= 0 ? { visualColorId } : {}),
   };
 }
