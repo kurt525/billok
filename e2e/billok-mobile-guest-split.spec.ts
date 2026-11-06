@@ -2006,6 +2006,65 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
   }
 });
 
+test('Issue 3.10: receipt creator and the one payer have independent visible roles on mobile', async ({ page }) => {
+  test.setTimeout(150_000);
+  const creator = await authedContext(users.alice.email, users.alice.password);
+  const receipts: string[] = [];
+  try {
+    for (const paidByGuestSlot of [0, 2]) {
+      const created = await trpcMutation(creator, 'guest.createClaimSession', {
+        receiptData: {
+          merchantName: 'Роли чека',
+          subtotal: 2000,
+          total: 2000,
+          tax: 0,
+          tip: 0,
+          currency: 'RUB',
+        },
+        items: [{ name: 'Сок', quantity: 1, unitPrice: 2000, totalPrice: 2000 }],
+        guestCount: 2,
+        ...(paidByGuestSlot ? { paidByGuestSlot } : {}),
+        joinCreator: true,
+      });
+      expect(created.ok(), await created.text()).toBe(true);
+      const token = (JSON.parse(await created.text()).result.data.json as { shareToken: string }).shareToken;
+      receipts.push(token);
+      const session = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+      expect(session.people).toHaveLength(3);
+      expect(session.receiptData.organizerPersonId).toBe(session.people[0].id);
+      expect(session.paidByIndex).toBe(paidByGuestSlot);
+      await page.goto('/split/' + token + '/claim');
+      const creatorRow = page.getByTestId('invited-person-0');
+      const guestOneRow = page.getByTestId('invited-person-1');
+      const guestTwoRow = page.getByTestId('invited-person-2');
+      await expect(creatorRow.getByTestId('receipt-role-creator')).toContainText('Создатель');
+      await expect(creatorRow.getByTestId('receipt-role-creator')).toContainText('👑');
+      await expect(guestOneRow.getByTestId('receipt-roles')).toHaveCount(0);
+      if (paidByGuestSlot === 0) {
+        await expect(creatorRow.getByTestId('receipt-role-payer')).toContainText('💵');
+        await expect(creatorRow.getByTestId('receipt-role-payer')).toContainText('Плательщик');
+        await expect(guestTwoRow.getByTestId('receipt-roles')).toHaveCount(0);
+      } else {
+        await expect(creatorRow.getByTestId('receipt-role-payer')).toHaveCount(0);
+        await expect(guestTwoRow.getByTestId('receipt-role-payer')).toContainText('Плательщик');
+        await expect(guestTwoRow.getByTestId('receipt-role-payer')).toContainText('💵');
+        await expect(page.getByTestId('guest-slot-option-2').getByTestId('receipt-role-payer')).toBeVisible();
+      }
+      await page.reload();
+      await expect(page.getByTestId('invited-person-0').getByTestId('receipt-role-creator')).toBeVisible();
+      for (const width of [320, 412, 720]) {
+        await page.setViewportSize({ width, height: 730 });
+        await fitsPhone(page);
+      }
+    }
+  } finally {
+    for (const token of receipts) {
+      await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
+    }
+    await creator.dispose();
+  }
+});
+
 test('Issue 3.9: mobile participant color stays with the person after rename and reload', async ({ page }) => {
   test.setTimeout(120_000);
   const creator = await authedContext(users.alice.email, users.alice.password);

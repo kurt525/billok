@@ -308,5 +308,9 @@
     "tipForWaiter": "Total voluntary tips for the waiter",
     "totalWithTips": "Total including tips",
     "organizerRoundingCorrection": "Creator rounding adjustment (already included)"
+  },
+  "roles": {
+    "creator": "Creator",
+    "payer": "Payer"
   }
 }

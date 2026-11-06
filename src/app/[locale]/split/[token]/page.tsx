@@ -16,6 +16,8 @@ import { toast } from 'sonner';
 import { Link } from '@/i18n/navigation';
 import { getInitials } from '@/lib/avatar';
 import { guestVisualColorStyle, guestVisualColorBorder } from '@/lib/guest-visual-color';
+import { guestReceiptRoleFlags } from '@/lib/guest-receipt-roles';
+import { GuestReceiptRoles } from '@/components/guest-receipt-roles';
 import { buildVenmoPayUrl, isValidVenmoHandle } from '@/lib/venmo';
 import { groupSizeWeights, personItemShares } from '@/lib/split-calculator';
 
@@ -23,6 +25,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
   const { token } = use(params);
   const locale = useLocale();
   const t = useTranslations('split.result');
+  const tr = useTranslations('split.roles');
   const tv = useTranslations('split.venmo');
   const tc = useTranslations('common');
   const format = useFormatter();
@@ -79,6 +82,13 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
   }
 
   const data = split.data!;
+  const roleMarks = (index: number) => (
+    <GuestReceiptRoles
+      {...guestReceiptRoleFlags(index, data.organizerIndex, data.paidByIndex, data.people.length)}
+      creatorLabel={tr('creator')}
+      payerLabel={tr('payer')}
+    />
+  );
   const expiredCreatorHistory = data.archivedCreatorView;
   const currency = data.receiptData.currency;
   // Saved shares are the definitive settlement, including personal tips.
@@ -216,6 +226,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
                       </AvatarFallback>
                     </Avatar>
                     <span className="min-w-0 font-semibold [overflow-wrap:anywhere]">{person.name}</span>
+                    {roleMarks(idx)}
                   </div>
                   <span
                     className="min-w-0 text-xl font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
