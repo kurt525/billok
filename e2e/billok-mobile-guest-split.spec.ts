@@ -1045,10 +1045,21 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     expect(approved.ok(), await approved.text()).toBe(true);
     // A live poll updates the guest's open page without a reload.
     await expect(page.getByTestId('guest-parts-awaiting-confirmation')).toHaveCount(0, { timeout: 15_000 });
-    const finish = page.getByTestId('finalize-btn');
-    await expect(finish).toBeVisible({ timeout: 15_000 });
-    await finish.click();
-    await page.getByRole('alertdialog').getByRole('button', { name: 'Завершить распределение' }).click();
+    // 3.4: the original personal token on this anonymous device does NOT
+    // authorize finalization. Only the logged-in creator may finish by API.
+    await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
+    const unauthorized = await trpcMutation(page.request, 'guest.finalizeSession', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+    });
+    expect((await trpcError(unauthorized))?.data?.code).toBe('UNAUTHORIZED');
+    const finishedByCreator = await trpcMutation(owner, 'guest.finalizeSession', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+    });
+    expect(finishedByCreator.ok(), await finishedByCreator.text()).toBe(true);
 
     await expect(page.getByText('Расчёт завершён')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('finalized-person-total-0')).toContainText('4,59');
@@ -1806,7 +1817,14 @@ test('Issue 2.19.3: guest personal links count 0, 3, 8 portions and cannot final
     await expect
       .poll(async () => (await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).partsConfirmed)
       .toBe(true);
-    await expect(page.getByTestId('finalize-btn')).toBeVisible({ timeout: 15_000 });
+    // 3.4: a personal guest link alone never confers creator permissions.
+    await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
+    const noGuestFinalization = await trpcMutation(page.request, 'guest.finalizeSession', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+    });
+    expect((await trpcError(noGuestFinalization))?.data?.code).toBe('UNAUTHORIZED');
 
     // Any further claim change invalidates even a previously approved receipt.
     const modified = await trpcMutation(second.request, 'guest.setMyItemParts', {
