@@ -2006,6 +2006,82 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
   }
 });
 
+test('Issue 3.8.2: only a receipt creator can reveal and copy a saved guest link on mobile', async ({
+  browser,
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const creator = await authedContext(users.alice.email, users.alice.password);
+  const creatorBrowser = await browser.newContext({
+    viewport: { width: 320, height: 740 },
+    isMobile: true,
+    hasTouch: true,
+    permissions: ['clipboard-read', 'clipboard-write'],
+  });
+  let token: string | undefined;
+  try {
+    const response = await trpcMutation(creator, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Личная ссылка гостя', subtotal: 900, tax: 0, tip: 0, total: 900, currency: 'RUB' },
+      items: [{ name: 'Чай', quantity: 1, unitPrice: 900, totalPrice: 900 }],
+      guestCount: 1,
+      joinCreator: true,
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    token = (JSON.parse(await response.text()).result.data.json as { shareToken: string }).shareToken;
+    const initial = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    const guestId = initial.people[1].id as string;
+    const guestJoined = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: guestId,
+      name: 'Андрей',
+    });
+    expect(guestJoined.ok(), await guestJoined.text()).toBe(true);
+    const joined = JSON.parse(await guestJoined.text()).result.data.json as { personToken: string; personId: string };
+    expect(joined.personId).toBe(guestId);
+
+    const tooEarly = await trpcMutation(creator, 'guest.getGuestPersonalLink', { token, personId: guestId });
+    expect(tooEarly.ok()).toBe(false);
+    expect((await trpcError(tooEarly))?.data?.code).toBe('PRECONDITION_FAILED');
+    const anonymous = await trpcMutation(page.request, 'guest.getGuestPersonalLink', { token, personId: guestId });
+    expect(anonymous.ok()).toBe(false);
+    expect((await trpcError(anonymous))?.data?.code).toBe('UNAUTHORIZED');
+
+    const selfSave = await trpcMutation(page.request, 'guest.editPersonName', {
+      token,
+      targetId: guestId,
+      personToken: joined.personToken,
+      newName: 'Андрей П.',
+    });
+    expect(selfSave.ok(), await selfSave.text()).toBe(true);
+    const after = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(after.people[1]).toMatchObject({ id: guestId, personalLinkReady: true, name: 'Андрей П.' });
+    expect(JSON.stringify(after)).not.toContain(joined.personToken);
+
+    const ownerPage = await creatorBrowser.newPage();
+    await ownerPage.goto('/login');
+    await ownerPage.locator('input[type=email]').fill(users.alice.email);
+    await ownerPage.locator('input[type=password]').fill(users.alice.password);
+    await ownerPage.getByRole('button', { name: 'Войти', exact: true }).click();
+    await expect(ownerPage).toHaveURL(/\/dashboard/);
+    await ownerPage.goto('/split/' + token + '/claim');
+    await expect(ownerPage.getByTestId('creator-guest-link-open-1')).toBeVisible({ timeout: 20_000 });
+    await ownerPage.getByTestId('creator-guest-link-open-1').click();
+    const revealed = ownerPage.getByTestId('creator-guest-link-url-1');
+    await expect(revealed).toBeVisible();
+    const personalUrl = await revealed.inputValue();
+    expect(personalUrl).toContain('/split/' + token + '/claim#me=');
+    expect(personalUrl).toContain(joined.personToken);
+    await ownerPage.getByTestId('creator-guest-link-copy-1').click();
+    await expect(ownerPage.getByText('Персональная ссылка гостя скопирована.')).toBeVisible();
+    expect(await ownerPage.evaluate(() => navigator.clipboard.readText())).toBe(personalUrl);
+    await fitsPhone(ownerPage);
+  } finally {
+    if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
+    await creatorBrowser.close();
+    await creator.dispose();
+  }
+});
+
 test('Issue 3.7.3: mobile invite flow creates N+1 seats and guests select distinct available slots', async ({
   page,
   browser,

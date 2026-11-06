@@ -1291,6 +1291,132 @@ describe('Issue 3.6: no two people share a display name inside one receipt', () 
   });
 });
 
+describe('Issue 3.8.2: creator retrieves a guest personal link only with verified account authority', () => {
+  const savedAt = '2026-11-06T10:00:00.000Z';
+  const data = {
+    subtotal: 800,
+    tax: 0,
+    tip: 0,
+    total: 800,
+    currency: 'RUB',
+    guestSlotsMode: true,
+    guestCount: 3,
+    organizerPersonId: pid(0),
+  };
+  const readyGuest: TestPerson = {
+    name: 'Андрей',
+    guestSlotNumber: 1,
+    personToken: ALICE_TOKEN,
+    personalLinkReadyAt: savedAt,
+  };
+  const people: TestPerson[] = [
+    { name: 'Создатель', accountUserId: 'user-1', personToken: OTHER_TOKEN },
+    readyGuest,
+    { name: 'Гость 2', guestSlotNumber: 2, personToken: '33333333-3333-4333-8333-333333333333' },
+    { name: 'Гость 3', guestSlotNumber: 3 },
+  ];
+  const request = { token: 'share-1', personId: pid(1) };
+  beforeEach(() => claimSession(people, { receiptData: data }));
+
+  test('only the actual creator receives the ready guest token through the explicit mutation', async () => {
+    const result = await (await caller(signedIn)).getGuestPersonalLink(request);
+    expect(result).toEqual({ personId: pid(1), name: 'Андрей', personToken: ALICE_TOKEN });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('a shared-link visitor cannot retrieve it without a registered account', async () => {
+    await expect((await caller()).getGuestPersonalLink(request)).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
+    expect(mockDb.guestSplit.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('another registered account, even if payer or BillOK owner, cannot access someone else receipt', async () => {
+    await expect((await caller({ user: { id: 'not-creator' } })).getGuestPersonalLink(request)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      messageKey: 'sessionNotFound',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('impersonating a creator account is forbidden without disclosing the credential', async () => {
+    const { guestRouter } = await import('./guest');
+    const api = guestRouter.createCaller({
+      session: signedIn,
+      db: mockDb,
+      headers: new Headers(),
+      impersonating: { adminId: 'someone' },
+    } as unknown as Parameters<typeof guestRouter.createCaller>[0]);
+    await expect(api.getGuestPersonalLink(request)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('a guest with no first saved action has no creator-copyable token yet', async () => {
+    await expect(
+      (await caller(signedIn)).getGuestPersonalLink({
+        token: 'share-1',
+        personId: pid(2),
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED', messageKey: 'guestPersonalLinkNotReady' });
+  });
+
+  test('an unclaimed guest slot does not have a link', async () => {
+    await expect(
+      (await caller(signedIn)).getGuestPersonalLink({
+        token: 'share-1',
+        personId: pid(3),
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED', messageKey: 'guestPersonalLinkNotJoined' });
+  });
+
+  test('creator row and a foreign personId cannot be returned as a guest secret', async () => {
+    const api = await caller(signedIn);
+    for (const personId of [pid(0), pid(9)]) {
+      await expect(api.getGuestPersonalLink({ token: 'share-1', personId })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+        messageKey: 'personGone',
+      });
+    }
+  });
+
+  test('closed receipts can still provide recovery after first edit, but expired ones cannot', async () => {
+    claimSession(people, { receiptData: data, status: 'FINALIZED' });
+    await expect((await caller(signedIn)).getGuestPersonalLink(request)).resolves.toMatchObject({
+      personToken: ALICE_TOKEN,
+    });
+    claimSession(people, { receiptData: data, expiresAt: new Date(0) });
+    await expect((await caller(signedIn)).getGuestPersonalLink(request)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      messageKey: 'sessionExpired',
+    });
+  });
+
+  test('old named receipts do not accidentally release secrets via the new API', async () => {
+    claimSession([{ name: 'Андрей', personToken: ALICE_TOKEN }]);
+    await expect(
+      (await caller(signedIn)).getGuestPersonalLink({
+        token: 'share-1',
+        personId: pid(0),
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  test('fetching the link is bounded by an authenticated-account rate limit', async () => {
+    checkRateLimit.mockReturnValueOnce({ allowed: false, retryAfterMs: 0 });
+    await expect((await caller(signedIn)).getGuestPersonalLink(request)).rejects.toMatchObject({
+      code: 'TOO_MANY_REQUESTS',
+    });
+    expect(mockDb.guestSplit.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('no public session response discloses the ready guest personal token', async () => {
+    const publicState = await (await caller()).getSession({ token: 'share-1' });
+    expect(publicState.people[1]).toMatchObject({ id: pid(1), personalLinkReady: true });
+    expect(JSON.stringify(publicState)).not.toContain(ALICE_TOKEN);
+    expect(JSON.stringify(publicState)).not.toContain(savedAt);
+  });
+});
+
 describe('Issue 3.8.1: personal link only after the guest saves a real change', () => {
   const data = {
     subtotal: 1500,

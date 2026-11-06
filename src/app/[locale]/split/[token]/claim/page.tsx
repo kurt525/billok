@@ -219,6 +219,9 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const [saving, setSaving] = useState(false);
   const [showImage, setShowImage] = useState(false);
   const [editingPersonId, setEditingPersonId] = useState<string | null>(null);
+  const [creatorGuestLink, setCreatorGuestLink] = useState<{ personId: string; name: string; url: string } | null>(
+    null,
+  );
   const [editingName, setEditingName] = useState('');
   const [editingGroupSize, setEditingGroupSize] = useState(1);
   const [splittingItemIdx, setSplittingItemIdx] = useState<number | null>(null);
@@ -250,6 +253,21 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         }),
     },
   );
+  // A creator-only explicit POST fetches the sensitive guest bearer secret;
+  // the common getSession query never exposes it. Copy must be triggered by
+  // a separate gesture to work in mobile browsers after this async request.
+  const getGuestPersonalLink = trpc.guest.getGuestPersonalLink.useMutation({
+    onSuccess: (result) => {
+      const url = new URL(window.location.origin + window.location.pathname);
+      url.hash = personalLinkHash(result.personToken);
+      setCreatorGuestLink({ personId: result.personId, name: result.name, url: url.toString() });
+    },
+    onError: (error) => {
+      setCreatorGuestLink(null);
+      toast.error(localizedTrpcError(error, tc('errors.generic')));
+    },
+  });
+
   const setMyItemParts = trpc.guest.setMyItemParts.useMutation({
     onSuccess: async (_result, variables) => {
       await utils.guest.getSession.invalidate({ token });
@@ -1243,6 +1261,65 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   }
 
   const data = session.data!;
+  const creatorGuestLinkControls = (
+    person: { id: string; name: string; hasJoined: boolean; guestSlotNumber?: number; personalLinkReady?: boolean },
+    idx: number,
+  ) => {
+    if (!data.isCreator || !data.receiptData.guestSlotsMode || person.guestSlotNumber === undefined) return null;
+    if (!person.hasJoined || !person.personalLinkReady) {
+      return (
+        <span className="w-full text-xs text-muted-foreground" data-testid={'creator-guest-link-pending-' + idx}>
+          {person.hasJoined ? t('creatorGuestLinkPending') : t('creatorGuestLinkUnjoined')}
+        </span>
+      );
+    }
+    const opened = creatorGuestLink?.personId === person.id ? creatorGuestLink : null;
+    return (
+      <div className="w-full min-w-0 space-y-2" data-testid={'creator-guest-link-controls-' + idx}>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="min-h-11 w-full min-w-0 whitespace-normal text-sm"
+          disabled={getGuestPersonalLink.isPending}
+          onClick={() => {
+            setCreatorGuestLink(null);
+            getGuestPersonalLink.mutate({ token, personId: person.id });
+          }}
+          data-testid={'creator-guest-link-open-' + idx}
+        >
+          <Link2 className="mr-2 h-4 w-4 shrink-0" />
+          {t('creatorGuestLinkOpen')}
+        </Button>
+        {opened && (
+          <div className="min-w-0 space-y-2" data-testid={'creator-guest-link-reveal-' + idx}>
+            <Input
+              readOnly
+              value={opened.url}
+              className="h-11 min-w-0 w-full text-sm"
+              aria-label={t('creatorGuestLinkOpen')}
+              data-testid={'creator-guest-link-url-' + idx}
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="min-h-11 w-full min-w-0 whitespace-normal"
+              onClick={async () => {
+                if (await copyToClipboard(opened.url)) toast.success(t('creatorGuestLinkCopied'));
+                else toast.error(tc('actions.copyFailed'));
+              }}
+              data-testid={'creator-guest-link-copy-' + idx}
+            >
+              <Copy className="mr-2 h-4 w-4 shrink-0" />
+              {t('creatorGuestLinkCopy')}
+            </Button>
+            <p className="text-xs text-muted-foreground">{t('creatorGuestLinkWarning')}</p>
+          </div>
+        )}
+      </div>
+    );
+  };
   const currency = data.receiptData.currency;
   // Finalized total includes personal tips, not just the restaurant subtotal.
   const finalizedTotal = data.summary?.reduce((sum, person) => sum + person.total, 0) ?? data.receiptData.total;
@@ -1761,6 +1838,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         )}
                       </>
                     )}
+                    {creatorGuestLinkControls(person, idx)}
                   </div>
                 ))}
               </div>
@@ -2216,6 +2294,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                     )}
                   </>
                 )}
+                {creatorGuestLinkControls(person, idx)}
               </div>
             ))}
           </div>

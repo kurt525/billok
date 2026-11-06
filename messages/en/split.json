@@ -258,7 +258,13 @@
     "guestPlaceJoined": "You have joined this receipt",
     "guestPlaceConflict": "Someone else took this place. Choose another available place.",
     "recoverRegisteredPlace": "Recover my place through my account",
-    "personalLinkAfterSave": "Your personal link becomes available after you save your first actual change to your name, dishes, portions, or tip."
+    "personalLinkAfterSave": "Your personal link becomes available after you save your first actual change to your name, dishes, portions, or tip.",
+    "creatorGuestLinkPending": "The guest link becomes available after their first saved change.",
+    "creatorGuestLinkUnjoined": "This guest has not claimed this place yet.",
+    "creatorGuestLinkOpen": "Get guest personal link",
+    "creatorGuestLinkCopy": "Copy link for guest",
+    "creatorGuestLinkCopied": "Guest personal link copied. Share it only with the intended person.",
+    "creatorGuestLinkWarning": "Anyone with this link can act as this guest. Send it only to them, never to a group chat."
   },
   "result": {
     "loading": "Loading split...",

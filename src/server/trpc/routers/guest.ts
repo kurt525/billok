@@ -1927,6 +1927,45 @@ export const guestRouter = createTRPCRouter({
       return { success: true };
     }),
 
+  /** 3.8.2: a personal link is a bearer credential. Only the signed-in
+   * creator of THIS receipt may request a guest's saved credential. Use POST
+   * (mutation) so the secret never appears in URLs or public query caches.
+   * The UI builds a #fragment link client-side; fragments never reach HTTP.
+   */
+  getGuestPersonalLink: protectedProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.impersonating) throw new AppError('FORBIDDEN', 'notParticipant');
+      if (
+        !checkTokenRateLimit(`guest-creator-personal-link:${JSON.stringify([input.token, ctx.user.id])}`, 30, 60_000)
+          .allowed
+      ) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const session = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: { userId: true, expiresAt: true, receiptData: true, people: true },
+      });
+      // Hide existence of other people's receipts from all registered users,
+      // including delegated organizers and the system-wide BillOK owner.
+      if (!session || session.userId !== ctx.user.id) {
+        throw new AppError('NOT_FOUND', 'sessionNotFound');
+      }
+      if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      if (parseExtractedData(session.receiptData).guestSlotsMode !== true) {
+        throw new AppError('BAD_REQUEST', 'invalidData', { label: 'fixed guest slots' });
+      }
+      const guest = (session.people as GuestSessionPerson[]).find(
+        (person) => person.id === input.personId && person.guestSlotNumber !== undefined,
+      );
+      if (!guest) throw new AppError('NOT_FOUND', 'personGone');
+      if (!guest.personToken) throw new AppError('PRECONDITION_FAILED', 'guestPersonalLinkNotJoined');
+      if (!guest.personalLinkReadyAt) throw new AppError('PRECONDITION_FAILED', 'guestPersonalLinkNotReady');
+      // No plain personal token is returned by getSession, getSplit, or an
+      // invite: this explicit creator-only mutation is the sole exception.
+      return { personId: guest.id!, name: guest.name, personToken: guest.personToken };
+    }),
+
   getSession: publicProcedure.input(z.object({ token: shareTokenSchema })).query(async ({ ctx, input }) => {
     if (!checkSessionReadRateLimit(input.token)) {
       throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
