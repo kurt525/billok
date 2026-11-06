@@ -21,6 +21,12 @@ export type GuestSessionPerson = {
   // Server-only identity binding for the BillOK owner. Public person serializers
   // must never expose this user id; guests cannot assign it via any API input.
   accountUserId?: string;
+  // 3.7: fixed guest place, distinct from a legacy unjoined named person.
+  // A place can be renamed without changing its number or stable person id.
+  guestSlotNumber?: number;
+  // Trusted server-only marker for the uniquely reserved BillOK-owner name.
+  // A registered creator named Илья is not necessarily the site owner.
+  reservedOwner?: boolean;
   groupSize?: number; // defaults to 1, > 1 means this person represents a group
   // Voluntary tip personally chosen for this receipt, integer RUB kopecks; missing = 0.
   tipCents?: number;

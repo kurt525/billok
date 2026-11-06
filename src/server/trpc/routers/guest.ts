@@ -769,8 +769,23 @@ export const guestRouter = createTRPCRouter({
         receiptId: receiptIdSchema.optional(),
         receiptData: receiptDataSchema,
         items: z.array(itemSchema).min(1).max(100),
-        creatorName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
-        paidByName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
+        // Legacy named-person receipts retain their original fields.
+        // 3.7.1: new receipts instead specify a fixed number of additional
+        // guests and derive the creator's name from their signed-in account.
+        creatorName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH).optional(),
+        paidByName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH).optional(),
+        guestCount: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_SESSION_PEOPLE - 1)
+          .optional(),
+        paidByGuestSlot: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_SESSION_PEOPLE - 1)
+          .optional(),
         // Everyone typed on "Who's splitting?", listed in this order (#263). The creator and the
         // payer are added when it leaves them out, and a name typed twice is listed once, since
         // people join by name.
@@ -789,9 +804,35 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'sessionsRateLimited');
       }
 
+      const guestCount = input.guestCount;
+      const usingGuestSlots = guestCount !== undefined;
+      // The two creation protocols are intentionally mutually exclusive:
+      // never reinterpret arbitrary names as identities of unclaimed slots.
+      if (usingGuestSlots) {
+        if (
+          input.people?.length ||
+          input.creatorName !== undefined ||
+          input.paidByName !== undefined ||
+          (input.paidByGuestSlot !== undefined && input.paidByGuestSlot > guestCount)
+        ) {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'guest slots' });
+        }
+      } else if (!input.creatorName || !input.paidByName || input.paidByGuestSlot !== undefined) {
+        throw new AppError('BAD_REQUEST', 'invalidData', { label: 'guest participants' });
+      }
       const ownerId = await billokOwnerUserId(ctx);
-      const creatorName = ownerId ? RESERVED_OWNER_NAME : input.creatorName.trim();
-      const paidByName = input.paidByName.trim();
+      const creatorProfile = usingGuestSlots
+        ? await ctx.db.user.findUnique({ where: { id: ctx.user.id }, select: { name: true } })
+        : null;
+      const creatorName = ownerId
+        ? RESERVED_OWNER_NAME
+        : usingGuestSlots
+          ? (creatorProfile?.name ?? '').normalize('NFC').trim()
+          : input.creatorName!.trim();
+      if (!creatorName || creatorName.length > MAX_GUEST_NAME_LENGTH) {
+        throw new AppError('BAD_REQUEST', 'invalidData', { label: 'creator display name' });
+      }
+      const paidByName = usingGuestSlots ? creatorName : input.paidByName!.trim();
 
       // Duplicate guest rows are rejected; creator and payer references
       // intentionally point to the same row when the names match.
@@ -801,25 +842,42 @@ export const guestRouter = createTRPCRouter({
       const people: IdentifiedGuestPerson[] = [];
       const indexOf = (name: string) =>
         people.findIndex((p) => normalizeGuestName(p.name) === normalizeGuestName(name));
-      for (const name of [...(input.people ?? []), creatorName, paidByName]) {
-        if (indexOf(name) < 0) people.push({ id: randomUUID(), name: name.normalize('NFC') });
+      if (usingGuestSlots) {
+        // Always exactly one creator plus guestCount independently addressable
+        // slots. The payer is a role on one of these rows, never an extra guest.
+        people.push({
+          id: randomUUID(),
+          name: creatorName,
+          accountUserId: ctx.user.id,
+          ...(ownerId ? { reservedOwner: true } : {}),
+        });
+        for (let slot = 1; slot <= guestCount; slot++) {
+          const preferredName = `Гость ${slot}`;
+          const name = indexOf(preferredName) < 0 ? preferredName : `${preferredName} (гость)`;
+          people.push({ id: randomUUID(), name, guestSlotNumber: slot });
+        }
+      } else {
+        for (const name of [...(input.people ?? []), creatorName, paidByName]) {
+          if (indexOf(name) < 0) people.push({ id: randomUUID(), name: name.normalize('NFC') });
+        }
+        if (ownerId) {
+          const idx = indexOf(RESERVED_OWNER_NAME);
+          people[idx] = { ...people[idx]!, accountUserId: ownerId, reservedOwner: true };
+        }
       }
       if (people.length > MAX_SESSION_PEOPLE) {
         throw new AppError('BAD_REQUEST', 'sessionFull', { max: MAX_SESSION_PEOPLE });
       }
-      const paidByIndex = indexOf(paidByName);
+      const paidByIndex = usingGuestSlots ? (input.paidByGuestSlot ?? 0) : indexOf(paidByName);
       // A persistent participant ID identifies the creator even if names are
       // edited and the payer is a different person or appears earlier in the list.
-      const organizerPersonId = people[indexOf(creatorName)]!.id;
-      if (ownerId) {
-        const idx = indexOf(RESERVED_OWNER_NAME);
-        people[idx] = { ...people[idx]!, accountUserId: ownerId };
-      }
+      const creatorIndex = usingGuestSlots ? 0 : indexOf(creatorName);
+      const organizerPersonId = people[creatorIndex]!.id;
 
-      // Everyone else gets a token the first time they join this session
+      // The creator's participant row is account-bound even if browser storage
+      // is blocked; a shared invitation alone cannot take their row by name.
       let creator: { personId: string; personToken: string; name: string } | null = null;
       if (input.joinCreator) {
-        const creatorIndex = indexOf(creatorName);
         const person = { ...people[creatorIndex]!, personToken: randomUUID() };
         people[creatorIndex] = person;
         creator = { personId: person.id, personToken: person.personToken, name: person.name };
@@ -869,6 +927,7 @@ export const guestRouter = createTRPCRouter({
               ...input.receiptData,
               roundingBalanced: true,
               organizerPersonId,
+              ...(usingGuestSlots ? { guestSlotsMode: true, guestCount } : {}),
             } as unknown as Prisma.InputJsonValue,
             items: expandedItems as unknown as Prisma.InputJsonValue,
             people: people as unknown as Prisma.InputJsonValue,
@@ -923,6 +982,12 @@ export const guestRouter = createTRPCRouter({
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+        // 3.7.1 is the creation protocol only. Until 3.7.2 adds atomic
+        // selection by stable slot id, a legacy name-based join must not
+        // append arbitrary people or seize a fixed guest place.
+        if (parseExtractedData(session.receiptData).guestSlotsMode === true) {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'guest slot selection required' });
+        }
 
         const stored = session.people as GuestSessionPerson[];
         // Never assign a claimant to an ambiguous legacy duplicate name.
@@ -971,6 +1036,7 @@ export const guestRouter = createTRPCRouter({
               ...previous,
               name: RESERVED_OWNER_NAME,
               accountUserId: ownerId,
+              reservedOwner: true,
               personToken,
               ...(desiredGroupSize !== undefined ? { groupSize: desiredGroupSize } : {}),
             };
@@ -979,6 +1045,7 @@ export const guestRouter = createTRPCRouter({
               id: randomUUID(),
               name: RESERVED_OWNER_NAME,
               accountUserId: ownerId,
+              reservedOwner: true,
               personToken,
               ...(input.groupSize != null ? { groupSize: input.groupSize } : {}),
             });
@@ -1001,7 +1068,7 @@ export const guestRouter = createTRPCRouter({
         // Once the owner actually participates in this receipt, the reserved
         // name may never be claimed by another account or guest.
         const ownerIndex = people.findIndex(
-          (p) => !!p.accountUserId && normalizeGuestName(p.name) === RESERVED_OWNER_KEY,
+          (p) => p.reservedOwner === true && normalizeGuestName(p.name) === RESERVED_OWNER_KEY,
         );
         if (ownerIndex >= 0 && normalizedName === RESERVED_OWNER_KEY && holderIndex !== ownerIndex) {
           throw new AppError('CONFLICT', 'nameTaken');
@@ -1171,7 +1238,7 @@ export const guestRouter = createTRPCRouter({
 
         const normalizedNew = normalizeGuestName(input.newName);
         const boundOwnerIndex = people.findIndex(
-          (p) => !!p.accountUserId && normalizeGuestName(p.name) === RESERVED_OWNER_KEY,
+          (p) => p.reservedOwner === true && normalizeGuestName(p.name) === RESERVED_OWNER_KEY,
         );
         if (
           (boundOwnerIndex >= 0 && normalizedNew === RESERVED_OWNER_KEY && targetIndex !== boundOwnerIndex) ||
@@ -1225,6 +1292,11 @@ export const guestRouter = createTRPCRouter({
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionFinalized');
+        // Fixed places cannot be deleted through the legacy token endpoint:
+        // deleting the creator or any slot would silently change guestCount.
+        if (parseExtractedData(session.receiptData).guestSlotsMode === true) {
+          throw new AppError('FORBIDDEN', 'notParticipant');
+        }
 
         const people = [...(session.people as GuestSessionPerson[])];
         const isParticipant = people.some((p) => p.personToken === input.personToken);

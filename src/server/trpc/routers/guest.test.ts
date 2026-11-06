@@ -474,6 +474,8 @@ type TestPerson = {
   name: string;
   personToken?: string;
   accountUserId?: string;
+  guestSlotNumber?: number;
+  reservedOwner?: boolean;
   groupSize?: number;
   tipCents?: number;
   join?: { key: string; name: string; expiresAt: number };
@@ -507,6 +509,8 @@ function claimSession(
       currency: string;
       roundingBalanced?: boolean;
       organizerPersonId?: string;
+      guestSlotsMode?: boolean;
+      guestCount?: number;
       partsApprovalHash?: string;
       knownPartsByItem?: Record<string, number>;
     };
@@ -1045,6 +1049,7 @@ describe('Issue 3.6.1: reserved owner name Илья, verified by account, not gu
       id: payload.receiptData.organizerPersonId,
       name: 'Илья',
       accountUserId: 'billok-owner',
+      reservedOwner: true,
       personToken: created.creator?.personToken,
     });
     expect(payload.paidByIndex).toBe(0);
@@ -1054,7 +1059,7 @@ describe('Issue 3.6.1: reserved owner name Илья, verified by account, not gu
   });
 
   test('an unjoined owner row cannot be taken by someone who merely enters Илья', async () => {
-    claimSession([{ name: 'Илья', accountUserId: 'billok-owner' }, { name: 'Гость 1' }]);
+    claimSession([{ name: 'Илья', accountUserId: 'billok-owner', reservedOwner: true }, { name: 'Гость 1' }]);
     await expect(
       (await caller(outsiderAccount)).joinSession({
         token: 'share-1',
@@ -1088,7 +1093,7 @@ describe('Issue 3.6.1: reserved owner name Илья, verified by account, not gu
       tipCents: 125,
       groupSize: 2,
     });
-    expect(people[3]).toMatchObject({ accountUserId: 'billok-owner', name: 'Илья' });
+    expect(people[3]).toMatchObject({ accountUserId: 'billok-owner', reservedOwner: true, name: 'Илья' });
     expect(new Set(people.map((p) => p.name.trim().toLocaleLowerCase('ru-RU'))).size).toBe(4);
     expect(mockDb.guestSplit.update.mock.calls[0]![0].data.assignments).toBeUndefined();
     expect(mockDb.guestSplit.update.mock.calls[0]![0].data.paidByIndex).toBeUndefined();
@@ -1096,7 +1101,7 @@ describe('Issue 3.6.1: reserved owner name Илья, verified by account, not gu
 
   test('owner first: other users cannot claim or rename a different row to Илья', async () => {
     claimSession([
-      { name: 'Илья', personToken: ALICE_TOKEN, accountUserId: 'billok-owner' },
+      { name: 'Илья', personToken: ALICE_TOKEN, accountUserId: 'billok-owner', reservedOwner: true },
       { name: 'Сергей', personToken: OTHER_TOKEN },
     ]);
     await expect((await caller()).joinSession({ token: 'share-1', name: ' иЛьЯ ' })).rejects.toMatchObject({
@@ -1131,7 +1136,10 @@ describe('Issue 3.6.1: reserved owner name Илья, verified by account, not gu
   });
 
   test('reentry by the same owner account uses exactly the old row and token, with no needless write', async () => {
-    claimSession([{ name: 'Илья', personToken: ALICE_TOKEN, accountUserId: 'billok-owner' }, { name: 'Гость 1' }]);
+    claimSession([
+      { name: 'Илья', personToken: ALICE_TOKEN, accountUserId: 'billok-owner', reservedOwner: true },
+      { name: 'Гость 1' },
+    ]);
     const result = await (await caller(ownerAccount)).joinSession({ token: 'share-1', name: 'Случайный текст' });
     expect(result).toEqual({ personIndex: 0, personId: pid(0), personToken: ALICE_TOKEN, name: 'Илья' });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
@@ -1154,7 +1162,7 @@ describe('Issue 3.6.1: reserved owner name Илья, verified by account, not gu
 
   test('an ordinary guest cannot remove the owner bound to the reserved row', async () => {
     claimSession([
-      { name: 'Илья', personToken: ALICE_TOKEN, accountUserId: 'billok-owner' },
+      { name: 'Илья', personToken: ALICE_TOKEN, accountUserId: 'billok-owner', reservedOwner: true },
       { name: 'Гость', personToken: OTHER_TOKEN },
     ]);
     await expect(
@@ -1168,7 +1176,7 @@ describe('Issue 3.6.1: reserved owner name Илья, verified by account, not gu
   });
 
   test('public session never exposes the owner userId even if its row is account bound', async () => {
-    claimSession([{ name: 'Илья', personToken: ALICE_TOKEN, accountUserId: 'billok-owner' }]);
+    claimSession([{ name: 'Илья', personToken: ALICE_TOKEN, accountUserId: 'billok-owner', reservedOwner: true }]);
     const result = await (await caller()).getSession({ token: 'share-1' });
     expect(JSON.stringify(result)).not.toContain('billok-owner');
     expect(result.people[0]?.name).toBe('Илья');
@@ -1279,6 +1287,187 @@ describe('Issue 3.6: no two people share a display name inside one receipt', () 
       name: 'Café',
       personToken: ALICE_TOKEN,
     });
+  });
+});
+
+describe('Issue 3.7.1: creator plus exactly N additional unclaimed guest slots', () => {
+  const receiptData = { subtotal: 1401, tax: 0, tip: 0, total: 1401, currency: 'RUB' };
+  const items = [{ name: 'Суп', quantity: 1, unitPrice: 1401, totalPrice: 1401 }];
+  const input = { receiptData, items };
+  beforeEach(() => {
+    mockDb.guestSplit.create.mockResolvedValue({ id: 'fresh', shareToken: 'share-fresh' });
+    mockDb.user.findUnique.mockResolvedValue({ name: 'Анна', email: 'anna@example.com', suspendedAt: null });
+  });
+
+  function created() {
+    return mockDb.guestSplit.create.mock.calls.at(-1)![0].data as {
+      people: TestPerson[];
+      paidByIndex: number;
+      userId: string;
+      receiptData: {
+        guestSlotsMode?: boolean;
+        guestCount?: number;
+        organizerPersonId?: string;
+        total: number;
+        currency: string;
+      };
+    };
+  }
+
+  test('two guests means exactly three rows; creator is always a named account-bound participant', async () => {
+    const result = await (
+      await caller(signedIn)
+    ).createClaimSession({
+      ...input,
+      guestCount: 2,
+      paidByGuestSlot: 2,
+      joinCreator: true,
+    });
+    const saved = created();
+    expect(saved.people.map((p) => p.name)).toEqual(['Анна', 'Гость 1', 'Гость 2']);
+    expect(saved.people[0]).toMatchObject({
+      id: saved.receiptData.organizerPersonId,
+      name: 'Анна',
+      accountUserId: 'user-1',
+      personToken: result.creator?.personToken,
+    });
+    expect(saved.people[0]?.guestSlotNumber).toBeUndefined();
+    expect(saved.people.slice(1).map((p) => p.guestSlotNumber)).toEqual([1, 2]);
+    expect(saved.people.slice(1).every((p) => !p.personToken && !p.accountUserId)).toBe(true);
+    expect(new Set(saved.people.map((p) => p.id)).size).toBe(3);
+    expect(saved.userId).toBe('user-1');
+    expect(saved.paidByIndex).toBe(2);
+    expect(saved.receiptData).toMatchObject({
+      guestSlotsMode: true,
+      guestCount: 2,
+      total: 1401,
+      currency: 'RUB',
+    });
+    expect(result.creator?.name).toBe('Анна');
+  });
+
+  test('zero guests keeps exactly the creator row; payer defaults to creator', async () => {
+    const result = await (await caller(signedIn)).createClaimSession({ ...input, guestCount: 0, joinCreator: true });
+    expect(created().people).toHaveLength(1);
+    expect(created().people[0]).toMatchObject({ name: 'Анна', accountUserId: 'user-1' });
+    expect(created().paidByIndex).toBe(0);
+    expect(result.creator?.personId).toBe(created().people[0]?.id);
+  });
+
+  test('creator without storage is still account-bound and cannot be taken by a guest name', async () => {
+    const result = await (await caller(signedIn)).createClaimSession({ ...input, guestCount: 2 });
+    expect(result.creator).toBeNull();
+    expect(created().people[0]).toMatchObject({ name: 'Анна', accountUserId: 'user-1' });
+    claimSession(created().people, { userId: 'user-1' });
+    await expect((await caller()).joinSession({ token: 'share-1', name: 'Анна' })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      messageKey: 'joinNameTaken',
+    });
+  });
+
+  test('maximum 99 additional guests makes 100 rows, more is refused', async () => {
+    await (await caller(signedIn)).createClaimSession({ ...input, guestCount: 99 });
+    const people = created().people;
+    expect(people).toHaveLength(100);
+    expect(people[1]).toMatchObject({ name: 'Гость 1', guestSlotNumber: 1 });
+    expect(people[99]).toMatchObject({ name: 'Гость 99', guestSlotNumber: 99 });
+    mockDb.guestSplit.create.mockClear();
+    await expect((await caller(signedIn)).createClaimSession({ ...input, guestCount: 100 })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+  });
+
+  test('guest count and paidByGuestSlot cannot select a nonexistent payer or mix legacy people', async () => {
+    const api = await caller(signedIn);
+    for (const bad of [
+      { guestCount: 2, paidByGuestSlot: 3 },
+      { guestCount: 0, paidByGuestSlot: 1 },
+      { guestCount: -1 },
+      { guestCount: 1, people: ['Иван'] },
+      { guestCount: 1, creatorName: 'Посторонний' },
+      { guestCount: 1, paidByName: 'Посторонний' },
+      { creatorName: 'Анна' },
+      { paidByName: 'Анна' },
+    ]) {
+      await expect(
+        api.createClaimSession({ ...input, ...bad } as Parameters<typeof api.createClaimSession>[0]),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+  });
+
+  test('profile name is obtained from the database, not a client-supplied name; blank is refused', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ name: '', email: 'anna@example.com', suspendedAt: null });
+    await expect((await caller(signedIn)).createClaimSession({ ...input, guestCount: 1 })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+  });
+
+  test('creator name Guest 1 cannot collide with a temporary slot', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ name: 'Гость 1', email: 'other@example.com', suspendedAt: null });
+    await (await caller(signedIn)).createClaimSession({ ...input, guestCount: 2 });
+    expect(created().people.map((p) => p.name)).toEqual(['Гость 1', 'Гость 1 (гость)', 'Гость 2']);
+    expect(created().people[1]?.guestSlotNumber).toBe(1);
+  });
+
+  test('regular user named Илья is not marked as the BillOK owner', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ name: 'Илья', email: 'other@example.com', suspendedAt: null });
+    await (await caller(signedIn)).createClaimSession({ ...input, guestCount: 1 });
+    expect(created().people[0]).toMatchObject({ name: 'Илья', accountUserId: 'user-1' });
+    expect(created().people[0]?.reservedOwner).toBeUndefined();
+  });
+
+  test('fixed guest slots refuse legacy name-based joins and deletion until atomic slot selection is available', async () => {
+    claimSession(
+      [
+        { name: 'Анна', personToken: ALICE_TOKEN, accountUserId: 'user-1' },
+        { name: 'Гость 1', guestSlotNumber: 1 },
+      ],
+      {
+        receiptData: {
+          subtotal: 100,
+          tax: 0,
+          tip: 0,
+          total: 100,
+          currency: 'RUB',
+          guestSlotsMode: true,
+          guestCount: 1,
+          organizerPersonId: pid(0),
+        },
+      },
+    );
+    await expect((await caller()).joinSession({ token: 'share-1', name: 'Гость 1' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await expect((await caller()).joinSession({ token: 'share-1', name: 'Посторонний' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await expect(
+      (await caller()).removePerson({
+        token: 'share-1',
+        personToken: ALICE_TOKEN,
+        targetId: pid(0),
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('verified owner creates one reserved Илья row plus guests and distinct payer', async () => {
+    vi.stubEnv('ADMIN_EMAIL', 'owner@example.com');
+    try {
+      mockDb.user.findUnique.mockResolvedValue({ name: 'Илья', email: 'owner@example.com', suspendedAt: null });
+      await (await caller(signedIn)).createClaimSession({ ...input, guestCount: 2, paidByGuestSlot: 1 });
+      expect(created().people[0]).toMatchObject({
+        name: 'Илья',
+        accountUserId: 'user-1',
+        reservedOwner: true,
+      });
+      expect(created().paidByIndex).toBe(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
@@ -2364,7 +2553,7 @@ describe('Issue 3.6.2: creator renames guests, guest edits only their own row', 
 
   test('creator cannot silently duplicate a name, use the owner reserved name or alter owner row', async () => {
     claimSession([
-      { name: 'Илья', accountUserId: 'billok-owner', personToken: ALICE_TOKEN },
+      { name: 'Илья', accountUserId: 'billok-owner', reservedOwner: true, personToken: ALICE_TOKEN },
       { name: 'Сергей', personToken: OTHER_TOKEN },
       { name: 'Гость 1' },
     ]);
