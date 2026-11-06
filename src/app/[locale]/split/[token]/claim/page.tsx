@@ -6,6 +6,7 @@ import { useLocale, useTranslations } from 'next-intl';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
+import { GUEST_PRESENCE_HEARTBEAT_MS } from '@/lib/guest-presence';
 import { formatCents, centsToDecimal, isValidMoneyInput, parseToCents, MAX_MONEY_CENTS } from '@/lib/money';
 import { copyToClipboard } from '@/lib/clipboard';
 import {
@@ -108,6 +109,51 @@ function removePersonalLinkFromAddressBar() {
   window.history.replaceState(null, '', window.location.pathname + window.location.search);
 }
 
+/** 3.5: shown to signed-in organizers only. Never equate joined with online. */
+function OrganizerPresence({
+  people,
+  presence,
+}: {
+  people: { id: string; name: string }[];
+  presence: { personId: string; status: 'not-joined' | 'joined' | 'online' | 'offline' }[];
+}) {
+  const t = useTranslations('split.claim');
+  const statusById = new Map(presence.map((entry) => [entry.personId, entry.status]));
+  const label = {
+    'not-joined': t('presenceNotJoined'),
+    joined: t('presenceJoined'),
+    online: t('presenceOnline'),
+    offline: t('presenceOffline'),
+  };
+  return (
+    <Card className="w-full min-w-0 max-w-full" data-testid="organizer-presence">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">{t('presenceTitle')}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {people.map((person) => {
+          const status = statusById.get(person.id) ?? 'not-joined';
+          return (
+            <div
+              key={person.id}
+              className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2"
+              data-testid={'presence-person-' + person.id}
+            >
+              <span className="min-w-0 flex-1 font-medium [overflow-wrap:anywhere]">{person.name}</span>
+              <span
+                className="text-sm text-muted-foreground [overflow-wrap:anywhere]"
+                data-testid={'presence-status-' + person.id}
+              >
+                {label[status]}
+              </span>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function ClaimPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = use(params);
   const locale = useLocale();
@@ -123,6 +169,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const [portionDrafts, setPortionDrafts] = useState<Record<number, string>>({});
   const [knownPartsDrafts, setKnownPartsDrafts] = useState<Record<number, string>>({});
   const [finalizationOrganizerEmail, setFinalizationOrganizerEmail] = useState('');
+  const [presenceConnectionLost, setPresenceConnectionLost] = useState(false);
+  const presenceDeviceId = useRef<string | null>(null);
   // People are tracked by id, not index: someone's index changes when anyone listed before them
   // is removed, on any device. Indexes are looked up in the session as last loaded (below).
   // This device's person, once it joined or resumed
@@ -297,6 +345,58 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     },
     onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
+
+  const { mutateAsync: sendPresenceHeartbeat } = trpc.guest.heartbeatPresence.useMutation();
+  const myPresenceReady =
+    !!identity?.personId &&
+    !!session.data?.people.some((person) => person.id === identity.personId && person.hasJoined);
+  // No heartbeat from hidden tabs: only a visible connected page counts as online.
+  // One stable device ID per open tab; reloading creates a new device, while
+  // a second tab keeps its own heartbeat. TTL resolves lost network/closed pages.
+  useEffect(() => {
+    if (!identity?.personId || !identity.personToken || !myPresenceReady || session.data?.status !== 'CLAIMING') {
+      return;
+    }
+    if (presenceDeviceId.current === null) presenceDeviceId.current = newRequestKey();
+    const deviceId = presenceDeviceId.current;
+    let disposed = false;
+    let sending = false;
+    const beat = async () => {
+      if (disposed || document.visibilityState === 'hidden') return;
+      if (!navigator.onLine) {
+        setPresenceConnectionLost(true);
+        return;
+      }
+      if (sending) return;
+      sending = true;
+      try {
+        await sendPresenceHeartbeat({
+          token,
+          personId: identity.personId,
+          personToken: identity.personToken,
+          deviceId,
+        });
+        if (!disposed) setPresenceConnectionLost(false);
+      } catch {
+        if (!disposed) setPresenceConnectionLost(true);
+      } finally {
+        sending = false;
+      }
+    };
+    const onOffline = () => setPresenceConnectionLost(true);
+    const intervalId = window.setInterval(() => void beat(), GUEST_PRESENCE_HEARTBEAT_MS);
+    document.addEventListener('visibilitychange', beat);
+    window.addEventListener('online', beat);
+    window.addEventListener('offline', onOffline);
+    void beat();
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', beat);
+      window.removeEventListener('online', beat);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, [token, identity?.personId, identity?.personToken, myPresenceReady, session.data?.status, sendPresenceHeartbeat]);
 
   const setKnownItemParts = trpc.guest.setKnownItemParts.useMutation({
     onSuccess: async (_result, variables) => {
@@ -1545,6 +1645,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           onConfirm={() => data.canFinalize && finalizeSession.mutate({ token })}
         />
 
+        {data.presence && <OrganizerPresence people={data.people} presence={data.presence} />}
+
         {/* Join form */}
         <Card data-testid="claim-join-form">
           <CardHeader className="pb-2">
@@ -2340,6 +2442,13 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {data.presence && <OrganizerPresence people={data.people} presence={data.presence} />}
+      {presenceConnectionLost && (
+        <p className="text-sm text-destructive" role="status" data-testid="presence-connection-lost">
+          {t('presenceConnectionLost')}
+        </p>
       )}
 
       <p

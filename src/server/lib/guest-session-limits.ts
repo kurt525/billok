@@ -63,6 +63,21 @@ export function checkClaimWriteRateLimit(action: ClaimWriteAction, token: string
 }
 
 /**
+ * 3.5: a heartbeat every 15 seconds, per person's token across all its tabs.
+ * Separate budget from actual claim writes; 100 concurrent guests must not
+ * starve each other's presence on a busy restaurant receipt.
+ */
+export function checkGuestPresenceHeartbeatLimit(token: string, personToken: string): boolean {
+  const sessionKey = `guest-presence:${token}`;
+  const personKey = `guest-presence-person:${JSON.stringify([token, personToken])}`;
+  const maxPerSession = 1000;
+  if (!peekTokenRateLimit(sessionKey, maxPerSession).allowed) return false;
+  if (!checkTokenRateLimit(personKey, 12, WINDOW_MS).allowed) return false;
+  checkTokenRateLimit(sessionKey, maxPerSession, WINDOW_MS);
+  return true;
+}
+
+/**
  * Rate limit for guest.getSession, one budget per share token. getSession takes no person
  * token (people poll before they join), so there's no per-viewer budget; the limit is sized
  * so that a full session's pages never reach it.

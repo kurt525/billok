@@ -2004,6 +2004,96 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
   }
 });
 
+test('Issue 3.5: organizer sees joined, live, lost and reconnected mobile guests without refresh', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const organizerBrowser = await browser.newContext({
+    viewport: { width: 320, height: 680 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  let token: string | undefined;
+  try {
+    const createdRes = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Присутствие 3.5', subtotal: 1001, total: 1001, tax: 0, tip: 0, currency: 'RUB' },
+      items: [{ name: 'Блюдо', quantity: 1, unitPrice: 1001, totalPrice: 1001 }],
+      creatorName: 'Анна',
+      paidByName: 'Анна',
+      people: ['Анна', 'Борис', 'Виктор'],
+      joinCreator: true,
+    });
+    const createdBody = await createdRes.text();
+    expect(createdRes.ok(), createdBody).toBe(true);
+    const created = JSON.parse(createdBody).result.data.json as {
+      shareToken: string;
+      creator: { personId: string; personToken: string; name: string };
+    };
+    token = created.shareToken;
+    const ownerPage = await organizerBrowser.newPage();
+    await ownerPage.goto('/login', { waitUntil: 'networkidle' });
+    await ownerPage.locator('input[type=email]').fill(users.alice.email);
+    await ownerPage.locator('input[type=password]').fill(users.alice.password);
+    await ownerPage.getByRole('button', { name: 'Войти', exact: true }).click();
+    await expect(ownerPage).toHaveURL(/\/dashboard/);
+    await rememberClaimIdentity(organizerBrowser, token, created.creator);
+    await ownerPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+
+    const ownerSession = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const creatorId = ownerSession.people[0].id as string;
+    const borisId = ownerSession.people[1].id as string;
+    const victorId = ownerSession.people[2].id as string;
+    const presence = ownerPage.getByTestId('organizer-presence');
+    await expect(presence).toBeVisible({ timeout: 15_000 });
+    const creatorStatus = presence.getByTestId('presence-status-' + creatorId);
+    const borisStatus = presence.getByTestId('presence-status-' + borisId);
+    const victorStatus = presence.getByTestId('presence-status-' + victorId);
+    await expect(creatorStatus).toHaveText('Сейчас на странице', { timeout: 25_000 });
+    await expect(borisStatus).toHaveText('Ещё не присоединился');
+    await expect(victorStatus).toHaveText('Ещё не присоединился');
+    await fitsPhone(ownerPage);
+
+    await page.setViewportSize({ width: 360, height: 620 });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('organizer-presence')).toHaveCount(0);
+    await page.getByTestId('rejoin-person-1').click();
+    await expect(page.getByTestId('claim-item-0')).toBeVisible({ timeout: 15_000 });
+    await expect(borisStatus).toHaveText('Сейчас на странице', { timeout: 25_000 });
+    await expect(victorStatus).toHaveText('Ещё не присоединился');
+
+    const publicView = await trpcResult(await trpcQuery(page.request, 'guest.getSession', { token }));
+    expect(publicView.presence).toBeNull();
+    expect(publicView.people[1].hasJoined).toBe(true);
+
+    // Network loss does not remove a joined participant. Server TTL, rather
+    // than a client-supplied 'offline' flag, is the authority for presence.
+    await page.context().setOffline(true);
+    await expect(page.getByTestId('presence-connection-lost')).toBeVisible({ timeout: 15_000 });
+    await expect(borisStatus).toHaveText('Не в сети — был подключён ранее', { timeout: 68_000 });
+    await expect(victorStatus).toHaveText('Ещё не присоединился');
+    await page.context().setOffline(false);
+    await expect(page.getByTestId('presence-connection-lost')).toHaveCount(0, { timeout: 25_000 });
+    await expect(borisStatus).toHaveText('Сейчас на странице', { timeout: 25_000 });
+
+    for (const width of [320, 360, 430, 720]) {
+      await ownerPage.setViewportSize({ width, height: 620 });
+      const card = presence.getByTestId('presence-person-' + borisId);
+      await card.scrollIntoViewIfNeeded();
+      const bounds = await card.boundingBox();
+      expect(bounds, 'Presence row on ' + width + ' px').not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width + 1);
+      await fitsPhone(ownerPage);
+    }
+  } finally {
+    if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await organizerBrowser.close();
+    await owner.dispose();
+  }
+});
+
 test('Issue 3.4: mobile creator explicitly delegates approval and finalization, payer and guest cannot', async ({
   page,
   browser,

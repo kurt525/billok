@@ -447,6 +447,20 @@ enum GuestSplitStatus {
 
 // ─── GUEST SPLITS (no auth required) ──────────────────────
 
+// Per-browser heartbeat rows, independent of receipt claims and organizer approval.
+model GuestPresence {
+  id         String   @id @default(cuid())
+  sessionId  String
+  personId   String
+  deviceId   String   @db.VarChar(36)
+  lastSeenAt DateTime @default(now())
+
+  session GuestSplit @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, personId, deviceId])
+  @@index([sessionId, personId, lastSeenAt])
+}
+
 model GuestSplit {
   id          String   @id @default(cuid())
   shareToken  String   @unique @default(cuid())
@@ -468,6 +482,7 @@ model GuestSplit {
   status           GuestSplitStatus @default(FINALIZED)
   userId           String?
   createdBy   User?    @relation("GuestSplits", fields: [userId], references: [id], onDelete: SetNull)
+  presence    GuestPresence[]
   expiresAt   DateTime
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

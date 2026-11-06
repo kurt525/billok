@@ -5,7 +5,11 @@ import { Prisma, GuestSplitStatus } from '@/generated/prisma/client';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
 import { logger } from '../../lib/logger';
 import { checkRateLimit, checkTokenRateLimit } from '../../lib/rate-limit';
-import { checkClaimWriteRateLimit, checkSessionReadRateLimit } from '../../lib/guest-session-limits';
+import {
+  checkClaimWriteRateLimit,
+  checkSessionReadRateLimit,
+  checkGuestPresenceHeartbeatLimit,
+} from '../../lib/guest-session-limits';
 import { getClientIp } from '../../lib/client-ip';
 import { guestTransaction } from '../../lib/guest-transaction';
 import {
@@ -25,6 +29,7 @@ import { calculateSplitTotals, addPersonalGuestTips, groupSizeWeights } from '@/
 import { guestPortionAssignments, type GuestPortionAssignment } from '@/lib/guest-portions';
 import { guestPartsConfirmationSnapshot } from '@/lib/guest-parts-confirmation';
 import { guestKnownPartsBalance } from '@/lib/guest-known-parts';
+import { guestPresenceState } from '@/lib/guest-presence';
 import { normalizeGuestName } from '@/lib/guest-session';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { MAX_MONEY_CENTS } from '@/lib/money';
@@ -1447,6 +1452,57 @@ export const guestRouter = createTRPCRouter({
       });
     }),
 
+  /** 3.5: a current browser tab declares presence for its own joined person.
+   * Independent row per device: one closed tab does not mark another tab offline.
+   * The database supplies the time; a client cannot forge the status or another person.
+   */
+  heartbeatPresence: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        deviceId: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkGuestPresenceHeartbeatLimit(input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const session = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: { id: true, expiresAt: true, status: true, people: true },
+      });
+      if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      if (session.status !== GuestSplitStatus.CLAIMING) {
+        throw new AppError('BAD_REQUEST', 'sessionAlreadyFinalized');
+      }
+      const people = session.people as GuestSessionPerson[];
+      const person = people.find((entry) => entry.id === input.personId);
+      if (!person?.personToken || person.personToken !== input.personToken) {
+        throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      }
+      const seen = new Date();
+      await ctx.db.guestPresence.upsert({
+        where: {
+          sessionId_personId_deviceId: {
+            sessionId: session.id,
+            personId: input.personId,
+            deviceId: input.deviceId,
+          },
+        },
+        create: {
+          sessionId: session.id,
+          personId: input.personId,
+          deviceId: input.deviceId,
+          lastSeenAt: seen,
+        },
+        update: { lastSeenAt: seen },
+      });
+      return { success: true };
+    }),
+
   getSession: publicProcedure.input(z.object({ token: shareTokenSchema })).query(async ({ ctx, input }) => {
     if (!checkSessionReadRateLimit(input.token)) {
       throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
@@ -1458,6 +1514,25 @@ export const guestRouter = createTRPCRouter({
     if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
     if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
     if (!hasPersonIds(session.people as GuestSessionPerson[])) session = await savePersonIds(ctx.db, session.id);
+
+    const parsedData = parseExtractedData(session.receiptData);
+    const canViewPresence = canFinalizeGuestSession(session.userId, parsedData, ctx.session?.user?.id);
+    const latestPresence =
+      canViewPresence && session.status === GuestSplitStatus.CLAIMING
+        ? await ctx.db.guestPresence.groupBy({
+            by: ['personId'],
+            where: { sessionId: session.id },
+            _max: { lastSeenAt: true },
+          })
+        : null;
+    const seenByPerson = new Map((latestPresence ?? []).map((entry) => [entry.personId, entry._max.lastSeenAt]));
+    const presence =
+      latestPresence === null
+        ? null
+        : (session.people as IdentifiedGuestPerson[]).map((entry) => ({
+            personId: entry.id,
+            status: guestPresenceState(!!entry.personToken, seenByPerson.get(entry.id)),
+          }));
 
     let receiptImagePath: string | null = null;
     if (session.receiptId) {
@@ -1491,6 +1566,7 @@ export const guestRouter = createTRPCRouter({
       items: session.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[],
       // Everyone has an id by now (savePersonIds above)
       people: toClaimPeople(session.people as IdentifiedGuestPerson[]),
+      presence, // organizer-only; never leaks personal tokens or heartbeat timestamps
       assignments: session.assignments as GuestPortionAssignment[],
       partsConfirmed: (() => {
         const data = parseExtractedData(session.receiptData);

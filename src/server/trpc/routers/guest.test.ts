@@ -10,6 +10,7 @@ const mockDb = {
   user: { findUnique: vi.fn() },
   receipt: { findUnique: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },
   groupMember: { findUnique: vi.fn() },
+  guestPresence: { upsert: vi.fn(), groupBy: vi.fn() },
   guestSplit: {
     findUnique: vi.fn(),
     findMany: vi.fn(),
@@ -65,6 +66,8 @@ beforeEach(async () => {
   checkRateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
   peekRateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
   mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+  mockDb.guestPresence.groupBy.mockResolvedValue([]);
+  mockDb.guestPresence.upsert.mockResolvedValue({ id: 'presence-1' });
   // New splits clear expired ones in the background
   deleteExpiredSplits.mockResolvedValue(0);
 });
@@ -789,6 +792,147 @@ describe('guest.resumeSession', () => {
     const saved = savedPeople() as { id: string }[];
     expect(saved.map((p) => p.id)).toEqual([expect.stringMatching(UUID), expect.stringMatching(UUID)]);
     expect(resumed).toEqual({ personIndex: 1, personId: saved[1]!.id, name: 'Alice' });
+  });
+});
+
+describe('Issue 3.5: independent short-lived device presence and organizer-only status', () => {
+  const devA = 'a1111111-1111-4111-8111-111111111111';
+  const devB = 'b2222222-2222-4222-8222-222222222222';
+  function prepared(override: Record<string, unknown> = {}) {
+    claimSession(
+      [
+        { name: 'Not joined' },
+        { name: 'Joined', personToken: ALICE_TOKEN },
+        { name: 'Online', personToken: OTHER_TOKEN },
+        { name: 'Offline', personToken: D_TOKEN },
+      ],
+      {
+        receiptData: {
+          subtotal: 100,
+          total: 100,
+          tax: 0,
+          tip: 0,
+          currency: 'RUB',
+          ...override,
+        },
+        userId: 'user-1',
+      },
+    );
+  }
+
+  test('only the holder of this joined person token can send a browser heartbeat', async () => {
+    prepared();
+    for (const input of [
+      { token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN, deviceId: devA },
+      { token: 'share-1', personId: pid(2), personToken: ALICE_TOKEN, deviceId: devA },
+      { token: 'share-1', personId: pid(3), personToken: OTHER_TOKEN, deviceId: devA },
+    ]) {
+      await expect((await caller()).heartbeatPresence(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    expect(mockDb.guestPresence.upsert).not.toHaveBeenCalled();
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    await (
+      await caller()
+    ).heartbeatPresence({
+      token: 'share-1',
+      personId: pid(2),
+      personToken: OTHER_TOKEN,
+      deviceId: devA,
+    });
+    const write = mockDb.guestPresence.upsert.mock.calls[0]![0];
+    expect(write.where.sessionId_personId_deviceId).toEqual({
+      sessionId: 'gs1',
+      personId: pid(2),
+      deviceId: devA,
+    });
+    expect(write.create.lastSeenAt).toBeInstanceOf(Date);
+    expect(write.update.lastSeenAt).toBeInstanceOf(Date);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('another browser has a separate device row and cannot erase the first browser', async () => {
+    prepared();
+    const api = await caller();
+    for (const deviceId of [devA, devB]) {
+      await api.heartbeatPresence({
+        token: 'share-1',
+        personId: pid(2),
+        personToken: OTHER_TOKEN,
+        deviceId,
+      });
+    }
+    expect(mockDb.guestPresence.upsert).toHaveBeenCalledTimes(2);
+    const keys = mockDb.guestPresence.upsert.mock.calls.map(
+      ([query]) => query.where.sessionId_personId_deviceId.deviceId,
+    );
+    expect(keys).toEqual([devA, devB]);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('expired and finished receipts reject heartbeats, leaving all shares unchanged', async () => {
+    prepared();
+    claimSession([{ name: 'online', personToken: ALICE_TOKEN }], { status: 'FINALIZED' });
+    await expect(
+      (await caller()).heartbeatPresence({
+        token: 'share-1',
+        personId: pid(0),
+        personToken: ALICE_TOKEN,
+        deviceId: devA,
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    claimSession([{ name: 'online', personToken: ALICE_TOKEN }], {
+      expiresAt: new Date(Date.now() - 1000),
+    });
+    await expect(
+      (await caller()).heartbeatPresence({
+        token: 'share-1',
+        personId: pid(0),
+        personToken: ALICE_TOKEN,
+        deviceId: devA,
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mockDb.guestPresence.upsert).not.toHaveBeenCalled();
+  });
+
+  test('creator sees never joined / joined / online / offline separately, calculated from TTL', async () => {
+    prepared();
+    const now = Date.now();
+    mockDb.guestPresence.groupBy.mockResolvedValue([
+      { personId: pid(2), _max: { lastSeenAt: new Date(now - 2000) } },
+      { personId: pid(3), _max: { lastSeenAt: new Date(now - 60_000) } },
+    ]);
+    const view = await (await caller(signedIn)).getSession({ token: 'share-1' });
+    expect(view.presence).toEqual([
+      { personId: pid(0), status: 'not-joined' },
+      { personId: pid(1), status: 'joined' },
+      { personId: pid(2), status: 'online' },
+      { personId: pid(3), status: 'offline' },
+    ]);
+    expect(mockDb.guestPresence.groupBy).toHaveBeenCalledWith({
+      by: ['personId'],
+      where: { sessionId: 'gs1' },
+      _max: { lastSeenAt: true },
+    });
+    expect(JSON.stringify(view.presence)).not.toContain(OTHER_TOKEN);
+  });
+
+  test('anonymous and registered non-organizers cannot see device-presence data', async () => {
+    prepared();
+    for (const session of [null, { user: { id: 'registered-payer' } }]) {
+      const view = await (await caller(session)).getSession({ token: 'share-1' });
+      expect(view.presence).toBeNull();
+      expect(view.people[2]?.hasJoined).toBe(true);
+    }
+    expect(mockDb.guestPresence.groupBy).not.toHaveBeenCalled();
+  });
+
+  test('explicitly appointed co-organizer sees statuses without participant identity or email leaks', async () => {
+    prepared({ finalizationOrganizerUserId: 'helper-account' });
+    const view = await (await caller({ user: { id: 'helper-account' } })).getSession({ token: 'share-1' });
+    expect(view.presence).toHaveLength(4);
+    expect(view.isCreator).toBe(false);
+    expect(JSON.stringify(view)).not.toContain('helper-account');
+    expect(mockDb.guestPresence.groupBy).toHaveBeenCalledOnce();
   });
 });
 
