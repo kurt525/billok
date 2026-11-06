@@ -477,6 +477,9 @@ type TestPerson = {
   guestSlotNumber?: number;
   reservedOwner?: boolean;
   personalLinkReadyAt?: string;
+  personalLinkRotation?: { requestKey: string; rotatedAt: string; count: number };
+  paymentDeclaredAt?: string;
+  paymentVerifiedAt?: string;
   groupSize?: number;
   tipCents?: number;
   join?: { key: string; name: string; expiresAt: number };
@@ -1288,6 +1291,222 @@ describe('Issue 3.6: no two people share a display name inside one receipt', () 
       name: 'Café',
       personToken: ALICE_TOKEN,
     });
+  });
+});
+
+describe('Issue 3.8.4: creator revokes and rotates a personal link without mutating the bill', () => {
+  const readyAt = '2026-11-07T01:00:00.000Z';
+  const data = {
+    subtotal: 1200,
+    tax: 0,
+    tip: 0,
+    total: 1200,
+    currency: 'RUB',
+    guestSlotsMode: true,
+    guestCount: 2,
+    organizerPersonId: pid(0),
+    partsApprovalHash: 'original-approved',
+  };
+  const oldJoin = { key: JOIN_KEY, name: 'андрей', expiresAt: Date.now() + 60_000 };
+  const savedKey = { key: '456e4567-e89b-42d3-a456-426614174083', hash: 'old-save-hash' };
+  const people: TestPerson[] = [
+    { name: 'Создатель', personToken: OTHER_TOKEN, accountUserId: 'user-1' },
+    {
+      name: 'Андрей',
+      guestSlotNumber: 1,
+      personToken: ALICE_TOKEN,
+      personalLinkReadyAt: readyAt,
+      tipCents: 175,
+      paymentDeclaredAt: '2026-11-06T19:00:00.000Z',
+      paymentVerifiedAt: '2026-11-06T19:05:00.000Z',
+      join: oldJoin,
+      saves: [savedKey],
+    },
+    { name: 'Гость 2', guestSlotNumber: 2, personToken: '33333333-3333-4333-8333-333333333333' },
+  ];
+  const requestKey = '123e4567-e89b-42d3-a456-426614174084';
+  const request = { token: 'share-1', personId: pid(1), requestKey };
+  beforeEach(() => {
+    claimSession(people, {
+      receiptData: data,
+      paidByIndex: 2,
+      items: [{ name: 'Суп', quantity: 1, unitPrice: 1200, totalPrice: 1200 }],
+      assignments: [{ itemIndex: 0, personIndices: [1] }],
+    });
+  });
+
+  test('one transaction revokes prior token and replay keys while retaining the stable person, financial fields and shares', async () => {
+    const result = await (await caller(signedIn)).rotateGuestPersonalLink(request);
+    expect(result).toMatchObject({
+      personId: pid(1),
+      name: 'Андрей',
+      personToken: expect.stringMatching(UUID),
+      rotatedAt: expect.any(String),
+      rotationCount: 1,
+    });
+    expect(result.personToken).not.toBe(ALICE_TOKEN);
+    const updated = savedPeople() as TestPerson[];
+    expect(updated).toHaveLength(people.length);
+    expect(updated[0]).toMatchObject({ personToken: OTHER_TOKEN, id: pid(0) });
+    expect(updated[1]).toMatchObject({
+      id: pid(1),
+      name: 'Андрей',
+      guestSlotNumber: 1,
+      personToken: result.personToken,
+      personalLinkReadyAt: readyAt,
+      tipCents: 175,
+      paymentDeclaredAt: '2026-11-06T19:00:00.000Z',
+      paymentVerifiedAt: '2026-11-06T19:05:00.000Z',
+      personalLinkRotation: { requestKey, rotatedAt: result.rotatedAt, count: 1 },
+    });
+    expect(updated[1]?.join).toBeUndefined();
+    expect(updated[1]?.saves).toBeUndefined();
+    expect(updated[2]?.personToken).toBe(people[2]?.personToken);
+    const payload = mockDb.guestSplit.update.mock.calls[0]![0].data;
+    expect(payload).not.toHaveProperty('assignments');
+    expect(payload).not.toHaveProperty('paidByIndex');
+    expect(payload).not.toHaveProperty('summary');
+    expect(payload).not.toHaveProperty('receiptData');
+    expect(payload).not.toHaveProperty('items');
+    expect(JSON.stringify(payload)).not.toContain(ALICE_TOKEN);
+    expect(JSON.stringify(payload)).not.toContain(JOIN_KEY);
+  });
+
+  test('old token cannot resume, rename, change personal tip, or claim dishes after rotation', async () => {
+    const rotated = await (await caller(signedIn)).rotateGuestPersonalLink(request);
+    claimSession(savedPeople() as TestPerson[], { receiptData: data });
+    mockDb.guestSplit.update.mockClear();
+    await expect((await caller()).resumeSession({ token: 'share-1', personToken: ALICE_TOKEN })).resolves.toBeNull();
+    await expect(
+      (await caller()).editPersonName({
+        token: 'share-1',
+        personToken: ALICE_TOKEN,
+        targetId: pid(1),
+        newName: 'Чужое',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      (await caller()).setPersonalTip({
+        token: 'share-1',
+        personId: pid(1),
+        personToken: ALICE_TOKEN,
+        tipCents: 1000,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      (await caller()).claimItems({
+        token: 'share-1',
+        personId: pid(1),
+        personToken: ALICE_TOKEN,
+        addItemIndices: [0],
+        removeItemIndices: [],
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      (await caller()).resumeSession({
+        token: 'share-1',
+        personToken: rotated.personToken,
+      }),
+    ).resolves.toMatchObject({ personId: pid(1), name: 'Андрей' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('idempotency key returns exactly the same new token on retry; a distinct request rotates again', async () => {
+    const first = await (await caller(signedIn)).rotateGuestPersonalLink(request);
+    claimSession(savedPeople() as TestPerson[], { receiptData: data });
+    mockDb.guestSplit.update.mockClear();
+    const second = await (await caller(signedIn)).rotateGuestPersonalLink(request);
+    expect(second).toEqual(first);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    const next = await (
+      await caller(signedIn)
+    ).rotateGuestPersonalLink({
+      ...request,
+      requestKey: '123e4567-e89b-42d3-a456-426614174085',
+    });
+    expect(next.personToken).not.toBe(first.personToken);
+    expect(next.rotationCount).toBe(2);
+    const final = savedPeople() as TestPerson[];
+    expect(final[1]?.personalLinkRotation?.count).toBe(2);
+  });
+
+  test('only registered receipt creator may rotate; payer, unrelated owner, anonymous and impersonator cannot', async () => {
+    await expect((await caller()).rotateGuestPersonalLink(request)).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    await expect(
+      (await caller({ user: { id: 'billok-owner' } })).rotateGuestPersonalLink(request),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', messageKey: 'sessionNotFound' });
+    const { guestRouter } = await import('./guest');
+    const impersonating = guestRouter.createCaller({
+      session: signedIn,
+      db: mockDb,
+      headers: new Headers(),
+      impersonating: { adminId: 'someone' },
+    } as unknown as Parameters<typeof guestRouter.createCaller>[0]);
+    await expect(impersonating.rotateGuestPersonalLink(request)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('no guest token, no first saved action, creator row, foreign personId, expired/legacy check cannot rotate', async () => {
+    const api = await caller(signedIn);
+    await expect(api.rotateGuestPersonalLink({ ...request, personId: pid(2) })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      messageKey: 'guestPersonalLinkNotReady',
+    });
+    await expect(api.rotateGuestPersonalLink({ ...request, personId: pid(0) })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      messageKey: 'personGone',
+    });
+    await expect(api.rotateGuestPersonalLink({ ...request, personId: pid(7) })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      messageKey: 'personGone',
+    });
+    claimSession([{ name: 'Андрей', personToken: ALICE_TOKEN }]);
+    await expect(api.rotateGuestPersonalLink({ ...request, personId: pid(0) })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    claimSession(people, { receiptData: data, expiresAt: new Date(0) });
+    await expect(api.rotateGuestPersonalLink(request)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      messageKey: 'sessionExpired',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('finalized check can reissue a recovery link, without modifying financial settlement', async () => {
+    claimSession(people, { receiptData: data, status: 'FINALIZED' });
+    const rotated = await (await caller(signedIn)).rotateGuestPersonalLink(request);
+    expect(rotated.personToken).not.toBe(ALICE_TOKEN);
+    const dataUpdate = mockDb.guestSplit.update.mock.calls[0]![0].data;
+    expect(Object.keys(dataUpdate)).toEqual(['people']);
+  });
+
+  test('rate limit rejects rotation without accessing or updating the private guest token', async () => {
+    checkRateLimit.mockReturnValueOnce({ allowed: false, retryAfterMs: 0 });
+    await expect((await caller(signedIn)).rotateGuestPersonalLink(request)).rejects.toMatchObject({
+      code: 'TOO_MANY_REQUESTS',
+    });
+    expect(mockDb.guestSplit.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('only creator gets a tokenless audit event; public and unrelated accounts get none', async () => {
+    const rotated = await (await caller(signedIn)).rotateGuestPersonalLink(request);
+    claimSession(savedPeople() as TestPerson[], { receiptData: data });
+    const creator = await (await caller(signedIn)).getSession({ token: 'share-1' });
+    expect(creator.personalLinkEvents).toEqual([
+      {
+        personId: pid(1),
+        rotatedAt: rotated.rotatedAt,
+        rotationCount: 1,
+      },
+    ]);
+    expect(JSON.stringify(creator.personalLinkEvents)).not.toContain(rotated.personToken);
+    expect(JSON.stringify(creator.personalLinkEvents)).not.toContain(ALICE_TOKEN);
+    const outside = await (await caller()).getSession({ token: 'share-1' });
+    expect(outside.personalLinkEvents).toBeNull();
+    const registered = await (await caller({ user: { id: 'registered-payer' } })).getSession({ token: 'share-1' });
+    expect(registered.personalLinkEvents).toBeNull();
+    expect(JSON.stringify(outside)).not.toContain(rotated.personToken);
+    expect(JSON.stringify(outside)).not.toContain(requestKey);
   });
 });
 

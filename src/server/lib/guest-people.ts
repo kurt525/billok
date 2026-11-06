@@ -30,6 +30,9 @@ export type GuestSessionPerson = {
   // Server-only timestamp: the participant personally saved their first
   // real edit. Until then 3.8 does not offer a recovery link.
   personalLinkReadyAt?: string;
+  // 3.8.4: server-only audit of explicit creator reissues, no old credential.
+  // Keeping the most recent request id makes a network retry idempotent.
+  personalLinkRotation?: { requestKey: string; rotatedAt: string; count: number };
   groupSize?: number; // defaults to 1, > 1 means this person represents a group
   // Voluntary tip personally chosen for this receipt, integer RUB kopecks; missing = 0.
   tipCents?: number;

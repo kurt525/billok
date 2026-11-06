@@ -119,6 +119,24 @@ describe('Long participant names on mobile guest receipts', () => {
   });
 });
 
+describe('Issue 3.8.4: creator personal-link rotation at narrow mobile widths', () => {
+  it('requires explicit confirmation, keeps touch targets, and shows only the current link', () => {
+    const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
+    const api = read('src/server/trpc/routers/guest.ts');
+    expect(claim).toContain("data-testid={'creator-guest-link-rotate-' + idx}");
+    expect(claim).toContain("data-testid={'creator-guest-link-rotate-confirm-' + idx}");
+    expect(claim).toContain("data-testid={'creator-guest-link-rotate-cancel-' + idx}");
+    expect(claim).toContain("data-testid={'creator-guest-link-event-' + idx}");
+    expect(claim).toContain("data-testid={'creator-guest-link-copy-' + idx}");
+    expect(claim).toContain('min-h-11 w-full min-w-0 whitespace-normal text-sm');
+    expect(claim).toContain('flex min-w-0 flex-wrap gap-2');
+    expect(claim).toContain('creatorGuestLink.rotationCount === (lastRotation?.rotationCount ?? 0)');
+    expect(api).toContain('rotateGuestPersonalLink: protectedProcedure');
+    expect(api).toContain('personalLinkEvents:');
+    expect(api).toContain('session.userId === ctx.session?.user?.id && !ctx.impersonating');
+  });
+});
+
 describe('Guest claiming join screen Android keyboard and listed names', () => {
   it('offers numeric keyboard, 44px controls and wraps long free participant names', () => {
     const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');

@@ -269,7 +269,12 @@
     "personalLinkRecoveryRetry": "Retry recovery",
     "personalLinkRecoveryCancel": "Cancel this link",
     "sessionTemporaryUnavailable": "Temporarily unable to reach BillOK",
-    "sessionRetryHint": "The receipt and your saved actions have not been deleted. Reconnect or wait for the automatic refresh."
+    "sessionRetryHint": "The receipt and your saved actions have not been deleted. Reconnect or wait for the automatic refresh.",
+    "creatorGuestLinkRotate": "Revoke and reissue link",
+    "creatorGuestLinkRotateWarning": "The previous personal link for {name} will immediately stop working on all devices. Their dishes, tips, payments and place remain intact. Send the new link privately.",
+    "creatorGuestLinkRotateConfirm": "Yes, reissue the link",
+    "creatorGuestLinkRotated": "Old link revoked. Copy the new link and send it only to this guest.",
+    "creatorGuestLinkRotationEvent": "Link rotations: {count}, last event: {date}."
   },
   "result": {
     "loading": "Loading split...",

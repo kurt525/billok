@@ -1932,6 +1932,74 @@ export const guestRouter = createTRPCRouter({
    * (mutation) so the secret never appears in URLs or public query caches.
    * The UI builds a #fragment link client-side; fragments never reach HTTP.
    */
+  /** 3.8.4: a creator rotates exactly one guest's personal bearer credential.
+   * The old token and its join replay key lose authority in the same commit.
+   * Do not touch personId, account binding, assignments, payments or tips.
+   */
+  rotateGuestPersonalLink: protectedProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        requestKey: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.impersonating) throw new AppError('FORBIDDEN', 'notParticipant');
+      const bucket = `guest-rotate-personal-link:${JSON.stringify([input.token, ctx.user.id])}`;
+      if (!checkTokenRateLimit(bucket, 12, 60_000).allowed) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session || session.userId !== ctx.user.id) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (parseExtractedData(session.receiptData).guestSlotsMode !== true) {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'fixed guest slots' });
+        }
+        const people = assignPersonIds(session.people as GuestSessionPerson[]);
+        const idx = people.findIndex((person) => person.id === input.personId && person.guestSlotNumber !== undefined);
+        if (idx < 0) throw new AppError('NOT_FOUND', 'personGone');
+        const guest = people[idx]!;
+        if (!guest.personToken) throw new AppError('PRECONDITION_FAILED', 'guestPersonalLinkNotJoined');
+        if (!guest.personalLinkReadyAt) throw new AppError('PRECONDITION_FAILED', 'guestPersonalLinkNotReady');
+
+        const previousRotation = guest.personalLinkRotation;
+        // A retry of an already committed rotation must not invalidate the
+        // credential it returned on the first (possibly lost) response.
+        if (previousRotation?.requestKey === input.requestKey) {
+          return {
+            personId: guest.id,
+            name: guest.name,
+            personToken: guest.personToken,
+            rotatedAt: previousRotation.rotatedAt,
+            rotationCount: previousRotation.count,
+          };
+        }
+
+        const rotatedAt = new Date().toISOString();
+        const personToken = randomUUID();
+        const rotationCount = Math.min((previousRotation?.count ?? 0) + 1, 1_000_000);
+        // Remove prior join-key and save-key replays: neither may be used to
+        // retrieve this fresh secret with an old request from another device.
+        const { join: _priorJoin, saves: _priorSaves, ...retained } = guest;
+        void _priorJoin;
+        void _priorSaves;
+        people[idx] = {
+          ...retained,
+          personToken,
+          personalLinkRotation: { requestKey: input.requestKey, rotatedAt, count: rotationCount },
+        };
+        await tx.guestSplit.update({
+          where: { id: session.id },
+          data: { people: people as unknown as Prisma.InputJsonValue },
+        });
+        // The response contains the NEW secret only for the authenticated
+        // creator; the audit event stores no old token or request URL.
+        return { personId: guest.id, name: guest.name, personToken, rotatedAt, rotationCount };
+      });
+    }),
+
   getGuestPersonalLink: protectedProcedure
     .input(z.object({ token: shareTokenSchema, personId: personIdSchema }))
     .mutation(async ({ ctx, input }) => {
@@ -2031,6 +2099,17 @@ export const guestRouter = createTRPCRouter({
       items: session.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[],
       // Everyone has an id by now (savePersonIds above)
       people: toClaimPeople(session.people as IdentifiedGuestPerson[]),
+      // Creator-only audit metadata, not a public token or an owner privilege.
+      personalLinkEvents:
+        session.userId === ctx.session?.user?.id && !ctx.impersonating
+          ? (session.people as IdentifiedGuestPerson[])
+              .filter((person) => person.guestSlotNumber !== undefined && person.personalLinkRotation)
+              .map((person) => ({
+                personId: person.id,
+                rotatedAt: person.personalLinkRotation!.rotatedAt,
+                rotationCount: person.personalLinkRotation!.count,
+              }))
+          : null,
       presence, // organizer-only; never leaks personal tokens or heartbeat timestamps
       assignments: session.assignments as GuestPortionAssignment[],
       partsConfirmed: (() => {

@@ -219,9 +219,16 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const [saving, setSaving] = useState(false);
   const [showImage, setShowImage] = useState(false);
   const [editingPersonId, setEditingPersonId] = useState<string | null>(null);
-  const [creatorGuestLink, setCreatorGuestLink] = useState<{ personId: string; name: string; url: string } | null>(
-    null,
-  );
+  const [creatorGuestLink, setCreatorGuestLink] = useState<{
+    personId: string;
+    name: string;
+    url: string;
+    rotationCount: number;
+  } | null>(null);
+  const [rotateLinkFor, setRotateLinkFor] = useState<{ personId: string; name: string } | null>(null);
+  // Reuse the same request key after a lost response, otherwise a second click
+  // could accidentally invalidate the already minted replacement link.
+  const pendingRotation = useRef<{ personId: string; requestKey: string } | null>(null);
   const [editingName, setEditingName] = useState('');
   const [editingGroupSize, setEditingGroupSize] = useState(1);
   const [splittingItemIdx, setSplittingItemIdx] = useState<number | null>(null);
@@ -260,10 +267,40 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     onSuccess: (result) => {
       const url = new URL(window.location.origin + window.location.pathname);
       url.hash = personalLinkHash(result.personToken);
-      setCreatorGuestLink({ personId: result.personId, name: result.name, url: url.toString() });
+      const event = utils.guest.getSession
+        .getData({ token })
+        ?.personalLinkEvents?.find((item) => item.personId === result.personId);
+      setCreatorGuestLink({
+        personId: result.personId,
+        name: result.name,
+        url: url.toString(),
+        rotationCount: event?.rotationCount ?? 0,
+      });
     },
     onError: (error) => {
       setCreatorGuestLink(null);
+      toast.error(localizedTrpcError(error, tc('errors.generic')));
+    },
+  });
+
+  const rotateGuestPersonalLink = trpc.guest.rotateGuestPersonalLink.useMutation({
+    onSuccess: async (result) => {
+      const url = new URL(window.location.origin + window.location.pathname);
+      url.hash = personalLinkHash(result.personToken);
+      setCreatorGuestLink({
+        personId: result.personId,
+        name: result.name,
+        url: url.toString(),
+        rotationCount: result.rotationCount,
+      });
+      pendingRotation.current = null;
+      setRotateLinkFor(null);
+      await utils.guest.getSession.invalidate({ token });
+      toast.success(t('creatorGuestLinkRotated'));
+    },
+    onError: (error) => {
+      // A lost rotation answer is retried with the same idempotency key.
+      // Do not expose or assert that the old link remains valid.
       toast.error(localizedTrpcError(error, tc('errors.generic')));
     },
   });
@@ -1319,7 +1356,14 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         </span>
       );
     }
-    const opened = creatorGuestLink?.personId === person.id ? creatorGuestLink : null;
+    const lastRotation = data.personalLinkEvents?.find((entry) => entry.personId === person.id);
+    // A second creator device may have rotated the link. Never display an
+    // earlier revealed URL after the server announces the newer generation.
+    const opened =
+      creatorGuestLink?.personId === person.id && creatorGuestLink.rotationCount === (lastRotation?.rotationCount ?? 0)
+        ? creatorGuestLink
+        : null;
+    const confirmingRotation = rotateLinkFor?.personId === person.id;
     return (
       <div className="w-full min-w-0 space-y-2" data-testid={'creator-guest-link-controls-' + idx}>
         <Button
@@ -1337,6 +1381,68 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           <Link2 className="mr-2 h-4 w-4 shrink-0" />
           {t('creatorGuestLinkOpen')}
         </Button>
+        {lastRotation && (
+          <p className="text-xs text-muted-foreground" data-testid={'creator-guest-link-event-' + idx}>
+            {t('creatorGuestLinkRotationEvent', { count: lastRotation.rotationCount, date: lastRotation.rotatedAt })}
+          </p>
+        )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="min-h-11 w-full min-w-0 whitespace-normal text-sm"
+          disabled={rotateGuestPersonalLink.isPending}
+          onClick={() => {
+            setCreatorGuestLink(null);
+            pendingRotation.current = null;
+            setRotateLinkFor({ personId: person.id, name: person.name });
+          }}
+          data-testid={'creator-guest-link-rotate-' + idx}
+        >
+          {t('creatorGuestLinkRotate')}
+        </Button>
+        {confirmingRotation && (
+          <div className="min-w-0 space-y-2 rounded-lg border p-3" data-testid={'creator-guest-link-confirm-' + idx}>
+            <p className="text-sm">{t('creatorGuestLinkRotateWarning', { name: person.name })}</p>
+            <div className="flex min-w-0 flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                className="min-h-11 min-w-0 whitespace-normal"
+                disabled={rotateGuestPersonalLink.isPending}
+                onClick={() => {
+                  const attempt =
+                    pendingRotation.current?.personId === person.id
+                      ? pendingRotation.current
+                      : { personId: person.id, requestKey: newRequestKey() };
+                  pendingRotation.current = attempt;
+                  rotateGuestPersonalLink.mutate({
+                    token,
+                    personId: person.id,
+                    requestKey: attempt.requestKey,
+                  });
+                }}
+                data-testid={'creator-guest-link-rotate-confirm-' + idx}
+              >
+                {t('creatorGuestLinkRotateConfirm')}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="min-h-11 min-w-0 whitespace-normal"
+                disabled={rotateGuestPersonalLink.isPending}
+                onClick={() => {
+                  pendingRotation.current = null;
+                  setRotateLinkFor(null);
+                }}
+                data-testid={'creator-guest-link-rotate-cancel-' + idx}
+              >
+                {t('cancelButton')}
+              </Button>
+            </div>
+          </div>
+        )}
         {opened && (
           <div className="min-w-0 space-y-2" data-testid={'creator-guest-link-reveal-' + idx}>
             <Input
