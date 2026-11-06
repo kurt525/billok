@@ -10,6 +10,7 @@ import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
 import { canStoreClaimIdentity, setStoredClaimIdentity } from '@/lib/guest-session';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { Button } from '@/components/ui/button';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -343,8 +344,10 @@ function AuthenticatedGuestSplitPage() {
         paidByIndex: remappedPaidBy,
       });
       router.push(`/split/${result.shareToken}`);
-    } catch {
-      toast.error(t('assign.createSplitFailed'));
+    } catch (error) {
+      toast.error(
+        localizedTrpcError(error as { message: string; data?: { code?: string } }, t('assign.createSplitFailed')),
+      );
     }
   }
 
@@ -373,8 +376,10 @@ function AuthenticatedGuestSplitPage() {
         });
       }
       router.push(`/split/${result.shareToken}/claim`);
-    } catch {
-      toast.error(t('assign.createSessionFailed'));
+    } catch (error) {
+      toast.error(
+        localizedTrpcError(error as { message: string; data?: { code?: string } }, t('assign.createSessionFailed')),
+      );
     }
   }
 

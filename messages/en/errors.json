@@ -123,7 +123,7 @@
   "invalidPersonToken": "Invalid person token",
   "personGone": "That person is no longer in this split.",
   "cannotRemoveLastPerson": "Cannot remove the last person",
-  "nameTaken": "Name already taken",
+  "nameTaken": "This name is already taken in this receipt. Please choose a distinct name.",
   "joinNameTaken": "Someone has already joined under this name. If that was you, open this split on the device you joined with and get your personal link there. Otherwise, choose a different name.",
   "joinKeyReused": "This join request was already used with a different name.",
   "saveKeyReused": "This save was already sent with different changes.",

@@ -6,6 +6,8 @@ import {
   canStoreClaimIdentity,
   claimPollInterval,
   isGuestSessionToken,
+  normalizeGuestName,
+  hasDuplicateGuestNames,
   isSessionLost,
   joinKeyFor,
   needsMembershipCheck,
@@ -19,6 +21,27 @@ import {
 const TOKEN = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
 const THIRD = '33333333-3333-4333-8333-333333333333';
+
+describe('Issue 3.6: Unicode-safe display names per receipt', () => {
+  test('trims and compares case-insensitively, without changing distinct names', () => {
+    expect(normalizeGuestName(' Алексей ')).toBe(normalizeGuestName('алексей'));
+    expect(normalizeGuestName('АЛЕКСЕЙ')).toBe(normalizeGuestName('Алексей'));
+    expect(normalizeGuestName('Алексей П.')).not.toBe(normalizeGuestName('Алексей'));
+  });
+
+  test('treats composed, decomposed and compatibility Unicode spellings as the same name', () => {
+    expect(normalizeGuestName('Cafe\u0301')).toBe(normalizeGuestName('CAFÉ'));
+    expect(normalizeGuestName('Ａｌｅｘ')).toBe(normalizeGuestName('alex'));
+    expect(normalizeGuestName('Ёж')).toBe(normalizeGuestName('Е\u0308ж'));
+  });
+
+  test('detects collisions without merging separate diners or separate receipts', () => {
+    expect(hasDuplicateGuestNames([' Алексей ', 'алексей'])).toBe(true);
+    expect(hasDuplicateGuestNames(['Alex', 'Ａｌｅｘ'])).toBe(true);
+    expect(hasDuplicateGuestNames(['Алексей', 'Алексей П.'])).toBe(false);
+    expect(hasDuplicateGuestNames(['Алексей', 'Иван'])).toBe(false);
+  });
+});
 
 describe('personal link fragment', () => {
   test('round-trips a person token', () => {

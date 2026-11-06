@@ -18,8 +18,12 @@ describe('BillOK Russian-only user-facing fallbacks', () => {
   it('shows Russian notifications rather than raw network exceptions when creating bills', () => {
     const guest = source('src/app/[locale]/split/page.tsx');
     const grouped = source('src/app/[locale]/(app)/groups/[groupId]/scan/page.tsx');
-    expect(guest).toContain("toast.error(t('assign.createSplitFailed'))");
-    expect(guest).toContain("toast.error(t('assign.createSessionFailed'))");
+    // 3.6: show server-localized name conflicts but retain safe Russian fallback
+    // when the failure has no tRPC error data (e.g., offline or timeout).
+    expect(guest).toContain('localizedTrpcError(error as { message: string; data?: { code?: string } }');
+    expect(guest).toContain("t('assign.createSplitFailed')");
+    expect(guest).toContain("t('assign.createSessionFailed')");
+    expect(guest).not.toContain('toast.error(error.message)');
     expect(grouped).toContain("toast.error(t('createSessionFailed'))");
     expect(guest).not.toContain("err instanceof Error ? err.message : t('assign.create");
     expect(grouped).not.toContain("err instanceof Error ? err.message : t('createSessionFailed')");

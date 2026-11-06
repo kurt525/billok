@@ -1006,6 +1006,112 @@ describe('guest.getSession people', () => {
   });
 });
 
+describe('Issue 3.6: no two people share a display name inside one receipt', () => {
+  const receiptData = { subtotal: 1001, tax: 0, tip: 0, total: 1001, currency: 'RUB' };
+  const items = [{ name: 'Чай', quantity: 1, unitPrice: 1001, totalPrice: 1001 }];
+  beforeEach(() => mockDb.guestSplit.create.mockResolvedValue({ id: 'fresh', shareToken: 'fresh-token' }));
+
+  test.each([
+    [' Алексей ', 'алексей'],
+    ['Cafe\u0301', 'CAFÉ'],
+    ['Ａｌｅｘ', 'alex'],
+  ])('direct split refuses normalized collision: %s vs %s', async (first, second) => {
+    await expect(
+      (await caller(signedIn)).createSplit({
+        receiptData,
+        items,
+        people: [{ name: first }, { name: second }],
+        assignments: [{ itemIndex: 0, personIndices: [0, 1] }],
+        paidByIndex: 0,
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'nameTaken' });
+    expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+  });
+
+  test('a different unique qualifier creates two separate people and assigned portions', async () => {
+    await (
+      await caller(signedIn)
+    ).createSplit({
+      receiptData,
+      items,
+      people: [{ name: 'Алексей' }, { name: 'Алексей П.' }],
+      assignments: [{ itemIndex: 0, personIndices: [0, 1] }],
+      paidByIndex: 0,
+    });
+    const created = mockDb.guestSplit.create.mock.calls[0]?.[0]?.data;
+    expect((created?.people as { name: string }[]).map((p) => p.name)).toEqual(['Алексей', 'Алексей П.']);
+    expect(created?.assignments).toEqual([{ itemIndex: 0, personIndices: [0, 1] }]);
+  });
+
+  test('a new receipt may reuse a name used in a different receipt', async () => {
+    const api = await caller(signedIn);
+    for (let i = 0; i < 2; i++) {
+      await api.createSplit({
+        receiptData,
+        items,
+        people: [{ name: 'Алексей' }],
+        assignments: [{ itemIndex: 0, personIndices: [0] }],
+        paidByIndex: 0,
+      });
+    }
+    expect(mockDb.guestSplit.create).toHaveBeenCalledTimes(2);
+  });
+
+  test('pre-seeded Unicode-equivalent duplicate names cannot be claimed ambiguously', async () => {
+    claimSession([{ name: 'Е\u0308ж' }, { name: 'ЁЖ' }]);
+    await expect((await caller()).joinSession({ token: 'share-1', name: 'Ёж' })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      messageKey: 'nameTaken',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('joining a different name remains permitted and name collision is receipt-local', async () => {
+    claimSession([{ name: 'Алексей', personToken: ALICE_TOKEN }]);
+    await expect((await caller()).joinSession({ token: 'share-1', name: ' алексей ' })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      messageKey: 'joinNameTaken',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    const fresh = await (await caller()).joinSession({ token: 'share-1', name: 'Алексей П.' });
+    expect(fresh.name).toBe('Алексей П.');
+    expect(savedPeople()).toHaveLength(2);
+  });
+
+  test('renaming a joined diner to an equivalent name fails inside transaction, without writing', async () => {
+    claimSession([
+      { name: 'Алексей', personToken: ALICE_TOKEN },
+      { name: 'Иван', personToken: OTHER_TOKEN },
+    ]);
+    await expect(
+      (await caller()).editPersonName({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        targetId: pid(1),
+        newName: ' аЛеКсЕЙ ',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'nameTaken' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('Unicode composition normalizes saved display spelling without changing a guest identity', async () => {
+    claimSession([{ name: 'Alice', personToken: ALICE_TOKEN }]);
+    await (
+      await caller()
+    ).editPersonName({
+      token: 'share-1',
+      personToken: ALICE_TOKEN,
+      targetId: pid(0),
+      newName: ' Cafe\u0301 ',
+    });
+    expect((savedPeople() as { id: string; name: string; personToken: string }[])[0]).toEqual({
+      id: pid(0),
+      name: 'Café',
+      personToken: ALICE_TOKEN,
+    });
+  });
+});
+
 describe('guest.createClaimSession', () => {
   const session = {
     receiptData: { subtotal: 100, tax: 0, tip: 0, total: 100, currency: 'RUB' },
@@ -1078,12 +1184,29 @@ describe('guest.createClaimSession', () => {
     expect(paidByIndex).toBe(1);
   });
 
-  test('lists a name typed twice once, as first typed, since people join by name', async () => {
+  test('3.6: refuses duplicate entered people instead of silently merging different diners', async () => {
+    await expect(
+      (await caller(signedIn)).createClaimSession({
+        ...session,
+        people: ['Pat', 'dana', ' Dana '],
+        creatorName: 'pat',
+        paidByName: 'PAT',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'nameTaken' });
+    expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+  });
+
+  test('3.6: still resolves creator and payer roles to the same real person, not duplicates', async () => {
     await (
       await caller(signedIn)
-    ).createClaimSession({ ...session, people: ['Pat', 'dana', ' Dana '], creatorName: 'pat', paidByName: 'PAT' });
+    ).createClaimSession({
+      ...session,
+      people: ['Pat', 'Dana'],
+      creatorName: 'pat',
+      paidByName: 'PAT',
+    });
     const { people, paidByIndex } = created();
-    expect(people.map((p) => p.name)).toEqual(['Pat', 'dana']);
+    expect(people.map((p) => p.name)).toEqual(['Pat', 'Dana']);
     expect(paidByIndex).toBe(0);
   });
 

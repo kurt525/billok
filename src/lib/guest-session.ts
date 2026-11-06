@@ -73,8 +73,19 @@ export function setStoredClaimIdentity(shareToken: string, identity: StoredClaim
   }
 }
 
+/** 3.6: one stable Unicode comparison key across creating, joining and renaming.
+ * NFKC removes canonical and compatibility differences (e.g. decomposed accents
+ * and fullwidth Latin), while a fixed locale avoids environment-dependent casing.
+ * Keep the human's display spelling; only this key decides name collisions.
+ */
 export function normalizeGuestName(name: string): string {
-  return name.trim().toLowerCase();
+  return name.normalize('NFKC').trim().toLocaleLowerCase('ru-RU').normalize('NFKC');
+}
+
+/** Duplicate names must be rejected rather than silently merging two diners. */
+export function hasDuplicateGuestNames(names: readonly string[]): boolean {
+  const keys = names.map(normalizeGuestName);
+  return new Set(keys).size !== keys.length;
 }
 
 export function isGuestSessionToken(value: string): boolean {

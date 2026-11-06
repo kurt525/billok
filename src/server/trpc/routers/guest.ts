@@ -30,7 +30,7 @@ import { guestPortionAssignments, type GuestPortionAssignment } from '@/lib/gues
 import { guestPartsConfirmationSnapshot } from '@/lib/guest-parts-confirmation';
 import { guestKnownPartsBalance } from '@/lib/guest-known-parts';
 import { guestPresenceState } from '@/lib/guest-presence';
-import { normalizeGuestName } from '@/lib/guest-session';
+import { hasDuplicateGuestNames, normalizeGuestName } from '@/lib/guest-session';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { MAX_MONEY_CENTS } from '@/lib/money';
 import { normalizeSbpPhone, isSupportedSbpBankId } from '@/lib/sbp-banks';
@@ -572,6 +572,9 @@ export const guestRouter = createTRPCRouter({
       if (filteredPeople.length === 0) {
         throw new AppError('BAD_REQUEST', 'personNameRequired');
       }
+      if (hasDuplicateGuestNames(filteredPeople.map((p) => p.name))) {
+        throw new AppError('CONFLICT', 'nameTaken');
+      }
       const remappedAssignments = input.assignments
         .map((a) => ({
           itemIndex: a.itemIndex,
@@ -741,11 +744,16 @@ export const guestRouter = createTRPCRouter({
       const creatorName = input.creatorName.trim();
       const paidByName = input.paidByName.trim();
 
+      // Duplicate guest rows are rejected; creator and payer references
+      // intentionally point to the same row when the names match.
+      if (hasDuplicateGuestNames(input.people ?? [])) {
+        throw new AppError('CONFLICT', 'nameTaken');
+      }
       const people: IdentifiedGuestPerson[] = [];
       const indexOf = (name: string) =>
         people.findIndex((p) => normalizeGuestName(p.name) === normalizeGuestName(name));
       for (const name of [...(input.people ?? []), creatorName, paidByName]) {
-        if (indexOf(name) < 0) people.push({ id: randomUUID(), name });
+        if (indexOf(name) < 0) people.push({ id: randomUUID(), name: name.normalize('NFC') });
       }
       if (people.length > MAX_SESSION_PEOPLE) {
         throw new AppError('BAD_REQUEST', 'sessionFull', { max: MAX_SESSION_PEOPLE });
@@ -863,6 +871,10 @@ export const guestRouter = createTRPCRouter({
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
 
         const stored = session.people as GuestSessionPerson[];
+        // Never assign a claimant to an ambiguous legacy duplicate name.
+        if (hasDuplicateGuestNames(stored.map((p) => p.name))) {
+          throw new AppError('CONFLICT', 'nameTaken');
+        }
         // People saved without an id get theirs now, and are saved even when the join changes
         // nothing else, so the id returned is the one getSession lists. Done here rather than
         // with savePersonIds, so it's one write in this transaction with the join's own changes.
@@ -947,7 +959,7 @@ export const guestRouter = createTRPCRouter({
           throw new AppError('BAD_REQUEST', 'sessionFull', { max: MAX_SESSION_PEOPLE });
         }
 
-        const name = input.name.trim();
+        const name = input.name.normalize('NFC').trim();
         const personId = randomUUID();
         people.push({
           id: personId,
@@ -1022,6 +1034,9 @@ export const guestRouter = createTRPCRouter({
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionFinalized');
 
         const people = [...(session.people as GuestSessionPerson[])];
+        if (hasDuplicateGuestNames(people.map((p) => p.name))) {
+          throw new AppError('CONFLICT', 'nameTaken');
+        }
         const isParticipant = people.some((p) => p.personToken === input.personToken);
         if (!isParticipant) throw new AppError('FORBIDDEN', 'notParticipant');
         const targetIndex = targetIndexOrThrow(people, input.targetId);
@@ -1032,7 +1047,7 @@ export const guestRouter = createTRPCRouter({
 
         people[targetIndex] = {
           ...people[targetIndex]!,
-          name: input.newName.trim(),
+          name: input.newName.normalize('NFC').trim(),
           ...(input.groupSize != null ? { groupSize: input.groupSize } : {}),
         };
         enforceGuestKnownParts(

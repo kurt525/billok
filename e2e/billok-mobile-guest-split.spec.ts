@@ -2004,6 +2004,93 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
   }
 });
 
+test('Issue 3.6: simultaneous mobile guests cannot claim the same Unicode-normalized receipt name', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const second = await browser.newContext({
+    viewport: { width: 360, height: 640 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  let token: string | undefined;
+  try {
+    const duplicateCreation = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Имена 3.6', subtotal: 1001, tax: 0, tip: 0, total: 1001, currency: 'RUB' },
+      items: [{ name: 'Пицца', quantity: 1, unitPrice: 1001, totalPrice: 1001 }],
+      people: ['Анна', ' Алексей ', 'алексей'],
+      creatorName: 'Анна',
+      paidByName: 'Анна',
+    });
+    expect(duplicateCreation.ok()).toBe(false);
+    expect((await trpcError(duplicateCreation))?.data?.messageKey).toBe('nameTaken');
+
+    const createdRes = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Имена 3.6', subtotal: 1001, tax: 0, tip: 0, total: 1001, currency: 'RUB' },
+      items: [{ name: 'Пицца', quantity: 1, unitPrice: 1001, totalPrice: 1001 }],
+      people: ['Анна', 'Алексей', 'Иван'],
+      creatorName: 'Анна',
+      paidByName: 'Анна',
+      joinCreator: true,
+    });
+    const raw = await createdRes.text();
+    expect(createdRes.ok(), raw).toBe(true);
+    const created = JSON.parse(raw).result.data.json as { shareToken: string };
+    token = created.shareToken;
+
+    // Two independent devices race to occupy the *same* pre-seeded person.
+    // The single GuestSplit-row transaction must grant one token, not two.
+    const attempts = await Promise.all([
+      trpcMutation(page.request, 'guest.joinSession', { token, name: ' Алексей ' }),
+      trpcMutation(second.request, 'guest.joinSession', { token, name: 'алексей' }),
+    ]);
+    expect(attempts.filter((response) => response.ok())).toHaveLength(1);
+    const denied = attempts.find((response) => !response.ok())!;
+    expect((await trpcError(denied))?.data?.messageKey).toBe('joinNameTaken');
+
+    const joinIvan = await trpcMutation(second.request, 'guest.joinSession', { token, name: 'Иван' });
+    const ivanRaw = await joinIvan.text();
+    expect(joinIvan.ok(), ivanRaw).toBe(true);
+    const ivan = JSON.parse(ivanRaw).result.data.json as { personId: string; personToken: string };
+
+    const renameCollision = await trpcMutation(second.request, 'guest.editPersonName', {
+      token,
+      targetId: ivan.personId,
+      personToken: ivan.personToken,
+      newName: ' аЛЕксЕЙ ',
+    });
+    expect(renameCollision.ok()).toBe(false);
+    expect((await trpcError(renameCollision))?.data?.messageKey).toBe('nameTaken');
+
+    const data = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(data.people.map((person: { name: string }) => person.name)).toEqual(['Анна', 'Алексей', 'Иван']);
+    expect(
+      data.people.filter(
+        (person: { name: string; hasJoined: boolean }) => person.name === 'Алексей' && person.hasJoined,
+      ),
+    ).toHaveLength(1);
+    expect(data.receiptData.total).toBe(1001);
+
+    // A longer qualifying name is distinct and may be assigned in this receipt.
+    const renamed = await trpcMutation(second.request, 'guest.editPersonName', {
+      token,
+      targetId: ivan.personId,
+      personToken: ivan.personToken,
+      newName: 'Алексей П.',
+    });
+    expect(renamed.ok(), await renamed.text()).toBe(true);
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await expect(page.getByText('Алексей П.').first()).toBeVisible({ timeout: 15_000 });
+    await fitsPhone(page);
+  } finally {
+    if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await second.close();
+    await owner.dispose();
+  }
+});
+
 test('Issue 3.5: organizer sees joined, live, lost and reconnected mobile guests without refresh', async ({
   page,
   browser,
