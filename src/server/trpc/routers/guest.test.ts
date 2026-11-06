@@ -476,6 +476,7 @@ type TestPerson = {
   accountUserId?: string;
   guestSlotNumber?: number;
   reservedOwner?: boolean;
+  personalLinkReadyAt?: string;
   groupSize?: number;
   tipCents?: number;
   join?: { key: string; name: string; expiresAt: number };
@@ -1287,6 +1288,176 @@ describe('Issue 3.6: no two people share a display name inside one receipt', () 
       name: 'Café',
       personToken: ALICE_TOKEN,
     });
+  });
+});
+
+describe('Issue 3.8.1: personal link only after the guest saves a real change', () => {
+  const data = {
+    subtotal: 1500,
+    tax: 0,
+    tip: 0,
+    total: 1500,
+    currency: 'RUB',
+    guestSlotsMode: true,
+    guestCount: 2,
+    organizerPersonId: pid(0),
+  };
+  const people: TestPerson[] = [
+    { name: 'Создатель', personToken: OTHER_TOKEN, accountUserId: 'user-1' },
+    { name: 'Андрей', personToken: ALICE_TOKEN, guestSlotNumber: 1 },
+    { name: 'Гость 2', guestSlotNumber: 2 },
+  ];
+  const items = [{ name: 'Чай', quantity: 1, unitPrice: 1500, totalPrice: 1500 }];
+  beforeEach(() => claimSession(people, { receiptData: data, items }));
+
+  test('the invitation and initial slot claim do not publish a personal-link readiness bit or secret', async () => {
+    const result = await (await caller()).getSession({ token: 'share-1' });
+    expect(result.people[1]).toMatchObject({ guestSlotNumber: 1, personalLinkReady: false, hasJoined: true });
+    expect(result.people[2]).toMatchObject({ guestSlotNumber: 2, personalLinkReady: false, hasJoined: false });
+    const json = JSON.stringify(result);
+    expect(json).not.toContain(ALICE_TOKEN);
+    expect(json).not.toContain('personalLinkReadyAt');
+    expect(json).not.toContain('accountUserId');
+  });
+
+  test('guest saves own changed name, then the same person becomes eligible', async () => {
+    await (
+      await caller()
+    ).editPersonName({
+      token: 'share-1',
+      personToken: ALICE_TOKEN,
+      targetId: pid(1),
+      newName: 'Андрей П.',
+    });
+    const saved = savedPeople() as TestPerson[];
+    expect(saved[1]).toMatchObject({
+      id: pid(1),
+      guestSlotNumber: 1,
+      personToken: ALICE_TOKEN,
+      name: 'Андрей П.',
+      personalLinkReadyAt: expect.any(String),
+    });
+    expect(saved[0]?.personalLinkReadyAt).toBeUndefined();
+    expect(saved[2]?.personalLinkReadyAt).toBeUndefined();
+    claimSession(saved, { receiptData: data, items });
+    const visible = await (await caller()).getSession({ token: 'share-1' });
+    expect(visible.people[1]).toMatchObject({ id: pid(1), personalLinkReady: true });
+    expect(JSON.stringify(visible)).not.toContain(ALICE_TOKEN);
+  });
+
+  test('creator renaming guest is NOT the guest first saved action', async () => {
+    await (
+      await caller(signedIn)
+    ).editPersonName({
+      token: 'share-1',
+      targetId: pid(1),
+      newName: 'Андрей Иванов',
+    });
+    expect((savedPeople() as TestPerson[])[1]?.personalLinkReadyAt).toBeUndefined();
+  });
+
+  test('saving the exact same name without a change does not unlock the personal link', async () => {
+    await (
+      await caller()
+    ).editPersonName({
+      token: 'share-1',
+      personToken: ALICE_TOKEN,
+      targetId: pid(1),
+      newName: 'Андрей',
+    });
+    expect((savedPeople() as TestPerson[])[1]?.personalLinkReadyAt).toBeUndefined();
+  });
+
+  test('a real voluntary tip change unlocks the link; zero-to-zero does not', async () => {
+    const guest = { token: 'share-1', personId: pid(1), personToken: ALICE_TOKEN };
+    await (await caller()).setPersonalTip({ ...guest, tipCents: 0 });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    await (await caller()).setPersonalTip({ ...guest, tipCents: 275 });
+    expect((savedPeople() as TestPerson[])[1]).toMatchObject({
+      personToken: ALICE_TOKEN,
+      tipCents: 275,
+      personalLinkReadyAt: expect.any(String),
+    });
+  });
+
+  test('saving your first selected dish unlocks the link without changing anyone else', async () => {
+    await (
+      await caller()
+    ).claimItems({
+      token: 'share-1',
+      personId: pid(1),
+      personToken: ALICE_TOKEN,
+      addItemIndices: [0],
+      removeItemIndices: [],
+      saveKey: JOIN_KEY,
+    });
+    const saved = savedPeople() as TestPerson[];
+    expect(saved[1]).toMatchObject({
+      id: pid(1),
+      personToken: ALICE_TOKEN,
+      personalLinkReadyAt: expect.any(String),
+    });
+    expect(saved[0]?.personalLinkReadyAt).toBeUndefined();
+    expect(saved[2]?.personalLinkReadyAt).toBeUndefined();
+  });
+
+  test('no-op save of an empty claim set does not unlock the link', async () => {
+    await (
+      await caller()
+    ).claimItems({
+      token: 'share-1',
+      personId: pid(1),
+      personToken: ALICE_TOKEN,
+      claimedItemIndices: [],
+    });
+    expect(savedPeople()).toBeUndefined();
+    expect(mockDb.guestSplit.update.mock.calls[0]![0].data).not.toHaveProperty('people');
+  });
+
+  test('guest first saved own portion count unlocks, without modifying other people', async () => {
+    claimSession(people, {
+      receiptData: data,
+      items,
+      assignments: [{ itemIndex: 0, personIndices: [1] }],
+    });
+    await (
+      await caller()
+    ).setMyItemParts({
+      token: 'share-1',
+      personId: pid(1),
+      personToken: ALICE_TOKEN,
+      itemIndex: 0,
+      parts: 1,
+    });
+    expect((savedPeople() as TestPerson[])[1]).toMatchObject({
+      personToken: ALICE_TOKEN,
+      personalLinkReadyAt: expect.any(String),
+    });
+    const payload = mockDb.guestSplit.update.mock.calls[0]![0].data;
+    expect(payload).not.toHaveProperty('paidByIndex');
+    expect(payload.assignments).toMatchObject([{ itemIndex: 0, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } }]);
+  });
+
+  test('changing another person allocation with own token cannot unlock target recovery link', async () => {
+    await (
+      await caller()
+    ).claimItems({
+      token: 'share-1',
+      personId: pid(0),
+      personToken: ALICE_TOKEN,
+      addItemIndices: [0],
+      removeItemIndices: [],
+      saveKey: JOIN_KEY,
+    });
+    const saved = savedPeople() as TestPerson[];
+    expect(saved[1]?.personalLinkReadyAt).toBeUndefined();
+    expect(saved[0]?.personalLinkReadyAt).toBeUndefined();
+  });
+
+  test('legacy named guest does not need first action eligibility to preserve old personal links', async () => {
+    claimSession([{ name: 'Андрей', personToken: ALICE_TOKEN }], { items });
+    const session = await (await caller()).getSession({ token: 'share-1' });
+    expect(session.people[0]).not.toHaveProperty('personalLinkReady');
   });
 });
 

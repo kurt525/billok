@@ -1280,9 +1280,14 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     personalTipCents <= MAX_MONEY_CENTS &&
     !/[.,]\d{3,}/.test(personalTipValue);
 
-  // This person's own link for their other devices (joined or finalized view), with the
-  // warning shown before anything is sent
-  const personalLinkButton = personToken && (
+  // 3.8.1: a fixed guest slot gets its own recovery link only after the
+  // server confirms its first real saved action. Legacy named receipts and
+  // the account-bound creator (not a guest slot) keep existing behavior.
+  const myFixedSlot = myPersonIndex === null ? null : data.people[myPersonIndex];
+  const personalLinkAvailable =
+    !data.receiptData.guestSlotsMode ||
+    (myFixedSlot != null && (myFixedSlot.guestSlotNumber === undefined || myFixedSlot.personalLinkReady === true));
+  const personalLinkButton = personToken && personalLinkAvailable && (
     <Button
       type="button"
       variant="outline"
@@ -1295,11 +1300,18 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       {t('continueOnAnotherDevice')}
     </Button>
   );
-  const personalLinkHint = personToken && (
-    <p className="text-xs text-muted-foreground" data-testid="personal-link-hint">
-      {t('personalLinkHint')}
-    </p>
-  );
+  const personalLinkHint =
+    personToken && !personalLinkAvailable ? (
+      <p className="text-xs text-muted-foreground" data-testid="personal-link-pending">
+        {t('personalLinkAfterSave')}
+      </p>
+    ) : (
+      personToken && (
+        <p className="text-xs text-muted-foreground" data-testid="personal-link-hint">
+          {t('personalLinkHint')}
+        </p>
+      )
+    );
 
   // Asks before this device becomes the person a personal link names. If this device joined
   // as someone else, says so: continuing replaces them here, and only their own personal link

@@ -186,13 +186,27 @@ function toPublicPeople(people: GuestSessionPerson[]) {
 
 // The claim page's view of the people: public fields plus each person's id, which it uses to
 // target them (their index changes when someone listed before them is removed)
+/** 3.8.1: the shared invite and the slot claim alone are not a saved
+ * personal action. Mark eligibility only in the same successful transaction
+ * as a real change authored by this guest's own personal token. */
+function markPersonalLinkReady(person: GuestSessionPerson): GuestSessionPerson {
+  return person.guestSlotNumber !== undefined && !!person.personToken && !person.personalLinkReadyAt
+    ? { ...person, personalLinkReadyAt: new Date().toISOString() }
+    : person;
+}
+
 function toClaimPeople(people: IdentifiedGuestPerson[]) {
   return people.map((person) => ({
     id: person.id,
     ...toPublicPerson(person),
     // Fixed slot number is safe and necessary for the shared-link UI. The
     // accountUserId and reservedOwner marker remain server-only.
-    ...(person.guestSlotNumber !== undefined ? { guestSlotNumber: person.guestSlotNumber } : {}),
+    ...(person.guestSlotNumber !== undefined
+      ? {
+          guestSlotNumber: person.guestSlotNumber,
+          personalLinkReady: !!person.personalLinkReadyAt,
+        }
+      : {}),
     tipCents: person.tipCents ?? 0,
   }));
 }
@@ -1411,11 +1425,13 @@ export const guestRouter = createTRPCRouter({
         const conflict = people.findIndex((p, i) => i !== targetIndex && normalizeGuestName(p.name) === normalizedNew);
         if (conflict >= 0) throw new AppError('CONFLICT', 'nameTaken');
 
-        people[targetIndex] = {
-          ...people[targetIndex]!,
+        const previous = people[targetIndex]!;
+        const renamed = {
+          ...previous,
           name: input.newName.normalize('NFC').trim(),
           ...(input.groupSize != null ? { groupSize: input.groupSize } : {}),
         };
+        people[targetIndex] = isSelf && previous.name !== renamed.name ? markPersonalLinkReady(renamed) : renamed;
         enforceGuestKnownParts(
           parseGuestItems(session.items),
           people,
@@ -1624,7 +1640,7 @@ export const guestRouter = createTRPCRouter({
         // no-op. Different devices are serialized through guestTransaction.
         if ((people[personIndex]!.tipCents ?? 0) !== input.tipCents) {
           const updated = people.map((person, index) =>
-            index === personIndex ? { ...person, tipCents: input.tipCents } : person,
+            index === personIndex ? markPersonalLinkReady({ ...person, tipCents: input.tipCents }) : person,
           );
           await tx.guestSplit.update({
             where: { id: session.id },
@@ -1694,6 +1710,13 @@ export const guestRouter = createTRPCRouter({
             where: { id: session.id },
             data: {
               assignments: assignments as unknown as Prisma.InputJsonValue,
+              ...(!people[personIndex]!.personalLinkReadyAt && people[personIndex]!.guestSlotNumber !== undefined
+                ? {
+                    people: people.map((person, index) =>
+                      index === personIndex ? markPersonalLinkReady(person) : person,
+                    ) as unknown as Prisma.InputJsonValue,
+                  }
+                : {}),
               ...invalidatePartsApproval(session.receiptData),
             },
           });
@@ -1780,6 +1803,9 @@ export const guestRouter = createTRPCRouter({
         }
 
         const assignments = cloneAssignments(session.assignments as GuestPortionAssignment[]);
+        const earlierClaims = new Set(
+          assignments.filter((a) => a.personIndices.includes(personIndex)).map((a) => a.itemIndex),
+        );
 
         // The person's claims after this save: the set sent, or what is stored now with the
         // changes applied
@@ -1822,11 +1848,19 @@ export const guestRouter = createTRPCRouter({
         );
 
         // The save key goes on the caller's person with this save, newest last
-        const withSaveKey = save
-          ? people.map((person, index) =>
-              index === callerIndex ? { ...person, saves: [...callerSaves, save].slice(-SAVE_KEYS_KEPT) } : person,
-            )
-          : null;
+        const actualOwnEdit =
+          callerIndex === personIndex &&
+          (earlierClaims.size !== claimedSet.size || [...claimedSet].some((item) => !earlierClaims.has(item)));
+        const withSaveKey =
+          save || actualOwnEdit
+            ? people.map((person, index) => {
+                const withSave =
+                  save && index === callerIndex
+                    ? { ...person, saves: [...callerSaves, save].slice(-SAVE_KEYS_KEPT) }
+                    : person;
+                return index === personIndex && actualOwnEdit ? markPersonalLinkReady(withSave) : withSave;
+              })
+            : null;
 
         await tx.guestSplit.update({
           where: { id: session.id },

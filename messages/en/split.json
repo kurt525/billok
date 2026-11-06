@@ -257,7 +257,8 @@
     "noGuestPlacesLeft": "All guest places are taken. Contact the receipt creator.",
     "guestPlaceJoined": "You have joined this receipt",
     "guestPlaceConflict": "Someone else took this place. Choose another available place.",
-    "recoverRegisteredPlace": "Recover my place through my account"
+    "recoverRegisteredPlace": "Recover my place through my account",
+    "personalLinkAfterSave": "Your personal link becomes available after you save your first actual change to your name, dishes, portions, or tip."
   },
   "result": {
     "loading": "Loading split...",

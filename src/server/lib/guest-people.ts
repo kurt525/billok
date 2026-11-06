@@ -27,6 +27,9 @@ export type GuestSessionPerson = {
   // Trusted server-only marker for the uniquely reserved BillOK-owner name.
   // A registered creator named Илья is not necessarily the site owner.
   reservedOwner?: boolean;
+  // Server-only timestamp: the participant personally saved their first
+  // real edit. Until then 3.8 does not offer a recovery link.
+  personalLinkReadyAt?: string;
   groupSize?: number; // defaults to 1, > 1 means this person represents a group
   // Voluntary tip personally chosen for this receipt, integer RUB kopecks; missing = 0.
   tipCents?: number;
