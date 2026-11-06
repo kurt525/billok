@@ -238,7 +238,8 @@
     "knownPartsClear": "Clear",
     "knownPartsSaved": "Original portion count saved.",
     "knownPartsOverLimit": "Claims exceed the known original count. Correct the claims or original count.",
-    "knownPartsNotFullyClaimed": "Known portions remain unassigned. The creator must assign the remainder or correct the count."
+    "knownPartsNotFullyClaimed": "Known portions remain unassigned. The creator must assign the remainder or correct the count.",
+    "nameChangedNotice": "Your name in this receipt was changed to: {name}"
   },
   "result": {
     "loading": "Loading split...",

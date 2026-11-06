@@ -44,6 +44,54 @@ import {
   type IdentifiedGuestPerson,
 } from '../../lib/guest-people';
 
+/** 3.6.1: the owner's verified server account, never the supplied display name
+ * or an impersonated session. ADMIN_EMAIL is the existing trusted owner account
+ * configuration; checking the fetched user id prevents spoofing with a guest name.
+ * Activation is restricted to the configured owner's profile name «Илья».
+ */
+const RESERVED_OWNER_NAME = 'Илья';
+const RESERVED_OWNER_KEY = normalizeGuestName(RESERVED_OWNER_NAME);
+
+async function billokOwnerUserId(ctx: {
+  session?: { user?: { id?: string | null } | null } | null;
+  impersonating?: unknown;
+  db: typeof import('@/server/db').db;
+}): Promise<string | null> {
+  const userId = ctx.session?.user?.id;
+  const ownerEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  if (!userId || !ownerEmail || ctx.impersonating) return null;
+  const account = await ctx.db.user.findUnique({
+    where: { id: userId },
+    select: { email: true, name: true, suspendedAt: true },
+  });
+  return account?.email?.trim().toLowerCase() === ownerEmail &&
+    normalizeGuestName(account.name ?? '') === RESERVED_OWNER_KEY &&
+    !account.suspendedAt
+    ? userId
+    : null;
+}
+
+/** Rename only the colliding display label, never the underlying token,
+ * account binding or any shares. Call exclusively inside guestTransaction.
+ */
+function freeOwnerName(people: IdentifiedGuestPerson[], ownerIndex: number): boolean {
+  const occupied = new Set(people.map((person) => normalizeGuestName(person.name)));
+  let changed = false;
+  for (let i = 0; i < people.length; i++) {
+    if (i === ownerIndex || normalizeGuestName(people[i]!.name) !== RESERVED_OWNER_KEY) continue;
+    let suffix = 2;
+    let candidate = `${RESERVED_OWNER_NAME} (${suffix})`;
+    while (occupied.has(normalizeGuestName(candidate))) {
+      suffix++;
+      candidate = `${RESERVED_OWNER_NAME} (${suffix})`;
+    }
+    occupied.add(normalizeGuestName(candidate));
+    people[i] = { ...people[i]!, name: candidate };
+    changed = true;
+  }
+  return changed;
+}
+
 async function getCreatorPayerVenmoHandle(
   db: typeof import('@/server/db').db,
   userId: string | undefined | null,
@@ -741,7 +789,8 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'sessionsRateLimited');
       }
 
-      const creatorName = input.creatorName.trim();
+      const ownerId = await billokOwnerUserId(ctx);
+      const creatorName = ownerId ? RESERVED_OWNER_NAME : input.creatorName.trim();
       const paidByName = input.paidByName.trim();
 
       // Duplicate guest rows are rejected; creator and payer references
@@ -762,6 +811,10 @@ export const guestRouter = createTRPCRouter({
       // A persistent participant ID identifies the creator even if names are
       // edited and the payer is a different person or appears earlier in the list.
       const organizerPersonId = people[indexOf(creatorName)]!.id;
+      if (ownerId) {
+        const idx = indexOf(RESERVED_OWNER_NAME);
+        people[idx] = { ...people[idx]!, accountUserId: ownerId };
+      }
 
       // Everyone else gets a token the first time they join this session
       let creator: { personId: string; personToken: string; name: string } | null = null;
@@ -862,6 +915,7 @@ export const guestRouter = createTRPCRouter({
       if (!checkJoinRateLimit(input.token, input.name, input.personToken)) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
+      const ownerId = await billokOwnerUserId(ctx);
       return guestTransaction(ctx.db, async (tx) => {
         const session = await tx.guestSplit.findUnique({
           where: { shareToken: input.token },
@@ -897,11 +951,65 @@ export const guestRouter = createTRPCRouter({
           });
         };
         const normalizedName = normalizeGuestName(input.name);
+        const holderIndex = input.personToken ? people.findIndex((p) => p.personToken === input.personToken) : -1;
+
+        if (ownerId) {
+          // Recover only the account-bound owner row. A guest personal token
+          // must NOT implicitly convert some other diner's place into the
+          // owner's account; explicit conversion belongs to 3.8.
+          const ownIndex = people.findIndex((p) => p.accountUserId === ownerId);
+          if (ownIndex < 0 && people.length >= MAX_SESSION_PEOPLE) {
+            throw new AppError('BAD_REQUEST', 'sessionFull', { max: MAX_SESSION_PEOPLE });
+          }
+          const renamedAnother = freeOwnerName(people, ownIndex);
+          const previous = ownIndex >= 0 ? people[ownIndex]! : null;
+          const personToken = previous?.personToken ?? randomUUID();
+          const finalIndex = ownIndex >= 0 ? ownIndex : people.length;
+          const desiredGroupSize = input.groupSize ?? previous?.groupSize;
+          if (previous) {
+            people[ownIndex] = {
+              ...previous,
+              name: RESERVED_OWNER_NAME,
+              accountUserId: ownerId,
+              personToken,
+              ...(desiredGroupSize !== undefined ? { groupSize: desiredGroupSize } : {}),
+            };
+          } else {
+            people.push({
+              id: randomUUID(),
+              name: RESERVED_OWNER_NAME,
+              accountUserId: ownerId,
+              personToken,
+              ...(input.groupSize != null ? { groupSize: input.groupSize } : {}),
+            });
+          }
+          // Don't revoke an organizer's approved parts snapshot just because
+          // the same account reopened the receipt on another device.
+          if (
+            !previous ||
+            renamedAnother ||
+            idsMissing ||
+            previous.name !== RESERVED_OWNER_NAME ||
+            !previous.personToken ||
+            previous.groupSize !== desiredGroupSize
+          )
+            await savePeople();
+          const owner = people[finalIndex]!;
+          return { personIndex: finalIndex, personId: owner.id, personToken, name: RESERVED_OWNER_NAME };
+        }
+
+        // Once the owner actually participates in this receipt, the reserved
+        // name may never be claimed by another account or guest.
+        const ownerIndex = people.findIndex(
+          (p) => !!p.accountUserId && normalizeGuestName(p.name) === RESERVED_OWNER_KEY,
+        );
+        if (ownerIndex >= 0 && normalizedName === RESERVED_OWNER_KEY && holderIndex !== ownerIndex) {
+          throw new AppError('CONFLICT', 'nameTaken');
+        }
 
         // The caller already is someone, by the token their device stored: return them under their
         // current name (anyone may have renamed them), whatever name was typed. Checked before a
         // join-key replay, so the device's current identity wins (e.g. another tab joined meanwhile).
-        const holderIndex = input.personToken ? people.findIndex((p) => p.personToken === input.personToken) : -1;
         if (holderIndex >= 0) {
           const holder = people[holderIndex]!;
           // Update groupSize on rejoin only if explicitly provided and different
@@ -942,7 +1050,7 @@ export const guestRouter = createTRPCRouter({
           const existingPerson = people[existingIndex]!;
           // Someone has already joined as this person, and the caller doesn't hold their token.
           // Refuse, or anyone with the link could take over their identity by name.
-          if (existingPerson.personToken) {
+          if (existingPerson.personToken || existingPerson.accountUserId) {
             throw new AppError('CONFLICT', 'joinNameTaken');
           }
           people[existingIndex] = {
@@ -1042,6 +1150,15 @@ export const guestRouter = createTRPCRouter({
         const targetIndex = targetIndexOrThrow(people, input.targetId);
 
         const normalizedNew = normalizeGuestName(input.newName);
+        const boundOwnerIndex = people.findIndex(
+          (p) => !!p.accountUserId && normalizeGuestName(p.name) === RESERVED_OWNER_KEY,
+        );
+        if (
+          (boundOwnerIndex >= 0 && normalizedNew === RESERVED_OWNER_KEY && targetIndex !== boundOwnerIndex) ||
+          (boundOwnerIndex === targetIndex && input.newName.trim() !== RESERVED_OWNER_NAME)
+        ) {
+          throw new AppError('CONFLICT', 'nameTaken');
+        }
         const conflict = people.findIndex((p, i) => i !== targetIndex && normalizeGuestName(p.name) === normalizedNew);
         if (conflict >= 0) throw new AppError('CONFLICT', 'nameTaken');
 
@@ -1093,6 +1210,10 @@ export const guestRouter = createTRPCRouter({
         const isParticipant = people.some((p) => p.personToken === input.personToken);
         if (!isParticipant) throw new AppError('FORBIDDEN', 'notParticipant');
         const targetIndex = targetIndexOrThrow(people, input.targetId);
+        // No other person's guest token may eject the account-bound owner.
+        if (people[targetIndex]?.accountUserId && people[targetIndex]?.personToken !== input.personToken) {
+          throw new AppError('FORBIDDEN', 'notParticipant');
+        }
         if (people.length <= 1) throw new AppError('BAD_REQUEST', 'cannotRemoveLastPerson');
 
         const removedPersonId = people[targetIndex]?.id;

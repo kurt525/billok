@@ -18,6 +18,9 @@ export type GuestSessionPerson = {
   id?: string;
   name: string;
   personToken?: string;
+  // Server-only identity binding for the BillOK owner. Public person serializers
+  // must never expose this user id; guests cannot assign it via any API input.
+  accountUserId?: string;
   groupSize?: number; // defaults to 1, > 1 means this person represents a group
   // Voluntary tip personally chosen for this receipt, integer RUB kopecks; missing = 0.
   tipCents?: number;

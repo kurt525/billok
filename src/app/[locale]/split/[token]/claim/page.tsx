@@ -294,6 +294,19 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const personIndex = (activePersonId === null ? undefined : indexById.get(activePersonId)) ?? myPersonIndex;
   const activeId = personIndex === null ? null : (session.data?.people[personIndex]?.id ?? null);
 
+  // 3.6.1: when the verified BillOK owner joins after a guest named Илья,
+  // the server changes only that guest's label. Inform the holder on their
+  // next session poll; never alter their token, person ID or assigned shares.
+  // This also reports a creator's later correction of the guest's name.
+  useEffect(() => {
+    if (!identity || !session.data) return;
+    const current = session.data.people.find((person) => person.id === identity.personId);
+    const stored = getStoredClaimIdentity(token);
+    if (!current || !stored || stored.personToken !== identity.personToken || stored.name === current.name) return;
+    setStoredClaimIdentity(token, { name: current.name, personToken: identity.personToken });
+    toast.info(t('nameChangedNotice', { name: current.name }));
+  }, [identity, session.data, token, t]);
+
   function setIdentity(next: { personId: string; personToken: string } | null) {
     identityRef.current = next;
     setIdentityState(next);

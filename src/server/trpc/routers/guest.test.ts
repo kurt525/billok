@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('next/headers', () => ({
   cookies: vi.fn().mockResolvedValue({ get: vi.fn().mockReturnValue(null) }),
@@ -473,6 +473,7 @@ type TestPerson = {
   id?: string;
   name: string;
   personToken?: string;
+  accountUserId?: string;
   groupSize?: number;
   tipCents?: number;
   join?: { key: string; name: string; expiresAt: number };
@@ -1003,6 +1004,175 @@ describe('guest.getSession people', () => {
     expect(JSON.stringify(split)).not.toContain(ALICE_TOKEN);
     expect(JSON.stringify(split)).not.toContain(JOIN_KEY);
     expect(JSON.stringify(split)).not.toContain(ALICE_SAVE.key);
+  });
+});
+
+describe('Issue 3.6.1: reserved owner name Илья, verified by account, not guest input', () => {
+  const ownerAccount = { user: { id: 'billok-owner' } };
+  const outsiderAccount = { user: { id: 'other-account' } };
+  const ownerUser = { email: 'owner@example.com', name: 'Илья', suspendedAt: null };
+  const nonOwner = { email: 'another@example.com', name: 'Илья', suspendedAt: null };
+  const receiptData = { subtotal: 100, tax: 0, tip: 0, total: 100, currency: 'RUB' };
+  const items = [{ name: 'Чай', quantity: 1, unitPrice: 100, totalPrice: 100 }];
+
+  beforeEach(() => {
+    vi.stubEnv('ADMIN_EMAIL', 'owner@example.com');
+    mockDb.user.findUnique.mockImplementation(async (args: { where: { id: string } }) =>
+      args.where.id === 'billok-owner' ? ownerUser : nonOwner,
+    );
+    mockDb.guestSplit.create.mockResolvedValue({ id: 'fresh', shareToken: 'fresh-share' });
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  test('owner creating a receipt gets reserved name even if payer differs; creator is bound by account id', async () => {
+    const created = await (
+      await caller(ownerAccount)
+    ).createClaimSession({
+      receiptData,
+      items,
+      people: ['Сергей', 'Илья'],
+      creatorName: 'Сергей',
+      paidByName: 'Сергей',
+      joinCreator: true,
+    });
+    const payload = mockDb.guestSplit.create.mock.calls[0]![0].data as {
+      people: TestPerson[];
+      receiptData: { organizerPersonId: string };
+      paidByIndex: number;
+    };
+    expect(payload.people.map((p) => p.name)).toEqual(['Сергей', 'Илья']);
+    expect(payload.people[1]).toMatchObject({
+      id: payload.receiptData.organizerPersonId,
+      name: 'Илья',
+      accountUserId: 'billok-owner',
+      personToken: created.creator?.personToken,
+    });
+    expect(payload.paidByIndex).toBe(0);
+    expect(created.creator?.name).toBe('Илья');
+    // The account binding is never part of the public response.
+    expect(JSON.stringify(created)).not.toContain('billok-owner');
+  });
+
+  test('an unjoined owner row cannot be taken by someone who merely enters Илья', async () => {
+    claimSession([{ name: 'Илья', accountUserId: 'billok-owner' }, { name: 'Гость 1' }]);
+    await expect(
+      (await caller(outsiderAccount)).joinSession({
+        token: 'share-1',
+        name: ' ИЛЬЯ ',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    const actualOwner = await (await caller(ownerAccount)).joinSession({ token: 'share-1', name: 'Илья' });
+    expect(actualOwner.name).toBe('Илья');
+    expect(actualOwner.personIndex).toBe(0);
+    expect((savedPeople() as TestPerson[])[0]?.accountUserId).toBe('billok-owner');
+  });
+
+  test('guest entered first: rename its label only, preserve ID, token, personal tip and all shares', async () => {
+    claimSession(
+      [
+        { name: 'Создатель', personToken: OTHER_TOKEN },
+        { name: ' илья ', personToken: ALICE_TOKEN, tipCents: 125, groupSize: 2 },
+        { name: 'Илья (2)' },
+      ],
+      { items, assignments: [{ itemIndex: 0, personIndices: [1] }] },
+    );
+    const owner = await (await caller(ownerAccount)).joinSession({ token: 'share-1', name: ' ИЛЬЯ ' });
+    expect(owner.name).toBe('Илья');
+    expect(owner.personIndex).toBe(3);
+    const people = savedPeople() as TestPerson[];
+    expect(people[1]).toMatchObject({
+      id: pid(1),
+      name: 'Илья (3)',
+      personToken: ALICE_TOKEN,
+      tipCents: 125,
+      groupSize: 2,
+    });
+    expect(people[3]).toMatchObject({ accountUserId: 'billok-owner', name: 'Илья' });
+    expect(new Set(people.map((p) => p.name.trim().toLocaleLowerCase('ru-RU'))).size).toBe(4);
+    expect(mockDb.guestSplit.update.mock.calls[0]![0].data.assignments).toBeUndefined();
+    expect(mockDb.guestSplit.update.mock.calls[0]![0].data.paidByIndex).toBeUndefined();
+  });
+
+  test('owner first: other users cannot claim or rename a different row to Илья', async () => {
+    claimSession([
+      { name: 'Илья', personToken: ALICE_TOKEN, accountUserId: 'billok-owner' },
+      { name: 'Сергей', personToken: OTHER_TOKEN },
+    ]);
+    await expect((await caller()).joinSession({ token: 'share-1', name: ' иЛьЯ ' })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      messageKey: 'nameTaken',
+    });
+    await expect(
+      (await caller()).editPersonName({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        targetId: pid(1),
+        newName: ' ИЛЬЯ ',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'nameTaken' });
+    await expect(
+      (await caller()).editPersonName({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        targetId: pid(0),
+        newName: 'Другое',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'nameTaken' });
+    await expect(
+      (await caller()).editPersonName({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        targetId: pid(0),
+        newName: 'ИЛЬЯ',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'nameTaken' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('reentry by the same owner account uses exactly the old row and token, with no needless write', async () => {
+    claimSession([{ name: 'Илья', personToken: ALICE_TOKEN, accountUserId: 'billok-owner' }, { name: 'Гость 1' }]);
+    const result = await (await caller(ownerAccount)).joinSession({ token: 'share-1', name: 'Случайный текст' });
+    expect(result).toEqual({ personIndex: 0, personId: pid(0), personToken: ALICE_TOKEN, name: 'Илья' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('another name Илья is allowed in a receipt with no participating owner', async () => {
+    claimSession([{ name: 'Создатель' }], { userId: 'billok-owner' });
+    const result = await (await caller(outsiderAccount)).joinSession({ token: 'share-1', name: 'Илья' });
+    expect(result.name).toBe('Илья');
+    expect((savedPeople() as TestPerson[])[1]?.accountUserId).toBeUndefined();
+  });
+
+  test('the name or ADMIN_EMAIL alone is not enough; a wrong account has no privilege', async () => {
+    claimSession([{ name: 'Илья', personToken: ALICE_TOKEN }]);
+    await expect((await caller(outsiderAccount)).joinSession({ token: 'share-1', name: 'Илья' })).rejects.toMatchObject(
+      { code: 'CONFLICT', messageKey: 'joinNameTaken' },
+    );
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('an ordinary guest cannot remove the owner bound to the reserved row', async () => {
+    claimSession([
+      { name: 'Илья', personToken: ALICE_TOKEN, accountUserId: 'billok-owner' },
+      { name: 'Гость', personToken: OTHER_TOKEN },
+    ]);
+    await expect(
+      (await caller()).removePerson({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        targetId: pid(0),
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('public session never exposes the owner userId even if its row is account bound', async () => {
+    claimSession([{ name: 'Илья', personToken: ALICE_TOKEN, accountUserId: 'billok-owner' }]);
+    const result = await (await caller()).getSession({ token: 'share-1' });
+    expect(JSON.stringify(result)).not.toContain('billok-owner');
+    expect(result.people[0]?.name).toBe('Илья');
+    expect(result.people[0]).not.toHaveProperty('accountUserId');
   });
 });
 
