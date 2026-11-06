@@ -86,11 +86,13 @@ describe('Expense split modes at narrow Android widths', () => {
 });
 
 describe('Guest participant name inputs stay within 40 characters', () => {
-  it('limits creator-provided names, join name and own renamed name in all forms', () => {
+  it('limits creator-provided names, join name, guest self-rename and organizer correction in all forms', () => {
     const create = read('src/app/[locale]/split/page.tsx');
     const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
     expect(create).toContain('maxLength={MAX_GUEST_NAME_LENGTH}');
-    expect(claim.match(/maxLength=\{MAX_GUEST_NAME_LENGTH\}/g)).toHaveLength(2);
+    // 3.6.2 adds a separate no-guest-token rename form for the bill creator.
+    expect(claim.match(/maxLength=\{MAX_GUEST_NAME_LENGTH\}/g)).toHaveLength(3);
+    expect(claim).toContain("data-testid={'creator-edit-name-input-' + idx}");
     expect(create).toContain("import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit'");
     expect(claim).toContain("import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit'");
   });

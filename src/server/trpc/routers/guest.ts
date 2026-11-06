@@ -1083,7 +1083,7 @@ export const guestRouter = createTRPCRouter({
     }),
 
   // How a returning device finds its person: by the token it stored when it joined, not by
-  // name, since anyone in the session can rename anyone. A mutation so the token travels in
+  // name, since the receipt creator may correct a guest's name. A mutation so the token travels in
   // the request body, not a URL. Returns null when nobody holds the token any more. Doesn't
   // require CLAIMING: it only maps a token the caller holds to the index, id and name getSession
   // already shows, and the claim page also calls it on finalized splits (personal links work
@@ -1122,7 +1122,9 @@ export const guestRouter = createTRPCRouter({
     .input(
       z.object({
         token: shareTokenSchema,
-        personToken: z.string().uuid(),
+        // Optional only for the signed-in receipt creator: their own account
+        // grants permission, no guest token belonging to somebody else needed.
+        personToken: z.string().uuid().optional(),
         // Who to rename, by id (see targetIndexOrThrow)
         targetId: personIdSchema,
         newName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
@@ -1130,7 +1132,14 @@ export const guestRouter = createTRPCRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      if (!checkClaimWriteRateLimit('edit-name', input.token, input.personToken)) {
+      if (
+        !checkClaimWriteRateLimit(
+          'edit-name',
+          input.token,
+          // A named, bounded bucket for signed-in creators without guest tokens.
+          input.personToken ?? (ctx.session?.user?.id ? `creator:${ctx.session.user.id}` : 'anonymous'),
+        )
+      ) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       return guestTransaction(ctx.db, async (tx) => {
@@ -1145,9 +1154,20 @@ export const guestRouter = createTRPCRouter({
         if (hasDuplicateGuestNames(people.map((p) => p.name))) {
           throw new AppError('CONFLICT', 'nameTaken');
         }
-        const isParticipant = people.some((p) => p.personToken === input.personToken);
-        if (!isParticipant) throw new AppError('FORBIDDEN', 'notParticipant');
         const targetIndex = targetIndexOrThrow(people, input.targetId);
+        // 3.6.2: receipt creator is an authenticated account identity, not
+        // the payer or someone presenting an invitation/guest token. A normal
+        // guest can only rename the row to which their token is attached.
+        const isCreator =
+          !!session.userId && !!ctx.session?.user?.id && session.userId === ctx.session.user.id && !ctx.impersonating;
+        const isSelf = !!input.personToken && people[targetIndex]!.personToken === input.personToken;
+        if (!isCreator && !isSelf) throw new AppError('FORBIDDEN', 'notParticipant');
+        // The owner is not an editable guest, even if the creator of a
+        // different bill happens to have a valid signed-in session.
+        const targetAccount = people[targetIndex]!.accountUserId;
+        if (targetAccount && targetAccount !== ctx.session?.user?.id) {
+          throw new AppError('FORBIDDEN', 'notParticipant');
+        }
 
         const normalizedNew = normalizeGuestName(input.newName);
         const boundOwnerIndex = people.findIndex(

@@ -1118,7 +1118,7 @@ describe('Issue 3.6.1: reserved owner name Илья, verified by account, not gu
         targetId: pid(0),
         newName: 'Другое',
       }),
-    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'nameTaken' });
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', messageKey: 'notParticipant' });
     await expect(
       (await caller()).editPersonName({
         token: 'share-1',
@@ -1126,7 +1126,7 @@ describe('Issue 3.6.1: reserved owner name Илья, verified by account, not gu
         targetId: pid(0),
         newName: 'ИЛЬЯ',
       }),
-    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'nameTaken' });
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', messageKey: 'notParticipant' });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
@@ -2216,11 +2216,217 @@ describe('guest.removePerson', () => {
   });
 });
 
+describe('Issue 3.6.2: creator renames guests, guest edits only their own row', () => {
+  test('creator renames unjoined guest without obtaining a personal token or forcing guest registration', async () => {
+    claimSession(
+      [
+        { name: 'Создатель', personToken: ALICE_TOKEN },
+        { name: 'Гость 1', tipCents: 25 },
+        { name: 'Гость 2', personToken: OTHER_TOKEN },
+      ],
+      { items: items(1), paidByIndex: 2, assignments: [{ itemIndex: 0, personIndices: [1] }] },
+    );
+    const result = await (
+      await caller(signedIn)
+    ).editPersonName({
+      token: 'share-1',
+      targetId: pid(1),
+      newName: 'Андрей',
+    });
+    expect(result).toEqual({ success: true });
+    const saved = savedPeople() as TestPerson[];
+    expect(saved[1]).toMatchObject({ id: pid(1), name: 'Андрей', tipCents: 25 });
+    expect(saved[1]?.personToken).toBeUndefined();
+    const payload = mockDb.guestSplit.update.mock.calls[0]![0].data;
+    expect(payload).not.toHaveProperty('assignments');
+    expect(payload).not.toHaveProperty('paidByIndex');
+    expect(payload).not.toHaveProperty('summary');
+  });
+
+  test('creator can rename same guest repeatedly without changing their ID, token or assigned shares', async () => {
+    claimSession(
+      [
+        { name: 'Создатель', personToken: ALICE_TOKEN },
+        { name: 'Андрей', personToken: OTHER_TOKEN, tipCents: 99, groupSize: 2 },
+      ],
+      { assignments: [{ itemIndex: 0, personIndices: [1] }], items: items(1) },
+    );
+    const api = await caller(signedIn);
+    await api.editPersonName({ token: 'share-1', targetId: pid(1), newName: 'Андрей П.' });
+    const saved = savedPeople() as TestPerson[];
+    expect(saved[1]).toMatchObject({
+      id: pid(1),
+      name: 'Андрей П.',
+      personToken: OTHER_TOKEN,
+      tipCents: 99,
+      groupSize: 2,
+    });
+    claimSession(saved, { assignments: [{ itemIndex: 0, personIndices: [1] }], items: items(1) });
+    await api.editPersonName({ token: 'share-1', targetId: pid(1), newName: 'Андрей Петров' });
+    expect((savedPeople() as TestPerson[])[1]).toMatchObject({
+      id: pid(1),
+      name: 'Андрей Петров',
+      personToken: OTHER_TOKEN,
+      tipCents: 99,
+      groupSize: 2,
+    });
+  });
+
+  test('anonymous guest edits own row but cannot rename another unjoined or already joined guest', async () => {
+    claimSession([
+      { name: 'Гость 1', personToken: ALICE_TOKEN },
+      { name: 'Гость 2' },
+      { name: 'Сергей', personToken: OTHER_TOKEN },
+    ]);
+    await expect(
+      (await caller()).editPersonName({
+        token: 'share-1',
+        personToken: ALICE_TOKEN,
+        targetId: pid(1),
+        newName: 'Чужое',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      (await caller()).editPersonName({
+        token: 'share-1',
+        personToken: ALICE_TOKEN,
+        targetId: pid(2),
+        newName: 'Чужое',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      (await caller()).editPersonName({
+        token: 'share-1',
+        personToken: ALICE_TOKEN,
+        targetId: pid(0),
+        newName: 'Алексей',
+      }),
+    ).resolves.toMatchObject({ success: true });
+    expect((savedPeople() as TestPerson[])[0]?.name).toBe('Алексей');
+  });
+
+  test('payer/another signed-in participant is not creator and cannot edit another guest', async () => {
+    claimSession(
+      [
+        { name: 'Создатель', personToken: ALICE_TOKEN },
+        { name: 'Плательщик', personToken: OTHER_TOKEN },
+        { name: 'Гость 1' },
+      ],
+      { paidByIndex: 1 },
+    );
+    await expect(
+      (await caller({ user: { id: 'other-user' } })).editPersonName({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        targetId: pid(2),
+        newName: 'Захват',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      (await caller({ user: { id: 'other-user' } })).editPersonName({
+        token: 'share-1',
+        targetId: pid(2),
+        newName: 'Захват',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('guest cannot rename a different receipt and creator cannot impersonate another account', async () => {
+    claimSession([{ name: 'Создатель' }, { name: 'Гость' }], { userId: 'another-creator' });
+    await expect(
+      (await caller(signedIn)).editPersonName({
+        token: 'share-1',
+        targetId: pid(1),
+        newName: 'Чужое',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    claimSession([{ name: 'Создатель' }, { name: 'Гость' }], { userId: 'user-1' });
+    const impersonated = await caller(signedIn);
+    // Explicitly test middleware context with an active impersonation flag.
+    const { guestRouter } = await import('./guest');
+    const api = guestRouter.createCaller({
+      session: signedIn,
+      db: mockDb,
+      headers: new Headers(),
+      impersonating: { adminId: 'real-admin' },
+    } as unknown as Parameters<typeof guestRouter.createCaller>[0]);
+    void impersonated;
+    await expect(
+      api.editPersonName({
+        token: 'share-1',
+        targetId: pid(1),
+        newName: 'Чужое',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('creator cannot silently duplicate a name, use the owner reserved name or alter owner row', async () => {
+    claimSession([
+      { name: 'Илья', accountUserId: 'billok-owner', personToken: ALICE_TOKEN },
+      { name: 'Сергей', personToken: OTHER_TOKEN },
+      { name: 'Гость 1' },
+    ]);
+    await expect(
+      (await caller(signedIn)).editPersonName({
+        token: 'share-1',
+        targetId: pid(2),
+        newName: ' иЛьЯ ',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'nameTaken' });
+    await expect(
+      (await caller(signedIn)).editPersonName({
+        token: 'share-1',
+        targetId: pid(2),
+        newName: ' СЕРГЕЙ ',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'nameTaken' });
+    await expect(
+      (await caller(signedIn)).editPersonName({
+        token: 'share-1',
+        targetId: pid(0),
+        newName: 'Гость 3',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('creator cannot change names once the receipt has been finalized', async () => {
+    claimSession([{ name: 'Создатель' }, { name: 'Гость 1' }], { status: 'FINALIZED' });
+    await expect(
+      (await caller(signedIn)).editPersonName({
+        token: 'share-1',
+        targetId: pid(1),
+        newName: 'Андрей',
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('creator without personal token has a bounded per-account/session edit budget', async () => {
+    claimSession([{ name: 'Создатель' }, { name: 'Гость 1' }]);
+    await (
+      await caller(signedIn)
+    ).editPersonName({
+      token: 'share-1',
+      targetId: pid(1),
+      newName: 'Андрей',
+    });
+    expect(checkRateLimit).toHaveBeenCalledWith(
+      'guest-edit-name-person:' + JSON.stringify(['share-1', 'creator:user-1']),
+      30,
+      60_000,
+    );
+  });
+});
+
 describe('guest.editPersonName', () => {
   test('renames the person the id names, wherever they are now', async () => {
     sessionAfterBWasRemoved();
+    // 3.6.2: only the authenticated receipt creator may rename C from A's device.
     await (
-      await caller()
+      await caller(signedIn)
     ).editPersonName({ token: 'share-1', personToken: ALICE_TOKEN, targetId: pid(2), newName: 'Cee' });
     expect((savedPeople() as { name: string }[]).map((p) => p.name)).toEqual(['A', 'Cee', 'D']);
   });

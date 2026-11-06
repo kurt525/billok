@@ -331,6 +331,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     onSuccess: () => {
       setEditingPersonId(null);
       setEditingName('');
+      void utils.guest.getSession.invalidate({ token });
       toast.success(t('nameUpdated'));
     },
     onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
@@ -1594,17 +1595,78 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 {data.people.map((person, idx) => (
                   <div
                     key={person.id}
-                    className="flex min-w-0 max-w-full items-center gap-2 rounded-2xl bg-muted px-3 py-1.5"
+                    className="flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-2xl bg-muted px-3 py-1.5"
                   >
-                    <Avatar className="h-6 w-6">
-                      <AvatarFallback className={`text-[10px] font-semibold ${guestAvatarColor(idx)}`}>
-                        {getInitials(person.name)}
-                      </AvatarFallback>
-                    </Avatar>
-                    <span className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">
-                      {person.name}
-                      {person.groupSize > 1 && ` (×${person.groupSize})`}
-                    </span>
+                    {data.isCreator && data.status === 'CLAIMING' && editingPersonId === person.id ? (
+                      <form
+                        className="flex min-w-0 w-full flex-wrap items-center gap-2"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          if (!editingName.trim()) return;
+                          // The authenticated receipt creator can correct guest
+                          // labels even before joining their own personal slot.
+                          editPersonName.mutate({ token, targetId: person.id, newName: editingName.trim() });
+                        }}
+                      >
+                        <Input
+                          value={editingName}
+                          maxLength={MAX_GUEST_NAME_LENGTH}
+                          onChange={(event) => setEditingName(event.target.value)}
+                          autoComplete="off"
+                          className="h-11 min-w-0 flex-1 text-base"
+                          aria-label={t('editName')}
+                          data-testid={'creator-edit-name-input-' + idx}
+                          autoFocus
+                        />
+                        <Button
+                          type="submit"
+                          size="sm"
+                          variant="ghost"
+                          className="size-11 shrink-0 p-0"
+                          disabled={!editingName.trim() || editPersonName.isPending}
+                          aria-label={t('saveName')}
+                          data-testid={'creator-save-name-' + idx}
+                        >
+                          <Check className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="size-11 shrink-0 p-0"
+                          onClick={() => setEditingPersonId(null)}
+                          aria-label={t('cancelButton')}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </form>
+                    ) : (
+                      <>
+                        <Avatar className="h-6 w-6 shrink-0">
+                          <AvatarFallback className={'text-[10px] font-semibold ' + guestAvatarColor(idx)}>
+                            {getInitials(person.name)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">
+                          {person.name}
+                          {person.groupSize > 1 && ' (×' + person.groupSize + ')'}
+                        </span>
+                        {data.isCreator && data.status === 'CLAIMING' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingPersonId(person.id);
+                              setEditingName(person.name);
+                            }}
+                            className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                            aria-label={t('editName')}
+                            data-testid={'creator-edit-person-' + idx}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                        )}
+                      </>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1905,10 +1967,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                     className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
                     onSubmit={(e) => {
                       e.preventDefault();
-                      if (!editingName.trim() || !personToken) return;
+                      if (!editingName.trim() || (!data.isCreator && !personToken)) return;
                       editPersonName.mutate({
                         token,
-                        personToken,
+                        ...(personToken ? { personToken } : {}),
                         targetId: person.id,
                         newName: editingName.trim(),
                         groupSize: editingGroupSize,
@@ -1968,19 +2030,21 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       )}
                       {idx === myPersonIndex && ` ${t('you')}`}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingPersonId(person.id);
-                        setEditingName(person.name);
-                        setEditingGroupSize(person.groupSize ?? 1);
-                      }}
-                      className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
-                      aria-label={t('editName')}
-                      data-testid={`edit-person-${idx}`}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
+                    {(data.isCreator || person.id === myPersonId) && data.status === 'CLAIMING' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingPersonId(person.id);
+                          setEditingName(person.name);
+                          setEditingGroupSize(person.groupSize ?? 1);
+                        }}
+                        className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                        aria-label={t('editName')}
+                        data-testid={'edit-person-' + idx}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                     {data.people.length > 1 && (
                       <button
                         type="button"

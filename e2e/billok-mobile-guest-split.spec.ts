@@ -2004,6 +2004,97 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
   }
 });
 
+test('Issue 3.6.2: creator renames unjoined guests on mobile; guests can edit only themselves', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(150_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const ownerBrowser = await browser.newContext({
+    viewport: { width: 320, height: 700 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  let token: string | undefined;
+  try {
+    const createdRes = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Имена 3.6.2', subtotal: 1001, tax: 0, tip: 0, total: 1001, currency: 'RUB' },
+      items: [{ name: 'Чай', quantity: 1, unitPrice: 1001, totalPrice: 1001 }],
+      people: ['Создатель', 'Гость 1', 'Гость 2'],
+      creatorName: 'Создатель',
+      paidByName: 'Создатель',
+      // Do not join the creator's personal place: the account alone must
+      // allow fixing guest names even when nobody else uses BillOK.
+      joinCreator: false,
+    });
+    const raw = await createdRes.text();
+    expect(createdRes.ok(), raw).toBe(true);
+    token = (JSON.parse(raw).result.data.json as { shareToken: string }).shareToken;
+    const before = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const guestId = before.people[1].id as string;
+
+    const ownerPage = await ownerBrowser.newPage();
+    await ownerPage.goto('/login', { waitUntil: 'networkidle' });
+    await ownerPage.locator('input[type=email]').fill(users.alice.email);
+    await ownerPage.locator('input[type=password]').fill(users.alice.password);
+    await ownerPage.getByRole('button', { name: 'Войти', exact: true }).click();
+    await expect(ownerPage).toHaveURL(/\/dashboard/);
+    await ownerPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await expect(ownerPage.getByTestId('claim-join-form')).toBeVisible();
+    await expect(ownerPage.getByTestId('creator-edit-person-1')).toBeVisible();
+    await ownerPage.getByTestId('creator-edit-person-1').click();
+    await ownerPage.getByTestId('creator-edit-name-input-1').fill('Андрей');
+    await ownerPage.getByTestId('creator-save-name-1').click();
+    await expect(ownerPage.getByTestId('creator-edit-person-1')).toBeVisible();
+    await expect(ownerPage.getByText('Андрей', { exact: true }).first()).toBeVisible();
+    await ownerPage.getByTestId('creator-edit-person-1').click();
+    await ownerPage.getByTestId('creator-edit-name-input-1').fill('Андрей П.');
+    await ownerPage.getByTestId('creator-save-name-1').click();
+    await expect(ownerPage.getByText('Андрей П.', { exact: true }).first()).toBeVisible();
+    await fitsPhone(ownerPage);
+
+    const after = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(after.people[1]).toMatchObject({ id: guestId, name: 'Андрей П.', hasJoined: false });
+    expect(after.assignments).toEqual(before.assignments);
+    expect(after.receiptData.total).toBe(1001);
+
+    // The shared link never grants permission to rename anyone.
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('creator-edit-person-1')).toHaveCount(0);
+    const denied = await trpcMutation(page.request, 'guest.editPersonName', {
+      token,
+      targetId: guestId,
+      newName: 'Чужое',
+    });
+    expect(denied.ok()).toBe(false);
+    expect((await trpcError(denied))?.data?.code).toBe('FORBIDDEN');
+
+    const joined = await joinGuestSession(page.request, { token, name: 'Андрей П.' });
+    expect(joined.personId).toBe(guestId);
+    await rememberClaimIdentity(page.context(), token, { name: joined.name, personToken: joined.personToken });
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
+    await expect(page.getByTestId('edit-person-0')).toHaveCount(0);
+    await expect(page.getByTestId('edit-person-1')).toBeVisible();
+
+    // Creator can still correct the claimed guest's name. The guest keeps
+    // their personId/token and sees the update without refreshing.
+    await ownerPage.getByTestId('creator-edit-person-1').click();
+    await ownerPage.getByTestId('creator-edit-name-input-1').fill('Андрей Иванов');
+    await ownerPage.getByTestId('creator-save-name-1').click();
+    await expect(ownerPage.getByText('Андрей Иванов', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('Ваше имя в этом чеке изменено: Андрей Иванов')).toBeVisible({ timeout: 25_000 });
+    const finalState = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(finalState.people[1]).toMatchObject({ id: guestId, name: 'Андрей Иванов', hasJoined: true });
+    expect(finalState.assignments).toEqual(before.assignments);
+    await fitsPhone(page);
+  } finally {
+    if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await ownerBrowser.close();
+    await owner.dispose();
+  }
+});
+
 test('Issue 3.6: simultaneous mobile guests cannot claim the same Unicode-normalized receipt name', async ({
   page,
   browser,
