@@ -1364,11 +1364,11 @@ describe('Issue 3.7.2: atomic fixed guest slot reservation with a shared link', 
     const api = await caller();
     await expect(api.joinGuestSlot({ token: 'share-1', slotId: pid(1), name: 'Андрей' })).rejects.toMatchObject({
       code: 'CONFLICT',
-      messageKey: 'joinNameTaken',
+      messageKey: 'guestSlotTaken',
     });
     await expect(api.joinGuestSlot({ token: 'share-1', slotId: pid(1), name: 'Олег' })).rejects.toMatchObject({
       code: 'CONFLICT',
-      messageKey: 'joinNameTaken',
+      messageKey: 'guestSlotTaken',
     });
     await expect(api.joinGuestSlot({ token: 'share-1', slotId: pid(2), name: ' АНДРЕЙ ' })).rejects.toMatchObject({
       code: 'CONFLICT',
@@ -1458,7 +1458,7 @@ describe('Issue 3.7.2: atomic fixed guest slot reservation with a shared link', 
         slotId: pid(1),
         name: 'Андрей',
       }),
-    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'joinNameTaken' });
+    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'guestSlotTaken' });
     await expect(
       (await caller(anotherAccount)).joinGuestSlot({
         token: 'share-1',

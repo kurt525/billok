@@ -1081,7 +1081,7 @@ export const guestRouter = createTRPCRouter({
         if (targetIndex < 0) throw new AppError('CONFLICT', 'personGone');
         const target = people[targetIndex]!;
         if (target.personToken || target.accountUserId) {
-          throw new AppError('CONFLICT', 'joinNameTaken');
+          throw new AppError('CONFLICT', 'guestSlotTaken');
         }
 
         // Owner can use only their own verified name. If another diner had
@@ -1951,6 +1951,8 @@ export const guestRouter = createTRPCRouter({
         currency: string;
         roundingBalanced?: boolean;
         organizerPersonId?: string;
+        guestSlotsMode?: boolean;
+        guestCount?: number;
         knownPartsByItem?: Record<string, number>;
       },
       items: session.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[],

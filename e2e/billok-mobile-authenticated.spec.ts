@@ -1437,6 +1437,7 @@ test('keyboard-height manual item inputs stay reachable at six mobile widths', a
     await page.setViewportSize({ width, height: 300 });
     await page.goto('/split', { waitUntil: 'networkidle' });
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    await page.getByTestId('workflow-manual').click();
     await page.getByTestId('person-input-0').fill('Участник');
     await page.getByTestId('next-assign-btn').click();
     await expect(page.getByTestId('guest-assign-step')).toBeVisible();

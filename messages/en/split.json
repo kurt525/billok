@@ -26,7 +26,17 @@
     "rescanDescription": "Describe what needs to be corrected and AI will re-scan the receipt.",
     "rescanPlaceholder": "e.g., \"The total should be $45.99\" or \"There are 3 tacos, not 1\"",
     "rescan": "Rescan",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "workflowLabel": "Receipt workflow",
+    "workflowInvite": "Invite guests",
+    "workflowManual": "Allocate now",
+    "creatorAlwaysIncluded": "You are the creator and always participate",
+    "creatorProfileName": "Your account name",
+    "guestCountLabel": "Number of guests (excluding you)",
+    "guestCountHint": "Your own place is included. Guest names can be entered later.",
+    "guestPlace": "Guest {index}",
+    "noAdditionalGuests": "No additional guests",
+    "creatorPayer": "Me — receipt creator"
   },
   "assign": {
     "title": "Assign items",
@@ -239,7 +249,15 @@
     "knownPartsSaved": "Original portion count saved.",
     "knownPartsOverLimit": "Claims exceed the known original count. Correct the claims or original count.",
     "knownPartsNotFullyClaimed": "Known portions remain unassigned. The creator must assign the remainder or correct the count.",
-    "nameChangedNotice": "Your name in this receipt was changed to: {name}"
+    "nameChangedNotice": "Your name in this receipt was changed to: {name}",
+    "chooseGuestPlace": "Choose an available guest place",
+    "guestPlaceTaken": "Taken",
+    "guestPlaceFree": "Available",
+    "guestPlaceSelectionRequired": "Choose an available place first.",
+    "noGuestPlacesLeft": "All guest places are taken. Contact the receipt creator.",
+    "guestPlaceJoined": "You have joined this receipt",
+    "guestPlaceConflict": "Someone else took this place. Choose another available place.",
+    "recoverRegisteredPlace": "Recover my place through my account"
   },
   "result": {
     "loading": "Loading split...",

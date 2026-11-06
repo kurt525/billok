@@ -132,6 +132,8 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
   await expect(page.getByTestId('manual-split-title')).toContainText('Разделить чек');
   await expect(page.getByTestId('guest-people-step')).toBeVisible();
   await expect(page.getByTestId('guest-file-input')).toHaveCount(0);
+  // The accepted direct-allocation flow remains available under the manual tab.
+  await page.getByTestId('workflow-manual').click();
   await page.getByTestId('manual-receipt-name').fill('Ужин в кафе');
   await page.getByTestId('person-input-0').fill('Анна');
   await page.getByTestId('add-person-btn').click();
@@ -2001,6 +2003,93 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
     }
   } finally {
     await owner.dispose();
+  }
+});
+
+test('Issue 3.7.3: mobile invite flow creates N+1 seats and guests select distinct available slots', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(150_000);
+  const guestContext = await browser.newContext({
+    viewport: { width: 320, height: 730 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const secondContext = await browser.newContext({
+    viewport: { width: 720, height: 780 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  let token: string | undefined;
+  try {
+    await page.goto('/login');
+    await page.locator('input[type=email]').fill(users.alice.email);
+    await page.locator('input[type=password]').fill(users.alice.password);
+    await page.getByRole('button', { name: 'Войти', exact: true }).click();
+    await expect(page).toHaveURL(/\/dashboard/);
+    await page.goto('/split');
+    await expect(page.getByTestId('guest-count-form')).toBeVisible();
+    await expect(page.getByTestId('person-input-0')).toHaveCount(0);
+    await expect(page.getByTestId('invite-creator-name')).toContainText(users.alice.name);
+    await page.getByTestId('guest-count-input').fill('2');
+    await page.getByTestId('invite-payer').selectOption('2');
+    await page.getByTestId('manual-receipt-name').fill('Ужин с друзьями');
+    await fitsPhone(page);
+    await page.getByTestId('next-assign-btn').click();
+    await page.getByTestId('guest-add-item-btn').click();
+    const fields = page.getByTestId('guest-add-item-submit').locator('xpath=ancestor::form').locator('input');
+    await fields.nth(0).fill('Пицца');
+    await fields.nth(1).fill('1');
+    await fields.nth(2).fill('240,00');
+    await page.getByTestId('guest-add-item-submit').click();
+    await page.getByTestId('share-for-claiming-btn').click();
+    await expect(page).toHaveURL(/\/split\/[^/]+\/claim/);
+    token = page.url().split('/split/')[1]?.split('/claim')[0];
+    expect(token).toBeTruthy();
+    const initial = await trpcResult(await trpcQuery(page.request, 'guest.getSession', { token }));
+    expect(initial.people.map((p: { hasJoined: boolean }) => p.hasJoined)).toEqual([true, false, false]);
+    expect(initial.paidByIndex).toBe(2);
+    expect(initial.receiptData.total).toBe(24000);
+    const guest = await guestContext.newPage();
+    await guest.goto('/split/' + token + '/claim');
+    await expect(guest.getByTestId('guest-slot-option-1')).toBeVisible();
+    await expect(guest.getByTestId('guest-slot-option-2')).toBeVisible();
+    await expect(guest.getByTestId('claim-join-btn')).toBeDisabled();
+    await guest.getByTestId('guest-slot-option-1').click();
+    await guest.getByTestId('claim-name-input').fill('Андрей');
+    await guest.getByTestId('claim-join-btn').click();
+    await expect(guest.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 15000 });
+    await fitsPhone(guest);
+    const after = await trpcResult(await trpcQuery(page.request, 'guest.getSession', { token }));
+    expect(after.people).toHaveLength(3);
+    expect(after.people[1].name).toBe('Андрей');
+    expect(after.people[1].id).toBe(initial.people[1].id);
+    expect(after.people[2].hasJoined).toBe(false);
+    expect(after.paidByIndex).toBe(2);
+
+    const second = await secondContext.newPage();
+    await second.goto('/split/' + token + '/claim');
+    await expect(second.getByTestId('guest-slot-option-1')).toBeDisabled();
+    await second.getByTestId('guest-slot-option-2').click();
+    await second.getByTestId('claim-name-input').fill('Сергей');
+    await second.getByTestId('claim-join-btn').click();
+    await expect(second.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 15000 });
+    await fitsPhone(second);
+    const complete = await trpcResult(await trpcQuery(page.request, 'guest.getSession', { token }));
+    expect(complete.people.map((p: { name: string }) => p.name)).toEqual([users.alice.name, 'Андрей', 'Сергей']);
+    expect(complete.people.map((p: { id: string }) => p.id)).toEqual(initial.people.map((p: { id: string }) => p.id));
+    expect(complete.people.every((p: { hasJoined: boolean }) => p.hasJoined)).toBe(true);
+    expect(complete.paidByIndex).toBe(2);
+    expect(complete.receiptData.total).toBe(24000);
+    for (const width of [320, 412, 720]) {
+      await page.setViewportSize({ width, height: 720 });
+      await fitsPhone(page);
+    }
+  } finally {
+    if (token) await trpcMutation(page.request, 'guest.expireSession', { token }).catch(() => undefined);
+    await guestContext.close();
+    await secondContext.close();
   }
 });
 

@@ -122,7 +122,9 @@ describe('Long participant names on mobile guest receipts', () => {
 describe('Guest claiming join screen Android keyboard and listed names', () => {
   it('offers numeric keyboard, 44px controls and wraps long free participant names', () => {
     const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
-    expect(claim).toContain('id="group-size"\n                  type="number"\n                  inputMode="numeric"');
+    // Indentation changes when the old group-size control is correctly hidden
+    // for fixed individual guest slots. Assert the element behavior instead.
+    expect(claim).toMatch(/id="group-size"\s+type="number"\s+inputMode="numeric"/);
     expect(claim).toContain('className="h-11 w-20 shrink-0 text-base"');
     expect(claim).toContain('className="h-11 min-w-0 text-base"');
     expect(claim).toContain('min-h-11 min-w-0 max-w-full items-center gap-2 rounded-2xl');

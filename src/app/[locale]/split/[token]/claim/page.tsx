@@ -164,6 +164,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // --- State ---
   const [name, setName] = useState('');
   const [groupSize, setGroupSize] = useState(1);
+  // Fixed slot selection is separate from a human's editable display name.
+  const [selectedGuestSlotId, setSelectedGuestSlotId] = useState<string | null>(null);
   // Only the owner of this device's personToken can edit these tips.
   const [personalTipDraft, setPersonalTipDraft] = useState<string | null>(null);
   const [portionDrafts, setPortionDrafts] = useState<Record<number, string>>({});
@@ -491,6 +493,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // storage: a stored pending key could be read and redeemed for the person before this device
   // holds their token. A reload therefore can't replay a lost join.
   const pendingJoin = useRef<PendingJoin | null>(null);
+  const autoCreatorJoinAttempted = useRef(false);
   // The token this device stored when the join or resume in flight was sent. Tabs of one browser
   // share the stored identity, so another tab may become someone else before the answer comes
   // back; see canAdoptAnswer (#213).
@@ -601,7 +604,36 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       joinInFlight.current = false;
     },
   });
-  const joining = joinSession.isPending || resumeSession.isPending;
+  const joinGuestSlot = trpc.guest.joinGuestSlot.useMutation({
+    onSuccess: (data) => {
+      const stored = getStoredClaimIdentity(token);
+      if (
+        stored &&
+        !canAdoptAnswer({
+          personToken: data.personToken,
+          storedAtStart: storedWhenSent.current,
+          storedNow: stored.personToken,
+        })
+      ) {
+        toast.warning(t('continuingAs', { name: stored.name }));
+        setTimeout(resumeStoredIdentity, 0);
+        return;
+      }
+      adoptIdentity(data);
+      toast.success(t('guestPlaceJoined'));
+    },
+    onError: (error) => {
+      // The server differentiates an occupied slot from a duplicate display
+      // name and localizes both. Do not guess from the error text.
+      toast.error(localizedTrpcError(error, tc('errors.generic')));
+      setSelectedGuestSlotId(null);
+      void utils.guest.getSession.invalidate({ token });
+    },
+    onSettled: () => {
+      joinInFlight.current = false;
+    },
+  });
+  const joining = joinSession.isPending || joinGuestSlot.isPending || resumeSession.isPending;
 
   // Resume whoever this device is stored as: when a personal link doesn't work out, or when an
   // answer came back for a token that's no longer stored. Called on the next tick from
@@ -643,6 +675,24 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // The join key is kept (in memory) until this device becomes someone, and reused only to retry
   // the same name, so a join whose response was lost (e.g. a network drop) is replayed as the
   // same person. The server mints new people's tokens itself.
+  function startGuestSlotJoin(input: { slotId: string; name: string }) {
+    if (joinInFlight.current) return;
+    joinInFlight.current = true;
+    const stored = getStoredClaimIdentity(token);
+    storedWhenSent.current = stored?.personToken;
+    // The retry key is scoped to *both* the name and selected slot. Changing
+    // either after a failed network request starts a fresh join attempt.
+    const pending = joinKeyFor(input.name + '|' + input.slotId, pendingJoin.current);
+    pendingJoin.current = pending;
+    joinGuestSlot.mutate({
+      token,
+      slotId: input.slotId,
+      name: input.name,
+      joinKey: pending.joinKey,
+      ...(stored ? { personToken: stored.personToken } : {}),
+    });
+  }
+
   function startJoin(input: { name: string; groupSize?: number }) {
     if (joinInFlight.current) return;
     joinInFlight.current = true;
@@ -686,6 +736,27 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     storedWhenSent.current = getStoredClaimIdentity(token)?.personToken;
     resumeSession.mutate({ token, personToken });
   }, [session.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The creator is already account-bound by 3.7.1. After changing browser or
+  // losing localStorage, recover their server-bound creator row without
+  // occupying any guest place. Do not override a personal link in progress.
+  useEffect(() => {
+    if (
+      autoCreatorJoinAttempted.current ||
+      !session.data?.receiptData.guestSlotsMode ||
+      !session.data.isCreator ||
+      !authSession?.user ||
+      identity ||
+      joinInFlight.current ||
+      getStoredClaimIdentity(token)?.personToken ||
+      linkedToken.current
+    )
+      return;
+    const creatorId = session.data.receiptData.organizerPersonId;
+    if (!creatorId) return;
+    autoCreatorJoinAttempted.current = true;
+    startGuestSlotJoin({ slotId: creatorId, name: authSession.user.name || session.data.people[0]?.name || '' });
+  }, [session.data, authSession, identity]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Someone on another device may remove this device's person. Their id missing from the session
   // as loaded doesn't prove it, so ask the server by token (see needsMembershipCheck).
@@ -872,9 +943,20 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
   // --- Handlers ---
   function handleJoin() {
-    const trimmed = name.trim();
+    const trimmed = (name || (session.data?.receiptData.guestSlotsMode ? authSession?.user?.name : '') || '').trim();
     if (!trimmed) {
       toast.error(t('pleaseEnterName'));
+      return;
+    }
+    if (session.data?.receiptData.guestSlotsMode) {
+      const selected = session.data.people.find(
+        (person) => person.id === selectedGuestSlotId && person.guestSlotNumber && !person.hasJoined,
+      );
+      if (!selected) {
+        toast.error(t('guestPlaceSelectionRequired'));
+        return;
+      }
+      startGuestSlotJoin({ slotId: selected.id, name: trimmed });
       return;
     }
     startJoin({ name: trimmed, ...(groupSize > 1 ? { groupSize } : {}) });
@@ -1737,7 +1819,9 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 maxLength={MAX_GUEST_NAME_LENGTH}
                 autoComplete="off"
                 className="h-11 min-w-0 text-base"
-                placeholder={t('enterName')}
+                placeholder={
+                  data.receiptData.guestSlotsMode && authSession?.user?.name ? authSession.user.name : t('enterName')
+                }
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => {
@@ -1747,28 +1831,66 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 data-testid="claim-name-input"
               />
             </div>
-            <div className="space-y-2">
-              <label htmlFor="group-size" className="text-sm font-medium">
-                {t('groupSize')}
-              </label>
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <Input
-                  id="group-size"
-                  type="number"
-                  inputMode="numeric"
-                  min={1}
-                  max={20}
-                  value={groupSize}
-                  onChange={(e) => setGroupSize(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-                  className="h-11 w-20 shrink-0 text-base"
-                  data-testid="group-size-input"
-                />
-                <span className="text-xs text-muted-foreground">{t('groupSizeHint')}</span>
+            {!data.receiptData.guestSlotsMode && (
+              <div className="space-y-2">
+                <label htmlFor="group-size" className="text-sm font-medium">
+                  {t('groupSize')}
+                </label>
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <Input
+                    id="group-size"
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={20}
+                    value={groupSize}
+                    onChange={(e) => setGroupSize(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+                    className="h-11 w-20 shrink-0 text-base"
+                    data-testid="group-size-input"
+                  />
+                  <span className="text-xs text-muted-foreground">{t('groupSizeHint')}</span>
+                </div>
               </div>
-            </div>
-            {/* Join as a listed person nobody has joined as yet (e.g. the payer); people who
-                already joined can only be rejoined from the device holding their token. */}
-            {data.people.some((person) => !person.hasJoined) && (
+            )}
+            {data.receiptData.guestSlotsMode && (
+              <div className="min-w-0 space-y-3" data-testid="guest-slot-choice">
+                <p className="text-sm font-semibold">{t('chooseGuestPlace')}</p>
+                <div className="grid min-w-0 grid-cols-1 gap-2">
+                  {data.people
+                    .filter((person) => person.guestSlotNumber !== undefined)
+                    .map((person) => (
+                      <button
+                        key={person.id}
+                        type="button"
+                        disabled={person.hasJoined || joining}
+                        aria-pressed={selectedGuestSlotId === person.id}
+                        onClick={() => setSelectedGuestSlotId(person.id)}
+                        className={
+                          'flex min-h-12 w-full min-w-0 items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left ' +
+                          (selectedGuestSlotId === person.id ? 'border-primary bg-primary/10 ' : '') +
+                          (person.hasJoined ? 'opacity-60 ' : 'hover:bg-muted')
+                        }
+                        data-testid={'guest-slot-option-' + person.guestSlotNumber}
+                      >
+                        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{person.name}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {person.hasJoined ? t('guestPlaceTaken') : t('guestPlaceFree')}
+                        </span>
+                      </button>
+                    ))}
+                </div>
+                {data.people
+                  .filter((person) => person.guestSlotNumber !== undefined)
+                  .every((person) => person.hasJoined) && (
+                  <p className="text-sm text-muted-foreground" data-testid="no-free-guest-slots">
+                    {t('noGuestPlacesLeft')}
+                  </p>
+                )}
+              </div>
+            )}
+            {/* Legacy named-person receipts retain their legacy joining buttons.
+                Fixed slots require explicit selection by stable personId. */}
+            {!data.receiptData.guestSlotsMode && data.people.some((person) => !person.hasJoined) && (
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground">{t('orJoinAs')}</p>
                 <div className="flex flex-wrap gap-2">
@@ -1800,7 +1922,15 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             <Button
               className="min-h-11 w-full text-base"
               onClick={handleJoin}
-              disabled={!name.trim() || joining}
+              disabled={
+                !(name.trim() || (data.receiptData.guestSlotsMode && authSession?.user?.name)) ||
+                joining ||
+                (data.receiptData.guestSlotsMode === true &&
+                  !data.people.some(
+                    (person) =>
+                      person.id === selectedGuestSlotId && person.guestSlotNumber !== undefined && !person.hasJoined,
+                  ))
+              }
               data-testid="claim-join-btn"
             >
               {joining ? (
@@ -1815,6 +1945,22 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 </>
               )}
             </Button>
+            {data.receiptData.guestSlotsMode && authSession?.user && (
+              <Button
+                variant="ghost"
+                type="button"
+                className="min-h-11 w-full whitespace-normal"
+                disabled={joining}
+                onClick={() => {
+                  const creatorId = data.receiptData.organizerPersonId ?? data.people[0]?.id;
+                  if (!creatorId) return;
+                  startGuestSlotJoin({ slotId: creatorId, name: authSession.user.name || name || '' });
+                }}
+                data-testid="resume-registered-slot"
+              >
+                {t('recoverRegisteredPlace')}
+              </Button>
+            )}
           </CardContent>
         </Card>
       </div>

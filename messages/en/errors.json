@@ -173,5 +173,6 @@
   "receiptPartsConfirmationRequired": "Confirm that everyone has declared their consumed portions. If items or portions changed, review them and confirm again.",
   "receiptKnownPartsOverclaimed": "Claimed portions exceed the known original. Update the claims or the original number of portions.",
   "receiptKnownPartsRemaining": "Known portions are not fully assigned. Assign the remaining portions or correct the original count before finalizing.",
-  "receiptKnownPartsSplitItem": "To split this item, first clear its known original portion count."
+  "receiptKnownPartsSplitItem": "To split this item, first clear its known original portion count.",
+  "guestSlotTaken": "This guest place has already been taken. Choose another available place."
 }
