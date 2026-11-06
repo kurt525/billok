@@ -173,11 +173,16 @@ const JOIN_REPLAY_WINDOW_MS = 24 * 60 * 60 * 1000;
 // The most people a claim session holds
 const MAX_SESSION_PEOPLE = 100;
 
-function toPublicPerson({ name, groupSize, personToken, accountUserId }: GuestSessionPerson) {
+function toPublicPerson({ name, groupSize, personToken, accountUserId, visualColorId }: GuestSessionPerson) {
   // Public receipts never expose personal tokens or account identifiers.
   // An account-bound creator is occupied even if device storage was unavailable
   // when the receipt was created and there is no guest token yet.
-  return { name, groupSize: groupSize ?? 1, hasJoined: !!personToken || !!accountUserId };
+  return {
+    name,
+    groupSize: groupSize ?? 1,
+    hasJoined: !!personToken || !!accountUserId,
+    ...(Number.isSafeInteger(visualColorId) && visualColorId! >= 0 ? { visualColorId } : {}),
+  };
 }
 
 function toPublicPeople(people: GuestSessionPerson[]) {
@@ -680,7 +685,10 @@ export const guestRouter = createTRPCRouter({
             ...(receiptId !== undefined ? { receiptId, receiptShared: true } : {}),
             receiptData: input.receiptData as unknown as Prisma.InputJsonValue,
             items: input.items as unknown as Prisma.InputJsonValue,
-            people: filteredPeople as unknown as Prisma.InputJsonValue,
+            people: filteredPeople.map((person, index) => ({
+              ...person,
+              visualColorId: index,
+            })) as unknown as Prisma.InputJsonValue,
             assignments: remappedAssignments as unknown as Prisma.InputJsonValue,
             summary: summaryWithNames as unknown as Prisma.InputJsonValue,
             paidByIndex: remappedPaidBy,
@@ -887,6 +895,11 @@ export const guestRouter = createTRPCRouter({
       }
       if (people.length > MAX_SESSION_PEOPLE) {
         throw new AppError('BAD_REQUEST', 'sessionFull', { max: MAX_SESSION_PEOPLE });
+      }
+      // Assign once, before any names are changed or people can be removed.
+      // The key will survive retries, joins, renames and index compaction.
+      for (const [index, person] of people.entries()) {
+        people[index] = { ...person, visualColorId: index };
       }
       const paidByIndex = usingGuestSlots ? (input.paidByGuestSlot ?? 0) : indexOf(paidByName);
       // A persistent participant ID identifies the creator even if names are
@@ -1316,6 +1329,7 @@ export const guestRouter = createTRPCRouter({
           id: personId,
           name,
           personToken,
+          visualColorId: Math.max(people.length - 1, ...people.map((p) => p.visualColorId ?? -1)) + 1,
           ...joinRecord,
           ...(input.groupSize != null ? { groupSize: input.groupSize } : {}),
         });

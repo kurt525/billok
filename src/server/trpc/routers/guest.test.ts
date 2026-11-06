@@ -561,7 +561,7 @@ describe('guest.joinSession', () => {
     expect(joined.personId).not.toBe(pid(0));
     expect(savedPeople()).toEqual([
       { id: pid(0), name: 'Host' },
-      { id: joined.personId, name: 'Bob', personToken: joined.personToken },
+      { id: joined.personId, name: 'Bob', personToken: joined.personToken, visualColorId: 1 },
     ]);
   });
 
@@ -578,6 +578,7 @@ describe('guest.joinSession', () => {
         id: joined.personId,
         name: 'Bob',
         personToken: joined.personToken,
+        visualColorId: 1,
         join: { key: JOIN_KEY, name: 'bob', expiresAt: expect.any(Number) },
       },
     ]);
@@ -2420,8 +2421,8 @@ describe('guest.createClaimSession', () => {
     ).createClaimSession({ ...session, creatorName: 'Host', paidByName: 'Payer' });
     const { people } = created();
     expect(people).toEqual([
-      { id: expect.stringMatching(UUID), name: 'Host' },
-      { id: expect.stringMatching(UUID), name: 'Payer' },
+      { id: expect.stringMatching(UUID), name: 'Host', visualColorId: 0 },
+      { id: expect.stringMatching(UUID), name: 'Payer', visualColorId: 1 },
     ]);
     expect(people[0]!.id).not.toBe(people[1]!.id);
     // Nobody is joined unless the client asks: older clients join the creator by name afterwards

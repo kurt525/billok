@@ -75,7 +75,8 @@ import {
 import { toast } from 'sonner';
 import { Link } from '@/i18n/navigation';
 import { buildVenmoPayUrl, isValidVenmoHandle } from '@/lib/venmo';
-import { getInitials, guestAvatarColor } from '@/lib/avatar';
+import { getInitials } from '@/lib/avatar';
+import { guestVisualColorStyle, guestVisualColorBorder } from '@/lib/guest-visual-color';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
@@ -1792,12 +1793,19 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           <div className="space-y-3">
             <h3 className="font-semibold text-base">{t('perPersonTotals')}</h3>
             {data.summary.map((person: { name: string; total: number; personIndex: number }) => (
-              <Card key={person.personIndex}>
+              <Card
+                key={person.personIndex}
+                className="border-l-4"
+                style={{ borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex) }}
+              >
                 <CardContent className="py-3">
                   <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                     <div className="flex min-w-0 flex-1 items-center gap-3">
                       <Avatar className="h-8 w-8">
-                        <AvatarFallback className={`text-xs font-semibold ${guestAvatarColor(person.personIndex)}`}>
+                        <AvatarFallback
+                          className="text-xs font-semibold"
+                          style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
+                        >
                           {getInitials(person.name)}
                         </AvatarFallback>
                       </Avatar>
@@ -2000,7 +2008,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                     ) : (
                       <>
                         <Avatar className="h-6 w-6 shrink-0">
-                          <AvatarFallback className={'text-[10px] font-semibold ' + guestAvatarColor(idx)}>
+                          <AvatarFallback
+                            className="text-[10px] font-semibold"
+                            style={guestVisualColorStyle(data.people[idx], idx)}
+                          >
                             {getInitials(person.name)}
                           </AvatarFallback>
                         </Avatar>
@@ -2185,7 +2196,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         data-testid={`rejoin-person-${idx}`}
                       >
                         <Avatar className="h-6 w-6 shrink-0">
-                          <AvatarFallback className={`text-[10px] font-semibold ${guestAvatarColor(idx)}`}>
+                          <AvatarFallback
+                            className="text-[10px] font-semibold"
+                            style={guestVisualColorStyle(data.people[idx], idx)}
+                          >
                             {getInitials(person.name)}
                           </AvatarFallback>
                         </Avatar>
@@ -2376,12 +2390,17 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             {data.people.map((person, idx) => (
               <div
                 key={person.id}
-                className={`flex min-w-0 flex-wrap items-center gap-2 rounded-lg px-3 py-2 ${
+                className={`flex min-w-0 flex-wrap items-center gap-2 rounded-lg border-l-4 px-3 py-2 ${
                   idx === myPersonIndex ? 'bg-primary/10 ring-1 ring-primary' : 'bg-muted'
                 }`}
+                style={{ borderLeftColor: guestVisualColorBorder(person, idx) }}
+                data-testid={'guest-color-person-' + idx}
               >
                 <Avatar className="h-6 w-6 shrink-0">
-                  <AvatarFallback className={`text-[10px] font-semibold ${guestAvatarColor(idx)}`}>
+                  <AvatarFallback
+                    className="text-[10px] font-semibold"
+                    style={guestVisualColorStyle(data.people[idx], idx)}
+                  >
                     {getInitials(person.name)}
                   </AvatarFallback>
                 </Avatar>
@@ -2506,7 +2525,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             >
               <Avatar className="h-6 w-6">
                 <AvatarFallback
-                  className={`text-[10px] font-semibold ${idx === personIndex ? 'bg-primary-foreground/20 text-primary-foreground' : guestAvatarColor(idx)}`}
+                  className="text-[10px] font-semibold"
+                  style={guestVisualColorStyle(data.people[idx], idx)}
                 >
                   {getInitials(person.name)}
                 </AvatarFallback>
@@ -2865,7 +2885,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           <div className="flex -space-x-1">
                             {otherClaimants.map((pi) => (
                               <Avatar key={pi} className="h-5 w-5 border-2 border-background">
-                                <AvatarFallback className={`text-[8px] font-semibold ${guestAvatarColor(pi)}`}>
+                                <AvatarFallback
+                                  className="text-[8px] font-semibold"
+                                  style={guestVisualColorStyle(data.people[pi], pi)}
+                                >
                                   {getInitials(data.people[pi]?.name ?? '?')}
                                 </AvatarFallback>
                               </Avatar>
@@ -2972,14 +2995,18 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             return (
               <Card
                 key={person.personIndex}
-                className={isActive ? 'ring-2 ring-primary' : ''}
+                className={isActive ? 'border-l-4 ring-2 ring-primary' : 'border-l-4'}
+                style={{ borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex) }}
                 data-testid={`person-total-${person.personIndex}`}
               >
                 <CardContent className="py-3">
                   <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                     <div className="flex min-w-0 flex-1 items-center gap-3">
                       <Avatar className="h-8 w-8">
-                        <AvatarFallback className={`text-xs font-semibold ${guestAvatarColor(person.personIndex)}`}>
+                        <AvatarFallback
+                          className="text-xs font-semibold"
+                          style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
+                        >
                           {getInitials(personName)}
                         </AvatarFallback>
                       </Avatar>

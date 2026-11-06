@@ -24,6 +24,9 @@ export type GuestSessionPerson = {
   // 3.7: fixed guest place, distinct from a legacy unjoined named person.
   // A place can be renamed without changing its number or stable person id.
   guestSlotNumber?: number;
+  // 3.9: immutable per-receipt visual key. Names and array indices may
+  // change; this ID must remain on the same person.
+  visualColorId?: number;
   // Trusted server-only marker for the uniquely reserved BillOK-owner name.
   // A registered creator named Илья is not necessarily the site owner.
   reservedOwner?: boolean;

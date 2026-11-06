@@ -14,7 +14,8 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Copy, Share2, Receipt, ArrowRight, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Link } from '@/i18n/navigation';
-import { getInitials, guestAvatarColor } from '@/lib/avatar';
+import { getInitials } from '@/lib/avatar';
+import { guestVisualColorStyle, guestVisualColorBorder } from '@/lib/guest-visual-color';
 import { buildVenmoPayUrl, isValidVenmoHandle } from '@/lib/venmo';
 import { groupSizeWeights, personItemShares } from '@/lib/split-calculator';
 
@@ -197,12 +198,20 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
           });
 
           return (
-            <Card key={idx} data-testid={`person-card-${idx}`}>
+            <Card
+              key={idx}
+              className="border-l-4"
+              style={{ borderLeftColor: guestVisualColorBorder(data.people[idx], idx) }}
+              data-testid={`person-card-${idx}`}
+            >
               <CardContent className="py-4">
                 <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
                   <div className="flex min-w-0 flex-1 items-center gap-3">
                     <Avatar className="h-10 w-10">
-                      <AvatarFallback className={`text-sm font-semibold ${guestAvatarColor(idx)}`}>
+                      <AvatarFallback
+                        className="text-sm font-semibold"
+                        style={guestVisualColorStyle(data.people[idx], idx)}
+                      >
                         {initials(person.name)}
                       </AvatarFallback>
                     </Avatar>

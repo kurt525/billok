@@ -2006,6 +2006,59 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
   }
 });
 
+test('Issue 3.9: mobile participant color stays with the person after rename and reload', async ({ page }) => {
+  test.setTimeout(120_000);
+  const creator = await authedContext(users.alice.email, users.alice.password);
+  let token: string | undefined;
+  try {
+    const created = await trpcMutation(creator, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Цвета гостей', subtotal: 1500, total: 1500, tax: 0, tip: 0, currency: 'RUB' },
+      items: [{ name: 'Чай', quantity: 1, unitPrice: 1500, totalPrice: 1500 }],
+      guestCount: 2,
+      joinCreator: true,
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    token = (JSON.parse(await created.text()).result.data.json as { shareToken: string }).shareToken;
+    const initial = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(initial.people.map((p: { visualColorId: number }) => p.visualColorId)).toEqual([0, 1, 2]);
+    const targetId = initial.people[1].id as string;
+
+    await page.goto('/login');
+    await page.locator('input[type=email]').fill(users.alice.email);
+    await page.locator('input[type=password]').fill(users.alice.password);
+    await page.getByRole('button', { name: 'Войти', exact: true }).click();
+    await expect(page).toHaveURL(/\/dashboard/);
+    await page.goto('/split/' + token + '/claim');
+    const colorOf = async (index: number) =>
+      page.getByTestId('guest-color-person-' + index).evaluate((element) => getComputedStyle(element).borderLeftColor);
+    await expect(page.getByTestId('guest-color-person-1')).toBeVisible({ timeout: 20_000 });
+    const before = [await colorOf(0), await colorOf(1), await colorOf(2)];
+    expect(new Set(before).size).toBe(3);
+
+    const rename = await trpcMutation(creator, 'guest.editPersonName', {
+      token,
+      targetId,
+      newName: 'Андрей П.',
+    });
+    expect(rename.ok(), await rename.text()).toBe(true);
+    await expect(page.getByTestId('guest-color-person-1')).toContainText('Андрей П.', { timeout: 20_000 });
+    expect(await colorOf(1)).toBe(before[1]);
+    await page.reload();
+    await expect(page.getByTestId('guest-color-person-1')).toContainText('Андрей П.', { timeout: 20_000 });
+    expect([await colorOf(0), await colorOf(1), await colorOf(2)]).toEqual(before);
+    for (const width of [320, 412, 720]) {
+      await page.setViewportSize({ width, height: 720 });
+      await fitsPhone(page);
+    }
+    const after = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(after.people.map((p: { id: string }) => p.id)).toEqual(initial.people.map((p: { id: string }) => p.id));
+    expect(after.people.map((p: { visualColorId: number }) => p.visualColorId)).toEqual([0, 1, 2]);
+  } finally {
+    if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
+    await creator.dispose();
+  }
+});
+
 test('Issue 3.8.3: a clean Android browser restores exactly one guest, saved dishes and tip', async ({
   browser,
   page,
