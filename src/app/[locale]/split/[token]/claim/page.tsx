@@ -504,6 +504,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const linkedToken = useRef<string | null>(null);
   // The person a personal link names, waiting for the user to confirm it's them
   const [linkOffer, setLinkOffer] = useState<ClaimIdentity | null>(null);
+  // A temporary failed lookup must not discard the only recovery credential.
+  const [linkRecoveryFailed, setLinkRecoveryFailed] = useState(false);
   // A personal link the user accepted, while it's looked up again: the card may have been open
   // while its person was removed
   const confirmedLinkToken = useRef<string | null>(null);
@@ -520,6 +522,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // Become this person on this device, and remember it for the next visit. Also settles any
   // pending personal link, so its card can't come back later and switch this device again.
   function adoptIdentity(adopted: ClaimIdentity) {
+    setLinkRecoveryFailed(false);
     setLinkOffer(null);
     linkedToken.current = null;
     confirmedLinkToken.current = null;
@@ -577,7 +580,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       const fromLink = variables.personToken === linkedToken.current;
       // The link got a definite answer (someone holds its token, or nobody does), so it can
       // leave the address bar. After an error it stays, so a reload can try it again.
-      if (fromLink) removePersonalLinkFromAddressBar();
+      if (fromLink) {
+        removePersonalLinkFromAddressBar();
+        setLinkRecoveryFailed(false);
+      }
       const outcome = resumeOutcome({
         found: data !== null,
         fromLink,
@@ -608,15 +614,16 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     },
     onError: (error, variables) => {
       if (variables.personToken !== linkedToken.current) return;
+      // No definite server answer: leave the #me credential in the URL.
+      setLinkRecoveryFailed(true);
       toast.error(localizedTrpcError(error, tc('errors.generic')));
       if (variables.personToken === confirmedLinkToken.current) {
-        // Accepting failed: keep the card and the link, so the user can accept again (on a
-        // fresh device nothing else would bring the link back)
+        // A failed acceptance retains its confirmation card.
         confirmedLinkToken.current = null;
         return;
       }
       setLinkOffer(null);
-      setTimeout(resumeStoredIdentity, 0);
+      // Never silently replace this credential with another stored identity.
     },
     onSettled: () => {
       joinInFlight.current = false;
@@ -685,6 +692,25 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   function declineLinkOffer() {
     if (joinInFlight.current) return;
     setLinkOffer(null);
+    resumeStoredIdentity();
+  }
+
+  function retryPendingPersonalLink() {
+    const pending = linkedToken.current;
+    if (!pending || joinInFlight.current) return;
+    joinInFlight.current = true;
+    storedWhenSent.current = getStoredClaimIdentity(token)?.personToken;
+    setLinkRecoveryFailed(false);
+    resumeSession.mutate({ token, personToken: pending });
+  }
+
+  function abandonPendingPersonalLink() {
+    if (joinInFlight.current) return;
+    linkedToken.current = null;
+    confirmedLinkToken.current = null;
+    setLinkRecoveryFailed(false);
+    setLinkOffer(null);
+    removePersonalLinkFromAddressBar();
     resumeStoredIdentity();
   }
 
@@ -1239,6 +1265,26 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     );
   }
 
+  // Failed first contact is not evidence that the receipt expired. Retain
+  // the #me link and keep retrying getSession in the ordinary poll cycle.
+  if (session.error && !session.data && session.error.data?.httpStatus !== 404) {
+    return (
+      <div className="mx-auto max-w-lg space-y-4 py-16 text-center" data-testid="claim-network-retry">
+        <p className="font-semibold">{t('sessionTemporaryUnavailable')}</p>
+        <p className="text-sm text-muted-foreground">{t('sessionRetryHint')}</p>
+        <Button
+          type="button"
+          className="min-h-12"
+          disabled={session.isFetching}
+          onClick={() => void session.refetch()}
+          data-testid="claim-retry-load"
+        >
+          {session.isFetching ? t('loadingSession') : t('personalLinkRecoveryRetry')}
+        </Button>
+      </div>
+    );
+  }
+
   // --- Error state ---
   if (session.error && isSessionLost(session.data !== undefined, session.error.data?.httpStatus)) {
     return (
@@ -1429,11 +1475,45 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     </Card>
   );
 
+  // A failed lookup does not mean that the person or link is invalid. Never
+  // remove the fragment for a transient network error.
+  const linkRetryCard = linkRecoveryFailed && !linkOffer && (
+    <Card className="border-primary/40" data-testid="personal-link-retry">
+      <CardContent className="space-y-3 py-4">
+        <p className="text-sm">{t('personalLinkRecoveryTemporaryFailure')}</p>
+        <div className="flex min-w-0 flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            className="min-h-11 min-w-0 whitespace-normal"
+            disabled={joining}
+            onClick={retryPendingPersonalLink}
+            data-testid="personal-link-retry-btn"
+          >
+            {t('personalLinkRecoveryRetry')}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="min-h-11 min-w-0 whitespace-normal"
+            disabled={joining}
+            onClick={abandonPendingPersonalLink}
+            data-testid="personal-link-abandon"
+          >
+            {t('personalLinkRecoveryCancel')}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
   // --- Finalized state ---
   if (data.status === 'FINALIZED') {
     return (
       <div className="space-y-6 pb-8">
         {linkOfferCard}
+        {linkRetryCard}
         <div className="text-center space-y-2 pt-4">
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
             <Check className="h-8 w-8 text-primary" />
@@ -1847,6 +1927,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         )}
 
         {linkOfferCard}
+        {linkRetryCard}
 
         {/* A registered, explicitly appointed organizer can finish the receipt
             without claiming any food or creating a fictitious guest. */}

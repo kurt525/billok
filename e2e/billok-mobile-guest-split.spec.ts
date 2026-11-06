@@ -2006,6 +2006,214 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
   }
 });
 
+test('Issue 3.8.3: a clean Android browser restores exactly one guest, saved dishes and tip', async ({
+  browser,
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const creator = await authedContext(users.alice.email, users.alice.password);
+  const fresh = await browser.newContext({ viewport: { width: 320, height: 720 }, isMobile: true, hasTouch: true });
+  const switching = await browser.newContext({ viewport: { width: 412, height: 760 }, isMobile: true, hasTouch: true });
+  let token: string | undefined;
+  try {
+    const res = await trpcMutation(creator, 'guest.createClaimSession', {
+      receiptData: {
+        merchantName: 'Восстановление гостя',
+        subtotal: 2300,
+        tax: 0,
+        tip: 0,
+        total: 2300,
+        currency: 'RUB',
+      },
+      items: [{ name: 'Суп', quantity: 1, unitPrice: 2300, totalPrice: 2300 }],
+      guestCount: 2,
+      joinCreator: true,
+    });
+    expect(res.ok(), await res.text()).toBe(true);
+    token = (JSON.parse(await res.text()).result.data.json as { shareToken: string }).shareToken;
+    const initial = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    const guestId = initial.people[1].id as string;
+    const secondId = initial.people[2].id as string;
+    const joinedRes = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: guestId,
+      name: 'Андрей',
+    });
+    expect(joinedRes.ok(), await joinedRes.text()).toBe(true);
+    const joined = JSON.parse(await joinedRes.text()).result.data.json as {
+      personId: string;
+      personToken: string;
+    };
+    const secondRes = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: secondId,
+      name: 'Сергей',
+    });
+    expect(secondRes.ok(), await secondRes.text()).toBe(true);
+    const second = JSON.parse(await secondRes.text()).result.data.json as { personToken: string };
+
+    const saved = await trpcMutation(page.request, 'guest.claimItems', {
+      token,
+      personId: guestId,
+      personToken: joined.personToken,
+      addItemIndices: [0],
+      removeItemIndices: [],
+      saveKey: '123e4567-e89b-42d3-a456-426614174083',
+    });
+    expect(saved.ok(), await saved.text()).toBe(true);
+    const tipped = await trpcMutation(page.request, 'guest.setPersonalTip', {
+      token,
+      personId: guestId,
+      personToken: joined.personToken,
+      tipCents: 175,
+    });
+    expect(tipped.ok(), await tipped.text()).toBe(true);
+    const before = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(before.people).toHaveLength(3);
+    expect(before.people[1]).toMatchObject({ id: guestId, personalLinkReady: true, tipCents: 175 });
+    expect(before.assignments).toEqual([{ itemIndex: 0, personIndices: [1] }]);
+
+    const secret = await trpcMutation(creator, 'guest.getGuestPersonalLink', { token, personId: guestId });
+    expect(secret.ok(), await secret.text()).toBe(true);
+    const recoveryToken = (JSON.parse(await secret.text()).result.data.json as { personToken: string }).personToken;
+    expect(recoveryToken).toBe(joined.personToken);
+    const cleanPage = await fresh.newPage();
+    await cleanPage.goto('/split/' + token + '/claim#me=' + recoveryToken);
+    expect(await cleanPage.evaluate((key) => localStorage.getItem(key), 'sharetab-claim:' + token)).toBeNull();
+    await expect(cleanPage.getByTestId('personal-link-offer')).toContainText('Андрей', { timeout: 20_000 });
+    await expect(cleanPage.getByTestId('personal-link-offer-replaces')).toHaveCount(0);
+    await expect.poll(() => cleanPage.url()).not.toContain('#me=');
+    await cleanPage.getByTestId('personal-link-accept').click();
+    await expect(cleanPage.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+    const persisted = await cleanPage.evaluate((key) => localStorage.getItem(key), 'sharetab-claim:' + token);
+    expect(persisted).toContain(recoveryToken);
+    await expect(cleanPage.getByTestId('personal-tip-input')).toHaveValue(/1[.,]75/);
+    await fitsPhone(cleanPage);
+
+    // Closing and reopening a browser tab still uses the same saved identity.
+    await cleanPage.close();
+    const reopened = await fresh.newPage();
+    await reopened.goto('/split/' + token + '/claim');
+    await expect(reopened.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+    await expect(reopened.getByTestId('personal-link-offer')).toHaveCount(0);
+    const after = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(after.people.map((p: { id: string }) => p.id)).toEqual(before.people.map((p: { id: string }) => p.id));
+    expect(after.people[1]).toMatchObject({ id: guestId, tipCents: 175 });
+    expect(after.assignments).toEqual(before.assignments);
+    const illegal = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: guestId,
+      name: 'Ещё один гость',
+    });
+    expect(illegal.ok()).toBe(false);
+    expect((await trpcError(illegal))?.data?.code).toBe('CONFLICT');
+
+    // If another person already uses this browser, the personal link must
+    // never silently replace their local identity. They can decline or
+    // explicitly accept switching, and both server person IDs stay intact.
+    const switchPage = await switching.newPage();
+    await switchPage.goto('/split/' + token + '/claim');
+    await switchPage.evaluate(({ key, saved }) => localStorage.setItem(key, saved), {
+      key: 'sharetab-claim:' + token,
+      saved: JSON.stringify({ name: 'Сергей', personToken: second.personToken }),
+    });
+    await switchPage.goto('about:blank');
+    await switchPage.goto('/split/' + token + '/claim#me=' + recoveryToken);
+    await expect(switchPage.getByTestId('personal-link-offer-replaces')).toContainText('Сергей', {
+      timeout: 20_000,
+    });
+    const originallyStored = await switchPage.evaluate((key) => localStorage.getItem(key), 'sharetab-claim:' + token);
+    expect(originallyStored).toContain(second.personToken);
+    await switchPage.getByTestId('personal-link-decline').click();
+    await expect(switchPage.getByTestId('personal-link-offer')).toHaveCount(0);
+    expect(await switchPage.evaluate((key) => localStorage.getItem(key), 'sharetab-claim:' + token)).toContain(
+      second.personToken,
+    );
+    await switchPage.goto('/split/' + token + '/claim#me=' + recoveryToken);
+    await expect(switchPage.getByTestId('personal-link-offer-replaces')).toContainText('Сергей', {
+      timeout: 20_000,
+    });
+    await switchPage.getByTestId('personal-link-accept').click();
+    await expect(switchPage.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+    expect(await switchPage.evaluate((key) => localStorage.getItem(key), 'sharetab-claim:' + token)).toContain(
+      recoveryToken,
+    );
+    await fitsPhone(switchPage);
+
+    // Another participant's token remains bound to their separate person ID.
+    const secondResume = await trpcMutation(page.request, 'guest.resumeSession', {
+      token,
+      personToken: second.personToken,
+    });
+    expect(secondResume.ok(), await secondResume.text()).toBe(true);
+    expect((JSON.parse(await secondResume.text()).result.data.json as { personId: string }).personId).toBe(secondId);
+  } finally {
+    if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
+    await fresh.close();
+    await switching.close();
+    await creator.dispose();
+  }
+});
+
+test('Issue 3.8.3: mobile recovery survives first-load outage and failed personal-link lookup', async ({
+  browser,
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const creator = await authedContext(users.alice.email, users.alice.password);
+  const clean = await browser.newContext({ viewport: { width: 360, height: 720 }, isMobile: true, hasTouch: true });
+  let token: string | undefined;
+  try {
+    const res = await trpcMutation(creator, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Сетевая ошибка', subtotal: 1500, tax: 0, tip: 0, total: 1500, currency: 'RUB' },
+      items: [{ name: 'Чай', quantity: 1, unitPrice: 1500, totalPrice: 1500 }],
+      guestCount: 1,
+      joinCreator: true,
+    });
+    expect(res.ok(), await res.text()).toBe(true);
+    token = (JSON.parse(await res.text()).result.data.json as { shareToken: string }).shareToken;
+    const info = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    const id = info.people[1].id as string;
+    const joinedRes = await trpcMutation(page.request, 'guest.joinGuestSlot', { token, slotId: id, name: 'Олег' });
+    expect(joinedRes.ok(), await joinedRes.text()).toBe(true);
+    const joined = JSON.parse(await joinedRes.text()).result.data.json as { personToken: string };
+    const saved = await trpcMutation(page.request, 'guest.editPersonName', {
+      token,
+      targetId: id,
+      personToken: joined.personToken,
+      newName: 'Олег П.',
+    });
+    expect(saved.ok(), await saved.text()).toBe(true);
+
+    const guest = await clean.newPage();
+    const failsSession = (url: URL) => url.pathname.includes('guest.getSession');
+    const failsResume = (url: URL) => url.pathname.includes('guest.resumeSession');
+    await guest.route(failsSession, (route) => route.fulfill({ status: 503, body: 'temporarily unavailable' }));
+    await guest.goto('/split/' + token + '/claim#me=' + joined.personToken);
+    await expect(guest.getByTestId('claim-network-retry')).toBeVisible({ timeout: 30_000 });
+    await expect(guest.getByTestId('claim-retry-load')).toBeVisible();
+    expect(guest.url()).toContain('#me=' + joined.personToken);
+    await guest.unroute(failsSession);
+    await guest.route(failsResume, (route) => route.fulfill({ status: 503, body: 'temporarily unavailable' }));
+    await guest.getByTestId('claim-retry-load').click();
+    await expect(guest.getByTestId('personal-link-retry')).toBeVisible({ timeout: 30_000 });
+    expect(guest.url()).toContain('#me=' + joined.personToken);
+    await guest.unroute(failsResume);
+    await guest.getByTestId('personal-link-retry-btn').click();
+    await expect(guest.getByTestId('personal-link-offer')).toContainText('Олег П.', { timeout: 20_000 });
+    await guest.getByTestId('personal-link-accept').click();
+    await expect(guest.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+    await fitsPhone(guest);
+    const after = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(after.people).toHaveLength(2);
+    expect(after.people[1]).toMatchObject({ id, name: 'Олег П.' });
+  } finally {
+    if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
+    await clean.close();
+    await creator.dispose();
+  }
+});
+
 test('Issue 3.8.2: only a receipt creator can reveal and copy a saved guest link on mobile', async ({
   browser,
   page,
