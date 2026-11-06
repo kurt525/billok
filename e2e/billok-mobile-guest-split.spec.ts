@@ -2004,6 +2004,134 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
   }
 });
 
+test('Issue 3.7.2: parallel devices reserve one fixed guest slot once; others keep their places', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(150_000);
+  const creator = await authedContext(users.alice.email, users.alice.password);
+  const other = await browser.newContext({ viewport: { width: 360, height: 640 }, isMobile: true, hasTouch: true });
+  let token: string | undefined;
+  try {
+    const createdRes = await trpcMutation(creator, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Места 3.7.2', subtotal: 1201, tax: 0, tip: 0, total: 1201, currency: 'RUB' },
+      items: [{ name: 'Суп', quantity: 1, unitPrice: 1201, totalPrice: 1201 }],
+      guestCount: 2,
+      paidByGuestSlot: 2,
+      joinCreator: true,
+    });
+    const createdText = await createdRes.text();
+    expect(createdRes.ok(), createdText).toBe(true);
+    const created = JSON.parse(createdText).result.data.json as {
+      shareToken: string;
+      creator: { personId: string; personToken: string };
+    };
+    token = created.shareToken;
+
+    const before = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(before.people).toHaveLength(3);
+    expect(before.people.map((person: { guestSlotNumber?: number }) => person.guestSlotNumber)).toEqual([
+      undefined,
+      1,
+      2,
+    ]);
+    expect(before.people.map((person: { hasJoined: boolean }) => person.hasJoined)).toEqual([true, false, false]);
+    expect(before.receiptData.total).toBe(1201);
+    expect(before.paidByIndex).toBe(2);
+    expect(before.people[0].id).toBe(created.creator.personId);
+    const slot1 = before.people[1].id as string;
+    const slot2 = before.people[2].id as string;
+
+    const proposals = [
+      { ctx: page.request, name: 'Андрей', key: '123e4567-e89b-42d3-a456-426614174001' },
+      { ctx: other.request, name: 'Борис', key: '123e4567-e89b-42d3-a456-426614174002' },
+    ];
+    const attempts = await Promise.all(
+      proposals.map((entry) =>
+        trpcMutation(entry.ctx, 'guest.joinGuestSlot', {
+          token,
+          slotId: slot1,
+          name: entry.name,
+          joinKey: entry.key,
+        }),
+      ),
+    );
+    const successes = attempts.map((result, index) => (result.ok() ? index : -1)).filter((index) => index >= 0);
+    expect(successes).toHaveLength(1);
+    const winner = successes[0]!;
+    const loser = 1 - winner;
+    const refused = await trpcError(attempts[loser]!);
+    expect(refused?.data?.code).toBe('CONFLICT');
+
+    const winnerJoined = JSON.parse(await attempts[winner]!.text()).result.data.json as {
+      personId: string;
+      personToken: string;
+      name: string;
+    };
+    expect(winnerJoined.personId).toBe(slot1);
+    expect(winnerJoined.name).toBe(proposals[winner]!.name);
+    expect(winnerJoined.personToken).toMatch(/^[0-9a-f-]{36}$/);
+
+    // Losing the competition for Guest 1 does not block Guest 2.
+    const loserRes = await trpcMutation(proposals[loser]!.ctx, 'guest.joinGuestSlot', {
+      token,
+      slotId: slot2,
+      name: proposals[loser]!.name,
+    });
+    expect(loserRes.ok(), await loserRes.text()).toBe(true);
+    const loserJoined = JSON.parse(await loserRes.text()).result.data.json as {
+      personId: string;
+      personToken: string;
+      name: string;
+    };
+    expect(loserJoined.personId).toBe(slot2);
+
+    // A returning guest retains the first personId even when choosing a
+    // different slot in the request (the bearer cannot create a second row).
+    const repeatedRes = await trpcMutation(proposals[winner]!.ctx, 'guest.joinGuestSlot', {
+      token,
+      slotId: slot2,
+      name: 'Другое',
+      personToken: winnerJoined.personToken,
+    });
+    expect(repeatedRes.ok(), await repeatedRes.text()).toBe(true);
+    const repeated = JSON.parse(await repeatedRes.text()).result.data.json;
+    expect(repeated.personId).toBe(slot1);
+    expect(repeated.personToken).toBe(winnerJoined.personToken);
+
+    // The creator already owns the creator row by account id and must not
+    // accidentally occupy another guest slot while opening the shared link.
+    const creatorRes = await trpcMutation(creator, 'guest.joinGuestSlot', {
+      token,
+      slotId: slot1,
+      name: 'Случайное имя',
+    });
+    expect(creatorRes.ok(), await creatorRes.text()).toBe(true);
+    expect(JSON.parse(await creatorRes.text()).result.data.json.personId).toBe(created.creator.personId);
+
+    const after = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(after.people).toHaveLength(3);
+    expect(after.people.map((person: { id: string }) => person.id)).toEqual(
+      before.people.map((person: { id: string }) => person.id),
+    );
+    expect(after.people.map((person: { hasJoined: boolean }) => person.hasJoined)).toEqual([true, true, true]);
+    expect(after.people[1].name).toBe(winnerJoined.name);
+    expect(after.people[2].name).toBe(loserJoined.name);
+    expect(after.receiptData.total).toBe(1201);
+    expect(after.paidByIndex).toBe(2);
+    expect(JSON.stringify(after.people)).not.toContain('personToken');
+    expect(JSON.stringify(after.people)).not.toContain('accountUserId');
+
+    const legacy = await trpcMutation(page.request, 'guest.joinSession', { token, name: 'Лишний' });
+    expect(legacy.ok()).toBe(false);
+    expect((await trpcError(legacy))?.data?.code).toBe('BAD_REQUEST');
+  } finally {
+    if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
+    await other.close();
+    await creator.dispose();
+  }
+});
+
 test('Issue 3.6.2: creator renames unjoined guests on mobile; guests can edit only themselves', async ({
   page,
   browser,

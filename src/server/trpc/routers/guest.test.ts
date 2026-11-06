@@ -1290,6 +1290,386 @@ describe('Issue 3.6: no two people share a display name inside one receipt', () 
   });
 });
 
+describe('Issue 3.7.2: atomic fixed guest slot reservation with a shared link', () => {
+  const account = { user: { id: 'registered-guest' } };
+  const anotherAccount = { user: { id: 'second-account' } };
+  const receiptData = {
+    subtotal: 1100,
+    tax: 0,
+    tip: 0,
+    total: 1100,
+    currency: 'RUB',
+    guestSlotsMode: true,
+    guestCount: 2,
+    organizerPersonId: pid(0),
+    partsApprovalHash: 'approved-digest',
+  };
+  const initialPeople: TestPerson[] = [
+    { name: 'Создатель', accountUserId: 'user-1' },
+    { name: 'Гость 1', guestSlotNumber: 1, tipCents: 25 },
+    { name: 'Гость 2', guestSlotNumber: 2 },
+  ];
+  const assignment = [{ itemIndex: 0, personIndices: [1] }];
+  beforeEach(() => {
+    claimSession(initialPeople, {
+      receiptData,
+      assignments: assignment,
+      items: [{ name: 'Чай', quantity: 1, unitPrice: 1100, totalPrice: 1100 }],
+    });
+    mockDb.user.findUnique.mockResolvedValue({
+      email: 'guest@example.com',
+      name: 'Андрей',
+      suspendedAt: null,
+    });
+  });
+
+  test('anonymous claims exact selected slot without creating any fourth participant or moving its dish', async () => {
+    const joined = await (
+      await caller()
+    ).joinGuestSlot({
+      token: 'share-1',
+      slotId: pid(1),
+      name: 'Андрей',
+      joinKey: JOIN_KEY,
+    });
+    expect(joined).toMatchObject({
+      personIndex: 1,
+      personId: pid(1),
+      name: 'Андрей',
+      personToken: expect.stringMatching(UUID),
+    });
+    const people = savedPeople() as TestPerson[];
+    expect(people).toHaveLength(3);
+    expect(people[1]).toMatchObject({
+      id: pid(1),
+      name: 'Андрей',
+      guestSlotNumber: 1,
+      tipCents: 25,
+      personToken: joined.personToken,
+      join: { key: JOIN_KEY, name: 'андрей', expiresAt: expect.any(Number) },
+    });
+    expect(people[2]).toMatchObject({ id: pid(2), name: 'Гость 2', guestSlotNumber: 2 });
+    const saved = mockDb.guestSplit.update.mock.calls[0]![0].data;
+    expect(saved).not.toHaveProperty('assignments');
+    expect(saved).not.toHaveProperty('paidByIndex');
+    expect(saved).not.toHaveProperty('receiptData');
+    expect(saved).not.toHaveProperty('summary');
+  });
+
+  test('a second device cannot claim already-occupied place or select by matching name', async () => {
+    claimSession(
+      [initialPeople[0]!, { name: 'Андрей', guestSlotNumber: 1, personToken: ALICE_TOKEN }, initialPeople[2]!],
+      { receiptData },
+    );
+    const api = await caller();
+    await expect(api.joinGuestSlot({ token: 'share-1', slotId: pid(1), name: 'Андрей' })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      messageKey: 'joinNameTaken',
+    });
+    await expect(api.joinGuestSlot({ token: 'share-1', slotId: pid(1), name: 'Олег' })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      messageKey: 'joinNameTaken',
+    });
+    await expect(api.joinGuestSlot({ token: 'share-1', slotId: pid(2), name: ' АНДРЕЙ ' })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      messageKey: 'nameTaken',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('guest with personal token recovers same place even after their name was changed by creator', async () => {
+    claimSession(
+      [initialPeople[0]!, { name: 'Андрей П.', guestSlotNumber: 1, personToken: ALICE_TOKEN }, initialPeople[2]!],
+      { receiptData },
+    );
+    const returned = await (
+      await caller()
+    ).joinGuestSlot({
+      token: 'share-1',
+      slotId: pid(2),
+      name: 'Другое',
+      personToken: ALICE_TOKEN,
+    });
+    expect(returned).toEqual({
+      personIndex: 1,
+      personId: pid(1),
+      personToken: ALICE_TOKEN,
+      name: 'Андрей П.',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('registered guest is linked to server account id, cannot take another slot on repeat login', async () => {
+    const joined = await (
+      await caller(account)
+    ).joinGuestSlot({
+      token: 'share-1',
+      slotId: pid(1),
+      name: 'Андрей',
+    });
+    const people = savedPeople() as TestPerson[];
+    expect(people[1]).toMatchObject({
+      name: 'Андрей',
+      guestSlotNumber: 1,
+      personToken: joined.personToken,
+      accountUserId: 'registered-guest',
+    });
+    claimSession(people, { receiptData });
+    mockDb.guestSplit.update.mockClear();
+    const rejoined = await (
+      await caller(account)
+    ).joinGuestSlot({
+      token: 'share-1',
+      slotId: pid(2),
+      name: 'Андрей П.',
+    });
+    expect(rejoined).toEqual(joined);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('one registered account cannot use another anonymous diner token to claim a different place', async () => {
+    claimSession(
+      [initialPeople[0]!, { name: 'Андрей', guestSlotNumber: 1, personToken: ALICE_TOKEN }, initialPeople[2]!],
+      { receiptData },
+    );
+    await expect(
+      (await caller(account)).joinGuestSlot({
+        token: 'share-1',
+        slotId: pid(2),
+        name: 'Андрей П.',
+        personToken: ALICE_TOKEN,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('different registered users can occupy different slots; other-account token is not interchangeable', async () => {
+    claimSession(
+      [
+        initialPeople[0]!,
+        { name: 'Андрей', guestSlotNumber: 1, personToken: ALICE_TOKEN, accountUserId: 'registered-guest' },
+        initialPeople[2]!,
+      ],
+      { receiptData },
+    );
+    await expect(
+      (await caller(anotherAccount)).joinGuestSlot({
+        token: 'share-1',
+        slotId: pid(1),
+        name: 'Андрей',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'joinNameTaken' });
+    await expect(
+      (await caller(anotherAccount)).joinGuestSlot({
+        token: 'share-1',
+        slotId: pid(2),
+        name: 'Олег',
+        personToken: ALICE_TOKEN,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const other = await (
+      await caller(anotherAccount)
+    ).joinGuestSlot({
+      token: 'share-1',
+      slotId: pid(2),
+      name: 'Олег',
+    });
+    expect(other.personIndex).toBe(2);
+    expect((savedPeople() as TestPerson[])[2]).toMatchObject({
+      accountUserId: 'second-account',
+      name: 'Олег',
+    });
+  });
+
+  test('creator account recovers reserved creator row without creating an extra guest or changing its name', async () => {
+    const recovered = await (
+      await caller(signedIn)
+    ).joinGuestSlot({
+      token: 'share-1',
+      slotId: pid(1),
+      name: 'Посторонний',
+    });
+    expect(recovered.personId).toBe(pid(0));
+    expect(recovered.personIndex).toBe(0);
+    expect(recovered.name).toBe('Создатель');
+    expect((savedPeople() as TestPerson[])[0]).toMatchObject({
+      accountUserId: 'user-1',
+      personToken: recovered.personToken,
+    });
+    expect((savedPeople() as TestPerson[]).length).toBe(3);
+  });
+
+  test('owner comes after another Илья: the same guest row and all other fields survive', async () => {
+    vi.stubEnv('ADMIN_EMAIL', 'owner@example.com');
+    try {
+      mockDb.user.findUnique.mockImplementation(async (args: { where: { id: string } }) =>
+        args.where.id === 'billok-owner'
+          ? { name: 'Илья', email: 'owner@example.com', suspendedAt: null }
+          : { name: 'Анна', email: 'other@example.com', suspendedAt: null },
+      );
+      claimSession(
+        [
+          initialPeople[0]!,
+          { name: ' илья ', guestSlotNumber: 1, personToken: ALICE_TOKEN, tipCents: 25 },
+          initialPeople[2]!,
+        ],
+        { receiptData, assignments: assignment },
+      );
+      const joined = await (
+        await caller({ user: { id: 'billok-owner' } })
+      ).joinGuestSlot({
+        token: 'share-1',
+        slotId: pid(2),
+        name: 'Неважно',
+      });
+      expect(joined).toMatchObject({ personId: pid(2), name: 'Илья' });
+      const people = savedPeople() as TestPerson[];
+      expect(people[1]).toMatchObject({
+        id: pid(1),
+        name: 'Илья (2)',
+        personToken: ALICE_TOKEN,
+        tipCents: 25,
+      });
+      expect(people[2]).toMatchObject({
+        id: pid(2),
+        name: 'Илья',
+        accountUserId: 'billok-owner',
+        reservedOwner: true,
+      });
+      expect(mockDb.guestSplit.update.mock.calls[0]![0].data.assignments).toBeUndefined();
+      expect(mockDb.guestSplit.update.mock.calls[0]![0].data.receiptData).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  test('a regular registered Илья cannot take the owner name after owner joins', async () => {
+    claimSession(
+      [
+        initialPeople[0]!,
+        {
+          name: 'Илья',
+          guestSlotNumber: 1,
+          accountUserId: 'billok-owner',
+          reservedOwner: true,
+          personToken: ALICE_TOKEN,
+        },
+        initialPeople[2]!,
+      ],
+      { receiptData },
+    );
+    await expect(
+      (await caller(account)).joinGuestSlot({
+        token: 'share-1',
+        slotId: pid(2),
+        name: ' иЛьЯ ',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'nameTaken' });
+  });
+
+  test('anonymous joinKey replay returns only the same slot and name; changed or stolen key is rejected', async () => {
+    const api = await caller();
+    const first = await api.joinGuestSlot({ token: 'share-1', slotId: pid(1), name: 'Андрей', joinKey: JOIN_KEY });
+    const people = savedPeople() as TestPerson[];
+    claimSession(people, { receiptData });
+    mockDb.guestSplit.update.mockClear();
+    const replay = await api.joinGuestSlot({ token: 'share-1', slotId: pid(1), name: ' АНДРЕЙ ', joinKey: JOIN_KEY });
+    expect(replay).toEqual(first);
+    await expect(
+      api.joinGuestSlot({
+        token: 'share-1',
+        slotId: pid(2),
+        name: 'Андрей',
+        joinKey: JOIN_KEY,
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'joinKeyReused' });
+    await expect(
+      (await caller(account)).joinGuestSlot({
+        token: 'share-1',
+        slotId: pid(1),
+        name: 'Андрей',
+        joinKey: JOIN_KEY,
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'joinKeyReused' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('guest slot ids from other checks, creator id, empty non-slot IDs are never claimable', async () => {
+    const api = await caller();
+    for (const id of [pid(0), pid(7)]) {
+      await expect(api.joinGuestSlot({ token: 'share-1', slotId: id, name: 'Андрей' })).rejects.toMatchObject({
+        code: 'CONFLICT',
+        messageKey: 'personGone',
+      });
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('slot joining refuses old name-based receipts, expired and finalized receipts', async () => {
+    claimSession(initialPeople, { receiptData: { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' } });
+    await expect(
+      (await caller()).joinGuestSlot({
+        token: 'share-1',
+        slotId: pid(1),
+        name: 'Андрей',
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    claimSession(initialPeople, { receiptData, status: 'FINALIZED' });
+    await expect(
+      (await caller()).joinGuestSlot({
+        token: 'share-1',
+        slotId: pid(1),
+        name: 'Андрей',
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    claimSession(initialPeople, { receiptData, expiresAt: new Date(0) });
+    await expect(
+      (await caller()).joinGuestSlot({
+        token: 'share-1',
+        slotId: pid(1),
+        name: 'Андрей',
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  test('suspended registered account cannot reserve a guest slot', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: new Date() });
+    await expect(
+      (await caller(account)).joinGuestSlot({
+        token: 'share-1',
+        slotId: pid(1),
+        name: 'Андрей',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', messageKey: 'accountSuspended' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('public getSession lists stable available slot IDs but not private account ids or tokens', async () => {
+    claimSession(initialPeople, { receiptData });
+    const result = await (await caller()).getSession({ token: 'share-1' });
+    expect(result.people).toMatchObject([
+      { id: pid(0), name: 'Создатель', hasJoined: true },
+      { id: pid(1), name: 'Гость 1', guestSlotNumber: 1, hasJoined: false },
+      { id: pid(2), name: 'Гость 2', guestSlotNumber: 2, hasJoined: false },
+    ]);
+    expect(JSON.stringify(result)).not.toContain('accountUserId');
+    expect(JSON.stringify(result)).not.toContain('personToken');
+    expect(JSON.stringify(result)).not.toContain('reservedOwner');
+  });
+
+  test('join attempts are separately rate limited by the same bounded session token', async () => {
+    checkRateLimit.mockReturnValue({ allowed: false, retryAfterMs: 0 });
+    await expect(
+      (await caller()).joinGuestSlot({
+        token: 'share-1',
+        slotId: pid(1),
+        name: 'Андрей',
+      }),
+    ).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+});
+
 describe('Issue 3.7.1: creator plus exactly N additional unclaimed guest slots', () => {
   const receiptData = { subtotal: 1401, tax: 0, tip: 0, total: 1401, currency: 'RUB' };
   const items = [{ name: 'Суп', quantity: 1, unitPrice: 1401, totalPrice: 1401 }];

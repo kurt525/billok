@@ -173,12 +173,11 @@ const JOIN_REPLAY_WINDOW_MS = 24 * 60 * 60 * 1000;
 // The most people a claim session holds
 const MAX_SESSION_PEOPLE = 100;
 
-function toPublicPerson({ name, groupSize, personToken }: GuestSessionPerson) {
-  // Never includes personToken, join or saves: no guest procedure returns another person's token
-  // (a client gets its own from joinSession; the admin export is the only place tokens leave in bulk).
-  // hasJoined tells the claim page which names are still free to join as (the results page,
-  // which reads getSplit, ignores it).
-  return { name, groupSize: groupSize ?? 1, hasJoined: !!personToken };
+function toPublicPerson({ name, groupSize, personToken, accountUserId }: GuestSessionPerson) {
+  // Public receipts never expose personal tokens or account identifiers.
+  // An account-bound creator is occupied even if device storage was unavailable
+  // when the receipt was created and there is no guest token yet.
+  return { name, groupSize: groupSize ?? 1, hasJoined: !!personToken || !!accountUserId };
 }
 
 function toPublicPeople(people: GuestSessionPerson[]) {
@@ -188,7 +187,14 @@ function toPublicPeople(people: GuestSessionPerson[]) {
 // The claim page's view of the people: public fields plus each person's id, which it uses to
 // target them (their index changes when someone listed before them is removed)
 function toClaimPeople(people: IdentifiedGuestPerson[]) {
-  return people.map((person) => ({ id: person.id, ...toPublicPerson(person), tipCents: person.tipCents ?? 0 }));
+  return people.map((person) => ({
+    id: person.id,
+    ...toPublicPerson(person),
+    // Fixed slot number is safe and necessary for the shared-link UI. The
+    // accountUserId and reservedOwner marker remain server-only.
+    ...(person.guestSlotNumber !== undefined ? { guestSlotNumber: person.guestSlotNumber } : {}),
+    tipCents: person.tipCents ?? 0,
+  }));
 }
 
 /**
@@ -950,6 +956,162 @@ export const guestRouter = createTRPCRouter({
       });
 
       return { shareToken: session.shareToken, creator };
+    }),
+
+  /** 3.7.2: join one of N preallocated guest slots by *stable person id*.
+   * The shareToken reveals available places but provides no ownership of a
+   * taken place. This is intentionally separate from legacy name-based joining.
+   * guestTransaction retries conflicting Repeatable Read writes to the same
+   * GuestSplit row; both competing requests can never commit the same free slot.
+   */
+  joinGuestSlot: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        slotId: personIdSchema,
+        name: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
+        personToken: z.string().uuid().optional(),
+        joinKey: z.string().uuid().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkJoinRateLimit(input.token, input.name, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      // A verified, active account binds to exactly one row in a receipt. A
+      // session created through impersonation is not that account's consent.
+      let accountUserId: string | null = null;
+      if (ctx.session?.user?.id && !ctx.impersonating) {
+        const account = await ctx.db.user.findUnique({
+          where: { id: ctx.session.user.id },
+          select: { suspendedAt: true },
+        });
+        if (!account) throw new AppError('UNAUTHORIZED');
+        if (account.suspendedAt) throw new AppError('FORBIDDEN', 'accountSuspended');
+        accountUserId = ctx.session.user.id;
+      }
+      const ownerId = accountUserId ? await billokOwnerUserId(ctx) : null;
+      return guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+        const receipt = parseExtractedData(session.receiptData);
+        if (receipt.guestSlotsMode !== true)
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'guest slots mode' });
+        const stored = session.people as GuestSessionPerson[];
+        if (hasDuplicateGuestNames(stored.map((person) => person.name))) {
+          throw new AppError('CONFLICT', 'nameTaken');
+        }
+        const people = assignPersonIds(stored);
+        const save = async () => {
+          enforceGuestKnownParts(
+            parseGuestItems(session.items),
+            people,
+            parseGuestAssignments(session.assignments),
+            receipt.knownPartsByItem,
+            false,
+          );
+          await tx.guestSplit.update({
+            where: { id: session.id },
+            data: {
+              // Selecting a place changes neither dish portions nor voluntary
+              // tip amounts: an already approved allocation stays approved.
+              people: people as unknown as Prisma.InputJsonValue,
+            },
+          });
+        };
+        const targetIndex = people.findIndex((p) => p.id === input.slotId && typeof p.guestSlotNumber === 'number');
+        // A registered creator can re-enter their own reserved row using
+        // their account, but cannot bind that row to a second guest slot.
+        const accountIndex = accountUserId ? people.findIndex((p) => p.accountUserId === accountUserId) : -1;
+        const bearerIndex = input.personToken ? people.findIndex((p) => p.personToken === input.personToken) : -1;
+        if (bearerIndex >= 0 && people[bearerIndex]!.accountUserId !== (accountUserId ?? undefined)) {
+          // A logged-in person cannot silently convert an anonymous personal
+          // link, or another registered account's token, into their own place.
+          // Explicit account conversion and personal links belong to 3.8.
+          throw new AppError('FORBIDDEN', 'notParticipant');
+        }
+        const existingIndex = accountIndex >= 0 ? accountIndex : bearerIndex;
+        if (existingIndex >= 0) {
+          // One registered account or previously joined guest retains exactly
+          // one position across devices/retries. A token for someone else's
+          // guest place never moves a registered account onto it.
+          if (accountIndex >= 0 && bearerIndex >= 0 && accountIndex !== bearerIndex) {
+            throw new AppError('CONFLICT', 'joinNameTaken');
+          }
+          const own = people[existingIndex]!;
+          if (own.accountUserId && own.accountUserId !== accountUserId) {
+            throw new AppError('FORBIDDEN', 'notParticipant');
+          }
+          const token = own.personToken ?? randomUUID();
+          const changed = own.personToken !== token;
+          if (changed) {
+            people[existingIndex] = { ...own, personToken: token };
+            await save();
+          }
+          return { personIndex: existingIndex, personId: own.id, personToken: token, name: own.name };
+        }
+
+        // A lost anonymous response can be replayed by a fresh device only
+        // with its own unpredictable joinKey; the key is scoped to this exact
+        // slot, name, and unauthenticated identity and has a 24h TTL.
+        const now = Date.now();
+        const replayIndex = input.joinKey
+          ? people.findIndex((p) => p.join?.key === input.joinKey && (p.join?.expiresAt ?? 0) > now)
+          : -1;
+        if (replayIndex >= 0) {
+          const replayed = people[replayIndex]!;
+          if (
+            replayed.id !== input.slotId ||
+            replayed.join!.name !== normalizeGuestName(input.name) ||
+            replayed.accountUserId !== undefined ||
+            accountUserId !== null
+          ) {
+            throw new AppError('CONFLICT', 'joinKeyReused');
+          }
+          return {
+            personIndex: replayIndex,
+            personId: replayed.id,
+            personToken: replayed.personToken!,
+            name: replayed.name,
+          };
+        }
+
+        if (targetIndex < 0) throw new AppError('CONFLICT', 'personGone');
+        const target = people[targetIndex]!;
+        if (target.personToken || target.accountUserId) {
+          throw new AppError('CONFLICT', 'joinNameTaken');
+        }
+
+        // Owner can use only their own verified name. If another diner had
+        // that name first, rename just their label, keeping ID/token/shares.
+        if (ownerId) freeOwnerName(people, targetIndex);
+        const displayName = ownerId ? RESERVED_OWNER_NAME : input.name.normalize('NFC').trim();
+        const wanted = normalizeGuestName(displayName);
+        if (people.some((p, i) => i !== targetIndex && normalizeGuestName(p.name) === wanted))
+          throw new AppError('CONFLICT', 'nameTaken');
+        const token = randomUUID();
+        const newJoin = input.joinKey
+          ? {
+              join: {
+                key: input.joinKey,
+                name: normalizeGuestName(input.name),
+                expiresAt: now + JOIN_REPLAY_WINDOW_MS,
+              },
+            }
+          : {};
+        people[targetIndex] = {
+          ...target,
+          name: displayName,
+          personToken: token,
+          ...(accountUserId ? { accountUserId } : {}),
+          ...(ownerId ? { reservedOwner: true } : {}),
+          ...newJoin,
+        };
+        await save();
+        return { personIndex: targetIndex, personId: target.id, personToken: token, name: displayName };
+      });
     }),
 
   joinSession: publicProcedure
