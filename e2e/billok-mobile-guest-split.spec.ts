@@ -1860,6 +1860,132 @@ test('Issue 2.19.3: guest personal links count 0, 3, 8 portions and cannot final
   }
 });
 
+test('Issue 3.3: guest joins by name without account or email, shares a dish and cannot create bills', async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  try {
+    const create = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: {
+        merchantName: 'Общий чек 3.3',
+        subtotal: 1001,
+        tax: 0,
+        tip: 0,
+        total: 1001,
+        currency: 'RUB',
+      },
+      items: [
+        { name: 'Общая пицца', quantity: 1, unitPrice: 800, totalPrice: 800 },
+        { name: 'Личный чай', quantity: 1, unitPrice: 201, totalPrice: 201 },
+      ],
+      creatorName: 'Анна',
+      paidByName: 'Анна',
+      joinCreator: true,
+    });
+    const createdBody = await create.text();
+    expect(create.ok(), createdBody).toBe(true);
+    const created = JSON.parse(createdBody).result.data.json as {
+      shareToken: string;
+      creator: { personId: string; personToken: string; name: string };
+    };
+    const token = created.shareToken;
+
+    // The registered creator already has a portion of the *same* pizza.
+    const creatorClaim = await trpcMutation(owner, 'guest.claimItems', {
+      token,
+      personId: created.creator.personId,
+      personToken: created.creator.personToken,
+      claimedItemIndices: [0],
+    });
+    expect(creatorClaim.ok(), await creatorClaim.text()).toBe(true);
+
+    // This browser has no session, email or registration form.
+    const authBefore = await trpcResult(await trpcQuery(page.request, 'auth.getSession'));
+    expect(authBefore?.user?.id).toBeFalsy();
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('claim-join-form')).toBeVisible();
+    await expect(page.locator('input[type=email]')).toHaveCount(0);
+    await page.getByTestId('claim-name-input').fill('Борис');
+    await page.getByTestId('claim-join-btn').click();
+    await expect(page.getByTestId('claim-item-0')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('claim-item-1')).toBeVisible();
+    await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
+
+    // The guest may claim an already selected *shared* dish and their own tea.
+    await page.getByTestId('claim-item-0').click();
+    await page.getByTestId('claim-item-1').click();
+    await expect(page.getByTestId('save-claims-btn')).toBeEnabled();
+    await page.getByTestId('save-claims-btn').click();
+    await expect
+      .poll(
+        async () => {
+          const state = await trpcResult(await trpcQuery(page.request, 'guest.getSession', { token }));
+          return state.assignments
+            .map((a: { itemIndex: number; personIndices: number[] }) => ({
+              itemIndex: a.itemIndex,
+              personIndices: [...a.personIndices].sort((a, b) => a - b),
+            }))
+            .sort((a: { itemIndex: number }, b: { itemIndex: number }) => a.itemIndex - b.itemIndex);
+        },
+        { timeout: 15_000 },
+      )
+      .toEqual([
+        { itemIndex: 0, personIndices: [0, 1] },
+        { itemIndex: 1, personIndices: [1] },
+      ]);
+    await expect(page.getByTestId('person-total-0')).toContainText('4,00', { timeout: 15_000 });
+    await expect(page.getByTestId('person-total-1')).toContainText('6,01', { timeout: 15_000 });
+    await expect(page.getByTestId('guest-parts-preliminary')).toBeVisible();
+    for (const width of [320, 360, 393, 412, 720]) {
+      await page.setViewportSize({ width, height: 520 });
+      const personalResult = page.getByTestId('person-total-1');
+      await personalResult.scrollIntoViewIfNeeded();
+      const rect = await personalResult.boundingBox();
+      expect(rect, 'Guest result at ' + width).not.toBeNull();
+      expect(rect!.x, 'Guest result left at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(rect!.x + rect!.width, 'Guest result right at ' + width).toBeLessThanOrEqual(width + 1);
+      await fitsPhone(page);
+    }
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
+    await expect(page.getByTestId('person-total-1')).toContainText('6,01', { timeout: 15_000 });
+    const authAfter = await trpcResult(await trpcQuery(page.request, 'auth.getSession'));
+    expect(authAfter?.user?.id).toBeFalsy();
+
+    // The guest token grants only access to this claim; it never turns an
+    // anonymous browser into an authenticated receipt/group creator.
+    for (const [proc, input] of [
+      [
+        'guest.createClaimSession',
+        {
+          receiptData: { subtotal: 100, total: 100, tax: 0, tip: 0, currency: 'RUB' },
+          items: [{ name: 'Чай', quantity: 1, unitPrice: 100, totalPrice: 100 }],
+          creatorName: 'Борис',
+          paidByName: 'Борис',
+        },
+      ],
+      [
+        'guest.createSplit',
+        {
+          receiptData: { subtotal: 100, total: 100, tax: 0, tip: 0, currency: 'RUB' },
+          items: [{ name: 'Чай', quantity: 1, unitPrice: 100, totalPrice: 100 }],
+          people: [{ name: 'Борис' }],
+          assignments: [{ itemIndex: 0, personIndices: [0] }],
+        },
+      ],
+      ['groups.create', { name: 'Недоступная группа' }],
+      ['receipts.createManual', { groupId: 'not-a-member' }],
+    ] as const) {
+      const denied = await trpcMutation(page.request, proc, input);
+      const error = await trpcError(denied);
+      expect(error?.data?.code, proc).toBe('UNAUTHORIZED');
+    }
+  } finally {
+    await owner.dispose();
+  }
+});
+
 test('Issue 3.2: a registered owner independently creates groups, receipts and expenses; other account is isolated', async () => {
   test.setTimeout(180_000);
   const owner = await authedContext(users.alice.email, users.alice.password);
