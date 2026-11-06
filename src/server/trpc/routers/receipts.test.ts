@@ -114,6 +114,84 @@ describe('manual group bill authorization and storage', () => {
   });
 });
 
+describe('Issue 3.2: only members may create and read manual receipts', () => {
+  beforeEach(() => {
+    mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => unknown) => fn(mockDb));
+    mockDb.$queryRaw.mockResolvedValue([{ archivedAt: null }]);
+    mockDb.group.findUnique.mockResolvedValue({ currency: 'RUB' });
+  });
+
+  test('one authenticated member may independently create repeated manual receipts', async () => {
+    mockDb.groupMember.findUnique.mockResolvedValue({ role: 'MEMBER', userId: 'u1', groupId: 'g1' });
+    mockDb.receipt.create.mockImplementation(async () => ({
+      id: 'receipt-' + mockDb.receipt.create.mock.calls.length,
+    }));
+    const api = await caller();
+    for (let i = 1; i <= 3; i++) {
+      await expect(api.createManual({ groupId: 'g1' })).resolves.toEqual({ receiptId: 'receipt-' + i });
+    }
+    expect(mockDb.receipt.create).toHaveBeenCalledTimes(3);
+    for (const [query] of mockDb.receipt.create.mock.calls) {
+      expect(query.data.groupId).toBe('g1');
+      expect(query.data.uploadedById).toBe('u1');
+      expect(query.data.savedById).toBe('u1');
+    }
+  });
+
+  test('non-member cannot create a receipt, even with a known group ID', async () => {
+    mockDb.groupMember.findUnique.mockResolvedValue(null);
+    await expect((await caller('outsider')).createManual({ groupId: 'g1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.receipt.create).not.toHaveBeenCalled();
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('non-member cannot read a receipt or its item assignments by guessing its ID', async () => {
+    mockDb.receipt.findUnique.mockResolvedValue({
+      id: 'r-private',
+      groupId: 'g1',
+      group: { members: [{ userId: 'u1' }] },
+      items: [{ id: 'private-item', totalPrice: 12345, assignments: [] }],
+    });
+    await expect((await caller('outsider')).getReceiptItems({ receiptId: 'r-private' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.receipt.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'r-private' },
+        include: expect.objectContaining({
+          group: { include: { members: { where: { removedAt: null } } } },
+        }),
+      }),
+    );
+  });
+
+  test('another group member can see a receipt, but not a private receipt from an unrelated group', async () => {
+    mockDb.receipt.findUnique
+      .mockResolvedValueOnce({
+        id: 'r1',
+        groupId: 'g1',
+        originalName: 'billok-manual',
+        extractedData: { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' },
+        uploadedById: 'u1',
+        status: 'COMPLETED',
+        items: [],
+        group: { members: [{ userId: 'u2' }] },
+      })
+      .mockResolvedValueOnce({
+        id: 'r2',
+        groupId: 'g2',
+        items: [],
+        group: { members: [{ userId: 'u1' }] },
+      });
+    await expect((await caller('u2')).getReceiptItems({ receiptId: 'r1' })).resolves.toMatchObject({ items: [] });
+    await expect((await caller('u2')).getReceiptItems({ receiptId: 'r2' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+});
+
 describe('manual group receipt: each member saves only their own voluntary tip', () => {
   const baseData = { subtotal: 505, tax: 0, tip: 0, total: 505, currency: 'RUB' };
   const receipt = {

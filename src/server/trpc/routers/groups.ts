@@ -49,7 +49,6 @@ export const groupsRouter = createTRPCRouter({
         members: { some: { userId: ctx.user.id, removedAt: null } },
         archivedAt: null,
       },
-      take: 200,
       include: {
         members: {
           where: { removedAt: null },
@@ -72,7 +71,6 @@ export const groupsRouter = createTRPCRouter({
         members: { some: { userId: ctx.user.id, removedAt: null } },
         archivedAt: { not: null },
       },
-      take: 200,
       include: {
         members: {
           where: { removedAt: null },

@@ -126,6 +126,54 @@ test.each(['list', 'listArchived'] as const)(
   },
 );
 
+describe('Issue 3.2: independent groups, no artificial list cap, private membership', () => {
+  test.each(['list', 'listArchived'] as const)(
+    '%s returns every matching group including results after the previous 200-group cutoff',
+    async (procedure) => {
+      const groups = Array.from({ length: 225 }, (_, i) => ({ id: 'owned-' + i, name: 'Group ' + i }));
+      mockDb.group.findMany.mockResolvedValue(groups);
+      const listed = await (await caller('owner'))[procedure]();
+      expect(listed).toHaveLength(225);
+      expect(listed.at(-1)?.id).toBe('owned-224');
+      const query = mockDb.group.findMany.mock.calls[0]![0];
+      expect(query).not.toHaveProperty('take');
+      expect(query.where.members.some).toEqual({ userId: 'owner', removedAt: null });
+    },
+  );
+
+  test('a signed-in user can create successive groups without a per-user quota', async () => {
+    mockDb.group.create.mockImplementation(async ({ data }: { data: { name: string } }) => ({
+      id: 'g-' + data.name,
+      ...data,
+    }));
+    const owner = await caller('owner');
+    for (let i = 0; i < 3; i++) {
+      const created = await owner.create({ name: 'Own ' + i });
+      expect(created.id).toBe('g-Own ' + i);
+    }
+    expect(mockDb.group.create).toHaveBeenCalledTimes(3);
+    for (const [index, [query]] of mockDb.group.create.mock.calls.entries()) {
+      expect(query.data.members.create).toEqual({ userId: 'owner', role: 'OWNER' });
+      expect(query.data.name).toBe('Own ' + index);
+    }
+  });
+
+  test('another signed-in user can create their own group but never open or change a foreign one', async () => {
+    mockDb.group.create.mockResolvedValue({ id: 'other-group' });
+    await (await caller('outsider')).create({ name: 'My own group' });
+    expect(mockDb.group.create.mock.calls[0]![0].data.members.create.userId).toBe('outsider');
+
+    mockDb.groupMember.findUnique.mockResolvedValue(null);
+    const outsider = await caller('outsider');
+    await expect(outsider.get({ groupId: 'g1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(outsider.update({ groupId: 'g1', name: 'Hijacked' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.group.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('group and placeholder names are trimmed', () => {
   test('create refuses a group name that is only whitespace', async () => {
     const api = await caller();

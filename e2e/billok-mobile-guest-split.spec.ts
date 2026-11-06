@@ -5,6 +5,7 @@ import {
   rememberClaimIdentity,
   trpcMutation,
   trpcQuery,
+  trpcError,
   trpcResult,
   users,
 } from './helpers';
@@ -1855,6 +1856,93 @@ test('Issue 2.19.3: guest personal links count 0, 3, 8 portions and cannot final
     expect(result.summary.every((entry: { tip: number }) => entry.tip === 0)).toBe(true);
   } finally {
     await second.close();
+    await owner.dispose();
+  }
+});
+
+test('Issue 3.2: a registered owner independently creates groups, receipts and expenses; other account is isolated', async () => {
+  test.setTimeout(180_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const outsider = await authedContext(users.bob.email, users.bob.password);
+  const createdIds: string[] = [];
+  const unique = String(Date.now());
+  try {
+    for (const index of [1, 2]) {
+      const created = await trpcMutation(owner, 'groups.create', { name: '3.2 Own group ' + unique + '-' + index });
+      expect(created.ok(), await created.text()).toBe(true);
+      const group = (await created.json()).result.data.json as { id: string };
+      createdIds.push(group.id);
+      const detail = await trpcResult(await trpcQuery(owner, 'groups.get', { groupId: group.id }));
+      const creatorId = detail.members.find(
+        (member: { user: { email: string } }) => member.user.email === users.alice.email,
+      )?.user.id as string | undefined;
+      expect(creatorId).toBeTruthy();
+
+      // Every new group permits its own manual receipt and exact RUB expense.
+      const receiptResponse = await trpcMutation(owner, 'receipts.createManual', { groupId: group.id });
+      expect(receiptResponse.ok(), await receiptResponse.text()).toBe(true);
+      const receiptId = (await receiptResponse.json()).result.data.json.receiptId as string;
+      const ownReceipt = await trpcQuery(owner, 'receipts.getReceiptItems', { receiptId });
+      expect(ownReceipt.ok(), await ownReceipt.text()).toBe(true);
+
+      const amount = 100 + index;
+      const expenseResponse = await trpcMutation(owner, 'expenses.create', {
+        groupId: group.id,
+        title: '3.2 expense ' + index,
+        amount,
+        currency: 'RUB',
+        paidById: creatorId,
+        splitMode: 'EQUAL',
+        shares: [{ userId: creatorId, amount }],
+      });
+      expect(expenseResponse.ok(), await expenseResponse.text()).toBe(true);
+      const expenseId = (await expenseResponse.json()).result.data.json.id as string;
+      const ownExpense = await trpcResult(
+        await trpcQuery(owner, 'expenses.get', {
+          groupId: group.id,
+          expenseId,
+        }),
+      );
+      expect(ownExpense.amount).toBe(amount);
+      expect(ownExpense.currency).toBe('RUB');
+
+      // Knowing a group, receipt or expense ID never confers membership.
+      for (const foreignQuery of [
+        trpcQuery(outsider, 'groups.get', { groupId: group.id }),
+        trpcQuery(outsider, 'receipts.getReceiptItems', { receiptId }),
+        trpcQuery(outsider, 'expenses.get', { groupId: group.id, expenseId }),
+        trpcQuery(outsider, 'expenses.list', { groupId: group.id }),
+      ]) {
+        const response = await foreignQuery;
+        const error = await trpcError(response);
+        expect(error?.data?.code).toBe('FORBIDDEN');
+      }
+      for (const forbiddenCreate of [
+        trpcMutation(outsider, 'receipts.createManual', { groupId: group.id }),
+        trpcMutation(outsider, 'expenses.create', {
+          groupId: group.id,
+          title: 'Unauthorized',
+          amount: 1,
+          paidById: creatorId,
+          splitMode: 'EQUAL',
+          shares: [{ userId: creatorId, amount: 1 }],
+        }),
+      ]) {
+        const response = await forbiddenCreate;
+        expect(response.ok(), await response.text()).toBe(false);
+      }
+    }
+    const ownGroups = await trpcResult(await trpcQuery(owner, 'groups.list'));
+    const outsiderGroups = await trpcResult(await trpcQuery(outsider, 'groups.list'));
+    for (const id of createdIds) {
+      expect(ownGroups.some((group: { id: string }) => group.id === id)).toBe(true);
+      expect(outsiderGroups.some((group: { id: string }) => group.id === id)).toBe(false);
+    }
+  } finally {
+    for (const groupId of createdIds) {
+      await trpcMutation(owner, 'groups.delete', { groupId }).catch(() => undefined);
+    }
+    await outsider.dispose();
     await owner.dispose();
   }
 });

@@ -9,7 +9,7 @@ const mockDb = {
   user: { findUnique: vi.fn() },
   group: { findUnique: vi.fn() },
   groupMember: { findUnique: vi.fn(), findFirst: vi.fn(), count: vi.fn() },
-  expense: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
+  expense: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
   expenseShare: { findMany: vi.fn(), deleteMany: vi.fn(), createMany: vi.fn() },
   activityLog: { create: vi.fn() },
   $transaction: vi.fn(),
@@ -44,6 +44,72 @@ beforeEach(() => {
       ...(args.include?.receipt || args.select?.receipt ? { receipt: scannedReceipt } : {}),
     }),
   );
+});
+
+describe('Issue 3.2: expenses in own group only, no per-owner creation quota', () => {
+  test('cannot list, read or create expenses in a group without active membership', async () => {
+    mockDb.groupMember.findUnique.mockResolvedValue(null);
+    const api = await caller();
+    await expect(api.list({ groupId: 'foreign' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.get({ groupId: 'foreign', expenseId: 'e1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      api.create({
+        groupId: 'foreign',
+        title: 'Unauthorized',
+        amount: 101,
+        paidById: 'u1',
+        splitMode: 'EQUAL',
+        shares: [{ userId: 'u1', amount: 101 }],
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.expense.findMany).not.toHaveBeenCalled();
+    expect(mockDb.expense.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.expense.create).not.toHaveBeenCalled();
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('different authenticated members can create their own successive exact RUB expenses', async () => {
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'RUB' });
+    mockDb.$queryRaw.mockResolvedValue([{ archivedAt: null }]);
+    mockDb.groupMember.findFirst.mockResolvedValue({ userId: 'u1' });
+    mockDb.groupMember.count.mockResolvedValue(1);
+    mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => unknown) => fn(mockDb));
+    mockDb.expense.create.mockImplementation(async ({ data }: { data: { title: string } }) => ({
+      id: 'expense-' + data.title,
+      shares: [],
+    }));
+    const api = await caller();
+    for (let i = 0; i < 3; i++) {
+      const result = await api.create({
+        groupId: 'g1',
+        title: 'Receipt ' + i,
+        amount: 101 + i,
+        paidById: 'u1',
+        splitMode: 'EQUAL',
+        shares: [{ userId: 'u1', amount: 101 + i }],
+      });
+      expect(result.id).toBe('expense-Receipt ' + i);
+    }
+    expect(mockDb.expense.create).toHaveBeenCalledTimes(3);
+    for (const [index, [query]] of mockDb.expense.create.mock.calls.entries()) {
+      expect(query.data.amount).toBe(101 + index);
+      expect(query.data.currency).toBe('RUB');
+      expect(query.data.addedById).toBe('u1');
+      expect(query.data.shares.create).toEqual([{ userId: 'u1', amount: 101 + index, shares: 1 }]);
+    }
+  });
+
+  test('expense lookup does not disclose a different group when IDs are guessed', async () => {
+    mockDb.expense.findUnique.mockResolvedValue({
+      id: 'foreign-expense',
+      groupId: 'other-group',
+      amount: 987,
+    });
+    const api = await caller();
+    await expect(api.get({ groupId: 'g1', expenseId: 'foreign-expense' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
 });
 
 describe('expenses.get (#280)', () => {
