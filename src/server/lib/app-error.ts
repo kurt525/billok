@@ -30,12 +30,21 @@ function translate(locale: Locale, key: string, values?: ErrorValues): string {
 export class AppError extends TRPCError {
   readonly messageKey: ErrorKey | null;
   readonly messageValues: ErrorValues | undefined;
+  // The nonnegative amount still free at the committed snapshot that rejected
+  // a personal parts edit. Exposed only on that one structured conflict.
+  readonly remainingParts: number | undefined;
 
-  constructor(code: ErrorCode, key?: ErrorKey, values?: ErrorValues, options?: { cause?: unknown }) {
+  constructor(
+    code: ErrorCode,
+    key?: ErrorKey,
+    values?: ErrorValues,
+    options?: { cause?: unknown; remainingParts?: number },
+  ) {
     super({ code, message: key ? englishMessage(key, values) : englishGeneric(code), cause: options?.cause });
     this.name = 'AppError';
     this.messageKey = key ?? null;
     this.messageValues = values;
+    this.remainingParts = options?.remainingParts;
   }
 }
 
@@ -90,6 +99,13 @@ export function errorShape<Shape extends { message: string; data: object }>(
   return {
     ...shape,
     message: userErrorMessage(error, locale),
-    data: { ...shape.data, messageKey: error instanceof AppError ? error.messageKey : null },
+    data: {
+      ...shape.data,
+      messageKey: error instanceof AppError ? error.messageKey : null,
+      // Only a known-original-parts conflict has a numeric remainder.
+      ...(error instanceof AppError && error.remainingParts !== undefined
+        ? { remainingParts: error.remainingParts }
+        : {}),
+    },
   };
 }

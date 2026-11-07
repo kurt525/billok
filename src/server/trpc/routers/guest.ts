@@ -1704,15 +1704,31 @@ export const guestRouter = createTRPCRouter({
           (item) => item.itemIndex === input.itemIndex && item.personIndices.includes(personIndex),
         );
         if (!target) throw new AppError('PRECONDITION_FAILED', 'itemsUnassigned');
+        // All counts below come from one PostgreSQL Repeatable Read snapshot.
+        // On a concurrent write, PostgreSQL aborts this transaction and
+        // guestTransaction retries from a fresh snapshot, preserving the
+        // other participant's already committed number of parts.
+        const knownPartsByItem = parseExtractedData(session.receiptData).knownPartsByItem;
+        const progressBefore = guestKnownPartsBalance({
+          items,
+          people,
+          assignments,
+          knownPartsByItem,
+        }).progressByItem[String(input.itemIndex)];
+        const savedParts = target.partsByPersonId?.[input.personId] ?? people[personIndex]!.groupSize ?? 1;
+        // A set is an absolute number, never a delta added again after retry.
+        // Only an explicitly declared original count imposes a free-parts limit.
+        if (progressBefore && input.parts > savedParts && input.parts - savedParts > progressBefore.remainingParts) {
+          throw new AppError('PRECONDITION_FAILED', 'receiptKnownPartsOverclaimed', undefined, {
+            remainingParts: Math.max(0, progressBefore.remainingParts),
+          });
+        }
+        let progressAfter = progressBefore;
         if (target.partsByPersonId?.[input.personId] !== input.parts) {
           target.partsByPersonId = { ...target.partsByPersonId, [input.personId]: input.parts };
-          enforceGuestKnownParts(
-            items,
-            people,
-            assignments,
-            parseExtractedData(session.receiptData).knownPartsByItem,
-            false,
-          );
+          progressAfter = enforceGuestKnownParts(items, people, assignments, knownPartsByItem, false).progressByItem[
+            String(input.itemIndex)
+          ];
           // Enforce the stored result is still an integer-kopeck division of
           // the same receipt item before persisting.
           calculateSplitTotals({
@@ -1738,7 +1754,13 @@ export const guestRouter = createTRPCRouter({
             },
           });
         }
-        return { success: true, parts: input.parts };
+        return {
+          success: true,
+          parts: input.parts,
+          // Null is significant: no original number of pieces was declared,
+          // so there is no artificial "free remainder" to report or enforce.
+          remainingParts: progressAfter?.remainingParts ?? null,
+        };
       });
     }),
 

@@ -3238,6 +3238,181 @@ test('Issue 3.15: receipt corrections recalculate claims and known pieces on thr
   }
 });
 
+test('Issue 3.18: PostgreSQL concurrent personal parts writes are absolute, bounded only by declared original', async ({
+  browser,
+  page,
+}) => {
+  test.setTimeout(170_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const secondDevice = await browser.newContext({
+    viewport: { width: 360, height: 760 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  let token: string | undefined;
+  try {
+    const response = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: {
+        merchantName: 'Конкурентные части',
+        subtotal: 801,
+        total: 801,
+        tax: 0,
+        tip: 0,
+        currency: 'RUB',
+      },
+      items: [{ name: 'Пицца', quantity: 1, unitPrice: 801, totalPrice: 801 }],
+      guestCount: 2,
+      joinCreator: true,
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    const created = JSON.parse(await response.text()).result.data.json as { shareToken: string };
+    token = created.shareToken;
+    const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const firstJoin = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[1].id,
+      name: 'Анна',
+    });
+    expect(firstJoin.ok(), await firstJoin.text()).toBe(true);
+    const anna = JSON.parse(await firstJoin.text()).result.data.json as {
+      personId: string;
+      personToken: string;
+      name: string;
+    };
+    const secondJoin = await trpcMutation(secondDevice.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[2].id,
+      name: 'Борис',
+    });
+    expect(secondJoin.ok(), await secondJoin.text()).toBe(true);
+    const boris = JSON.parse(await secondJoin.text()).result.data.json as {
+      personId: string;
+      personToken: string;
+      name: string;
+    };
+    await rememberClaimIdentity(page.context(), token, anna);
+    await rememberClaimIdentity(secondDevice, token, boris);
+    const borisPage = await secondDevice.newPage();
+    await page.setViewportSize({ width: 393, height: 760 });
+    await page.goto('/split/' + token + '/claim');
+    await borisPage.goto('/split/' + token + '/claim');
+    for (const viewer of [page, borisPage]) {
+      await expect(viewer.getByTestId('claim-item-0')).toBeVisible({ timeout: 25_000 });
+    }
+    const claims = await Promise.all([
+      trpcMutation(page.request, 'guest.claimItems', {
+        token,
+        personId: anna.personId,
+        personToken: anna.personToken,
+        addItemIndices: [0],
+      }),
+      trpcMutation(secondDevice.request, 'guest.claimItems', {
+        token,
+        personId: boris.personId,
+        personToken: boris.personToken,
+        addItemIndices: [0],
+      }),
+    ]);
+    for (const claim of claims) expect(claim.ok(), await claim.text()).toBe(true);
+    const setKnown = await trpcMutation(owner, 'guest.setKnownItemParts', {
+      token,
+      itemIndex: 0,
+      totalParts: 10,
+    });
+    expect(setKnown.ok(), await setKnown.text()).toBe(true);
+
+    const setParts = (ctx: typeof page.request, person: typeof anna, parts: number) =>
+      trpcMutation(ctx, 'guest.setMyItemParts', {
+        token,
+        personId: person.personId,
+        personToken: person.personToken,
+        itemIndex: 0,
+        parts,
+      });
+    const firstWrites = await Promise.all([setParts(page.request, anna, 3), setParts(secondDevice.request, boris, 5)]);
+    for (const result of firstWrites) {
+      expect(result.ok(), await result.text()).toBe(true);
+      const saved = JSON.parse(await result.text()).result.data.json;
+      expect(saved.success).toBe(true);
+      expect(saved.remainingParts).toBeGreaterThanOrEqual(2);
+      expect(saved.remainingParts).toBeLessThanOrEqual(6);
+    }
+    let stored = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(stored.assignments[0].partsByPersonId).toEqual({
+      [anna.personId]: 3,
+      [boris.personId]: 5,
+    });
+    for (const viewer of [page, borisPage]) {
+      await expect(viewer.getByTestId('guest-claimed-parts-progress-0')).toContainText(
+        'Осталось нераспределённых частей: 2',
+        { timeout: 25_000 },
+      );
+    }
+    // Retrying the same absolute target must not add three more portions.
+    const replay = await setParts(page.request, anna, 3);
+    expect(replay.ok(), await replay.text()).toBe(true);
+    expect(JSON.parse(await replay.text()).result.data.json).toMatchObject({
+      success: true,
+      parts: 3,
+      remainingParts: 2,
+    });
+    const overLimit = await setParts(page.request, anna, 6);
+    expect(overLimit.ok()).toBe(false);
+    const refused = await trpcError(overLimit);
+    expect(refused?.data?.code).toBe('PRECONDITION_FAILED');
+    expect(refused?.data?.remainingParts).toBe(2);
+
+    // Two independent updates can fill the remaining two parts, however
+    // the database orders the transactions and retries serialization failures.
+    const finalWrites = await Promise.all([setParts(page.request, anna, 4), setParts(secondDevice.request, boris, 6)]);
+    for (const result of finalWrites) expect(result.ok(), await result.text()).toBe(true);
+    stored = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(stored.assignments[0].partsByPersonId).toEqual({
+      [anna.personId]: 4,
+      [boris.personId]: 6,
+    });
+    for (const viewer of [page, borisPage]) {
+      await expect(viewer.getByTestId('guest-claimed-parts-progress-0')).toContainText(
+        'Осталось нераспределённых частей: 0',
+        { timeout: 25_000 },
+      );
+    }
+
+    // A missing original total removes the bound; it is not reconstructed
+    // from item quantity, price, group size or previous saved portions.
+    const unknown = await trpcMutation(owner, 'guest.setKnownItemParts', {
+      token,
+      itemIndex: 0,
+      totalParts: null,
+    });
+    expect(unknown.ok(), await unknown.text()).toBe(true);
+    const unlimited = await Promise.all([
+      setParts(page.request, anna, 9_999),
+      setParts(secondDevice.request, boris, 7_777),
+    ]);
+    for (const result of unlimited) {
+      expect(result.ok(), await result.text()).toBe(true);
+      expect(JSON.parse(await result.text()).result.data.json.remainingParts).toBeNull();
+    }
+    stored = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(stored.assignments[0].partsByPersonId).toEqual({
+      [anna.personId]: 9_999,
+      [boris.personId]: 7_777,
+    });
+    expect(stored.receiptData.knownPartsByItem).toEqual({});
+    for (const viewer of [page, borisPage]) {
+      await expect(viewer.getByTestId('guest-claimed-parts-progress-0')).toContainText(
+        'Исходное количество неизвестно',
+        { timeout: 25_000 },
+      );
+    }
+  } finally {
+    if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await secondDevice.close();
+    await owner.dispose();
+  }
+});
+
 test('Issue 3.17: concurrent guests preserve each others claims and all open screens agree', async ({
   page,
   browser,

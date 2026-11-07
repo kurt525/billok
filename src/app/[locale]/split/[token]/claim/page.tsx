@@ -409,7 +409,13 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         toast.success(t('partsSaved'));
       }
     },
-    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
+    onError: (error) => {
+      // A concurrent saved edit can consume the remaining original pieces
+      // while this phone still shows the prior count. Reload the authoritative
+      // balance before allowing another attempt.
+      void utils.guest.getSession.invalidate({ token });
+      toast.error(localizedTrpcError(error, tc('errors.generic')));
+    },
   });
 
   const setPersonalTip = trpc.guest.setPersonalTip.useMutation({

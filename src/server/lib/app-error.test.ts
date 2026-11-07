@@ -62,6 +62,19 @@ describe('errorShape', () => {
     expect(formatted.code).toBe(shape.code);
   });
 
+  test('a rejected personal-parts update returns the actual available remainder, without exposing it on other errors', () => {
+    const refusal = new AppError('PRECONDITION_FAILED', 'receiptKnownPartsOverclaimed', undefined, {
+      remainingParts: 2,
+    });
+    const formatted = errorShape(shape, refusal, 'ru');
+    expect(formatted.data).toMatchObject({
+      messageKey: 'receiptKnownPartsOverclaimed',
+      remainingParts: 2,
+    });
+    expect(formatted.message).toBe(ru.receiptKnownPartsOverclaimed);
+    expect(errorShape(shape, new AppError('FORBIDDEN'), 'ru').data).not.toHaveProperty('remainingParts');
+  });
+
   test('an error without a key has a null messageKey', () => {
     const formatted = errorShape(shape, new TRPCError({ code: 'NOT_FOUND' }), 'ru');
     expect(formatted.message).toBe(ru.generic.notFound);

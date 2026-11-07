@@ -2909,7 +2909,7 @@ describe('2.14 guest personal parts cannot change another participant', () => {
 
   test('stores only the caller own parts and retains another saved portion', async () => {
     fixture(5);
-    expect(await (await caller()).setMyItemParts(base)).toEqual({ success: true, parts: 3 });
+    expect(await (await caller()).setMyItemParts(base)).toEqual({ success: true, parts: 3, remainingParts: null });
     expect(savedAssignments()).toEqual([
       {
         itemIndex: 0,
@@ -2919,6 +2919,54 @@ describe('2.14 guest personal parts cannot change another participant', () => {
     ]);
     expect(mockDb.$transaction).toHaveBeenCalledOnce();
   });
+  test('3.18: known count returns the exact current remainder and rejects a stale overclaim without writing', async () => {
+    claimSession(diners, {
+      items: items(1),
+      receiptData: { subtotal: 100, tax: 0, tip: 0, total: 100, currency: 'RUB', knownPartsByItem: { 0: 10 } },
+      assignments: [
+        {
+          itemIndex: 0,
+          personIndices: [0, 1],
+          partsByPersonId: { [pid(0)]: 3, [pid(1)]: 5 },
+        },
+      ],
+    });
+    const api = await caller();
+    expect(await api.setMyItemParts(base)).toEqual({ success: true, parts: 3, remainingParts: 2 });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    await expect(api.setMyItemParts({ ...base, parts: 6 })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      messageKey: 'receiptKnownPartsOverclaimed',
+      remainingParts: 2,
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    expect(await api.setMyItemParts({ ...base, parts: 5 })).toEqual({
+      success: true,
+      parts: 5,
+      remainingParts: 0,
+    });
+    expect(savedAssignments()).toMatchObject([
+      {
+        partsByPersonId: { [pid(0)]: 5, [pid(1)]: 5 },
+      },
+    ]);
+  });
+
+  test('3.18: no declared total does not invent a free-parts limit; saves absolute count', async () => {
+    fixture(5);
+    const api = await caller();
+    expect(await api.setMyItemParts({ ...base, parts: 9_999 })).toEqual({
+      success: true,
+      parts: 9_999,
+      remainingParts: null,
+    });
+    expect(savedAssignments()).toMatchObject([
+      {
+        partsByPersonId: { [pid(0)]: 9_999, [pid(1)]: 5 },
+      },
+    ]);
+  });
+
   test('same value is idempotent', async () => {
     claimSession(diners, {
       items: items(1),
