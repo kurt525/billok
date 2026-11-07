@@ -11,11 +11,11 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
-import { Plus, Settings, UserPlus, ArrowRight, Receipt, Handshake, Camera, Tag, Archive, Trash2 } from 'lucide-react';
+import { Plus, Settings, UserPlus, ArrowRight, Receipt, Tag, Archive, Trash2 } from 'lucide-react';
 import { Link } from '@/i18n/navigation';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { InviteDialog } from '@/components/groups/invite-dialog';
-import { SettleDialog } from '@/components/groups/settle-dialog';
 import { PaymentsList } from '@/components/groups/payments-list';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { getInitials, avatarColor } from '@/lib/avatar';
@@ -24,14 +24,13 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
   const { groupId } = use(params);
   const locale = useLocale();
   const [showInvite, setShowInvite] = useState(false);
-  const [settleState, setSettleState] = useState<{
-    open: boolean;
-    from?: string;
-    to?: string;
-    amount?: number;
-  }>({ open: false });
   // The Venmo payment to ask about once the payer is back from Venmo
-  const [venmoPaid, setVenmoPaid] = useState<{ from: string; to: string; amount: number; toName: string } | null>(null);
+  const [venmoPaid, setVenmoPaid] = useState<{
+    from: string;
+    to: string;
+    amount: number;
+    toName: string;
+  } | null>(null);
   const [deleteReceiptId, setDeleteReceiptId] = useState<string | null>(null);
 
   const t = useTranslations('groups');
@@ -58,7 +57,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
       utils.settlements.list.invalidate({ groupId });
     },
     onError: (err) => {
-      toast.error(err.message);
+      toast.error(localizedTrpcError(err, tc('errors.generic')));
     },
   });
 
@@ -91,30 +90,31 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
   // A placeholder removed from the group still has their name in the balances: one that
   // comes back (an old expense changed) shows under it, and can be settled with them (#284)
   const memberMap = new Map([...g.members, ...g.removedMembers].map((m) => [m.user.id, m.user]));
-  const inDebts = new Set(debts.data?.debts.flatMap((d) => [d.from, d.to]) ?? []);
-  const settleParties = [...g.members, ...g.removedMembers.filter((m) => inDebts.has(m.user.id))];
   const myRole = g.members.find((m) => m.user.id === myId)?.role;
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-4">
+        <div className="flex w-full min-w-0 basis-full items-start gap-4 sm:w-auto sm:flex-1 sm:basis-auto">
           <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-accent">
             <span className="text-4xl leading-none">{g.emoji}</span>
           </div>
-          <div className="min-w-0">
-            <h1 className="truncate text-2xl font-bold leading-tight">{g.name}</h1>
-            {g.description && <p className="mt-0.5 truncate text-sm text-muted-foreground">{g.description}</p>}
+          <div className="min-w-0 flex-1 pr-2">
+            <h1 className="max-w-full break-all text-2xl font-bold leading-tight [overflow-wrap:anywhere]">{g.name}</h1>
+            {g.description && (
+              <p className="mt-0.5 text-sm text-muted-foreground [overflow-wrap:anywhere]">{g.description}</p>
+            )}
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => setShowInvite(true)}>
+          <Button variant="outline" size="sm" className="min-h-11 min-w-11" onClick={() => setShowInvite(true)}>
             <UserPlus className="mr-2 h-4 w-4" />
             {t('detail.invite')}
           </Button>
           <Button
             variant="outline"
             size="sm"
+            className="min-h-11 min-w-11"
             aria-label={t('settings.title')}
             title={t('settings.title')}
             nativeButton={false}
@@ -130,7 +130,8 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
         {g.members.map((m) => (
           <div
             key={m.user.id}
-            className={`flex items-center gap-2 rounded-full py-1 pr-3 pl-1 ${
+            data-testid="group-member-chip"
+            className={`flex min-w-0 max-w-full items-center gap-2 rounded-full py-1 pr-3 pl-1 ${
               m.user.isPlaceholder ? 'border border-dashed border-muted-foreground/40 bg-muted/50' : 'bg-muted'
             }`}
           >
@@ -148,7 +149,12 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                 {getInitials(m.user.placeholderName ?? m.user.name, m.user.email)}
               </div>
             )}
-            <span className="text-sm font-medium">{m.user.placeholderName ?? m.user.name ?? m.user.email}</span>
+            <span
+              data-testid="group-member-name"
+              className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]"
+            >
+              {m.user.placeholderName ?? m.user.name ?? m.user.email}
+            </span>
             {m.role === 'OWNER' && (
               <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
                 {t('detail.owner')}
@@ -191,17 +197,10 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
       {debts.data && debts.data.debts.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base" data-testid="balances-title">
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+              <CardTitle className="min-w-0 text-base [overflow-wrap:anywhere]" data-testid="balances-title">
                 {t('detail.balances')}
               </CardTitle>
-              {/* An archived group refuses payments (see the banner above) */}
-              {!g.archivedAt && (
-                <Button variant="outline" size="sm" onClick={() => setSettleState({ open: true })}>
-                  <Handshake className="mr-2 h-4 w-4" />
-                  {t('detail.settle')}
-                </Button>
-              )}
             </div>
           </CardHeader>
           <CardContent className="space-y-1">
@@ -217,35 +216,27 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                 isMyDebt &&
                 to?.venmoUsername &&
                 isValidVenmoHandle(to.venmoUsername);
-              const venmoUrl = showVenmo
-                ? buildVenmoPayUrl(to.venmoUsername!, debt.amount, `ShareTab: ${g.name}`)
-                : null;
+              const venmoUrl = showVenmo ? buildVenmoPayUrl(to.venmoUsername!, debt.amount, `BillOK: ${g.name}`) : null;
               return (
-                <div key={i} className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={!!g.archivedAt}
-                    className="flex flex-1 items-center gap-2 rounded-lg p-2.5 text-sm transition-all enabled:hover:bg-muted/70 enabled:hover:shadow-sm"
-                    onClick={() =>
-                      setSettleState({
-                        open: true,
-                        from: debt.from,
-                        to: debt.to,
-                        amount: debt.amount,
-                      })
-                    }
+                <div key={i} className="flex min-w-0 flex-wrap items-center gap-2">
+                  <div
+                    data-testid="group-debt-row"
+                    className="flex min-h-11 w-full min-w-0 flex-wrap items-center gap-2 rounded-lg p-2.5 text-sm"
                   >
-                    <span className="truncate text-xs font-medium text-red-600 sm:text-sm dark:text-red-400">
+                    <span className="min-w-0 text-xs font-medium text-red-600 [overflow-wrap:anywhere] sm:text-sm dark:text-red-400">
                       {from?.name ?? from?.email ?? t('detail.unknown')}
                     </span>
                     <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="truncate text-xs font-medium text-emerald-600 sm:text-sm dark:text-emerald-400">
+                    <span className="min-w-0 text-xs font-medium text-emerald-600 [overflow-wrap:anywhere] sm:text-sm dark:text-emerald-400">
                       {toName}
                     </span>
-                    <span className="ml-auto shrink-0 font-semibold tabular-nums text-red-600 dark:text-red-400">
+                    <span
+                      data-testid="group-debt-amount"
+                      className="ml-auto min-w-0 max-w-full basis-full text-right font-semibold tabular-nums text-red-600 [overflow-wrap:anywhere] sm:basis-auto dark:text-red-400"
+                    >
                       {formatCents(debt.amount, g.currency, locale)}
                     </span>
-                  </button>
+                  </div>
                   {venmoUrl && (
                     <Button
                       variant="ghost"
@@ -258,7 +249,12 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                         window.open(venmoUrl, '_blank', 'noopener,noreferrer');
                         settleTimerRef.current = setTimeout(() => {
                           settleTimerRef.current = null;
-                          setVenmoPaid({ from: debt.from, to: debt.to, amount: debt.amount, toName });
+                          setVenmoPaid({
+                            from: debt.from,
+                            to: debt.to,
+                            amount: debt.amount,
+                            toName,
+                          });
                         }, 2000);
                       }}
                       data-testid={`venmo-settle-${i}`}
@@ -289,8 +285,10 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
             {pendingReceipts.data.map((r) => {
               const summary = (
                 <>
-                  <p className="font-medium">{r.extractedData?.merchantName ?? t('detail.receipt')}</p>
-                  <p className="text-sm text-muted-foreground">
+                  <p className="min-w-0 font-medium [overflow-wrap:anywhere]">
+                    {r.extractedData?.merchantName ?? t('detail.receipt')}
+                  </p>
+                  <p className="min-w-0 text-sm text-muted-foreground [overflow-wrap:anywhere]">
                     {r.extractedData?.date ?? new Date(r.createdAt).toLocaleDateString(locale)}
                     {' · '}
                     {t('detail.savedForLater')}
@@ -299,22 +297,25 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
               );
               return (
                 <Card key={r.id} className={g.archivedAt ? undefined : 'transition-colors hover:bg-muted/50'}>
-                  <CardContent className="flex items-center justify-between py-3">
+                  <CardContent className="flex min-w-0 flex-wrap items-center justify-between gap-2 py-3">
                     {/* An archived group refuses the expense finishing a saved receipt makes; deleting one still works */}
                     {g.archivedAt ? (
                       <div className="flex-1 min-w-0">{summary}</div>
                     ) : (
-                      <Link href={`/groups/${groupId}/scan?receiptId=${r.id}`} className="flex-1 min-w-0">
+                      <Link
+                        href={`/groups/${groupId}/scan?receiptId=${r.id}`}
+                        className="flex-1 min-w-0 min-h-11 scroll-mt-20"
+                      >
                         {summary}
                       </Link>
                     )}
-                    <div className="flex items-center gap-3 ml-3">
-                      <p className="text-lg font-semibold">
+                    <div className="ml-3 flex min-w-0 flex-wrap items-center justify-end gap-2">
+                      <p className="min-w-0 text-lg font-semibold tabular-nums [overflow-wrap:anywhere]">
                         {r.extractedData ? formatCents(r.extractedData.total, g.currency, locale) : '—'}
                       </p>
                       <button
                         type="button"
-                        className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                        className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-destructive"
                         aria-label={t('detail.deleteReceipt')}
                         title={t('detail.deleteReceipt')}
                         onClick={() => setDeleteReceiptId(r.id)}
@@ -332,20 +333,16 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
 
       {/* Expenses */}
       <div>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">{t('detail.expenses')}</h2>
+        <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-2">
+          <h2 className="min-w-0 text-lg font-semibold">{t('detail.expenses')}</h2>
           {!g.archivedAt && (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex min-w-0 max-w-full flex-wrap gap-2">
               <Button
                 size="sm"
-                variant="outline"
+                className="min-h-11 min-w-0 max-w-full whitespace-normal text-center"
                 nativeButton={false}
-                render={<Link href={`/groups/${groupId}/scan`} />}
+                render={<Link href={`/groups/${groupId}/expenses/new`} />}
               >
-                <Camera className="mr-2 h-4 w-4" />
-                {t('detail.scanReceipt')}
-              </Button>
-              <Button size="sm" nativeButton={false} render={<Link href={`/groups/${groupId}/expenses/new`} />}>
                 <Plus className="mr-2 h-4 w-4" />
                 {t('detail.addExpense')}
               </Button>
@@ -362,7 +359,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
               <p className="text-muted-foreground">{t('detail.noExpenses')}</p>
               {!g.archivedAt && (
                 <Button
-                  className="mt-4"
+                  className="mt-4 min-h-11"
                   size="sm"
                   nativeButton={false}
                   render={<Link href={`/groups/${groupId}/expenses/new`} />}
@@ -378,34 +375,42 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
         {expenses.data && expenses.data.expenses.length > 0 && (
           <Card className="divide-y divide-border overflow-hidden">
             {expenses.data.expenses.map((expense, index) => (
-              <Link key={expense.id} href={`/groups/${groupId}/expenses/${expense.id}`} className="block">
+              <Link
+                key={expense.id}
+                href={`/groups/${groupId}/expenses/${expense.id}`}
+                className="block min-w-0 min-h-11 scroll-mt-20"
+              >
                 <div
-                  className={`flex items-center justify-between px-4 py-3 transition-colors hover:bg-muted/50 ${
+                  className={`flex min-w-0 flex-wrap items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-muted/50 ${
                     index % 2 === 1 ? 'bg-muted/20' : ''
                   }`}
                 >
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex min-w-0 flex-1 basis-48 items-start gap-3">
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent">
                       <Tag className="h-3.5 w-3.5 text-accent-foreground" />
                     </div>
-                    <div className="min-w-0">
-                      <p className="font-medium truncate">{expense.title}</p>
-                      <p className="text-sm text-muted-foreground">
+                    <div className="min-w-0 flex-1">
+                      <p
+                        data-testid="group-history-expense-title"
+                        className="min-w-0 font-medium [overflow-wrap:anywhere]"
+                      >
+                        {expense.title}
+                      </p>
+                      <p className="min-w-0 text-sm text-muted-foreground [overflow-wrap:anywhere]">
                         {t('detail.paidBy', {
                           name: expense.paidBy.name ?? expense.paidBy.email ?? t('detail.unknown'),
                         })}
                         {' · '}
-                        {new Date(expense.expenseDate).toLocaleDateString(locale)}
-                        {expense.category && (
-                          <span className="ml-1 text-muted-foreground/70">
-                            {' · '}
-                            {expense.category}
-                          </span>
-                        )}
+                        <span data-testid="group-history-expense-date" className="[overflow-wrap:anywhere]">
+                          {new Date(expense.expenseDate).toLocaleDateString(locale)}
+                        </span>
                       </p>
                     </div>
                   </div>
-                  <p className="ml-4 shrink-0 text-lg font-semibold tabular-nums">
+                  <p
+                    data-testid="group-history-expense-amount"
+                    className="ml-auto min-w-0 max-w-full text-right text-lg font-semibold tabular-nums [overflow-wrap:anywhere]"
+                  >
                     {formatCents(
                       expense.amount,
                       expense.baseCurrencyAmount != null ? expense.currency : g.currency,
@@ -429,16 +434,6 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
 
       <InviteDialog groupId={groupId} open={showInvite} onOpenChange={setShowInvite} />
 
-      <SettleDialog
-        groupId={groupId}
-        members={settleParties.map((m) => ({ id: m.user.id, name: m.user.name ?? m.user.email }))}
-        {...(settleState.from !== undefined ? { suggestedFrom: settleState.from } : {})}
-        {...(settleState.to !== undefined ? { suggestedTo: settleState.to } : {})}
-        {...(settleState.amount !== undefined ? { suggestedAmount: settleState.amount } : {})}
-        currency={g.currency}
-        open={settleState.open}
-        onOpenChange={(open) => setSettleState((s) => ({ ...s, open }))}
-      />
       <ConfirmDialog
         open={venmoPaid !== null}
         onOpenChange={(open) => !open && setVenmoPaid(null)}

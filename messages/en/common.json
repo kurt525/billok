@@ -26,12 +26,12 @@
     "copyFailed": "Could not copy link to clipboard"
   },
   "brand": {
-    "name": "ShareTab",
+    "name": "BillOK",
     "tagline": "Self-hosted expense splitting with AI receipt scanning"
   },
   "sponsor": {
-    "title": "Support ShareTab",
-    "description": "ShareTab is free and open source. If it saves you time, consider sponsoring development.",
+    "title": "Support BillOK",
+    "description": "BillOK is free and open source. If it saves you time, consider sponsoring development.",
     "cta": "Sponsor on GitHub"
   },
   "errors": {

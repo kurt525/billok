@@ -16,18 +16,18 @@ export async function POST(req: Request) {
   const adminEmail = process.env.ADMIN_EMAIL;
 
   if (!session?.user?.id || !adminEmail || session.user.email !== adminEmail) {
-    return Response.json({ error: 'Forbidden' }, { status: 403 });
+    return Response.json({ error: 'Доступ запрещён' }, { status: 403 });
   }
 
   const body = await req.json();
   const targetUserId = body.userId;
 
   if (!targetUserId || typeof targetUserId !== 'string') {
-    return Response.json({ error: 'userId is required' }, { status: 400 });
+    return Response.json({ error: 'Не указан пользователь' }, { status: 400 });
   }
 
   if (targetUserId === session.user.id) {
-    return Response.json({ error: 'Cannot impersonate yourself' }, { status: 400 });
+    return Response.json({ error: 'Нельзя войти от собственного имени' }, { status: 400 });
   }
 
   const targetUser = await db.user.findUnique({
@@ -36,7 +36,7 @@ export async function POST(req: Request) {
   });
 
   if (!targetUser) {
-    return Response.json({ error: 'User not found' }, { status: 404 });
+    return Response.json({ error: 'Пользователь не найден' }, { status: 404 });
   }
 
   const impersonationData = JSON.stringify({
@@ -81,7 +81,7 @@ export async function DELETE() {
   const adminEmail = process.env.ADMIN_EMAIL;
 
   if (!session?.user?.id || !adminEmail || session.user.email !== adminEmail) {
-    return Response.json({ error: 'Forbidden' }, { status: 403 });
+    return Response.json({ error: 'Доступ запрещён' }, { status: 403 });
   }
 
   const cookieStore = await cookies();

@@ -14,6 +14,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 /**
  * Merge a placeholder into a member who has joined with an account: their
@@ -46,15 +47,22 @@ export function MergePlaceholderDialog({
       void utils.balances.invalidate();
       void utils.expenses.invalidate();
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t('merge.title', { name: placeholder.name })}</DialogTitle>
-          <DialogDescription>{t('merge.description', { name: placeholder.name })}</DialogDescription>
+      <DialogContent
+        className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain pb-[calc(1rem+env(safe-area-inset-bottom))] [overflow-wrap:anywhere] [&_[data-slot=dialog-close]]:size-11"
+        data-testid="mobile-group-merge-dialog"
+      >
+        <DialogHeader className="min-w-0 pr-11">
+          <DialogTitle className="min-w-0 [overflow-wrap:anywhere]">
+            {t('merge.title', { name: placeholder.name })}
+          </DialogTitle>
+          <DialogDescription className="min-w-0 [overflow-wrap:anywhere]">
+            {t('merge.description', { name: placeholder.name })}
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-2">
           <Label htmlFor="merge-target">{t('merge.target')}</Label>
@@ -62,7 +70,7 @@ export function MergePlaceholderDialog({
             id="merge-target"
             value={targetId}
             onChange={(e) => setTargetId(e.target.value)}
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="flex h-11 min-w-0 w-full scroll-mt-20 rounded-md border border-input bg-background px-3 py-1 text-base shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <option value="" disabled>
               {t('merge.choose')}
@@ -79,11 +87,12 @@ export function MergePlaceholderDialog({
             </p>
           )}
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+        <DialogFooter className="flex min-w-0 flex-wrap gap-2">
+          <Button variant="outline" className="min-h-11 min-w-11 whitespace-normal" onClick={() => onOpenChange(false)}>
             {tc('actions.cancel')}
           </Button>
           <Button
+            className="min-h-11 min-w-11 whitespace-normal"
             onClick={() => merge.mutate({ groupId, placeholderUserId: placeholder.id, realUserId: targetId })}
             disabled={!target || merge.isPending}
           >

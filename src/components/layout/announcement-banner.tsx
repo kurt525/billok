@@ -31,15 +31,15 @@ export function AnnouncementBanner() {
     <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2.5 text-sm text-amber-800 dark:text-amber-200">
       <div className="mx-auto flex max-w-5xl items-center gap-3">
         <Megaphone className="h-4 w-4 shrink-0" />
-        <span className="flex-1">{data.message}</span>
+        <span className="min-w-0 flex-1 break-words">{data.message}</span>
         <button
           type="button"
           onClick={() => {
             localStorage.setItem(DISMISS_KEY, data.message!);
             setLocalDismissed(true);
           }}
-          className="shrink-0 rounded p-0.5 hover:bg-amber-500/20 transition-colors"
-          aria-label="Dismiss announcement"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg hover:bg-amber-500/20 transition-colors"
+          aria-label="Скрыть объявление"
         >
           <X className="h-4 w-4" />
         </button>

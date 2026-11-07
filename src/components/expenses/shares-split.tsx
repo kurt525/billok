@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { formatCents } from '@/lib/money';
 import { Input } from '@/components/ui/input';
+import { formatShareCount } from '@/lib/ru-plurals';
 
 type Member = { id: string; name: string | null };
 type ShareEntry = { userId: string; amount: number; shares: number };
@@ -69,29 +70,32 @@ export function SharesSplit({
         const units = parseInt(shareUnits[m.id] ?? '0') || 0;
         const share = totalUnits > 0 ? Math.round((totalCents * units) / totalUnits) : 0;
         return (
-          <div key={m.id} className="flex items-center gap-3 rounded-md border p-3">
-            <span className="flex-1 text-sm">{m.name ?? 'Unnamed'}</span>
+          <div
+            key={m.id}
+            className="flex min-w-0 flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center"
+            data-testid="split-member-row"
+          >
+            <span className="min-w-0 flex-1 break-words text-sm">{m.name ?? 'Без имени'}</span>
             <Input
               type="number"
+              inputMode="numeric"
               step="1"
               min="0"
               placeholder="1"
-              className="w-20"
+              className="h-11 w-20 min-w-0 text-base"
               value={shareUnits[m.id] ?? ''}
               onChange={(e) => setUnits(m.id, e.target.value)}
             />
-            <span className="text-xs text-muted-foreground">shares</span>
+            <span className="text-xs text-muted-foreground">долей</span>
             {units > 0 && totalCents > 0 && (
-              <span className="w-20 text-right text-xs text-muted-foreground">
+              <span className="max-w-full break-words text-right text-xs text-muted-foreground sm:ml-auto">
                 {formatCents(share, currency, locale)}
               </span>
             )}
           </div>
         );
       })}
-      <p className="text-xs text-muted-foreground">
-        Total: {totalUnits} share{totalUnits !== 1 ? 's' : ''}
-      </p>
+      <p className="text-xs text-muted-foreground">Всего: {formatShareCount(totalUnits)}</p>
     </div>
   );
 }

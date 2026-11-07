@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dialog';
 import { ArrowRight, Handshake, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 type PendingDelete = { id: string; from: string; to: string; amount: string; date: string };
 
@@ -57,7 +58,7 @@ export function PaymentsList({
       void utils.balances.getSimplifiedDebts.invalidate({ groupId });
       void utils.balances.getDashboard.invalidate();
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
 
   const items = payments.data?.pages.flatMap((page) => page.items) ?? [];
@@ -77,32 +78,40 @@ export function PaymentsList({
           return (
             <div
               key={p.id}
-              className={`flex items-center justify-between px-4 py-3 ${index % 2 === 1 ? 'bg-muted/20' : ''}`}
+              className={`flex min-w-0 flex-wrap items-center justify-between gap-3 px-4 py-3 ${index % 2 === 1 ? 'bg-muted/20' : ''}`}
               data-testid="payment-row"
             >
-              <div className="flex min-w-0 items-center gap-3">
+              <div className="flex min-w-0 flex-1 items-start gap-3">
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent">
                   <Handshake className="h-3.5 w-3.5 text-accent-foreground" />
                 </div>
-                <div className="min-w-0">
-                  <p className="flex min-w-0 items-center gap-1.5 font-medium">
-                    <span className="truncate">{from}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="flex min-w-0 flex-wrap items-center gap-1.5 font-medium">
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{from}</span>
                     <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{to}</span>
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{to}</span>
                   </p>
-                  <p className="truncate text-sm text-muted-foreground">
+                  <p
+                    data-testid="payment-note"
+                    className="min-w-0 text-sm text-muted-foreground [overflow-wrap:anywhere]"
+                  >
                     {date}
                     {p.note && ` · ${p.note}`}
                   </p>
                 </div>
               </div>
-              <div className="ml-4 flex shrink-0 items-center gap-2">
-                <p className="text-lg font-semibold tabular-nums">{amount}</p>
+              <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
+                <p
+                  data-testid="payment-amount"
+                  className="min-w-0 max-w-full text-right text-lg font-semibold tabular-nums [overflow-wrap:anywhere]"
+                >
+                  {amount}
+                </p>
                 {canDelete && (
                   <Button
                     variant="ghost"
-                    size="icon-sm"
-                    className="text-muted-foreground hover:text-destructive"
+                    size="icon"
+                    className="size-11 shrink-0 text-muted-foreground hover:text-destructive"
                     aria-label={t('payments.deleteLabel', { from, to, amount })}
                     onClick={() => setPending({ id: p.id, from, to, amount, date })}
                     data-testid="delete-payment"
@@ -119,7 +128,7 @@ export function PaymentsList({
         <Button
           variant="ghost"
           size="sm"
-          className="mt-2"
+          className="mt-2 min-h-11"
           disabled={payments.isFetchingNextPage}
           onClick={() => void payments.fetchNextPage()}
         >
@@ -128,7 +137,10 @@ export function PaymentsList({
       )}
 
       <Dialog open={pending !== null} onOpenChange={(open) => !open && setPending(null)}>
-        <DialogContent>
+        <DialogContent
+          className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-y-auto overscroll-contain pb-[calc(1rem+env(safe-area-inset-bottom))] [overflow-wrap:anywhere]"
+          data-testid="mobile-payment-delete-dialog"
+        >
           <DialogHeader>
             <DialogTitle>{t('payments.deleteTitle')}</DialogTitle>
             {pending && (
@@ -142,12 +154,18 @@ export function PaymentsList({
               </DialogDescription>
             )}
           </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPending(null)}>
+          <DialogFooter className="flex min-w-0 flex-wrap gap-2">
+            <Button
+              variant="outline"
+              className="min-h-11 min-w-11"
+              data-testid="cancel-delete-payment"
+              onClick={() => setPending(null)}
+            >
               {tc('actions.cancel')}
             </Button>
             <Button
               variant="destructive"
+              className="min-h-11 min-w-11"
               disabled={remove.isPending}
               onClick={() => pending && remove.mutate({ groupId, settlementId: pending.id })}
               data-testid="confirm-delete-payment"

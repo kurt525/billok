@@ -58,6 +58,13 @@ export async function authorizePasswordLogin(credentials: unknown, headers: Head
   }
   if (!user?.passwordHash) return null;
 
+  // Only new invite-only registrations require verification. Historical users
+  // can have emailVerified=null, so never block them solely on that field.
+  if (user.registrationEmailVerificationRequired && !user.emailVerified) {
+    logger.warn('auth.login_failed', { email: parsed.data.email, reason: 'registration_email_unverified' });
+    return null;
+  }
+
   const valid = await bcrypt.compare(parsed.data.password, user.passwordHash);
   if (!valid) {
     logger.warn('auth.login_failed', { email: parsed.data.email, reason: 'invalid_password' });

@@ -12,12 +12,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
+import { RegistrationEmailResendForm } from '@/components/auth/registration-email-resend-form';
 import { Separator } from '@/components/ui/separator';
 import { Receipt } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { normalizeCallbackPath, stripLocalePrefix } from '@/lib/locale-paths';
 
-type RegistrationErrorKey = 'emailTaken' | 'inviteRequired' | 'inviteInvalid' | 'closed' | 'generic';
+type RegistrationErrorKey =
+  'emailTaken' | 'inviteRequired' | 'inviteInvalid' | 'closed' | 'emailDomain' | 'emailUnavailable' | 'generic';
 
 function getRegistrationErrorKey(error: unknown): RegistrationErrorKey {
   if (!(error instanceof TRPCClientError)) {
@@ -26,6 +28,13 @@ function getRegistrationErrorKey(error: unknown): RegistrationErrorKey {
 
   if (error.data?.code === 'CONFLICT') {
     return 'emailTaken';
+  }
+
+  if (error.data?.messageKey === 'registrationEmailDomainInvalid') {
+    return 'emailDomain';
+  }
+  if (error.data?.messageKey === 'registrationEmailUnavailable') {
+    return 'emailUnavailable';
   }
 
   if (error.data?.code !== 'FORBIDDEN') {
@@ -65,6 +74,7 @@ function RegisterForm() {
   const [error, setError] = useState('');
   const [nameError, setNameError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [confirmationEmail, setConfirmationEmail] = useState<string | null>(null);
 
   const regMode = trpc.auth.getRegistrationMode.useQuery();
   const registerMutation = trpc.auth.register.useMutation();
@@ -86,12 +96,20 @@ function RegisterForm() {
     setLoading(true);
 
     try {
-      await registerMutation.mutateAsync({
+      const registration = await registerMutation.mutateAsync({
         name: trimmedName,
         email,
         password,
         ...(mode === 'invite-only' && inviteCode ? { inviteCode } : {}),
       });
+
+      // New invite-only registrations must verify their email before sign-in.
+      // Keep the legacy successful response working until the API switches.
+      if ('verificationRequired' in registration && registration.verificationRequired === true) {
+        setPassword('');
+        setConfirmationEmail(email);
+        return;
+      }
 
       const result = await signIn('credentials', {
         email,
@@ -114,7 +132,7 @@ function RegisterForm() {
   }
 
   return (
-    <Card className="border-primary/10 shadow-lg shadow-primary/5">
+    <Card className="min-w-0 border-primary/10 shadow-lg shadow-primary/5">
       <CardHeader className="text-center pb-2">
         <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/20">
           <Receipt className="h-7 w-7 text-primary" />
@@ -122,8 +140,20 @@ function RegisterForm() {
         <CardTitle className="text-2xl font-semibold tracking-tight">{t('title')}</CardTitle>
         <CardDescription className="mt-1">{t('subtitle')}</CardDescription>
       </CardHeader>
-      <CardContent className="pt-4">
-        {regMode.isPending ? (
+      <CardContent className="min-w-0 pt-4">
+        {confirmationEmail !== null ? (
+          <div className="space-y-4" role="status" aria-live="polite">
+            <p className="text-base font-semibold">{t('confirmationPendingTitle')}</p>
+            <p className="min-w-0 text-sm [overflow-wrap:anywhere]">
+              {t('confirmationPendingDescription', { email: confirmationEmail })}
+            </p>
+            <p className="text-sm text-muted-foreground">{t('confirmationPendingSpamHint')}</p>
+            <RegistrationEmailResendForm initialEmail={confirmationEmail} />
+            <Link href={loginHref} className="inline-flex min-h-11 items-center font-medium text-primary underline">
+              {t('signIn')}
+            </Link>
+          </div>
+        ) : regMode.isPending ? (
           <LoadingSpinner className="py-8" />
         ) : mode === 'closed' ? (
           // Also the state when DISABLE_PASSWORD_LOGIN is set: don't show a
@@ -132,13 +162,23 @@ function RegisterForm() {
             {t('error.closed')}
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {error && <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+          <form onSubmit={handleSubmit} className="min-w-0 space-y-4" data-testid="mobile-register-form">
+            {error && (
+              <div
+                role="alert"
+                className="min-w-0 rounded-md bg-destructive/10 p-3 text-sm text-destructive [overflow-wrap:anywhere]"
+              >
+                {error}
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="name">{t('name')}</Label>
               <Input
                 id="name"
                 type="text"
+                maxLength={100}
+                autoComplete="off"
+                className="h-11 min-w-0 text-base"
                 placeholder={t('namePlaceholder')}
                 value={name}
                 onChange={(e) => {
@@ -150,7 +190,7 @@ function RegisterForm() {
                 aria-describedby={nameError ? 'name-error' : undefined}
               />
               {nameError && (
-                <p id="name-error" className="text-sm text-destructive">
+                <p id="name-error" className="text-sm text-destructive [overflow-wrap:anywhere]">
                   {nameError}
                 </p>
               )}
@@ -160,6 +200,10 @@ function RegisterForm() {
               <Input
                 id="email"
                 type="email"
+                autoComplete="email"
+                autoCapitalize="none"
+                spellCheck={false}
+                className="h-11 min-w-0 text-base"
                 placeholder={t('emailPlaceholder')}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -171,6 +215,8 @@ function RegisterForm() {
               <Input
                 id="password"
                 type="password"
+                autoComplete="new-password"
+                className="h-11 min-w-0 text-base"
                 placeholder={t('passwordPlaceholder')}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -184,6 +230,10 @@ function RegisterForm() {
                 <Input
                   id="inviteCode"
                   type="text"
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  className="h-11 min-w-0 text-base"
                   placeholder={t('inviteCodePlaceholder')}
                   value={inviteCode}
                   onChange={(e) => setInviteCode(e.target.value)}
@@ -192,7 +242,11 @@ function RegisterForm() {
                 <p className="text-xs text-muted-foreground">{t('error.inviteRequired')}</p>
               </div>
             )}
-            <Button type="submit" className="w-full rounded-full h-10 text-sm font-medium mt-2" disabled={loading}>
+            <Button
+              type="submit"
+              className="mt-2 min-h-11 w-full whitespace-normal rounded-full text-base font-medium"
+              disabled={loading}
+            >
               {loading ? t('submitting') : t('submit')}
             </Button>
           </form>
@@ -204,7 +258,7 @@ function RegisterForm() {
 
         <p className="text-center text-sm text-muted-foreground">
           {t('hasAccount')}{' '}
-          <Link href={loginHref} className="font-medium text-primary hover:underline">
+          <Link href={loginHref} className="inline-flex min-h-11 items-center font-medium text-primary hover:underline">
             {t('signIn')}
           </Link>
         </p>

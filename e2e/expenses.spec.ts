@@ -20,7 +20,7 @@ test.describe('Expenses', () => {
 
       await page.getByLabel('Description').fill('Detail Test Expense');
       await page.getByLabel('Amount').fill('85.47');
-      await page.getByLabel('Category (optional)').fill('Food');
+      await expect(page.locator('#category')).toHaveCount(0);
       await page.getByLabel('Paid by').selectOption({ label: 'Alice Johnson' });
       await page.getByRole('button', { name: 'Add Expense' }).click();
       await page.waitForURL(/\/groups\/\w+$/, { timeout: 15000 });
@@ -36,7 +36,7 @@ test.describe('Expenses', () => {
       await expect(page.getByText('$85.47')).toBeVisible();
       await expect(page.getByText('EQUAL')).toBeVisible();
       await expect(page.getByText('Alice Johnson').first()).toBeVisible();
-      await expect(page.getByText('Food')).toBeVisible();
+      await expect(page.getByText('Category (optional)', { exact: true })).toHaveCount(0);
       // Split breakdown — verify at least one share amount is visible
       // (exact amount depends on member count which may vary from test pollution)
       await expect(page.getByText('Split', { exact: true })).toBeVisible();

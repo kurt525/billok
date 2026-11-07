@@ -27,6 +27,8 @@ const BOB = {
   image: null,
   locale: 'en',
   passwordHash: 'hash',
+  registrationEmailVerificationRequired: false,
+  emailVerified: null as Date | null,
 };
 
 function usersFound(rows: (typeof BOB)[]) {
@@ -44,6 +46,35 @@ describe('authorizePasswordLogin', () => {
     await expect(
       authorizePasswordLogin({ email: 'bob@EXAMPLE.com', password: 'password123' }, new Headers()),
     ).resolves.toEqual({ id: 'bob', name: 'Bob', email: 'Bob@example.com', image: null, locale: 'en' });
+  });
+
+  test('new registrations cannot sign in until email confirmation; verified and legacy users can', async () => {
+    const credentials = { email: 'bob@example.com', password: 'password123' };
+    const headers = new Headers();
+    const { default: bcrypt } = await import('bcryptjs');
+
+    // A reserved invitation and a password hash do not grant access.
+    usersFound([{ ...BOB, registrationEmailVerificationRequired: true, emailVerified: null }]);
+    await expect(authorizePasswordLogin(credentials, headers)).resolves.toBeNull();
+    expect(bcrypt.compare).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith('auth.login_failed', {
+      email: credentials.email,
+      reason: 'registration_email_unverified',
+    });
+
+    // After the confirmation transaction sets emailVerified, password login
+    // is enabled without changing the registration's verification-required flag.
+    usersFound([
+      { ...BOB, registrationEmailVerificationRequired: true, emailVerified: new Date('2026-11-01T08:00:00Z') },
+    ]);
+    await expect(authorizePasswordLogin(credentials, headers)).resolves.toMatchObject({ id: BOB.id });
+    expect(bcrypt.compare).toHaveBeenCalledTimes(1);
+
+    // Accounts created before mandatory confirmation remain accessible even
+    // when their historical emailVerified field is null.
+    usersFound([{ ...BOB, registrationEmailVerificationRequired: false, emailVerified: null }]);
+    await expect(authorizePasswordLogin(credentials, headers)).resolves.toMatchObject({ id: BOB.id });
+    expect(bcrypt.compare).toHaveBeenCalledTimes(2);
   });
 
   test('case variants share one per-email rate-limit bucket', async () => {

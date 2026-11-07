@@ -2,8 +2,7 @@ name: Docker Fresh Install
 
 # Builds the production image and runs scripts/docker-smoke.sh against it:
 # a fresh install on an empty data volume, restarts the way every existing
-# install does on upgrade, and the Meridian provider starting inside the image
-# and running through the app. The Test workflow runs the app with
+# install does on upgrade, including schema creation and manual receipts. The Test workflow runs the app with
 # `npm run start` against its own database, so it never exercises the
 # entrypoint, the pre-push SQL migrations, or the packages the Dockerfile
 # adds. Run it locally with `npm run test:docker`.

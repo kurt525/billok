@@ -108,10 +108,10 @@ export function GroupOverviewSection() {
   ];
 
   return (
-    <section>
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold">{t('groups.title')}</h2>
-        <div className="flex items-center gap-2">
+    <section className="min-w-0" data-testid="admin-groups-section">
+      <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <h2 className="min-w-0 text-lg font-semibold [overflow-wrap:anywhere]">{t('groups.title')}</h2>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <Badge variant="secondary">{t('groups.count', { count: totalCount })}</Badge>
           {totalExpenses != null && <Badge variant="secondary">{t('groups.expenses', { count: totalExpenses })}</Badge>}
           {totalSettlements != null && (
@@ -121,16 +121,18 @@ export function GroupOverviewSection() {
       </div>
 
       {/* Filters toolbar */}
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+      <div className="mb-3 flex min-w-0 flex-wrap items-center gap-2">
         {/* Status filter buttons */}
-        <div className="flex gap-1">
+        <div className="flex min-w-0 flex-wrap gap-2" role="group" aria-label={t('groups.title')}>
           {statuses.map((s) => (
             <Button
               key={s.value}
               size="sm"
               variant={status === s.value ? 'default' : 'outline'}
+              data-testid={'admin-groups-filter-' + s.value}
+              aria-pressed={status === s.value}
               onClick={() => setStatus(s.value)}
-              className="h-7 px-2.5 text-xs"
+              className="min-h-11 min-w-11 max-w-full whitespace-normal px-3 py-2 text-xs [overflow-wrap:anywhere]"
             >
               {s.label}
             </Button>
@@ -138,20 +140,21 @@ export function GroupOverviewSection() {
         </div>
 
         {/* Search */}
-        <div className="relative min-w-[180px] flex-1">
+        <div className="relative min-w-0 basis-full flex-1 sm:min-w-[180px] sm:basis-auto">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
+            data-testid="admin-groups-search"
             aria-label={t('groups.searchAriaLabel')}
             placeholder={t('groups.searchPlaceholder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="h-7 pl-8 text-xs"
+            className="min-h-11 w-full min-w-0 max-w-full scroll-mt-20 pl-8 text-base"
           />
         </div>
       </div>
 
-      <Card>
-        <CardContent className="p-0">
+      <Card className="min-w-0">
+        <CardContent className="min-w-0 p-0">
           {groups.isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -167,34 +170,56 @@ export function GroupOverviewSection() {
             <div className="py-12 text-center text-sm text-muted-foreground">{t('groups.noGroups')}</div>
           ) : (
             <>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <div
+                className="min-w-0 max-w-full overflow-x-auto overscroll-x-contain"
+                role="region"
+                aria-label={t('groups.title')}
+                tabIndex={0}
+                data-testid="admin-groups-scroll"
+              >
+                <table className="w-full min-w-[820px] table-fixed text-sm">
                   <thead>
                     <tr className="border-b text-left text-muted-foreground">
-                      <th className="px-4 py-3 font-medium">
+                      <th
+                        className="px-4 py-3 font-medium"
+                        aria-sort={sortBy === 'name' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
+                      >
                         <button
                           type="button"
-                          className="inline-flex items-center hover:text-foreground"
+                          className="inline-flex min-h-11 min-w-11 flex-wrap items-center gap-1 whitespace-normal [overflow-wrap:anywhere] hover:text-foreground"
+                          data-testid="admin-groups-sort-name"
                           onClick={() => handleSort('name')}
                         >
                           {t('groups.colName')}
                           <SortIcon column="name" currentSort={sortBy} currentDirection={sortDirection} />
                         </button>
                       </th>
-                      <th className="px-4 py-3 font-medium text-right">
+                      <th
+                        className="px-4 py-3 font-medium text-right"
+                        aria-sort={
+                          sortBy === 'memberCount' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'
+                        }
+                      >
                         <button
                           type="button"
-                          className="inline-flex items-center hover:text-foreground"
+                          className="inline-flex min-h-11 min-w-11 flex-wrap items-center gap-1 whitespace-normal [overflow-wrap:anywhere] hover:text-foreground"
+                          data-testid="admin-groups-sort-memberCount"
                           onClick={() => handleSort('memberCount')}
                         >
                           {t('groups.colMembers')}
                           <SortIcon column="memberCount" currentSort={sortBy} currentDirection={sortDirection} />
                         </button>
                       </th>
-                      <th className="px-4 py-3 font-medium text-right">
+                      <th
+                        className="px-4 py-3 font-medium text-right"
+                        aria-sort={
+                          sortBy === 'expenseCount' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'
+                        }
+                      >
                         <button
                           type="button"
-                          className="inline-flex items-center hover:text-foreground"
+                          className="inline-flex min-h-11 min-w-11 flex-wrap items-center gap-1 whitespace-normal [overflow-wrap:anywhere] hover:text-foreground"
+                          data-testid="admin-groups-sort-expenseCount"
                           onClick={() => handleSort('expenseCount')}
                         >
                           {t('groups.colExpenses')}
@@ -210,10 +235,16 @@ export function GroupOverviewSection() {
                   <tbody>
                     {allGroups.map((group) => (
                       <tr key={group.id} className="border-b last:border-0">
-                        <td className="px-4 py-3 font-medium">{group.name}</td>
+                        <td className="px-4 py-3 font-medium [overflow-wrap:anywhere]">{group.name}</td>
                         <td className="px-4 py-3 text-right">{group.memberCount}</td>
                         <td className="px-4 py-3 text-right">{group.expenseCount}</td>
-                        <td className="px-4 py-3 text-right">{formatCents(group.totalAmount, 'USD', locale)}</td>
+                        <td className="px-4 py-3 text-right">
+                          {group.totalAmount == null ? (
+                            <span title={t('groups.totalUnavailable')}>—</span>
+                          ) : (
+                            formatCents(group.totalAmount, group.currency, locale)
+                          )}
+                        </td>
                         <td className="px-4 py-3 text-muted-foreground">
                           {new Date(group.lastActivity).toLocaleDateString(locale)}
                         </td>
@@ -228,6 +259,8 @@ export function GroupOverviewSection() {
                           <Button
                             variant="ghost"
                             size="icon-sm"
+                            className="min-h-11 min-w-11"
+                            data-testid="admin-groups-delete-trigger"
                             aria-label={t('groups.deleteGroup', { name: group.name })}
                             onClick={() =>
                               setDeleteTarget({
@@ -249,6 +282,8 @@ export function GroupOverviewSection() {
                   <Button
                     variant="ghost"
                     size="sm"
+                    className="min-h-11 min-w-11 max-w-full whitespace-normal [overflow-wrap:anywhere]"
+                    data-testid="admin-groups-load-more"
                     onClick={() => groups.fetchNextPage()}
                     disabled={groups.isFetchingNextPage}
                   >
@@ -263,22 +298,33 @@ export function GroupOverviewSection() {
       </Card>
 
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t('groups.deleteTitle')}</DialogTitle>
-            <DialogDescription>
+        <DialogContent
+          data-testid="admin-groups-delete-dialog"
+          className="min-w-0 overflow-x-hidden [overflow-wrap:anywhere] [&_[data-slot=dialog-close]]:min-h-11 [&_[data-slot=dialog-close]]:min-w-11"
+        >
+          <DialogHeader className="min-w-0 pr-11">
+            <DialogTitle className="[overflow-wrap:anywhere]">{t('groups.deleteTitle')}</DialogTitle>
+            <DialogDescription className="[overflow-wrap:anywhere]">
               {t.rich('groups.deleteDescription', {
                 name: deleteTarget?.name ?? '',
-                strong: (chunks) => <strong>{chunks}</strong>,
+                strong: (chunks) => <strong className="[overflow-wrap:anywhere]">{chunks}</strong>,
               })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleteGroup.isPending}>
+            <Button
+              variant="outline"
+              className="min-h-11 min-w-11"
+              data-testid="admin-groups-delete-cancel"
+              onClick={() => setDeleteTarget(null)}
+              disabled={deleteGroup.isPending}
+            >
               {t('groups.cancel')}
             </Button>
             <Button
               variant="destructive"
+              className="min-h-11 min-w-11"
+              data-testid="admin-groups-delete-confirm"
               onClick={() => deleteTarget && deleteGroup.mutate({ groupId: deleteTarget.id })}
               disabled={deleteGroup.isPending}
             >

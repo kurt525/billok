@@ -69,7 +69,7 @@ async function main() {
       name: 'Apartment',
       description: 'Monthly shared expenses',
       emoji: '🏠',
-      currency: 'USD',
+      currency: 'RUB',
       members: {
         create: [
           { userId: alice.id, role: 'OWNER' },
@@ -87,7 +87,6 @@ async function main() {
     {
       title: 'Groceries',
       amount: 8547,
-      category: 'Food',
       paidById: alice.id,
       shares: [
         { userId: alice.id, amount: 2849 },
@@ -98,7 +97,6 @@ async function main() {
     {
       title: 'Electric bill',
       amount: 12300,
-      category: 'Utilities',
       paidById: bob.id,
       shares: [
         { userId: alice.id, amount: 4100 },
@@ -109,7 +107,6 @@ async function main() {
     {
       title: 'Internet',
       amount: 7999,
-      category: 'Utilities',
       paidById: alice.id,
       shares: [
         { userId: alice.id, amount: 2667 },
@@ -120,7 +117,6 @@ async function main() {
     {
       title: 'Dinner out',
       amount: 14250,
-      category: 'Food',
       paidById: charlie.id,
       shares: [
         { userId: alice.id, amount: 4750 },
@@ -136,7 +132,6 @@ async function main() {
         groupId: group.id,
         title: exp.title,
         amount: exp.amount,
-        category: exp.category,
         paidById: exp.paidById,
         addedById: exp.paidById,
         splitMode: 'EQUAL',
@@ -153,7 +148,7 @@ async function main() {
       name: 'Japan Trip',
       description: 'Vacation expenses',
       emoji: '✈️',
-      currency: 'USD',
+      currency: 'RUB',
       members: {
         create: [
           { userId: alice.id, role: 'OWNER' },
@@ -168,7 +163,6 @@ async function main() {
       groupId: trip.id,
       title: 'Flight tickets',
       amount: 120000,
-      category: 'Transport',
       paidById: alice.id,
       addedById: alice.id,
       splitMode: 'EQUAL',
@@ -186,7 +180,6 @@ async function main() {
       groupId: trip.id,
       title: 'Hotel (3 nights)',
       amount: 45000,
-      category: 'Accommodation',
       paidById: bob.id,
       addedById: bob.id,
       splitMode: 'EQUAL',
@@ -209,7 +202,7 @@ async function main() {
       name: 'Test Admin Group',
       description: 'For e2e admin tests',
       emoji: '🧪',
-      currency: 'USD',
+      currency: 'RUB',
       members: {
         create: [
           { userId: alice.id, role: 'OWNER' },

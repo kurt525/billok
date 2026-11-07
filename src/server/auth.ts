@@ -14,6 +14,7 @@ import { OIDC_PROVIDER_ID, checkOidcSignIn, mapOidcProfile } from './lib/oidc-si
 import { authorizePasswordLogin } from './lib/password-login';
 import { readEmailVerified } from './lib/sign-in-identity';
 import { findUserByEmail } from './lib/user-email';
+import { sendRussianSignInEmail } from './lib/magic-link-email';
 
 const authConfig = parseAuthConfig(process.env);
 for (const warning of authConfig.warnings) {
@@ -65,7 +66,14 @@ if (authConfig.magicLink) {
   providers.push(
     Nodemailer({
       server,
-      from: process.env.EMAIL_FROM ?? 'ShareTab <noreply@sharetab.local>',
+      from: process.env.EMAIL_FROM ?? 'BillOK <noreply@billok.ru>',
+      sendVerificationRequest: ({ identifier, url, provider }) =>
+        sendRussianSignInEmail({
+          to: identifier,
+          url,
+          from: provider.from ?? 'BillOK <noreply@billok.ru>',
+          server,
+        }),
     }),
   );
 }
@@ -123,6 +131,37 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   callbacks: {
     async signIn({ user, account, profile }): Promise<boolean | string> {
+      // A pending invite-only password registration must not be activated
+      // through a magic sign-in link or an external identity provider.
+      // Match exact email (case-insensitive, without ILIKE wildcards) and the
+      // linked account id if the provider supplies one.
+      const provider = account?.provider;
+      if (provider === 'nodemailer' || provider === GOOGLE_PROVIDER_ID || provider === OIDC_PROVIDER_ID) {
+        const accountId = user.id ?? '';
+        const email = user.email ?? '';
+        const matchedUsers = await db.$queryRaw<
+          { email: string; registrationEmailVerificationRequired: boolean; emailVerified: Date | null }[]
+        >`
+          SELECT email, "registrationEmailVerificationRequired", "emailVerified"
+          FROM "User"
+          WHERE id = ${accountId} OR lower(email) = lower(${email})
+          LIMIT 2
+        `;
+
+        if (matchedUsers.some((match) => match.registrationEmailVerificationRequired && !match.emailVerified)) {
+          logger.warn('auth.registration_confirmation_required', { provider });
+          return '/login?error=RegistrationEmailUnverified';
+        }
+
+        // Magic Link, Google and OIDC are sign-in methods ONLY. Never create
+        // a user from a provider, regardless of the registration setting or
+        // the address suffix. New accounts require auth.register, an invite,
+        // .ru/.su and the registration-email confirmation flow.
+        if (matchedUsers.length === 0) {
+          return '/login?error=RegistrationAccountRequired';
+        }
+      }
+
       if (account?.provider === GOOGLE_PROVIDER_ID) {
         return checkGoogleSignIn(db, {
           providerAccountId: account.providerAccountId,

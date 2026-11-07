@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog';
 import { Trash2, Loader2, Ban, CheckCircle2, UserCheck, Search, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { toast } from 'sonner';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 type UserSortBy = 'name' | 'email' | 'groupCount' | 'createdAt';
 type UserStatus = 'all' | 'active' | 'suspended' | 'placeholder';
@@ -43,6 +44,7 @@ function SortIcon({
 
 export function UserManagementSection({ currentUserEmail }: { currentUserEmail?: string | null }) {
   const t = useTranslations('admin');
+  const tc = useTranslations('common');
   const locale = useLocale();
   const utils = trpc.useUtils();
 
@@ -83,21 +85,21 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
       utils.admin.getAuditLog.invalidate();
       setDeleteTarget(null);
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const suspendUser = trpc.admin.suspendUser.useMutation({
     onSuccess: () => {
       utils.admin.listUsers.invalidate();
       utils.admin.getAuditLog.invalidate();
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
   const unsuspendUser = trpc.admin.unsuspendUser.useMutation({
     onSuccess: () => {
       utils.admin.listUsers.invalidate();
       utils.admin.getAuditLog.invalidate();
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => toast.error(localizedTrpcError(e, tc('errors.generic'))),
   });
 
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -116,14 +118,13 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
         body: JSON.stringify({ userId }),
       });
       if (res.ok) {
-        const [, locale] = window.location.pathname.split('/');
-        window.location.href = locale ? `/${locale}/dashboard` : '/dashboard';
+        // BillOK uses canonical, unprefixed Russian-only URLs.
+        window.location.assign(new URL('/dashboard', window.location.origin).href);
       } else {
-        const data = await res.json().catch(() => null);
-        toast.error(data?.error ?? `Impersonation failed (${res.status})`);
+        toast.error('Не удалось войти от имени пользователя (код ' + res.status + ')');
       }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Impersonation failed');
+    } catch {
+      toast.error('Не удалось войти от имени пользователя');
     } finally {
       setImpersonating(false);
     }
@@ -146,23 +147,26 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
   ];
 
   return (
-    <section>
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold">{t('users.title')}</h2>
-        <Badge variant="secondary">{t('users.count', { count: totalCount })}</Badge>
+    <section data-testid="admin-user-management" className="min-w-0">
+      <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <h2 className="min-w-0 text-lg font-semibold [overflow-wrap:anywhere]">{t('users.title')}</h2>
+        <Badge variant="secondary" className="max-w-full whitespace-normal [overflow-wrap:anywhere]">
+          {t('users.count', { count: totalCount })}
+        </Badge>
       </div>
 
       {/* Filters toolbar */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {/* Status filter buttons */}
-        <div className="flex gap-1">
+        <div className="flex min-w-0 flex-wrap gap-1">
           {statuses.map((s) => (
             <Button
               key={s.value}
               size="sm"
               variant={status === s.value ? 'default' : 'outline'}
               onClick={() => setStatus(s.value)}
-              className="h-7 px-2.5 text-xs"
+              className="min-h-11 min-w-11 max-w-full px-3 py-2 text-xs whitespace-normal [overflow-wrap:anywhere]"
+              data-testid={'admin-users-filter-' + s.value}
             >
               {s.label}
             </Button>
@@ -170,14 +174,15 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
         </div>
 
         {/* Search */}
-        <div className="relative min-w-[180px] flex-1">
+        <div className="relative min-w-0 basis-full flex-1 sm:min-w-[180px] sm:basis-auto">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
+            data-testid="admin-users-search"
             aria-label={t('users.searchAriaLabel')}
             placeholder={t('users.searchPlaceholder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="h-7 pl-8 text-xs"
+            className="min-h-11 min-w-0 w-full scroll-mt-20 pl-8 text-base"
           />
         </div>
       </div>
@@ -191,7 +196,7 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
           ) : users.isError ? (
             <div className="flex flex-col items-center gap-2 py-12 text-sm text-destructive">
               <p>{t('users.errorLoading')}</p>
-              <Button variant="outline" size="sm" onClick={() => users.refetch()}>
+              <Button variant="outline" size="sm" className="min-h-11 min-w-11" onClick={() => users.refetch()}>
                 {t('users.retry')}
               </Button>
             </div>
@@ -206,7 +211,7 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
                       <th className="px-4 py-3 font-medium">
                         <button
                           type="button"
-                          className="inline-flex items-center hover:text-foreground"
+                          className="inline-flex min-h-11 min-w-11 items-center text-left whitespace-normal hover:text-foreground"
                           onClick={() => handleSort('name')}
                         >
                           {t('users.colName')}
@@ -216,7 +221,7 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
                       <th className="px-4 py-3 font-medium">
                         <button
                           type="button"
-                          className="inline-flex items-center hover:text-foreground"
+                          className="inline-flex min-h-11 min-w-11 items-center text-left whitespace-normal hover:text-foreground"
                           onClick={() => handleSort('email')}
                         >
                           {t('users.colEmail')}
@@ -227,7 +232,7 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
                       <th className="px-4 py-3 font-medium text-right">
                         <button
                           type="button"
-                          className="inline-flex items-center hover:text-foreground"
+                          className="inline-flex min-h-11 min-w-11 items-center text-left whitespace-normal hover:text-foreground"
                           onClick={() => handleSort('groupCount')}
                         >
                           {t('users.colGroups')}
@@ -237,7 +242,7 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
                       <th className="px-4 py-3 font-medium">
                         <button
                           type="button"
-                          className="inline-flex items-center hover:text-foreground"
+                          className="inline-flex min-h-11 min-w-11 items-center text-left whitespace-normal hover:text-foreground"
                           onClick={() => handleSort('createdAt')}
                         >
                           {t('users.colCreated')}
@@ -273,6 +278,7 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
                                 <Button
                                   variant="ghost"
                                   size="icon-sm"
+                                  className="size-11 shrink-0"
                                   aria-label={t('users.unsuspend', { name: user.name ?? user.email })}
                                   onClick={() => unsuspendUser.mutate({ userId: user.id })}
                                   disabled={unsuspendUser.isPending}
@@ -283,6 +289,7 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
                                 <Button
                                   variant="ghost"
                                   size="icon-sm"
+                                  className="size-11 shrink-0"
                                   aria-label={t('users.suspend', { name: user.name ?? user.email })}
                                   onClick={() => suspendUser.mutate({ userId: user.id })}
                                   disabled={suspendUser.isPending}
@@ -294,6 +301,7 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
                                 <Button
                                   variant="ghost"
                                   size="icon-sm"
+                                  className="size-11 shrink-0"
                                   aria-label={t('users.impersonate', { name: user.name ?? user.email })}
                                   onClick={() => handleImpersonate(user.id)}
                                   disabled={impersonating}
@@ -304,6 +312,7 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
                               <Button
                                 variant="ghost"
                                 size="icon-sm"
+                                className="size-11 shrink-0"
                                 aria-label={t('users.deleteUser', { name: user.name ?? user.email })}
                                 onClick={() =>
                                   setDeleteTarget({
@@ -328,6 +337,7 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
                   <Button
                     variant="ghost"
                     size="sm"
+                    className="min-h-11 min-w-11 whitespace-normal"
                     onClick={() => users.fetchNextPage()}
                     disabled={users.isFetchingNextPage}
                   >
@@ -342,10 +352,13 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
       </Card>
 
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t('users.deleteTitle')}</DialogTitle>
-            <DialogDescription>
+        <DialogContent
+          data-testid="admin-user-delete-dialog"
+          className="min-w-0 overflow-x-hidden [overflow-wrap:anywhere] [&_[data-slot=dialog-close]]:size-11"
+        >
+          <DialogHeader className="min-w-0 pr-11">
+            <DialogTitle className="min-w-0 [overflow-wrap:anywhere]">{t('users.deleteTitle')}</DialogTitle>
+            <DialogDescription className="min-w-0 [overflow-wrap:anywhere]">
               {t.rich('users.deleteDescription', {
                 name: deleteTarget?.name ?? deleteTarget?.email ?? '',
                 strong: (chunks) => <strong>{chunks}</strong>,
@@ -353,11 +366,17 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleteUser.isPending}>
+            <Button
+              variant="outline"
+              className="min-h-11 min-w-11 whitespace-normal"
+              onClick={() => setDeleteTarget(null)}
+              disabled={deleteUser.isPending}
+            >
               {t('users.cancel')}
             </Button>
             <Button
               variant="destructive"
+              className="min-h-11 min-w-11 whitespace-normal"
               onClick={() => deleteTarget && deleteUser.mutate({ userId: deleteTarget.id })}
               disabled={deleteUser.isPending}
             >

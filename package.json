@@ -1,7 +1,7 @@
 {
   "name": "sharetab",
   "version": "0.8.0",
-  "description": "Self-hosted, open-source Splitwise alternative with AI-powered receipt scanning",
+  "description": "BillOK — ручное разделение общих чеков и расходов без OCR и AI",
   "author": "Carlos Cristobal",
   "license": "MIT",
   "homepage": "https://github.com/sw-carlos-cristobal/sharetab",
@@ -13,8 +13,6 @@
     "self-hosted",
     "splitwise-alternative",
     "expense-tracker",
-    "receipt-scanner",
-    "ai",
     "nextjs",
     "docker",
     "unraid"
@@ -37,29 +35,27 @@
     "test:e2e": "npx playwright test",
     "test:docker": "bash scripts/docker-smoke.sh --build",
     "test:e2e:ui": "npx playwright test --ui",
-    "test:ai:setup": "npx tsx e2e/ai-setup.ts",
-    "test:ai": "RUN_AI_TESTS=1 npx playwright test ai-provider-test.spec.ts",
     "demo": "tsx e2e/demo-video.ts",
     "demo:gifs": "tsx e2e/demo-gifs.ts",
-    "lint:i18n": "npx tsx scripts/check-translations.ts"
+    "lint:i18n": "npx tsx scripts/check-translations.ts",
+    "test:coverage": "vitest run --coverage",
+    "sbp:sync": "node scripts/sync-sbp-banks.mjs",
+    "sbp:sync:test": "node --test scripts/lib/sbp-catalog-sync.test.mjs && node --test scripts/lib/sbp-auto-publish-gate.test.mjs && node --test scripts/lib/sbp-auto-publish-evidence.test.mjs && node --test scripts/lib/sbp-auto-publish-merge.test.mjs && node --test scripts/lib/sbp-auto-publish-merge-runner.test.mjs && node --test scripts/lib/sbp-catalog-deploy-readiness.test.mjs && node --test scripts/lib/sbp-catalog-failure-email.test.mjs && node --test scripts/lib/sbp-catalog-rollback-plan.test.mjs && node --test scripts/lib/sbp-catalog-deploy-runner.test.mjs && node --test scripts/lib/sbp-catalog-release-approval.test.mjs && bash scripts/ops/sbp-catalog-trust.test.sh && bash scripts/ops/sbp-catalog-poll.test.sh"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"
   },
   "overrides": {
-    "@anthropic-ai/sdk": "^0.93.0",
     "@hono/node-server": ">=1.19.13",
     "hono": ">=4.12.21",
     "postcss": ">=8.5.10",
     "fast-uri": ">=3.1.1"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.93.0",
     "@auth/prisma-adapter": "^2.11.1",
     "@base-ui/react": "^1.9.0",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
-    "@rynfar/meridian": "^1.83.0",
     "@tanstack/react-query": "^5.104.3",
     "@trpc/client": "^11.19.0",
     "@trpc/react-query": "^11.19.0",
@@ -74,7 +70,6 @@
     "next-intl": "^4.14.9",
     "next-themes": "^0.4.6",
     "nodemailer": "^10.1.1",
-    "openai": "^6.33.0",
     "pg": "^8.23.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
@@ -92,6 +87,7 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "4.1.11",
     "embedded-postgres": "^18.3.0-beta.16",
     "eslint": "^9",
     "eslint-config-next": "16.4.2",

@@ -18,7 +18,31 @@ export type GuestSessionPerson = {
   id?: string;
   name: string;
   personToken?: string;
+  // Server-only identity binding for the BillOK owner. Public person serializers
+  // must never expose this user id; guests cannot assign it via any API input.
+  accountUserId?: string;
+  // 3.7: fixed guest place, distinct from a legacy unjoined named person.
+  // A place can be renamed without changing its number or stable person id.
+  guestSlotNumber?: number;
+  // 3.9: immutable per-receipt visual key. Names and array indices may
+  // change; this ID must remain on the same person.
+  visualColorId?: number;
+  // Trusted server-only marker for the uniquely reserved BillOK-owner name.
+  // A registered creator named Илья is not necessarily the site owner.
+  reservedOwner?: boolean;
+  // Server-only timestamp: the participant personally saved their first
+  // real edit. Until then 3.8 does not offer a recovery link.
+  personalLinkReadyAt?: string;
+  // 3.8.4: server-only audit of explicit creator reissues, no old credential.
+  // Keeping the most recent request id makes a network retry idempotent.
+  personalLinkRotation?: { requestKey: string; rotatedAt: string; count: number };
   groupSize?: number; // defaults to 1, > 1 means this person represents a group
+  // Voluntary tip personally chosen for this receipt, integer RUB kopecks; missing = 0.
+  tipCents?: number;
+  // Participant's declaration only; does NOT mean funds arrived or were verified.
+  paymentDeclaredAt?: string;
+  // Payer's independent verification after checking actual incoming funds.
+  paymentVerifiedAt?: string;
   // The join that created (or first claimed) this person: its idempotency key and the normalized
   // name it was made with, replayable until expiresAt (epoch ms). See guest.joinSession.
   join?: { key: string; name: string; expiresAt: number };

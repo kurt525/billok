@@ -10,7 +10,17 @@
     "venmo": "Venmo handle",
     "venmoPlaceholder": "@username",
     "language": "Language",
-    "languageDescription": "Choose your preferred language"
+    "languageDescription": "Choose your preferred language",
+    "sbpPhone": "Phone number for SBP",
+    "sbpPhonePlaceholder": "+7 999 123-45-67",
+    "sbpPhoneUnverified": "This number is not verified by SMS.",
+    "sbpBank": "Bank for SBP",
+    "sbpBankNotSelected": "No bank selected",
+    "sbpBankHint": "Banks from the NSPK registry. Phone transfer availability depends on the bank.",
+    "sbpBankSearch": "Search banks",
+    "sbpBankSearchPlaceholder": "Enter a bank name",
+    "sbpBankNoResults": "No matching bank in the current list.",
+    "sbpBankRemoved": "This bank is no longer listed in the NSPK registry. Choose another bank."
   },
   "password": {
     "title": "Change Password",

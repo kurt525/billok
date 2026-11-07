@@ -10,13 +10,13 @@ const { nextAuth, authMock, google, logger, checkGoogleSignIn, checkOidcSignIn, 
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   checkGoogleSignIn: vi.fn(),
   checkOidcSignIn: vi.fn(),
-  db: { user: { findUnique: vi.fn() } },
+  db: { user: { findUnique: vi.fn() }, $queryRaw: vi.fn(), systemSetting: { findUnique: vi.fn() } },
 }));
 vi.mock('next-auth', () => ({ default: nextAuth }));
 vi.mock('@auth/prisma-adapter', () => ({ PrismaAdapter: vi.fn(() => ({})) }));
 vi.mock('next-auth/providers/credentials', () => ({ default: vi.fn(() => ({ id: 'credentials' })) }));
 vi.mock('next-auth/providers/google', () => ({ default: google }));
-vi.mock('next-auth/providers/nodemailer', () => ({ default: vi.fn(() => ({ id: 'nodemailer' })) }));
+vi.mock('next-auth/providers/nodemailer', () => ({ default: vi.fn((options) => ({ id: 'nodemailer', ...options })) }));
 vi.mock('bcryptjs', () => ({ default: { compare: vi.fn() } }));
 vi.mock('./db', () => ({ db }));
 vi.mock('./lib/logger', () => ({ logger }));
@@ -87,6 +87,10 @@ const OIDC_ENV = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  db.$queryRaw.mockResolvedValue([
+    { email: 'existing@mail.ru', registrationEmailVerificationRequired: false, emailVerified: null },
+  ]);
+  db.systemSetting.findUnique.mockResolvedValue({ value: 'open' });
   // clearAllMocks keeps implementations, so a test's rejection can't reach the next one.
   authMock.mockResolvedValue(null);
   checkGoogleSignIn.mockResolvedValue(true);
@@ -95,6 +99,16 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+});
+
+describe('Magic-link email localization', () => {
+  test('replaces the Auth.js English verification email with the Russian sender', async () => {
+    const config = await loadAuth({ EMAIL_SERVER_HOST: 'smtp.example.test' });
+    const provider = config.providers.find((p) => p.id === 'nodemailer');
+    expect(provider).toBeDefined();
+    expect(typeof provider?.sendVerificationRequest).toBe('function');
+    expect(provider?.from).toBe('BillOK <noreply@billok.ru>');
+  });
 });
 
 describe('Google provider registration', () => {
@@ -149,6 +163,55 @@ describe('other providers', () => {
 });
 
 describe('signIn callback', () => {
+  test.each(['nodemailer', 'google', 'oidc'])(
+    'denies %s sign-in for a pending registration before invoking a provider policy',
+    async (provider) => {
+      const config = await loadAuth({ ...GOOGLE_ENV, ...OIDC_ENV, EMAIL_SERVER_HOST: 'smtp.example.test' });
+      db.$queryRaw.mockResolvedValue([
+        { email: 'pending@mail.ru', registrationEmailVerificationRequired: true, emailVerified: null },
+      ]);
+      expect(
+        await config.callbacks.signIn({
+          user: { email: 'pending@mail.ru' },
+          account: { provider, providerAccountId: 'pending' },
+        }),
+      ).toBe('/login?error=RegistrationEmailUnverified');
+      expect(checkGoogleSignIn).not.toHaveBeenCalled();
+      expect(checkOidcSignIn).not.toHaveBeenCalled();
+    },
+  );
+
+  test('Magic Link, Google and OIDC never register accounts even when registration is open', async () => {
+    const config = await loadAuth({ ...GOOGLE_ENV, ...OIDC_ENV, EMAIL_SERVER_HOST: 'smtp.example.test' });
+    db.$queryRaw.mockResolvedValue([]);
+
+    for (const mode of ['open', 'invite-only', 'closed']) {
+      db.systemSetting.findUnique.mockResolvedValue({ value: mode });
+      for (const provider of ['nodemailer', 'google', 'oidc']) {
+        expect(
+          await config.callbacks.signIn({
+            user: { email: 'new-user@mail.ru' },
+            account: { provider, providerAccountId: 'new-user' },
+          }),
+        ).toBe('/login?error=RegistrationAccountRequired');
+      }
+    }
+    expect(checkGoogleSignIn).not.toHaveBeenCalled();
+    expect(checkOidcSignIn).not.toHaveBeenCalled();
+
+    // No regression: existing users can keep signing in with enabled providers,
+    // including historical accounts that have emailVerified=null.
+    db.$queryRaw.mockResolvedValue([
+      { email: 'legacy@mail.ru', registrationEmailVerificationRequired: false, emailVerified: null },
+    ]);
+    expect(
+      await config.callbacks.signIn({
+        user: { email: 'legacy@mail.ru' },
+        account: { provider: 'nodemailer' },
+      }),
+    ).toBe(true);
+  });
+
   const googleSignIn = {
     user: { email: 'alice@gmail.com' },
     account: { provider: 'google', providerAccountId: 'g-1' },

@@ -91,17 +91,33 @@ describe('deleteExpiredSplits', () => {
     expect(await deleteExpiredSplits(db as never, 100)).toBe(2);
 
     expect(tx.guestSplit.findMany).toHaveBeenNthCalledWith(1, {
-      where: { expiresAt: { lt: expect.any(Date) } },
+      where: { status: 'CLAIMING', expiresAt: { lt: expect.any(Date) } },
       select: { id: true, receiptId: true },
       take: 100,
     });
-    expect(tx.guestSplit.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['s1', 's2'] } } });
+    expect(tx.guestSplit.deleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ['s1', 's2'] }, status: 'CLAIMING', expiresAt: { lt: expect.any(Date) } },
+    });
     expect(tx.receipt.findMany).toHaveBeenCalledWith({
       where: { id: { in: ['r1'] }, groupId: null, expense: { is: null } },
       select: { id: true, imagePath: true },
     });
     expect(tx.receipt.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['r1'] } } });
     expect(await readdir(path.join(dir, 'receipts'))).toEqual([]);
+  });
+
+  test('never selects finalized bills merely because their original expiry date passed', async () => {
+    const { tx, db } = fakeDb();
+    tx.guestSplit.findMany.mockResolvedValue([]);
+    const { deleteExpiredSplits } = await import('./receipt-cleanup');
+    expect(await deleteExpiredSplits(db as never, 100)).toBe(0);
+    expect(tx.guestSplit.findMany).toHaveBeenCalledWith({
+      where: { status: 'CLAIMING', expiresAt: { lt: expect.any(Date) } },
+      select: { id: true, receiptId: true },
+      take: 100,
+    });
+    expect(tx.guestSplit.deleteMany).not.toHaveBeenCalled();
+    expect(tx.receipt.deleteMany).not.toHaveBeenCalled();
   });
 
   test('with nothing expired, deletes nothing', async () => {

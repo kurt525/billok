@@ -3,10 +3,13 @@ import { z } from 'zod';
 import { AppError } from '@/server/lib/app-error';
 import { Prisma, GuestSplitStatus } from '@/generated/prisma/client';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
-import { processReceiptImage } from '../../lib/receipt-processor';
 import { logger } from '../../lib/logger';
-import { checkRateLimit, checkTokenRateLimit, refundRateLimit } from '../../lib/rate-limit';
-import { checkClaimWriteRateLimit, checkSessionReadRateLimit } from '../../lib/guest-session-limits';
+import { checkRateLimit, checkTokenRateLimit } from '../../lib/rate-limit';
+import {
+  checkClaimWriteRateLimit,
+  checkSessionReadRateLimit,
+  checkGuestPresenceHeartbeatLimit,
+} from '../../lib/guest-session-limits';
 import { getClientIp } from '../../lib/client-ip';
 import { guestTransaction } from '../../lib/guest-transaction';
 import {
@@ -22,9 +25,15 @@ import {
   parseGuestAssignments,
   validSaveRecords,
 } from '../../lib/json-schemas';
-import { calculateSplitTotals, groupSizeWeights } from '@/lib/split-calculator';
-import { normalizeGuestName } from '@/lib/guest-session';
-import { canUseGuestUploads } from '../../lib/guest-uploads';
+import { calculateSplitTotals, addPersonalGuestTips, groupSizeWeights } from '@/lib/split-calculator';
+import { guestPortionAssignments, type GuestPortionAssignment } from '@/lib/guest-portions';
+import { guestPartsConfirmationSnapshot } from '@/lib/guest-parts-confirmation';
+import { guestKnownPartsBalance } from '@/lib/guest-known-parts';
+import { guestPresenceState } from '@/lib/guest-presence';
+import { hasDuplicateGuestNames, normalizeGuestName } from '@/lib/guest-session';
+import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
+import { MAX_MONEY_CENTS } from '@/lib/money';
+import { normalizeSbpPhone, isSupportedSbpBankId } from '@/lib/sbp-banks';
 import { checkJoinRateLimit } from '../../lib/guest-join-limit';
 import {
   assignPersonIds,
@@ -34,6 +43,54 @@ import {
   type GuestSessionPerson,
   type IdentifiedGuestPerson,
 } from '../../lib/guest-people';
+
+/** 3.6.1: the owner's verified server account, never the supplied display name
+ * or an impersonated session. ADMIN_EMAIL is the existing trusted owner account
+ * configuration; checking the fetched user id prevents spoofing with a guest name.
+ * Activation is restricted to the configured owner's profile name «Илья».
+ */
+const RESERVED_OWNER_NAME = 'Илья';
+const RESERVED_OWNER_KEY = normalizeGuestName(RESERVED_OWNER_NAME);
+
+async function billokOwnerUserId(ctx: {
+  session?: { user?: { id?: string | null } | null } | null;
+  impersonating?: unknown;
+  db: typeof import('@/server/db').db;
+}): Promise<string | null> {
+  const userId = ctx.session?.user?.id;
+  const ownerEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  if (!userId || !ownerEmail || ctx.impersonating) return null;
+  const account = await ctx.db.user.findUnique({
+    where: { id: userId },
+    select: { email: true, name: true, suspendedAt: true },
+  });
+  return account?.email?.trim().toLowerCase() === ownerEmail &&
+    normalizeGuestName(account.name ?? '') === RESERVED_OWNER_KEY &&
+    !account.suspendedAt
+    ? userId
+    : null;
+}
+
+/** Rename only the colliding display label, never the underlying token,
+ * account binding or any shares. Call exclusively inside guestTransaction.
+ */
+function freeOwnerName(people: IdentifiedGuestPerson[], ownerIndex: number): boolean {
+  const occupied = new Set(people.map((person) => normalizeGuestName(person.name)));
+  let changed = false;
+  for (let i = 0; i < people.length; i++) {
+    if (i === ownerIndex || normalizeGuestName(people[i]!.name) !== RESERVED_OWNER_KEY) continue;
+    let suffix = 2;
+    let candidate = `${RESERVED_OWNER_NAME} (${suffix})`;
+    while (occupied.has(normalizeGuestName(candidate))) {
+      suffix++;
+      candidate = `${RESERVED_OWNER_NAME} (${suffix})`;
+    }
+    occupied.add(normalizeGuestName(candidate));
+    people[i] = { ...people[i]!, name: candidate };
+    changed = true;
+  }
+  return changed;
+}
 
 async function getCreatorPayerVenmoHandle(
   db: typeof import('@/server/db').db,
@@ -51,18 +108,84 @@ async function getCreatorPayerVenmoHandle(
   return null;
 }
 
+/** Clear an organizer's acknowledgement only for sessions with a saved one.
+ * No extra JSON writes for unchanged/legacy sessions or personal tip updates.
+ */
+function invalidatePartsApproval(value: Prisma.JsonValue): { receiptData?: Prisma.InputJsonValue } {
+  const data = parseExtractedData(value);
+  if (!data.partsApprovalHash) return {};
+  const next = { ...data };
+  delete next.partsApprovalHash;
+  return { receiptData: next as Prisma.InputJsonValue };
+}
+
+function guestPartsDigest(input: {
+  items: readonly { name: string; quantity: number; totalPrice: number }[];
+  people: readonly { id?: string | undefined; groupSize?: number | undefined }[];
+  assignments: readonly GuestPortionAssignment[];
+  knownPartsByItem?: unknown;
+}): string {
+  return createHash('sha256').update(guestPartsConfirmationSnapshot(input)).digest('hex');
+}
+
+/** 3.4: a signed-in creator or a single creator-appointed registered organizer can
+ * approve and finalize a guest bill. A payer/guest token never grants this role.
+ * Store the delegation in the existing receipt JSON: no unused DB column.
+ */
+function canFinalizeGuestSession(
+  creatorUserId: string | null | undefined,
+  data: ReturnType<typeof parseExtractedData>,
+  callerUserId: string | null | undefined,
+): boolean {
+  return (
+    !!creatorUserId &&
+    !!callerUserId &&
+    (creatorUserId === callerUserId || data.finalizationOrganizerUserId === callerUserId)
+  );
+}
+
+/** 2.20.2: known totals are optional, but strict where provided.
+ * All checks happen in guestTransaction using its current data snapshot.
+ */
+function enforceGuestKnownParts(
+  items: readonly unknown[],
+  people: readonly { id?: string | undefined; groupSize?: number | undefined }[],
+  assignments: readonly GuestPortionAssignment[],
+  rawKnown: unknown,
+  requireComplete: boolean,
+) {
+  let state: ReturnType<typeof guestKnownPartsBalance>;
+  try {
+    state = guestKnownPartsBalance({ items, people, assignments, knownPartsByItem: rawKnown });
+  } catch {
+    throw new AppError('BAD_REQUEST', 'invalidData', { label: 'known original portions' });
+  }
+  if (state.overclaimed) throw new AppError('PRECONDITION_FAILED', 'receiptKnownPartsOverclaimed');
+  if (requireComplete && state.hasRemaining) {
+    throw new AppError('PRECONDITION_FAILED', 'receiptKnownPartsRemaining');
+  }
+  return state;
+}
+
 // How long a join can be replayed with its join key (Stripe prunes idempotency keys once they are at least 24 hours old)
 const JOIN_REPLAY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 // The most people a claim session holds
 const MAX_SESSION_PEOPLE = 100;
 
-function toPublicPerson({ name, groupSize, personToken }: GuestSessionPerson) {
-  // Never includes personToken, join or saves: no guest procedure returns another person's token
-  // (a client gets its own from joinSession; the admin export is the only place tokens leave in bulk).
-  // hasJoined tells the claim page which names are still free to join as (the results page,
-  // which reads getSplit, ignores it).
-  return { name, groupSize: groupSize ?? 1, hasJoined: !!personToken };
+function toPublicPerson({ name, groupSize, personToken, accountUserId, visualColorId }: GuestSessionPerson) {
+  // Public receipts never expose personal tokens or account identifiers.
+  // An account-bound creator is occupied even if device storage was unavailable
+  // when the receipt was created and there is no guest token yet.
+  return {
+    name,
+    groupSize: groupSize ?? 1,
+    hasJoined: !!personToken || !!accountUserId,
+    // Only a trusted server-issued account binding qualifies, not a display
+    // name, phone, share URL, or possession of a guest bearer credential.
+    isRegistered: typeof accountUserId === 'string' && accountUserId.length > 0,
+    ...(Number.isSafeInteger(visualColorId) && visualColorId! >= 0 ? { visualColorId } : {}),
+  };
 }
 
 function toPublicPeople(people: GuestSessionPerson[]) {
@@ -71,8 +194,29 @@ function toPublicPeople(people: GuestSessionPerson[]) {
 
 // The claim page's view of the people: public fields plus each person's id, which it uses to
 // target them (their index changes when someone listed before them is removed)
+/** 3.8.1: the shared invite and the slot claim alone are not a saved
+ * personal action. Mark eligibility only in the same successful transaction
+ * as a real change authored by this guest's own personal token. */
+function markPersonalLinkReady(person: GuestSessionPerson): GuestSessionPerson {
+  return person.guestSlotNumber !== undefined && !!person.personToken && !person.personalLinkReadyAt
+    ? { ...person, personalLinkReadyAt: new Date().toISOString() }
+    : person;
+}
+
 function toClaimPeople(people: IdentifiedGuestPerson[]) {
-  return people.map((person) => ({ id: person.id, ...toPublicPerson(person) }));
+  return people.map((person) => ({
+    id: person.id,
+    ...toPublicPerson(person),
+    // Fixed slot number is safe and necessary for the shared-link UI. The
+    // accountUserId and reservedOwner marker remain server-only.
+    ...(person.guestSlotNumber !== undefined
+      ? {
+          guestSlotNumber: person.guestSlotNumber,
+          personalLinkReady: !!person.personalLinkReadyAt,
+        }
+      : {}),
+    tipCents: person.tipCents ?? 0,
+  }));
 }
 
 /**
@@ -169,23 +313,136 @@ function targetIndexOrThrow(people: readonly { id?: string | undefined }[], id: 
   throw new AppError('CONFLICT', 'personGone');
 }
 
-function cloneAssignments(assignments: { itemIndex: number; personIndices: number[] }[]) {
+function cloneAssignments(assignments: GuestPortionAssignment[]) {
   return assignments.map((assignment) => ({
     ...assignment,
     personIndices: [...assignment.personIndices],
+    ...(assignment.partsByPersonId ? { partsByPersonId: { ...assignment.partsByPersonId } } : {}),
   }));
 }
 
+/** Return only a verified non-payer with a positive, reconciled personal debt.
+ * Never authorize using a public share token, creator login or display name.
+ */
+function requireGuestDebtor(
+  split: {
+    status: GuestSplitStatus;
+    people: Prisma.JsonValue;
+    paidByIndex: number;
+    receiptData: Prisma.JsonValue;
+    summary: Prisma.JsonValue | null;
+  },
+  personId: string,
+  personToken: string,
+) {
+  if (split.status !== GuestSplitStatus.FINALIZED) {
+    throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+  }
+  const people = split.people as GuestSessionPerson[];
+  const personIndex = people.findIndex((person) => person.id === personId && person.personToken === personToken);
+  if (personIndex < 0 || personIndex === split.paidByIndex) {
+    throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  }
+  const person = people[personIndex]!;
+  const receipt = split.receiptData as { currency?: string; tax?: number; tip?: number; total?: number };
+  const summary = split.summary as { personIndex: number; total: number; tip: number }[] | null;
+  if (
+    receipt.currency !== 'RUB' ||
+    receipt.tax !== 0 ||
+    receipt.tip !== 0 ||
+    !Number.isSafeInteger(receipt.total) ||
+    receipt.total! < 0 ||
+    !Array.isArray(summary) ||
+    summary.length !== people.length ||
+    !people[split.paidByIndex] ||
+    summary.some(
+      (entry) =>
+        !Number.isSafeInteger(entry.personIndex) ||
+        entry.personIndex < 0 ||
+        entry.personIndex >= people.length ||
+        !Number.isSafeInteger(entry.total) ||
+        entry.total < 0 ||
+        !Number.isSafeInteger(entry.tip) ||
+        entry.tip < 0,
+    ) ||
+    new Set(summary.map((entry) => entry.personIndex)).size !== people.length ||
+    summary.reduce((sum, entry) => sum + entry.total, 0) !==
+      receipt.total! + summary.reduce((sum, entry) => sum + entry.tip, 0)
+  ) {
+    throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  }
+  const due = summary.find((entry) => entry.personIndex === personIndex);
+  if (!due || due.total <= 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  return { people, person, personIndex };
+}
+
+/** Check payer's identity and reconcile the finalized receipt before allowing
+ * payer-only verification. The public share token and creator account are not authority.
+ */
+function requireGuestPayerReview(
+  split: {
+    status: GuestSplitStatus;
+    people: Prisma.JsonValue;
+    paidByIndex: number;
+    receiptData: Prisma.JsonValue;
+    summary: Prisma.JsonValue | null;
+  },
+  payerId: string,
+  payerToken: string,
+) {
+  const people = split.people as GuestSessionPerson[];
+  const payer = people[split.paidByIndex];
+  if (!payer || payer.id !== payerId || payer.personToken !== payerToken) {
+    throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  }
+  if (split.status !== GuestSplitStatus.FINALIZED) {
+    throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+  }
+  const receipt = split.receiptData as { currency?: string; tax?: number; tip?: number; total?: number };
+  const summary = split.summary as { personIndex: number; total: number; tip: number }[] | null;
+  if (
+    receipt.currency !== 'RUB' ||
+    receipt.tax !== 0 ||
+    receipt.tip !== 0 ||
+    !Number.isSafeInteger(receipt.total) ||
+    receipt.total! < 0 ||
+    !Array.isArray(summary) ||
+    summary.length !== people.length ||
+    summary.some(
+      (entry) =>
+        !Number.isSafeInteger(entry.personIndex) ||
+        entry.personIndex < 0 ||
+        entry.personIndex >= people.length ||
+        !Number.isSafeInteger(entry.total) ||
+        entry.total < 0 ||
+        !Number.isSafeInteger(entry.tip) ||
+        entry.tip < 0,
+    ) ||
+    new Set(summary.map((entry) => entry.personIndex)).size !== people.length ||
+    summary.reduce((sum, entry) => sum + entry.total, 0) !==
+      receipt.total! + summary.reduce((sum, entry) => sum + entry.tip, 0)
+  ) {
+    throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  }
+  return { people, summary };
+}
+
 // ─── Shared Zod schemas (Finding #27) ────────────────────────────
-const receiptDataSchema = z.object({
-  merchantName: z.string().optional(),
-  date: z.string().optional(),
-  subtotal: z.number().int(),
-  tax: z.number().int(),
-  tip: z.number().int(),
-  total: z.number().int(),
-  currency: z.string().default('USD'),
-});
+const receiptDataSchema = z
+  .object({
+    merchantName: z.string().optional(),
+    date: z.string().optional(),
+    subtotal: z.number().int(),
+    // Item prices include restaurant taxes; personal tips will be separate.
+    tax: z.number().int().min(0).max(0).default(0),
+    tip: z.number().int().min(0).max(0).default(0),
+    total: z.number().int().min(0),
+    currency: z.string().trim().toUpperCase().pipe(z.literal('RUB')).default('RUB'),
+  })
+  .refine((receipt) => receipt.total === receipt.subtotal, {
+    path: ['total'],
+    message: 'No additional tax or shared tips in a new BillOK receipt',
+  });
 
 const itemSchema = z.object({
   name: z.string(),
@@ -284,7 +541,7 @@ export const guestRouter = createTRPCRouter({
             status: s.status,
             merchantName: receipt?.merchantName as string | undefined,
             total: receipt?.total as number | undefined,
-            currency: (receipt?.currency as string | undefined) ?? 'USD',
+            currency: (receipt?.currency as string | undefined) ?? 'RUB',
             peopleCount: people?.length ?? 0,
             itemCount: items?.length ?? 0,
             createdAt: s.createdAt,
@@ -292,108 +549,6 @@ export const guestRouter = createTRPCRouter({
         }),
         nextCursor,
       };
-    }),
-
-  getUploadStatus: publicProcedure.query(async ({ ctx }) => {
-    return { allowed: await canUseGuestUploads(ctx.db, () => ctx.session?.user?.id) };
-  }),
-
-  processReceipt: publicProcedure
-    .input(z.object({ receiptId: receiptIdSchema, correctionHint: z.string().max(500).optional() }))
-    .mutation(async ({ ctx, input }) => {
-      // Kill switch for unauthenticated AI spend. Checked first so an
-      // anonymous caller on a disabled install does no receipt lookup and
-      // burns no quota.
-      if (!(await canUseGuestUploads(ctx.db, () => ctx.session?.user?.id))) {
-        throw new AppError('FORBIDDEN', 'guestUploadsDisabled');
-      }
-
-      const receipt = await ctx.db.receipt.findUnique({
-        where: { id: input.receiptId },
-      });
-      if (!receipt) {
-        throw new AppError('NOT_FOUND', 'receiptNotFound');
-      }
-      if (!receipt.isGuest) {
-        throw new AppError('NOT_FOUND', 'receiptNotFound');
-      }
-
-      // Quotas, checked only AFTER the receipt is validated as a real guest
-      // receipt so bad receipt ids can't burn budget:
-      //  - per receipt (3/h): bounds reprocessing of a single receipt
-      //  - per IP (20/h): bounds one client across receipts (spoofable headers)
-      //  - global: hard cap on total unauthenticated AI spend regardless
-      // Consumption is atomic (synchronous, single event-loop turn) BEFORE
-      // the processing claim, so concurrent requests cannot all slip past a
-      // non-consuming check; if the claim then fails with CONFLICT, the
-      // consumed attempts are refunded so retries against an in-flight
-      // receipt don't drain any bucket.
-      const ip = getClientIp(ctx.headers);
-      const globalMax = parseInt(process.env.GUEST_AI_GLOBAL_LIMIT ?? '100', 10) || 100;
-      const quotaWindow = 60 * 60 * 1000;
-      const quotas: Array<{ key: string; max: number }> = [
-        { key: `guest-process:${input.receiptId}`, max: 3 },
-        { key: `guest-process-ip:${ip}`, max: 20 },
-        { key: 'guest-process-global', max: globalMax },
-      ];
-      const consumed: string[] = [];
-      const refundConsumed = () => {
-        for (const key of consumed) refundRateLimit(key);
-      };
-      for (const quota of quotas) {
-        if (checkRateLimit(quota.key, quota.max, quotaWindow).allowed) {
-          consumed.push(quota.key);
-        } else {
-          refundConsumed();
-          throw new AppError('TOO_MANY_REQUESTS', 'processingRateLimited');
-        }
-      }
-
-      // Conditional update doubles as a mutex against concurrent processing.
-      // A PROCESSING receipt untouched for 15+ minutes is considered stale
-      // (crashed run) and may be re-claimed. The threshold deliberately
-      // exceeds the worst-case provider pipeline (2 passes x per-provider
-      // timeouts of 30-120s) so a slow-but-live run is never re-claimed.
-      // Old items are replaced atomically inside processReceiptImage.
-      const claimed = await ctx.db.receipt.updateMany({
-        where: {
-          id: input.receiptId,
-          OR: [{ status: { not: 'PROCESSING' } }, { updatedAt: { lt: new Date(Date.now() - 15 * 60 * 1000) } }],
-        },
-        data: { status: 'PROCESSING' },
-      });
-      if (claimed.count === 0) {
-        refundConsumed();
-        throw new AppError('CONFLICT', 'receiptBeingProcessed');
-      }
-
-      try {
-        return await processReceiptImage({
-          db: ctx.db,
-          receiptId: input.receiptId,
-          receipt,
-          ...(input.correctionHint !== undefined ? { correctionHint: input.correctionHint } : {}),
-          logPrefix: 'guest.receipt',
-        });
-      } catch (error) {
-        logger.error('guest.receipt.failed', {
-          receiptId: input.receiptId,
-          error: error instanceof Error ? error.message : 'Unknown',
-        });
-        await ctx.db.receipt.update({
-          where: { id: input.receiptId },
-          data: {
-            status: 'FAILED',
-            rawResponse: {
-              error: error instanceof Error ? error.message : 'Unknown error',
-            } as unknown as Prisma.InputJsonValue,
-          },
-        });
-
-        // Details are logged server-side; never echo raw provider errors
-        // (model output, internal URLs) to unauthenticated guests.
-        throw new AppError('INTERNAL_SERVER_ERROR', 'receiptProcessingFailed');
-      }
     }),
 
   getReceiptItems: publicProcedure.input(z.object({ receiptId: receiptIdSchema })).query(async ({ ctx, input }) => {
@@ -437,14 +592,15 @@ export const guestRouter = createTRPCRouter({
     };
   }),
 
-  createSplit: publicProcedure
+  // Only an active signed-in user may create a bill; existing guest links stay public.
+  createSplit: protectedProcedure
     .input(
       z.object({
         receiptId: receiptIdSchema.optional(),
         receiptData: receiptDataSchema,
         items: z.array(itemSchema).min(1).max(100),
         people: z
-          .array(z.object({ name: z.string() }))
+          .array(z.object({ name: z.string().trim().max(MAX_GUEST_NAME_LENGTH) }))
           .min(1)
           .max(100),
         assignments: z
@@ -456,7 +612,7 @@ export const guestRouter = createTRPCRouter({
           )
           .max(1000),
         paidByIndex: z.number().int().default(0),
-        tipOverride: z.number().int().min(0).optional(),
+        tipOverride: z.never().optional(), // no shared tip override
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -492,6 +648,9 @@ export const guestRouter = createTRPCRouter({
       if (filteredPeople.length === 0) {
         throw new AppError('BAD_REQUEST', 'personNameRequired');
       }
+      if (hasDuplicateGuestNames(filteredPeople.map((p) => p.name))) {
+        throw new AppError('CONFLICT', 'nameTaken');
+      }
       const remappedAssignments = input.assignments
         .map((a) => ({
           itemIndex: a.itemIndex,
@@ -503,13 +662,11 @@ export const guestRouter = createTRPCRouter({
       // Note: second bounds-validation loop removed (Finding #13) — the remap above
       // only produces valid indices via indexMap filtering, making post-remap validation redundant.
 
-      const tip = input.tipOverride ?? input.receiptData.tip;
-
       const summary = calculateSplitTotals({
         items: input.items,
         assignments: remappedAssignments,
-        tax: input.receiptData.tax,
-        tip,
+        tax: 0,
+        tip: 0,
         peopleCount: filteredPeople.length,
       });
 
@@ -529,18 +686,17 @@ export const guestRouter = createTRPCRouter({
         return tx.guestSplit.create({
           data: {
             ...(receiptId !== undefined ? { receiptId, receiptShared: true } : {}),
-            receiptData: {
-              ...input.receiptData,
-              tip,
-              ...(input.tipOverride != null ? { total: input.receiptData.subtotal + input.receiptData.tax + tip } : {}),
-            } as unknown as Prisma.InputJsonValue,
+            receiptData: input.receiptData as unknown as Prisma.InputJsonValue,
             items: input.items as unknown as Prisma.InputJsonValue,
-            people: filteredPeople as unknown as Prisma.InputJsonValue,
+            people: filteredPeople.map((person, index) => ({
+              ...person,
+              visualColorId: index,
+            })) as unknown as Prisma.InputJsonValue,
             assignments: remappedAssignments as unknown as Prisma.InputJsonValue,
             summary: summaryWithNames as unknown as Prisma.InputJsonValue,
             paidByIndex: remappedPaidBy,
             payerVenmoHandle,
-            userId: ctx.session?.user?.id ?? null,
+            userId: ctx.user.id,
             expiresAt: createExpiryDate(),
           },
         });
@@ -565,8 +721,18 @@ export const guestRouter = createTRPCRouter({
     if (!split) {
       throw new AppError('NOT_FOUND', 'splitNotFound');
     }
-    if (split.expiresAt < new Date()) {
-      throw new AppError('NOT_FOUND', 'splitExpired');
+    const guestLinkExpired = split.expiresAt < new Date();
+    if (guestLinkExpired) {
+      // Guest links expire; only the active registered creator may view their
+      // finalized receipt afterward through their own account history.
+      if (split.status !== GuestSplitStatus.FINALIZED || !split.userId || split.userId !== ctx.session?.user?.id) {
+        throw new AppError('NOT_FOUND', 'splitExpired');
+      }
+      const creator = await ctx.db.user.findUnique({
+        where: { id: split.userId },
+        select: { suspendedAt: true },
+      });
+      if (!creator || creator.suspendedAt) throw new AppError('NOT_FOUND', 'splitExpired');
     }
     if (split.status !== GuestSplitStatus.FINALIZED) {
       throw new AppError('CONFLICT', 'splitNotFinalized');
@@ -575,7 +741,11 @@ export const guestRouter = createTRPCRouter({
     return {
       id: split.id,
       shareToken: split.shareToken,
-      receiptData: split.receiptData as {
+      receiptData: (() => {
+        const { finalizationOrganizerUserId: _privateOrganizer, ...visible } = parseExtractedData(split.receiptData);
+        void _privateOrganizer;
+        return visible;
+      })() as {
         merchantName?: string;
         date?: string;
         subtotal: number;
@@ -583,10 +753,21 @@ export const guestRouter = createTRPCRouter({
         tip: number;
         total: number;
         currency: string;
+        roundingBalanced?: boolean;
+        organizerPersonId?: string;
       },
       items: split.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[],
       people: toPublicPeople(split.people as GuestSessionPerson[]),
-      assignments: split.assignments as { itemIndex: number; personIndices: number[] }[],
+      organizerIndex: (() => {
+        const organizerPersonId = (split.receiptData as { organizerPersonId?: string }).organizerPersonId;
+        return typeof organizerPersonId === 'string'
+          ? (split.people as GuestSessionPerson[]).findIndex((person) => person.id === organizerPersonId)
+          : -1;
+      })(),
+      assignments: guestPortionAssignments(
+        split.assignments as GuestPortionAssignment[],
+        split.people as GuestSessionPerson[],
+      ),
       summary: split.summary as {
         personIndex: number;
         name: string;
@@ -594,10 +775,12 @@ export const guestRouter = createTRPCRouter({
         tax: number;
         tip: number;
         total: number;
+        roundingCorrectionCents?: number;
       }[],
       paidByIndex: split.paidByIndex,
       payerVenmoHandle: split.payerVenmoHandle,
       isCreator: !!split.userId && split.userId === ctx.session?.user?.id,
+      archivedCreatorView: guestLinkExpired,
       isPayer: (() => {
         if (!ctx.session?.user?.name) return false;
         const people = split.people as GuestSessionPerson[];
@@ -611,18 +794,33 @@ export const guestRouter = createTRPCRouter({
 
   // ─── CLAIMING SESSION ENDPOINTS ────────────────────────────
 
-  createClaimSession: publicProcedure
+  createClaimSession: protectedProcedure
     .input(
       z.object({
         receiptId: receiptIdSchema.optional(),
         receiptData: receiptDataSchema,
         items: z.array(itemSchema).min(1).max(100),
-        creatorName: z.string().trim().min(1).max(100),
-        paidByName: z.string().trim().min(1).max(100),
+        // Legacy named-person receipts retain their original fields.
+        // 3.7.1: new receipts instead specify a fixed number of additional
+        // guests and derive the creator's name from their signed-in account.
+        creatorName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH).optional(),
+        paidByName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH).optional(),
+        guestCount: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_SESSION_PEOPLE - 1)
+          .optional(),
+        paidByGuestSlot: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_SESSION_PEOPLE - 1)
+          .optional(),
         // Everyone typed on "Who's splitting?", listed in this order (#263). The creator and the
         // payer are added when it leaves them out, and a name typed twice is listed once, since
         // people join by name.
-        people: z.array(z.string().trim().min(1).max(100)).max(MAX_SESSION_PEOPLE).optional(),
+        people: z.array(z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH)).max(MAX_SESSION_PEOPLE).optional(),
         // Join the creator now and return their identity, so the creator's device already is them
         // when the link is shared (#263). Opt-in because older clients join the creator by name
         // afterwards, which is refused once someone holds the creator's token.
@@ -637,24 +835,85 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'sessionsRateLimited');
       }
 
-      const creatorName = input.creatorName.trim();
-      const paidByName = input.paidByName.trim();
+      const guestCount = input.guestCount;
+      const usingGuestSlots = guestCount !== undefined;
+      // The two creation protocols are intentionally mutually exclusive:
+      // never reinterpret arbitrary names as identities of unclaimed slots.
+      if (usingGuestSlots) {
+        if (
+          input.people?.length ||
+          input.creatorName !== undefined ||
+          input.paidByName !== undefined ||
+          (input.paidByGuestSlot !== undefined && input.paidByGuestSlot > guestCount)
+        ) {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'guest slots' });
+        }
+      } else if (!input.creatorName || !input.paidByName || input.paidByGuestSlot !== undefined) {
+        throw new AppError('BAD_REQUEST', 'invalidData', { label: 'guest participants' });
+      }
+      const ownerId = await billokOwnerUserId(ctx);
+      const creatorProfile = usingGuestSlots
+        ? await ctx.db.user.findUnique({ where: { id: ctx.user.id }, select: { name: true } })
+        : null;
+      const creatorName = ownerId
+        ? RESERVED_OWNER_NAME
+        : usingGuestSlots
+          ? (creatorProfile?.name ?? '').normalize('NFC').trim()
+          : input.creatorName!.trim();
+      if (!creatorName || creatorName.length > MAX_GUEST_NAME_LENGTH) {
+        throw new AppError('BAD_REQUEST', 'invalidData', { label: 'creator display name' });
+      }
+      const paidByName = usingGuestSlots ? creatorName : input.paidByName!.trim();
 
+      // Duplicate guest rows are rejected; creator and payer references
+      // intentionally point to the same row when the names match.
+      if (hasDuplicateGuestNames(input.people ?? [])) {
+        throw new AppError('CONFLICT', 'nameTaken');
+      }
       const people: IdentifiedGuestPerson[] = [];
       const indexOf = (name: string) =>
         people.findIndex((p) => normalizeGuestName(p.name) === normalizeGuestName(name));
-      for (const name of [...(input.people ?? []), creatorName, paidByName]) {
-        if (indexOf(name) < 0) people.push({ id: randomUUID(), name });
+      if (usingGuestSlots) {
+        // Always exactly one creator plus guestCount independently addressable
+        // slots. The payer is a role on one of these rows, never an extra guest.
+        people.push({
+          id: randomUUID(),
+          name: creatorName,
+          accountUserId: ctx.user.id,
+          ...(ownerId ? { reservedOwner: true } : {}),
+        });
+        for (let slot = 1; slot <= guestCount; slot++) {
+          const preferredName = `Гость ${slot}`;
+          const name = indexOf(preferredName) < 0 ? preferredName : `${preferredName} (гость)`;
+          people.push({ id: randomUUID(), name, guestSlotNumber: slot });
+        }
+      } else {
+        for (const name of [...(input.people ?? []), creatorName, paidByName]) {
+          if (indexOf(name) < 0) people.push({ id: randomUUID(), name: name.normalize('NFC') });
+        }
+        if (ownerId) {
+          const idx = indexOf(RESERVED_OWNER_NAME);
+          people[idx] = { ...people[idx]!, accountUserId: ownerId, reservedOwner: true };
+        }
       }
       if (people.length > MAX_SESSION_PEOPLE) {
         throw new AppError('BAD_REQUEST', 'sessionFull', { max: MAX_SESSION_PEOPLE });
       }
-      const paidByIndex = indexOf(paidByName);
+      // Assign once, before any names are changed or people can be removed.
+      // The key will survive retries, joins, renames and index compaction.
+      for (const [index, person] of people.entries()) {
+        people[index] = { ...person, visualColorId: index };
+      }
+      const paidByIndex = usingGuestSlots ? (input.paidByGuestSlot ?? 0) : indexOf(paidByName);
+      // A persistent participant ID identifies the creator even if names are
+      // edited and the payer is a different person or appears earlier in the list.
+      const creatorIndex = usingGuestSlots ? 0 : indexOf(creatorName);
+      const organizerPersonId = people[creatorIndex]!.id;
 
-      // Everyone else gets a token the first time they join this session
+      // The creator's participant row is account-bound even if browser storage
+      // is blocked; a shared invitation alone cannot take their row by name.
       let creator: { personId: string; personToken: string; name: string } | null = null;
       if (input.joinCreator) {
-        const creatorIndex = indexOf(creatorName);
         const person = { ...people[creatorIndex]!, personToken: randomUUID() };
         people[creatorIndex] = person;
         creator = { personId: person.id, personToken: person.personToken, name: person.name };
@@ -698,14 +957,21 @@ export const guestRouter = createTRPCRouter({
         return tx.guestSplit.create({
           data: {
             ...(receiptId !== undefined ? { receiptId, receiptShared: true } : {}),
-            receiptData: input.receiptData as unknown as Prisma.InputJsonValue,
+            // New personal-link claims use one cross-item rounding strategy.
+            // Direct finalized splits keep their historical settlement rules.
+            receiptData: {
+              ...input.receiptData,
+              roundingBalanced: true,
+              organizerPersonId,
+              ...(usingGuestSlots ? { guestSlotsMode: true, guestCount } : {}),
+            } as unknown as Prisma.InputJsonValue,
             items: expandedItems as unknown as Prisma.InputJsonValue,
             people: people as unknown as Prisma.InputJsonValue,
             assignments: [] as unknown as Prisma.InputJsonValue,
             paidByIndex,
             payerVenmoHandle: claimPayerVenmoHandle,
             status: GuestSplitStatus.CLAIMING,
-            userId: ctx.session?.user?.id ?? null,
+            userId: ctx.user.id,
             expiresAt: createExpiryDate(),
           },
         });
@@ -722,11 +988,167 @@ export const guestRouter = createTRPCRouter({
       return { shareToken: session.shareToken, creator };
     }),
 
+  /** 3.7.2: join one of N preallocated guest slots by *stable person id*.
+   * The shareToken reveals available places but provides no ownership of a
+   * taken place. This is intentionally separate from legacy name-based joining.
+   * guestTransaction retries conflicting Repeatable Read writes to the same
+   * GuestSplit row; both competing requests can never commit the same free slot.
+   */
+  joinGuestSlot: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        slotId: personIdSchema,
+        name: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
+        personToken: z.string().uuid().optional(),
+        joinKey: z.string().uuid().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkJoinRateLimit(input.token, input.name, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      // A verified, active account binds to exactly one row in a receipt. A
+      // session created through impersonation is not that account's consent.
+      let accountUserId: string | null = null;
+      if (ctx.session?.user?.id && !ctx.impersonating) {
+        const account = await ctx.db.user.findUnique({
+          where: { id: ctx.session.user.id },
+          select: { suspendedAt: true },
+        });
+        if (!account) throw new AppError('UNAUTHORIZED');
+        if (account.suspendedAt) throw new AppError('FORBIDDEN', 'accountSuspended');
+        accountUserId = ctx.session.user.id;
+      }
+      const ownerId = accountUserId ? await billokOwnerUserId(ctx) : null;
+      return guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+        const receipt = parseExtractedData(session.receiptData);
+        if (receipt.guestSlotsMode !== true)
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'guest slots mode' });
+        const stored = session.people as GuestSessionPerson[];
+        if (hasDuplicateGuestNames(stored.map((person) => person.name))) {
+          throw new AppError('CONFLICT', 'nameTaken');
+        }
+        const people = assignPersonIds(stored);
+        const save = async () => {
+          enforceGuestKnownParts(
+            parseGuestItems(session.items),
+            people,
+            parseGuestAssignments(session.assignments),
+            receipt.knownPartsByItem,
+            false,
+          );
+          await tx.guestSplit.update({
+            where: { id: session.id },
+            data: {
+              // Selecting a place changes neither dish portions nor voluntary
+              // tip amounts: an already approved allocation stays approved.
+              people: people as unknown as Prisma.InputJsonValue,
+            },
+          });
+        };
+        const targetIndex = people.findIndex((p) => p.id === input.slotId && typeof p.guestSlotNumber === 'number');
+        // A registered creator can re-enter their own reserved row using
+        // their account, but cannot bind that row to a second guest slot.
+        const accountIndex = accountUserId ? people.findIndex((p) => p.accountUserId === accountUserId) : -1;
+        const bearerIndex = input.personToken ? people.findIndex((p) => p.personToken === input.personToken) : -1;
+        if (bearerIndex >= 0 && people[bearerIndex]!.accountUserId !== (accountUserId ?? undefined)) {
+          // A logged-in person cannot silently convert an anonymous personal
+          // link, or another registered account's token, into their own place.
+          // Explicit account conversion and personal links belong to 3.8.
+          throw new AppError('FORBIDDEN', 'notParticipant');
+        }
+        const existingIndex = accountIndex >= 0 ? accountIndex : bearerIndex;
+        if (existingIndex >= 0) {
+          // One registered account or previously joined guest retains exactly
+          // one position across devices/retries. A token for someone else's
+          // guest place never moves a registered account onto it.
+          if (accountIndex >= 0 && bearerIndex >= 0 && accountIndex !== bearerIndex) {
+            throw new AppError('CONFLICT', 'joinNameTaken');
+          }
+          const own = people[existingIndex]!;
+          if (own.accountUserId && own.accountUserId !== accountUserId) {
+            throw new AppError('FORBIDDEN', 'notParticipant');
+          }
+          const token = own.personToken ?? randomUUID();
+          const changed = own.personToken !== token;
+          if (changed) {
+            people[existingIndex] = { ...own, personToken: token };
+            await save();
+          }
+          return { personIndex: existingIndex, personId: own.id, personToken: token, name: own.name };
+        }
+
+        // A lost anonymous response can be replayed by a fresh device only
+        // with its own unpredictable joinKey; the key is scoped to this exact
+        // slot, name, and unauthenticated identity and has a 24h TTL.
+        const now = Date.now();
+        const replayIndex = input.joinKey
+          ? people.findIndex((p) => p.join?.key === input.joinKey && (p.join?.expiresAt ?? 0) > now)
+          : -1;
+        if (replayIndex >= 0) {
+          const replayed = people[replayIndex]!;
+          if (
+            replayed.id !== input.slotId ||
+            replayed.join!.name !== normalizeGuestName(input.name) ||
+            replayed.accountUserId !== undefined ||
+            accountUserId !== null
+          ) {
+            throw new AppError('CONFLICT', 'joinKeyReused');
+          }
+          return {
+            personIndex: replayIndex,
+            personId: replayed.id,
+            personToken: replayed.personToken!,
+            name: replayed.name,
+          };
+        }
+
+        if (targetIndex < 0) throw new AppError('CONFLICT', 'personGone');
+        const target = people[targetIndex]!;
+        if (target.personToken || target.accountUserId) {
+          throw new AppError('CONFLICT', 'guestSlotTaken');
+        }
+
+        // Owner can use only their own verified name. If another diner had
+        // that name first, rename just their label, keeping ID/token/shares.
+        if (ownerId) freeOwnerName(people, targetIndex);
+        const displayName = ownerId ? RESERVED_OWNER_NAME : input.name.normalize('NFC').trim();
+        const wanted = normalizeGuestName(displayName);
+        if (people.some((p, i) => i !== targetIndex && normalizeGuestName(p.name) === wanted))
+          throw new AppError('CONFLICT', 'nameTaken');
+        const token = randomUUID();
+        const newJoin = input.joinKey
+          ? {
+              join: {
+                key: input.joinKey,
+                name: normalizeGuestName(input.name),
+                expiresAt: now + JOIN_REPLAY_WINDOW_MS,
+              },
+            }
+          : {};
+        people[targetIndex] = {
+          ...target,
+          name: displayName,
+          personToken: token,
+          ...(accountUserId ? { accountUserId } : {}),
+          ...(ownerId ? { reservedOwner: true } : {}),
+          ...newJoin,
+        };
+        await save();
+        return { personIndex: targetIndex, personId: target.id, personToken: token, name: displayName };
+      });
+    }),
+
   joinSession: publicProcedure
     .input(
       z.object({
         token: shareTokenSchema,
-        name: z.string().trim().min(1).max(100),
+        name: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
         groupSize: z.number().int().min(1).max(20).optional(),
         // The token this device stored when it joined: whoever holds it is the caller. Only ever
         // used to find its holder, never given to anyone, so a removed person's old token
@@ -744,6 +1166,7 @@ export const guestRouter = createTRPCRouter({
       if (!checkJoinRateLimit(input.token, input.name, input.personToken)) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
+      const ownerId = await billokOwnerUserId(ctx);
       return guestTransaction(ctx.db, async (tx) => {
         const session = await tx.guestSplit.findUnique({
           where: { shareToken: input.token },
@@ -751,24 +1174,101 @@ export const guestRouter = createTRPCRouter({
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+        // 3.7.1 is the creation protocol only. Until 3.7.2 adds atomic
+        // selection by stable slot id, a legacy name-based join must not
+        // append arbitrary people or seize a fixed guest place.
+        if (parseExtractedData(session.receiptData).guestSlotsMode === true) {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'guest slot selection required' });
+        }
 
         const stored = session.people as GuestSessionPerson[];
+        // Never assign a claimant to an ambiguous legacy duplicate name.
+        if (hasDuplicateGuestNames(stored.map((p) => p.name))) {
+          throw new AppError('CONFLICT', 'nameTaken');
+        }
         // People saved without an id get theirs now, and are saved even when the join changes
         // nothing else, so the id returned is the one getSession lists. Done here rather than
         // with savePersonIds, so it's one write in this transaction with the join's own changes.
         const idsMissing = !hasPersonIds(stored);
         const people = assignPersonIds(stored);
-        const savePeople = () =>
-          tx.guestSplit.update({
+        const savePeople = () => {
+          enforceGuestKnownParts(
+            parseGuestItems(session.items),
+            people,
+            parseGuestAssignments(session.assignments),
+            parseExtractedData(session.receiptData).knownPartsByItem,
+            false,
+          );
+          return tx.guestSplit.update({
             where: { id: session.id },
-            data: { people: people as unknown as Prisma.InputJsonValue },
+            data: {
+              people: people as unknown as Prisma.InputJsonValue,
+              ...invalidatePartsApproval(session.receiptData),
+            },
           });
+        };
         const normalizedName = normalizeGuestName(input.name);
+        const holderIndex = input.personToken ? people.findIndex((p) => p.personToken === input.personToken) : -1;
+
+        if (ownerId) {
+          // Recover only the account-bound owner row. A guest personal token
+          // must NOT implicitly convert some other diner's place into the
+          // owner's account; explicit conversion belongs to 3.8.
+          const ownIndex = people.findIndex((p) => p.accountUserId === ownerId);
+          if (ownIndex < 0 && people.length >= MAX_SESSION_PEOPLE) {
+            throw new AppError('BAD_REQUEST', 'sessionFull', { max: MAX_SESSION_PEOPLE });
+          }
+          const renamedAnother = freeOwnerName(people, ownIndex);
+          const previous = ownIndex >= 0 ? people[ownIndex]! : null;
+          const personToken = previous?.personToken ?? randomUUID();
+          const finalIndex = ownIndex >= 0 ? ownIndex : people.length;
+          const desiredGroupSize = input.groupSize ?? previous?.groupSize;
+          if (previous) {
+            people[ownIndex] = {
+              ...previous,
+              name: RESERVED_OWNER_NAME,
+              accountUserId: ownerId,
+              reservedOwner: true,
+              personToken,
+              ...(desiredGroupSize !== undefined ? { groupSize: desiredGroupSize } : {}),
+            };
+          } else {
+            people.push({
+              id: randomUUID(),
+              name: RESERVED_OWNER_NAME,
+              accountUserId: ownerId,
+              reservedOwner: true,
+              personToken,
+              ...(input.groupSize != null ? { groupSize: input.groupSize } : {}),
+            });
+          }
+          // Don't revoke an organizer's approved parts snapshot just because
+          // the same account reopened the receipt on another device.
+          if (
+            !previous ||
+            renamedAnother ||
+            idsMissing ||
+            previous.name !== RESERVED_OWNER_NAME ||
+            !previous.personToken ||
+            previous.groupSize !== desiredGroupSize
+          )
+            await savePeople();
+          const owner = people[finalIndex]!;
+          return { personIndex: finalIndex, personId: owner.id, personToken, name: RESERVED_OWNER_NAME };
+        }
+
+        // Once the owner actually participates in this receipt, the reserved
+        // name may never be claimed by another account or guest.
+        const ownerIndex = people.findIndex(
+          (p) => p.reservedOwner === true && normalizeGuestName(p.name) === RESERVED_OWNER_KEY,
+        );
+        if (ownerIndex >= 0 && normalizedName === RESERVED_OWNER_KEY && holderIndex !== ownerIndex) {
+          throw new AppError('CONFLICT', 'nameTaken');
+        }
 
         // The caller already is someone, by the token their device stored: return them under their
         // current name (anyone may have renamed them), whatever name was typed. Checked before a
         // join-key replay, so the device's current identity wins (e.g. another tab joined meanwhile).
-        const holderIndex = input.personToken ? people.findIndex((p) => p.personToken === input.personToken) : -1;
         if (holderIndex >= 0) {
           const holder = people[holderIndex]!;
           // Update groupSize on rejoin only if explicitly provided and different
@@ -809,7 +1309,7 @@ export const guestRouter = createTRPCRouter({
           const existingPerson = people[existingIndex]!;
           // Someone has already joined as this person, and the caller doesn't hold their token.
           // Refuse, or anyone with the link could take over their identity by name.
-          if (existingPerson.personToken) {
+          if (existingPerson.personToken || existingPerson.accountUserId) {
             throw new AppError('CONFLICT', 'joinNameTaken');
           }
           people[existingIndex] = {
@@ -826,12 +1326,13 @@ export const guestRouter = createTRPCRouter({
           throw new AppError('BAD_REQUEST', 'sessionFull', { max: MAX_SESSION_PEOPLE });
         }
 
-        const name = input.name.trim();
+        const name = input.name.normalize('NFC').trim();
         const personId = randomUUID();
         people.push({
           id: personId,
           name,
           personToken,
+          visualColorId: Math.max(people.length - 1, ...people.map((p) => p.visualColorId ?? -1)) + 1,
           ...joinRecord,
           ...(input.groupSize != null ? { groupSize: input.groupSize } : {}),
         });
@@ -842,7 +1343,7 @@ export const guestRouter = createTRPCRouter({
     }),
 
   // How a returning device finds its person: by the token it stored when it joined, not by
-  // name, since anyone in the session can rename anyone. A mutation so the token travels in
+  // name, since the receipt creator may correct a guest's name. A mutation so the token travels in
   // the request body, not a URL. Returns null when nobody holds the token any more. Doesn't
   // require CLAIMING: it only maps a token the caller holds to the index, id and name getSession
   // already shows, and the claim page also calls it on finalized splits (personal links work
@@ -881,15 +1382,24 @@ export const guestRouter = createTRPCRouter({
     .input(
       z.object({
         token: shareTokenSchema,
-        personToken: z.string().uuid(),
+        // Optional only for the signed-in receipt creator: their own account
+        // grants permission, no guest token belonging to somebody else needed.
+        personToken: z.string().uuid().optional(),
         // Who to rename, by id (see targetIndexOrThrow)
         targetId: personIdSchema,
-        newName: z.string().trim().min(1).max(100),
+        newName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
         groupSize: z.number().int().min(1).max(20).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      if (!checkClaimWriteRateLimit('edit-name', input.token, input.personToken)) {
+      if (
+        !checkClaimWriteRateLimit(
+          'edit-name',
+          input.token,
+          // A named, bounded bucket for signed-in creators without guest tokens.
+          input.personToken ?? (ctx.session?.user?.id ? `creator:${ctx.session.user.id}` : 'anonymous'),
+        )
+      ) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       return guestTransaction(ctx.db, async (tx) => {
@@ -901,22 +1411,57 @@ export const guestRouter = createTRPCRouter({
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionFinalized');
 
         const people = [...(session.people as GuestSessionPerson[])];
-        const isParticipant = people.some((p) => p.personToken === input.personToken);
-        if (!isParticipant) throw new AppError('FORBIDDEN', 'notParticipant');
+        if (hasDuplicateGuestNames(people.map((p) => p.name))) {
+          throw new AppError('CONFLICT', 'nameTaken');
+        }
         const targetIndex = targetIndexOrThrow(people, input.targetId);
+        // 3.6.2: receipt creator is an authenticated account identity, not
+        // the payer or someone presenting an invitation/guest token. A normal
+        // guest can only rename the row to which their token is attached.
+        const isCreator =
+          !!session.userId && !!ctx.session?.user?.id && session.userId === ctx.session.user.id && !ctx.impersonating;
+        const isSelf = !!input.personToken && people[targetIndex]!.personToken === input.personToken;
+        if (!isCreator && !isSelf) throw new AppError('FORBIDDEN', 'notParticipant');
+        // The owner is not an editable guest, even if the creator of a
+        // different bill happens to have a valid signed-in session.
+        const targetAccount = people[targetIndex]!.accountUserId;
+        if (targetAccount && targetAccount !== ctx.session?.user?.id) {
+          throw new AppError('FORBIDDEN', 'notParticipant');
+        }
 
         const normalizedNew = normalizeGuestName(input.newName);
+        const boundOwnerIndex = people.findIndex(
+          (p) => p.reservedOwner === true && normalizeGuestName(p.name) === RESERVED_OWNER_KEY,
+        );
+        if (
+          (boundOwnerIndex >= 0 && normalizedNew === RESERVED_OWNER_KEY && targetIndex !== boundOwnerIndex) ||
+          (boundOwnerIndex === targetIndex && input.newName.trim() !== RESERVED_OWNER_NAME)
+        ) {
+          throw new AppError('CONFLICT', 'nameTaken');
+        }
         const conflict = people.findIndex((p, i) => i !== targetIndex && normalizeGuestName(p.name) === normalizedNew);
         if (conflict >= 0) throw new AppError('CONFLICT', 'nameTaken');
 
-        people[targetIndex] = {
-          ...people[targetIndex]!,
-          name: input.newName.trim(),
+        const previous = people[targetIndex]!;
+        const renamed = {
+          ...previous,
+          name: input.newName.normalize('NFC').trim(),
           ...(input.groupSize != null ? { groupSize: input.groupSize } : {}),
         };
+        people[targetIndex] = isSelf && previous.name !== renamed.name ? markPersonalLinkReady(renamed) : renamed;
+        enforceGuestKnownParts(
+          parseGuestItems(session.items),
+          people,
+          parseGuestAssignments(session.assignments),
+          parseExtractedData(session.receiptData).knownPartsByItem,
+          false,
+        );
         await tx.guestSplit.update({
           where: { id: session.id },
-          data: { people: people as unknown as Prisma.InputJsonValue },
+          data: {
+            people: people as unknown as Prisma.InputJsonValue,
+            ...invalidatePartsApproval(session.receiptData),
+          },
         });
         return { success: true };
       });
@@ -942,23 +1487,38 @@ export const guestRouter = createTRPCRouter({
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionFinalized');
+        // Fixed places cannot be deleted through the legacy token endpoint:
+        // deleting the creator or any slot would silently change guestCount.
+        if (parseExtractedData(session.receiptData).guestSlotsMode === true) {
+          throw new AppError('FORBIDDEN', 'notParticipant');
+        }
 
         const people = [...(session.people as GuestSessionPerson[])];
         const isParticipant = people.some((p) => p.personToken === input.personToken);
         if (!isParticipant) throw new AppError('FORBIDDEN', 'notParticipant');
         const targetIndex = targetIndexOrThrow(people, input.targetId);
+        // No other person's guest token may eject the account-bound owner.
+        if (people[targetIndex]?.accountUserId && people[targetIndex]?.personToken !== input.personToken) {
+          throw new AppError('FORBIDDEN', 'notParticipant');
+        }
         if (people.length <= 1) throw new AppError('BAD_REQUEST', 'cannotRemoveLastPerson');
 
+        const removedPersonId = people[targetIndex]?.id;
         people.splice(targetIndex, 1);
 
         // Remap assignments: remove the person and shift indices down
-        const assignments = (session.assignments as { itemIndex: number; personIndices: number[] }[])
-          .map((a) => ({
-            itemIndex: a.itemIndex,
-            personIndices: a.personIndices
-              .filter((pi) => pi !== targetIndex)
-              .map((pi) => (pi > targetIndex ? pi - 1 : pi)),
-          }))
+        const assignments = (session.assignments as GuestPortionAssignment[])
+          .map((a) => {
+            const partsByPersonId = { ...(a.partsByPersonId ?? {}) };
+            if (removedPersonId) delete partsByPersonId[removedPersonId];
+            return {
+              itemIndex: a.itemIndex,
+              personIndices: a.personIndices
+                .filter((pi) => pi !== targetIndex)
+                .map((pi) => (pi > targetIndex ? pi - 1 : pi)),
+              ...(a.partsByPersonId ? { partsByPersonId } : {}),
+            };
+          })
           .filter((a) => a.personIndices.length > 0);
 
         // Adjust paidByIndex
@@ -975,6 +1535,7 @@ export const guestRouter = createTRPCRouter({
             people: people as unknown as Prisma.InputJsonValue,
             assignments: assignments as unknown as Prisma.InputJsonValue,
             paidByIndex,
+            ...invalidatePartsApproval(session.receiptData),
           },
         });
         return { success: true };
@@ -1015,6 +1576,14 @@ export const guestRouter = createTRPCRouter({
         ];
         if (input.itemIndex >= items.length) throw new AppError('BAD_REQUEST', 'invalidItemIndex');
 
+        const currentData = parseExtractedData(session.receiptData);
+        if (
+          currentData.knownPartsByItem &&
+          typeof currentData.knownPartsByItem === 'object' &&
+          Object.keys(currentData.knownPartsByItem).length > 0
+        ) {
+          throw new AppError('PRECONDITION_FAILED', 'receiptKnownPartsSplitItem');
+        }
         const item = items[input.itemIndex]!;
         if (input.splitQuantity >= item.quantity) {
           throw new AppError('BAD_REQUEST', 'splitQuantityOverItem');
@@ -1036,7 +1605,8 @@ export const guestRouter = createTRPCRouter({
         });
 
         // Remap assignments: shift indices after insertion point
-        const assignments = (session.assignments as { itemIndex: number; personIndices: number[] }[]).map((a) => ({
+        const assignments = (session.assignments as GuestPortionAssignment[]).map((a) => ({
+          ...a,
           itemIndex: a.itemIndex > input.itemIndex ? a.itemIndex + 1 : a.itemIndex,
           personIndices: [...a.personIndices],
         }));
@@ -1046,9 +1616,129 @@ export const guestRouter = createTRPCRouter({
           data: {
             items: items as unknown as Prisma.InputJsonValue,
             assignments: assignments as unknown as Prisma.InputJsonValue,
+            ...invalidatePartsApproval(session.receiptData),
           },
         });
         return { success: true, itemCount: items.length };
+      });
+    }),
+
+  // Every participant chooses only their own voluntary tip. This intentionally
+  // does not yet alter shares or final totals: those are handled with the
+  // subsequent personal-tip settlement and UI stages.
+  setPersonalTip: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        tipCents: z.number().int().min(0).max(MAX_MONEY_CENTS),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('personal-tip', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) {
+          throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+        }
+
+        const people = session.people as GuestSessionPerson[];
+        const personIndex = people.findIndex((person) => person.personToken === input.personToken);
+        if (personIndex < 0 || people[personIndex]?.id !== input.personId) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+
+        // Setting the same amount twice, including the default zero, is a
+        // no-op. Different devices are serialized through guestTransaction.
+        if ((people[personIndex]!.tipCents ?? 0) !== input.tipCents) {
+          const updated = people.map((person, index) =>
+            index === personIndex ? markPersonalLinkReady({ ...person, tipCents: input.tipCents }) : person,
+          );
+          await tx.guestSplit.update({
+            where: { id: session.id },
+            data: { people: updated as unknown as Prisma.InputJsonValue },
+          });
+        }
+        return { success: true, tipCents: input.tipCents };
+      });
+    }),
+
+  // A guest may adjust only their own number of consumed portions. Keep the
+  // existing claim/save semantics, but never trust name, person index or share
+  // URL as authority to change another person's count.
+  setMyItemParts: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        itemIndex: z.number().int().min(0),
+        parts: z.number().int().min(1).max(10000),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('personal-parts', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'claimRateLimited');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) {
+          throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+        }
+        const people = session.people as GuestSessionPerson[];
+        const personIndex = people.findIndex(
+          (person) => person.id === input.personId && person.personToken === input.personToken,
+        );
+        if (personIndex < 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        const items = session.items as { totalPrice: number }[];
+        if (input.itemIndex >= items.length) throw new AppError('BAD_REQUEST', 'invalidItemIndex');
+        const assignments = cloneAssignments(session.assignments as GuestPortionAssignment[]);
+        const target = assignments.find(
+          (item) => item.itemIndex === input.itemIndex && item.personIndices.includes(personIndex),
+        );
+        if (!target) throw new AppError('PRECONDITION_FAILED', 'itemsUnassigned');
+        if (target.partsByPersonId?.[input.personId] !== input.parts) {
+          target.partsByPersonId = { ...target.partsByPersonId, [input.personId]: input.parts };
+          enforceGuestKnownParts(
+            items,
+            people,
+            assignments,
+            parseExtractedData(session.receiptData).knownPartsByItem,
+            false,
+          );
+          // Enforce the stored result is still an integer-kopeck division of
+          // the same receipt item before persisting.
+          calculateSplitTotals({
+            items,
+            assignments: guestPortionAssignments([target], people),
+            tax: 0,
+            tip: 0,
+            peopleCount: people.length,
+            ...groupSizeWeights(people),
+          });
+          await tx.guestSplit.update({
+            where: { id: session.id },
+            data: {
+              assignments: assignments as unknown as Prisma.InputJsonValue,
+              ...(!people[personIndex]!.personalLinkReadyAt && people[personIndex]!.guestSlotNumber !== undefined
+                ? {
+                    people: people.map((person, index) =>
+                      index === personIndex ? markPersonalLinkReady(person) : person,
+                    ) as unknown as Prisma.InputJsonValue,
+                  }
+                : {}),
+              ...invalidatePartsApproval(session.receiptData),
+            },
+          });
+        }
+        return { success: true, parts: input.parts };
       });
     }),
 
@@ -1129,7 +1819,10 @@ export const guestRouter = createTRPCRouter({
           }
         }
 
-        const assignments = cloneAssignments(session.assignments as { itemIndex: number; personIndices: number[] }[]);
+        const assignments = cloneAssignments(session.assignments as GuestPortionAssignment[]);
+        const earlierClaims = new Set(
+          assignments.filter((a) => a.personIndices.includes(personIndex)).map((a) => a.itemIndex),
+        );
 
         // The person's claims after this save: the set sent, or what is stored now with the
         // changes applied
@@ -1140,9 +1833,12 @@ export const guestRouter = createTRPCRouter({
         for (const idx of input.addItemIndices ?? []) claimedSet.add(idx);
         for (const idx of input.removeItemIndices ?? []) claimedSet.delete(idx);
 
-        // Remove this person from all current assignments
+        // Remove the claimed person without touching other people's portions.
         for (const a of assignments) {
           a.personIndices = a.personIndices.filter((pi) => pi !== personIndex);
+          if (!claimedSet.has(a.itemIndex) && a.partsByPersonId) {
+            delete a.partsByPersonId[input.personId];
+          }
         }
 
         // Add this person to claimed items
@@ -1160,17 +1856,34 @@ export const guestRouter = createTRPCRouter({
         // Clean up empty assignments
         const cleanedAssignments = assignments.filter((a) => a.personIndices.length > 0);
 
+        enforceGuestKnownParts(
+          items,
+          people,
+          cleanedAssignments,
+          parseExtractedData(session.receiptData).knownPartsByItem,
+          false,
+        );
+
         // The save key goes on the caller's person with this save, newest last
-        const withSaveKey = save
-          ? people.map((person, index) =>
-              index === callerIndex ? { ...person, saves: [...callerSaves, save].slice(-SAVE_KEYS_KEPT) } : person,
-            )
-          : null;
+        const actualOwnEdit =
+          callerIndex === personIndex &&
+          (earlierClaims.size !== claimedSet.size || [...claimedSet].some((item) => !earlierClaims.has(item)));
+        const withSaveKey =
+          save || actualOwnEdit
+            ? people.map((person, index) => {
+                const withSave =
+                  save && index === callerIndex
+                    ? { ...person, saves: [...callerSaves, save].slice(-SAVE_KEYS_KEPT) }
+                    : person;
+                return index === personIndex && actualOwnEdit ? markPersonalLinkReady(withSave) : withSave;
+              })
+            : null;
 
         await tx.guestSplit.update({
           where: { id: session.id },
           data: {
             assignments: cleanedAssignments as unknown as Prisma.InputJsonValue,
+            ...invalidatePartsApproval(session.receiptData),
             ...(withSaveKey ? { people: withSaveKey as unknown as Prisma.InputJsonValue } : {}),
           },
         });
@@ -1178,6 +1891,164 @@ export const guestRouter = createTRPCRouter({
         // Check for conflicts: items in this person's claim set that are also claimed by others
         return { success: true, conflicts: claimConflicts(cleanedAssignments, people, personIndex) };
       });
+    }),
+
+  /** 3.5: a current browser tab declares presence for its own joined person.
+   * Independent row per device: one closed tab does not mark another tab offline.
+   * The database supplies the time; a client cannot forge the status or another person.
+   */
+  heartbeatPresence: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        deviceId: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkGuestPresenceHeartbeatLimit(input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const session = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: { id: true, expiresAt: true, status: true, people: true },
+      });
+      if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      if (session.status !== GuestSplitStatus.CLAIMING) {
+        throw new AppError('BAD_REQUEST', 'sessionAlreadyFinalized');
+      }
+      const people = session.people as GuestSessionPerson[];
+      const person = people.find((entry) => entry.id === input.personId);
+      if (!person?.personToken || person.personToken !== input.personToken) {
+        throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      }
+      const seen = new Date();
+      await ctx.db.guestPresence.upsert({
+        where: {
+          sessionId_personId_deviceId: {
+            sessionId: session.id,
+            personId: input.personId,
+            deviceId: input.deviceId,
+          },
+        },
+        create: {
+          sessionId: session.id,
+          personId: input.personId,
+          deviceId: input.deviceId,
+          lastSeenAt: seen,
+        },
+        update: { lastSeenAt: seen },
+      });
+      return { success: true };
+    }),
+
+  /** 3.8.2: a personal link is a bearer credential. Only the signed-in
+   * creator of THIS receipt may request a guest's saved credential. Use POST
+   * (mutation) so the secret never appears in URLs or public query caches.
+   * The UI builds a #fragment link client-side; fragments never reach HTTP.
+   */
+  /** 3.8.4: a creator rotates exactly one guest's personal bearer credential.
+   * The old token and its join replay key lose authority in the same commit.
+   * Do not touch personId, account binding, assignments, payments or tips.
+   */
+  rotateGuestPersonalLink: protectedProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        requestKey: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.impersonating) throw new AppError('FORBIDDEN', 'notParticipant');
+      const bucket = `guest-rotate-personal-link:${JSON.stringify([input.token, ctx.user.id])}`;
+      if (!checkTokenRateLimit(bucket, 12, 60_000).allowed) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session || session.userId !== ctx.user.id) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (parseExtractedData(session.receiptData).guestSlotsMode !== true) {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'fixed guest slots' });
+        }
+        const people = assignPersonIds(session.people as GuestSessionPerson[]);
+        const idx = people.findIndex((person) => person.id === input.personId && person.guestSlotNumber !== undefined);
+        if (idx < 0) throw new AppError('NOT_FOUND', 'personGone');
+        const guest = people[idx]!;
+        if (!guest.personToken) throw new AppError('PRECONDITION_FAILED', 'guestPersonalLinkNotJoined');
+        if (!guest.personalLinkReadyAt) throw new AppError('PRECONDITION_FAILED', 'guestPersonalLinkNotReady');
+
+        const previousRotation = guest.personalLinkRotation;
+        // A retry of an already committed rotation must not invalidate the
+        // credential it returned on the first (possibly lost) response.
+        if (previousRotation?.requestKey === input.requestKey) {
+          return {
+            personId: guest.id,
+            name: guest.name,
+            personToken: guest.personToken,
+            rotatedAt: previousRotation.rotatedAt,
+            rotationCount: previousRotation.count,
+          };
+        }
+
+        const rotatedAt = new Date().toISOString();
+        const personToken = randomUUID();
+        const rotationCount = Math.min((previousRotation?.count ?? 0) + 1, 1_000_000);
+        // Remove prior join-key and save-key replays: neither may be used to
+        // retrieve this fresh secret with an old request from another device.
+        const { join: _priorJoin, saves: _priorSaves, ...retained } = guest;
+        void _priorJoin;
+        void _priorSaves;
+        people[idx] = {
+          ...retained,
+          personToken,
+          personalLinkRotation: { requestKey: input.requestKey, rotatedAt, count: rotationCount },
+        };
+        await tx.guestSplit.update({
+          where: { id: session.id },
+          data: { people: people as unknown as Prisma.InputJsonValue },
+        });
+        // The response contains the NEW secret only for the authenticated
+        // creator; the audit event stores no old token or request URL.
+        return { personId: guest.id, name: guest.name, personToken, rotatedAt, rotationCount };
+      });
+    }),
+
+  getGuestPersonalLink: protectedProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.impersonating) throw new AppError('FORBIDDEN', 'notParticipant');
+      if (
+        !checkTokenRateLimit(`guest-creator-personal-link:${JSON.stringify([input.token, ctx.user.id])}`, 30, 60_000)
+          .allowed
+      ) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const session = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: { userId: true, expiresAt: true, receiptData: true, people: true },
+      });
+      // Hide existence of other people's receipts from all registered users,
+      // including delegated organizers and the system-wide BillOK owner.
+      if (!session || session.userId !== ctx.user.id) {
+        throw new AppError('NOT_FOUND', 'sessionNotFound');
+      }
+      if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      if (parseExtractedData(session.receiptData).guestSlotsMode !== true) {
+        throw new AppError('BAD_REQUEST', 'invalidData', { label: 'fixed guest slots' });
+      }
+      const guest = (session.people as GuestSessionPerson[]).find(
+        (person) => person.id === input.personId && person.guestSlotNumber !== undefined,
+      );
+      if (!guest) throw new AppError('NOT_FOUND', 'personGone');
+      if (!guest.personToken) throw new AppError('PRECONDITION_FAILED', 'guestPersonalLinkNotJoined');
+      if (!guest.personalLinkReadyAt) throw new AppError('PRECONDITION_FAILED', 'guestPersonalLinkNotReady');
+      // No plain personal token is returned by getSession, getSplit, or an
+      // invite: this explicit creator-only mutation is the sole exception.
+      return { personId: guest.id!, name: guest.name, personToken: guest.personToken };
     }),
 
   getSession: publicProcedure.input(z.object({ token: shareTokenSchema })).query(async ({ ctx, input }) => {
@@ -1192,6 +2063,25 @@ export const guestRouter = createTRPCRouter({
     if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
     if (!hasPersonIds(session.people as GuestSessionPerson[])) session = await savePersonIds(ctx.db, session.id);
 
+    const parsedData = parseExtractedData(session.receiptData);
+    const canViewPresence = canFinalizeGuestSession(session.userId, parsedData, ctx.session?.user?.id);
+    const latestPresence =
+      canViewPresence && session.status === GuestSplitStatus.CLAIMING
+        ? await ctx.db.guestPresence.groupBy({
+            by: ['personId'],
+            where: { sessionId: session.id },
+            _max: { lastSeenAt: true },
+          })
+        : null;
+    const seenByPerson = new Map((latestPresence ?? []).map((entry) => [entry.personId, entry._max.lastSeenAt]));
+    const presence =
+      latestPresence === null
+        ? null
+        : (session.people as IdentifiedGuestPerson[]).map((entry) => ({
+            personId: entry.id,
+            status: guestPresenceState(!!entry.personToken, seenByPerson.get(entry.id)),
+          }));
+
     let receiptImagePath: string | null = null;
     if (session.receiptId) {
       const receipt = await ctx.db.receipt.findUnique({
@@ -1205,7 +2095,11 @@ export const guestRouter = createTRPCRouter({
       id: session.id,
       shareToken: session.shareToken,
       status: session.status,
-      receiptData: session.receiptData as {
+      receiptData: (() => {
+        const { finalizationOrganizerUserId: _privateOrganizer, ...visible } = parseExtractedData(session.receiptData);
+        void _privateOrganizer;
+        return visible;
+      })() as {
         merchantName?: string;
         date?: string;
         subtotal: number;
@@ -1213,31 +2107,297 @@ export const guestRouter = createTRPCRouter({
         tip: number;
         total: number;
         currency: string;
+        roundingBalanced?: boolean;
+        organizerPersonId?: string;
+        guestSlotsMode?: boolean;
+        guestCount?: number;
+        knownPartsByItem?: Record<string, number>;
       },
       items: session.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[],
       // Everyone has an id by now (savePersonIds above)
       people: toClaimPeople(session.people as IdentifiedGuestPerson[]),
-      assignments: session.assignments as { itemIndex: number; personIndices: number[] }[],
+      // Creator-only audit metadata, not a public token or an owner privilege.
+      personalLinkEvents:
+        session.userId === ctx.session?.user?.id && !ctx.impersonating
+          ? (session.people as IdentifiedGuestPerson[])
+              .filter((person) => person.guestSlotNumber !== undefined && person.personalLinkRotation)
+              .map((person) => ({
+                personId: person.id,
+                rotatedAt: person.personalLinkRotation!.rotatedAt,
+                rotationCount: person.personalLinkRotation!.count,
+              }))
+          : null,
+      presence, // organizer-only; never leaks personal tokens or heartbeat timestamps
+      assignments: session.assignments as GuestPortionAssignment[],
+      partsConfirmed: (() => {
+        const data = parseExtractedData(session.receiptData);
+        if (typeof data.organizerPersonId !== 'string') return true; // old sessions
+        return (
+          typeof data.partsApprovalHash === 'string' &&
+          data.partsApprovalHash ===
+            guestPartsDigest({
+              items: parseGuestItems(session.items),
+              people: session.people as GuestSessionPerson[],
+              assignments: parseGuestAssignments(session.assignments),
+              knownPartsByItem: data.knownPartsByItem,
+            })
+        );
+      })(),
       summary: session.summary as
-        { personIndex: number; name: string; itemTotal: number; tax: number; tip: number; total: number }[] | null,
+        | {
+            personIndex: number;
+            name: string;
+            itemTotal: number;
+            tax: number;
+            tip: number;
+            total: number;
+            roundingCorrectionCents?: number;
+          }[]
+        | null,
       paidByIndex: session.paidByIndex,
       payerVenmoHandle: session.payerVenmoHandle,
       isCreator: !!session.userId && session.userId === ctx.session?.user?.id,
+      canFinalize: canFinalizeGuestSession(
+        session.userId,
+        parseExtractedData(session.receiptData),
+        ctx.session?.user?.id,
+      ),
+      hasFinalizationOrganizer: typeof parseExtractedData(session.receiptData).finalizationOrganizerUserId === 'string',
       receiptImagePath,
       createdAt: session.createdAt,
       expiresAt: session.expiresAt,
     };
   }),
 
-  finalizeSession: publicProcedure
+  // 3.15: creator corrections are edits of the ORIGINAL receipt position,
+  // not a new expense or payment. Every viewer sees the corrected saved item
+  // and the recomputed total through the existing getSession update path.
+  // Keep the index and the identities/portion assignments stable; replacing
+  // or renumbering other rows is not allowed through this operation.
+  updateClaimReceiptItem: protectedProcedure
     .input(
       z.object({
         token: shareTokenSchema,
-        // Who is finalizing, by id; must be the holder of personToken
-        personId: personIdSchema,
-        personToken: z.string().uuid(),
-        tipOverride: z.number().int().min(0).optional(),
+        itemIndex: z.number().int().min(0),
+        name: z.string().trim().min(1).max(160),
+        quantity: z.number().int().min(1).max(200),
+        unitPrice: z.number().int().min(1).max(MAX_MONEY_CENTS),
       }),
+    )
+    .mutation(async ({ ctx, input }) =>
+      guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionAlreadyFinalized');
+        if (session.userId !== ctx.user.id || ctx.impersonating) throw new AppError('FORBIDDEN');
+
+        const items = parseGuestItems(session.items);
+        if (input.itemIndex >= items.length) throw new AppError('BAD_REQUEST', 'invalidItemIndex');
+        const value = input.quantity * input.unitPrice;
+        if (!Number.isSafeInteger(value) || value > MAX_MONEY_CENTS) {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'receipt amount' });
+        }
+        const nextItems = items.map((item, index) =>
+          index === input.itemIndex
+            ? { name: input.name, quantity: input.quantity, unitPrice: input.unitPrice, totalPrice: value }
+            : item,
+        );
+        const total = nextItems.reduce((sum, item) => sum + item.totalPrice, 0);
+        if (!Number.isSafeInteger(total) || total > MAX_MONEY_CENTS) {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'receipt total' });
+        }
+        const originalData = parseExtractedData(session.receiptData);
+        // New BillOK receipts have no extra tax/shared tip. Corrections must
+        // never create an amount independent of an actual position in the bill.
+        if (originalData.tax !== 0 || originalData.tip !== 0 || originalData.currency !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'receipt correction' });
+        }
+        const changed = items[input.itemIndex]!;
+        if (
+          changed.name === input.name &&
+          changed.quantity === input.quantity &&
+          changed.unitPrice === input.unitPrice &&
+          changed.totalPrice === value &&
+          originalData.subtotal === total &&
+          originalData.total === total
+        )
+          return { success: true, total, itemIndex: input.itemIndex };
+
+        enforceGuestKnownParts(
+          nextItems,
+          parseGuestPeople(session.people),
+          parseGuestAssignments(session.assignments),
+          originalData.knownPartsByItem,
+          false,
+        );
+        const nextData: Record<string, unknown> = { ...originalData, subtotal: total, total };
+        delete nextData.partsApprovalHash;
+        await tx.guestSplit.update({
+          where: { id: session.id },
+          data: {
+            items: nextItems as unknown as Prisma.InputJsonValue,
+            receiptData: nextData as Prisma.InputJsonValue,
+          },
+        });
+        return { success: true, total, itemIndex: input.itemIndex };
+      }),
+    ),
+
+  // Only the registered creator may declare or clear an original number of
+  // portions for a guest item. This is NOT the item quantity or a price.
+  setKnownItemParts: protectedProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        itemIndex: z.number().int().min(0),
+        totalParts: z.number().int().min(1).max(10000).nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) =>
+      guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionAlreadyFinalized');
+        if (!session.userId || session.userId !== ctx.user.id) throw new AppError('FORBIDDEN');
+
+        const items = parseGuestItems(session.items);
+        if (input.itemIndex >= items.length) throw new AppError('BAD_REQUEST', 'invalidItemIndex');
+        const data = parseExtractedData(session.receiptData);
+        const existing = data.knownPartsByItem;
+        const saved =
+          existing && typeof existing === 'object' && !Array.isArray(existing)
+            ? { ...(existing as Record<string, unknown>) }
+            : {};
+        const key = String(input.itemIndex);
+        if ((saved[key] ?? null) === input.totalParts) return { success: true, totalParts: input.totalParts };
+        if (input.totalParts === null) delete saved[key];
+        else saved[key] = input.totalParts;
+        enforceGuestKnownParts(
+          items,
+          parseGuestPeople(session.people),
+          parseGuestAssignments(session.assignments),
+          saved,
+          false,
+        );
+        const next: Record<string, unknown> = { ...data, knownPartsByItem: saved };
+        delete next.partsApprovalHash;
+        await tx.guestSplit.update({
+          where: { id: session.id },
+          data: { receiptData: next as Prisma.InputJsonValue },
+        });
+        return { success: true, totalParts: input.totalParts };
+      }),
+    ),
+
+  // Only the signed-in creator can appoint or revoke one registered co-organizer.
+  // No guest token, payer identity or guessed share link grants this permission.
+  setFinalizationOrganizer: protectedProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        email: z.string().trim().email().max(254).nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) =>
+      guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) {
+          throw new AppError('BAD_REQUEST', 'sessionAlreadyFinalized');
+        }
+        if (!session.userId || session.userId !== ctx.user.id) throw new AppError('FORBIDDEN');
+        const data = parseExtractedData(session.receiptData);
+        let organizerId: string | null = null;
+        if (input.email !== null) {
+          const account = await tx.user.findUnique({
+            where: { email: input.email.toLowerCase() },
+            select: {
+              id: true,
+              suspendedAt: true,
+              isPlaceholder: true,
+              emailVerified: true,
+              registrationEmailVerificationRequired: true,
+            },
+          });
+          if (
+            !account ||
+            account.suspendedAt ||
+            account.isPlaceholder ||
+            (account.registrationEmailVerificationRequired && !account.emailVerified) ||
+            account.id === ctx.user.id
+          ) {
+            throw new AppError('BAD_REQUEST', 'invalidData', { label: 'registered co-organizer' });
+          }
+          organizerId = account.id;
+        }
+        const next = { ...data };
+        delete next.finalizationOrganizerUserId;
+        if (organizerId) next.finalizationOrganizerUserId = organizerId;
+        // A delegation change invalidates the previous approval: the newly
+        // authorized organizer must confirm the same current assignments again.
+        delete next.partsApprovalHash;
+        await tx.guestSplit.update({
+          where: { id: session.id },
+          data: { receiptData: next as Prisma.InputJsonValue },
+        });
+        return { success: true, delegated: !!organizerId };
+      }),
+    ),
+
+  // The registered creator or their explicitly appointed co-organizer approves
+  // the exact stored guest claims. A subsequent edit removes this approval.
+  confirmSessionParts: protectedProcedure
+    .input(z.object({ token: shareTokenSchema }))
+    .mutation(async ({ ctx, input }) =>
+      guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionAlreadyFinalized');
+        if (!canFinalizeGuestSession(session.userId, parseExtractedData(session.receiptData), ctx.user.id)) {
+          throw new AppError('FORBIDDEN');
+        }
+        const data = parseExtractedData(session.receiptData);
+        const people = parseGuestPeople(session.people);
+        if (
+          typeof data.organizerPersonId !== 'string' ||
+          !people.some((person) => person.id === data.organizerPersonId)
+        ) {
+          throw new AppError('PRECONDITION_FAILED', 'invalidData', { label: 'receipt organizer' });
+        }
+        const items = parseGuestItems(session.items);
+        const assignments = parseGuestAssignments(session.assignments);
+        const claimed = new Set(assignments.filter((a) => a.personIndices.length > 0).map((a) => a.itemIndex));
+        if (!items.length || items.some((_, index) => !claimed.has(index))) {
+          throw new AppError('PRECONDITION_FAILED', 'itemsUnassigned');
+        }
+        enforceGuestKnownParts(items, people, assignments, data.knownPartsByItem, true);
+        const hash = guestPartsDigest({ items, people, assignments, knownPartsByItem: data.knownPartsByItem });
+        await tx.guestSplit.update({
+          where: { id: session.id },
+          data: { receiptData: { ...data, partsApprovalHash: hash } as Prisma.InputJsonValue },
+        });
+        return { success: true };
+      }),
+    ),
+
+  finalizeSession: protectedProcedure
+    .input(
+      z
+        .object({
+          token: shareTokenSchema,
+          // Optional legacy personal identity. An authorized registered organizer
+          // can finalize without becoming a bill participant who owes money.
+          personId: personIdSchema.optional(),
+          personToken: z.string().uuid().optional(),
+          tipOverride: z.never().optional(), // no shared tip override
+        })
+        .refine((value) => (value.personId === undefined) === (value.personToken === undefined), {
+          message: 'Person ID and personal token must be supplied together',
+        }),
     )
     .mutation(async ({ ctx, input }) => {
       const { shareToken, finalizeLog } = await guestTransaction(ctx.db, async (tx) => {
@@ -1252,10 +2412,17 @@ export const guestRouter = createTRPCRouter({
         const people = parseGuestPeople(session.people);
         const assignments = parseGuestAssignments(session.assignments);
         const receiptData = parseExtractedData(session.receiptData);
+        if (!canFinalizeGuestSession(session.userId, receiptData, ctx.user.id)) {
+          throw new AppError('FORBIDDEN');
+        }
 
-        const person = people[targetIndexOrThrow(people, input.personId)];
-        if (!person?.personToken || person.personToken !== input.personToken) {
-          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        // A registered organizer need not claim dishes to be authorized:
+        // optional legacy personal credentials are still validated if supplied.
+        if (input.personId !== undefined && input.personToken !== undefined) {
+          const person = people[targetIndexOrThrow(people, input.personId)];
+          if (!person?.personToken || person.personToken !== input.personToken) {
+            throw new AppError('FORBIDDEN', 'invalidPersonToken');
+          }
         }
 
         // Every item needs a claimant. The claim page only offers Finalize when it sees that, but
@@ -1268,17 +2435,51 @@ export const guestRouter = createTRPCRouter({
           throw new AppError('PRECONDITION_FAILED', 'itemsUnassigned');
         }
 
-        const tip = input.tipOverride ?? receiptData.tip;
+        // A receipt creator must have acknowledged this exact set of claims
+        // in the same repeatable-read snapshot used to produce the final shares.
+        if (
+          typeof receiptData.organizerPersonId === 'string' &&
+          (typeof receiptData.partsApprovalHash !== 'string' ||
+            receiptData.partsApprovalHash !==
+              guestPartsDigest({ items, people, assignments, knownPartsByItem: receiptData.knownPartsByItem }))
+        ) {
+          throw new AppError('PRECONDITION_FAILED', 'receiptPartsConfirmationRequired');
+        }
+
+        enforceGuestKnownParts(items, people, assignments, receiptData.knownPartsByItem, true);
+        const tip = receiptData.tip;
+
+        // This session's organizer is identified by their original stable
+        // person ID, never paidByIndex or their position in the array.
+        const organizerPersonId = receiptData.organizerPersonId;
+        const organizerIndex =
+          typeof organizerPersonId === 'string' ? people.findIndex((entry) => entry.id === organizerPersonId) : -1;
+        if (receiptData.roundingBalanced === true && typeof organizerPersonId === 'string' && organizerIndex < 0) {
+          throw new AppError('PRECONDITION_FAILED', 'invalidData', { label: 'receipt organizer' });
+        }
 
         // Each person's groupSize weights the items they share
-        const summary = calculateSplitTotals({
+        const itemShares = calculateSplitTotals({
           items,
-          assignments,
+          assignments: guestPortionAssignments(assignments, people),
           tax: receiptData.tax,
           tip,
           peopleCount: people.length,
+          balanceAcrossItems: receiptData.roundingBalanced === true,
+          ...(organizerIndex >= 0 ? { organizerIndex } : {}),
           ...groupSizeWeights(people),
         });
+        let summary: ReturnType<typeof calculateSplitTotals>;
+        try {
+          summary = addPersonalGuestTips(
+            itemShares,
+            people,
+            new Set(assignments.flatMap((assignment) => assignment.personIndices)),
+          );
+        } catch (error) {
+          if (!(error instanceof RangeError)) throw error;
+          throw new AppError('BAD_REQUEST', 'receiptPersonalTipsInvalid', undefined, { cause: error });
+        }
 
         const summaryWithNames = summary.map((s) => ({
           ...s,
@@ -1291,13 +2492,6 @@ export const guestRouter = createTRPCRouter({
             status: GuestSplitStatus.FINALIZED,
             summary: summaryWithNames as unknown as Prisma.InputJsonValue,
             assignments: assignments as unknown as Prisma.InputJsonValue,
-            ...(input.tipOverride !== undefined && {
-              receiptData: {
-                ...receiptData,
-                tip,
-                total: receiptData.subtotal + receiptData.tax + tip,
-              } as unknown as Prisma.InputJsonValue,
-            }),
           },
         });
 
@@ -1310,6 +2504,264 @@ export const guestRouter = createTRPCRouter({
       // Log only once the transaction has committed; the callback may run more than once.
       logger.info('guest.session.finalized', finalizeLog);
       return { shareToken };
+    }),
+
+  // The declaration is NOT a bank transaction and never means the payer has
+  // received money. A person's own token is needed both to read and to write.
+  getMyPaymentDeclaration: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payment-declaration-read', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const split = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: { expiresAt: true, status: true, people: true, paidByIndex: true, receiptData: true, summary: true },
+      });
+      if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      const { person } = requireGuestDebtor(split, input.personId, input.personToken);
+      return {
+        declaredPaidAt: person.paymentDeclaredAt ?? null,
+        verifiedAt: person.paymentDeclaredAt ? (person.paymentVerifiedAt ?? null) : null,
+      };
+    }),
+
+  markMyPayment: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payment-declaration-write', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const { people, person, personIndex } = requireGuestDebtor(split, input.personId, input.personToken);
+        if (person.paymentDeclaredAt) {
+          // Idempotent when a delayed retry or a second tab sends the same action.
+          return { declaredPaidAt: person.paymentDeclaredAt };
+        }
+        const timestamp = new Date().toISOString();
+        const updated = people.map((entry, index) =>
+          index === personIndex ? { ...entry, paymentDeclaredAt: timestamp } : entry,
+        );
+        await tx.guestSplit.update({
+          where: { id: split.id },
+          data: { people: updated as unknown as Prisma.InputJsonValue },
+        });
+        return { declaredPaidAt: timestamp };
+      });
+    }),
+
+  // Payer-only private overview, including who declared a transfer and who
+  // has had their incoming payment independently verified by the payer.
+  getMyPayerPaymentReview: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-payment-review', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const split = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: { expiresAt: true, status: true, people: true, paidByIndex: true, receiptData: true, summary: true },
+      });
+      if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      const { people, summary } = requireGuestPayerReview(split, input.personId, input.personToken);
+      return {
+        payments: summary
+          .filter((entry) => entry.personIndex !== split.paidByIndex && entry.total > 0)
+          .map((entry) => {
+            const person = people[entry.personIndex]!;
+            return {
+              personId: person.id!,
+              name: person.name,
+              amount: entry.total,
+              declaredPaidAt: person.paymentDeclaredAt ?? null,
+              verifiedAt: person.paymentDeclaredAt ? (person.paymentVerifiedAt ?? null) : null,
+            };
+          }),
+      };
+    }),
+
+  confirmGuestPaymentReceived: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        debtorId: personIdSchema,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-payment-verify', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const { people, summary } = requireGuestPayerReview(split, input.personId, input.personToken);
+        const debtorIndex = people.findIndex((person) => person.id === input.debtorId);
+        if (
+          debtorIndex < 0 ||
+          debtorIndex === split.paidByIndex ||
+          !summary.some((entry) => entry.personIndex === debtorIndex && entry.total > 0)
+        ) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        const debtor = people[debtorIndex]!;
+        // Cannot attest an incoming transfer the debtor never declared.
+        if (!debtor.paymentDeclaredAt) {
+          throw new AppError('BAD_REQUEST', 'paymentNotDeclared');
+        }
+        if (debtor.paymentVerifiedAt) return { verifiedAt: debtor.paymentVerifiedAt };
+        const verifiedAt = new Date().toISOString();
+        const updated = people.map((person, index) =>
+          index === debtorIndex ? { ...person, paymentVerifiedAt: verifiedAt } : person,
+        );
+        await tx.guestSplit.update({
+          where: { id: split.id },
+          data: { people: updated as unknown as Prisma.InputJsonValue },
+        });
+        return { verifiedAt };
+      });
+    }),
+
+  // Read payer contact via a personal token only. The share token on its own
+  // is a public receipt link and MUST NOT return the bank/phone. Use mutation
+  // so the person's secret is sent in the request body, not the URL.
+  getMyPayerSbpContact: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-sbp-read', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const split = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: {
+          expiresAt: true,
+          people: true,
+          paidByIndex: true,
+          payerSbpPhone: true,
+          payerSbpBankId: true,
+        },
+      });
+      if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      const people = split.people as GuestSessionPerson[];
+      const payer = people[split.paidByIndex];
+      if (!payer || payer.id !== input.personId || payer.personToken !== input.personToken) {
+        throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      }
+      return { phone: split.payerSbpPhone, bankId: split.payerSbpBankId };
+    }),
+
+  // A participant may learn the payer's destination only when this finalized
+  // receipt actually requires THEM to reimburse the payer. A public share link,
+  // the creator's account and a different guest's personal token are insufficient.
+  getPayerSbpForReimbursement: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-sbp-reimbursement', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const split = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: {
+          expiresAt: true,
+          status: true,
+          people: true,
+          paidByIndex: true,
+          receiptData: true,
+          summary: true,
+          payerSbpPhone: true,
+          payerSbpBankId: true,
+        },
+      });
+      if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      if (split.status !== GuestSplitStatus.FINALIZED) {
+        throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+      }
+      const people = split.people as GuestSessionPerson[];
+      const personIndex = people.findIndex(
+        (person) => person.id === input.personId && person.personToken === input.personToken,
+      );
+      if (personIndex < 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      if (personIndex === split.paidByIndex) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      const receipt = split.receiptData as { currency?: string; tax?: number; tip?: number; total?: number };
+      const summary = split.summary as { personIndex: number; total: number; tip: number }[] | null;
+      // Fail closed if stale or malformed settlement sums cannot be reconciled.
+      if (
+        receipt.currency !== 'RUB' ||
+        receipt.tax !== 0 ||
+        receipt.tip !== 0 ||
+        !Number.isSafeInteger(receipt.total) ||
+        !Array.isArray(summary) ||
+        summary.length !== people.length ||
+        summary.some(
+          (person) =>
+            !Number.isSafeInteger(person.total) ||
+            person.total < 0 ||
+            !Number.isSafeInteger(person.tip) ||
+            person.tip < 0,
+        ) ||
+        summary.reduce((sum, person) => sum + person.total, 0) !==
+          receipt.total! + summary.reduce((sum, person) => sum + person.tip, 0)
+      ) {
+        throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      }
+      const owed = summary.find((person) => person.personIndex === personIndex);
+      if (!owed || owed.total <= 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      return {
+        phone: split.payerSbpPhone && split.payerSbpBankId ? split.payerSbpPhone : null,
+        bankId: split.payerSbpPhone && split.payerSbpBankId ? split.payerSbpBankId : null,
+      };
+    }),
+
+  // Only the person holding the payer's actual personal token may configure
+  // where reimbursements go, even when the creator is somebody else.
+  setMyPayerSbpContact: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        phone: z.string().max(24).nullable(),
+        bankId: z.string().max(40).nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-sbp-write', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const emptyPhone = input.phone === null || input.phone.trim() === '';
+      const emptyBank = input.bankId === null || input.bankId.trim() === '';
+      if (emptyPhone !== emptyBank) throw new AppError('BAD_REQUEST', 'sbpBankInvalid');
+      const phone = emptyPhone ? null : normalizeSbpPhone(input.phone!);
+      if (!emptyPhone && !phone) throw new AppError('BAD_REQUEST', 'sbpPhoneInvalid');
+      if (!emptyBank && !isSupportedSbpBankId(input.bankId!)) {
+        throw new AppError('BAD_REQUEST', 'sbpBankInvalid');
+      }
+
+      return guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const payer = (split.people as GuestSessionPerson[])[split.paidByIndex];
+        if (!payer || payer.id !== input.personId || payer.personToken !== input.personToken) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        if (split.payerSbpPhone !== phone || split.payerSbpBankId !== (emptyBank ? null : input.bankId)) {
+          await tx.guestSplit.update({
+            where: { id: split.id },
+            data: { payerSbpPhone: phone, payerSbpBankId: emptyBank ? null : input.bankId },
+          });
+        }
+        return { success: true };
+      });
     }),
 
   setPayerVenmoHandle: protectedProcedure

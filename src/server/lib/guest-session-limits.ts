@@ -15,7 +15,20 @@ const READ_LIMIT_PER_SESSION = 3000;
 const WINDOW_MS = 60 * 1000;
 
 /** The claim-session changes that take a person token, each budgeted separately. */
-export type ClaimWriteAction = 'claim' | 'edit-name' | 'remove-person' | 'split-item';
+export type ClaimWriteAction =
+  | 'claim'
+  | 'edit-name'
+  | 'remove-person'
+  | 'split-item'
+  | 'personal-tip'
+  | 'personal-parts'
+  | 'payer-sbp-read'
+  | 'payer-sbp-write'
+  | 'payer-sbp-reimbursement'
+  | 'payment-declaration-read'
+  | 'payment-declaration-write'
+  | 'payer-payment-review'
+  | 'payer-payment-verify';
 
 /**
  * Rate limit for the claim-session changes that take a person token: claimItems,
@@ -46,6 +59,21 @@ export function checkClaimWriteRateLimit(action: ClaimWriteAction, token: string
   if (!checkTokenRateLimit(personKey, WRITE_LIMIT_PER_PERSON, WINDOW_MS).allowed) return false;
   // Synchronous since the peek, so the session budget still has room
   checkTokenRateLimit(sessionKey, WRITE_LIMIT_PER_SESSION, WINDOW_MS);
+  return true;
+}
+
+/**
+ * 3.5: a heartbeat every 15 seconds, per person's token across all its tabs.
+ * Separate budget from actual claim writes; 100 concurrent guests must not
+ * starve each other's presence on a busy restaurant receipt.
+ */
+export function checkGuestPresenceHeartbeatLimit(token: string, personToken: string): boolean {
+  const sessionKey = `guest-presence:${token}`;
+  const personKey = `guest-presence-person:${JSON.stringify([token, personToken])}`;
+  const maxPerSession = 1000;
+  if (!peekTokenRateLimit(sessionKey, maxPerSession).allowed) return false;
+  if (!checkTokenRateLimit(personKey, 12, WINDOW_MS).allowed) return false;
+  checkTokenRateLimit(sessionKey, maxPerSession, WINDOW_MS);
   return true;
 }
 
