@@ -2931,6 +2931,7 @@ test('Issue 3.12: two guest devices count as one; joins, name changes and roles 
     const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     const firstId = initial.people[1].id as string;
     const secondId = initial.people[2].id as string;
+    expect(initial.paidByIndex).toBe(2);
 
     const ownerPage = await creatorDevice.newPage();
     await ownerPage.goto('/login');
@@ -2947,7 +2948,7 @@ test('Issue 3.12: two guest devices count as one; joins, name changes and roles 
     await expect(count('waiting')).toHaveText('2');
     await expect(count('joined')).toHaveText('0');
     await expect(count('online')).toHaveText('0');
-    await expect(ownerPage.getByTestId('invited-person-2').getByTestId('receipt-role-payer')).toContainText(
+    await expect(ownerPage.getByTestId('guest-color-person-2').getByTestId('receipt-role-payer')).toContainText(
       'Плательщик',
     );
 
@@ -3001,7 +3002,7 @@ test('Issue 3.12: two guest devices count as one; joins, name changes and roles 
     await expect(count('waiting')).toHaveText('0', { timeout: 25_000 });
     await expect(count('joined')).toHaveText('2', { timeout: 25_000 });
     await expect(count('online')).toHaveText('1', { timeout: 25_000 });
-    await expect(ownerPage.getByTestId('invited-person-2').getByTestId('receipt-role-payer')).toBeVisible();
+    await expect(ownerPage.getByTestId('guest-color-person-2').getByTestId('receipt-role-payer')).toBeVisible();
     await expect(ownerPage.getByTestId('presence-person-' + secondId)).toContainText('Сергей');
 
     const publicState = await trpcResult(await trpcQuery(page.request, 'guest.getSession', { token }));
