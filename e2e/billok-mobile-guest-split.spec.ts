@@ -3067,6 +3067,7 @@ test('Issue 3.14: claims and shared positions reach every open mobile receipt', 
     expect(bJoin.ok(), await bJoin.text()).toBe(true);
     const b = JSON.parse(await bJoin.text()).result.data.json;
     await rememberClaimIdentity(page.context(), token, a);
+    await page.setViewportSize({ width: 393, height: 740 });
     await rememberClaimIdentity(guestDevice, token, b);
     const creatorPage = await creatorDevice.newPage();
     await creatorPage.goto('/login');
@@ -3084,10 +3085,31 @@ test('Issue 3.14: claims and shared positions reach every open mobile receipt', 
     }
     // A saved choice is delivered to all three open screens by server polling.
     // B's unsaved choice of a different dish must stay local.
-    await guestPage.getByTestId('claim-item-2').click();
+    await guestPage.getByTestId('claim-item-2').click({ position: { x: 36, y: 44 } });
     await expect(guestPage.getByTestId('claim-item-2')).toHaveAttribute('aria-pressed', 'true');
-    await page.getByTestId('claim-item-0').click();
-    await page.getByTestId('save-claims-btn').click();
+    await page.getByTestId('claim-item-0').click({ position: { x: 36, y: 44 } });
+    const mobileSave = page.getByTestId('save-claims-btn');
+    await expect(mobileSave).toBeEnabled();
+    // Verify the real hit target, not a force click: the fixed action bar
+    // must be above the dish cards on a mobile viewport.
+    const saveHit = await mobileSave.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      const panel = element.closest('[data-testid="claim-actions"]');
+      return {
+        hittable: Boolean(hit && element.contains(hit)),
+        hitTag: hit?.tagName ?? 'none',
+        hitTestId: hit?.getAttribute('data-testid') ?? '',
+        panelZ: panel ? getComputedStyle(panel).zIndex : '',
+        x,
+        y,
+        viewport: { width: innerWidth, height: innerHeight },
+      };
+    });
+    expect(saveHit.hittable, JSON.stringify(saveHit)).toBe(true);
+    await mobileSave.click();
     await expect(creatorPage.getByTestId('claim-item-0')).toContainText('Андрей', { timeout: 25_000 });
     await expect(guestPage.getByTestId('claim-item-0')).toContainText('Андрей', { timeout: 25_000 });
     await expect(guestPage.getByTestId('claim-item-2')).toHaveAttribute('aria-pressed', 'true');
@@ -3107,7 +3129,7 @@ test('Issue 3.14: claims and shared positions reach every open mobile receipt', 
       timeout: 25_000,
     });
     // B joins A's salad and saves tea; owner sees both saved names.
-    await guestPage.getByTestId('claim-item-0').click();
+    await guestPage.getByTestId('claim-item-0').click({ position: { x: 36, y: 44 } });
     await guestPage.getByTestId('save-claims-btn').click();
     await expect(page.getByTestId('claim-item-0')).toContainText('Борис', { timeout: 25_000 });
     await expect(creatorPage.getByTestId('claim-item-0')).toContainText('Борис', { timeout: 25_000 });
@@ -3122,7 +3144,7 @@ test('Issue 3.14: claims and shared positions reach every open mobile receipt', 
     expect(shared.assignments.find((row: { itemIndex: number }) => row.itemIndex === 2)?.personIndices).toEqual([2]);
 
     // A withdraws from the shared position; B's portion must remain.
-    await page.getByTestId('claim-item-0').click();
+    await page.getByTestId('claim-item-0').click({ position: { x: 36, y: 44 } });
     await page.getByTestId('save-claims-btn').click();
     await expect(creatorPage.getByTestId('claim-item-0')).not.toContainText('Андрей', { timeout: 25_000 });
     await expect(creatorPage.getByTestId('claim-item-0')).toContainText('Борис');

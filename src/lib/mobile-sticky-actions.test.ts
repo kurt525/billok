@@ -34,7 +34,11 @@ describe('Android guest result and claim actions', () => {
     it(file + ': keeps bottom actions reachable above Android navigation and small keyboard viewports', () => {
       const ui = read(file);
       expect(ui).toContain('data-testid="' + testid + '"');
-      expect(ui).toContain('fixed inset-x-0 bottom-0 z-10');
+      // Claim actions need a higher stacking context so dish cards cannot
+      // intercept a normal finger tap; result actions retain their own layer.
+      expect(ui).toContain(
+        testid === 'claim-actions' ? 'fixed inset-x-0 bottom-0 z-40 isolate' : 'fixed inset-x-0 bottom-0 z-10',
+      );
       expect(ui).toContain('max-h-[calc(100dvh-1rem)]');
       expect(ui).toContain('overflow-y-auto overscroll-contain');
       expect(ui).toContain('pb-[calc(1rem+env(safe-area-inset-bottom))]');

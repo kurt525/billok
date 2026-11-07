@@ -3219,9 +3219,9 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         </Link>
       </div>
 
-      {/* Save button - sticky bottom */}
+      {/* Save button - fixed above interactive dish rows. Keep below the z-50 header/dialogs. */}
       <div
-        className="fixed inset-x-0 bottom-0 z-10 box-border w-screen min-w-0 max-w-[100vw] max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
+        className="fixed inset-x-0 bottom-0 z-40 isolate box-border w-screen min-w-0 max-w-[100vw] max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
         data-testid="claim-actions"
       >
         <div className="mx-auto w-full min-w-0 max-w-lg">
