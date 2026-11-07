@@ -3353,8 +3353,6 @@ test('Issue 3.17: concurrent guests preserve each others claims and all open scr
     for (const viewer of viewers) {
       await expect(viewer.getByTestId('claim-allocated-total')).toContainText('5,01', { timeout: 25_000 });
       await expect(viewer.getByTestId('claim-unallocated-total')).toContainText('4,00');
-      await expect(viewer.getByTestId('claim-item-0')).toContainText('Анна');
-      await expect(viewer.getByTestId('claim-item-0')).toContainText('Борис');
       await expect(viewer.getByTestId('guest-claimed-parts-progress-0')).toContainText(
         'Исходное количество неизвестно',
       );
@@ -3362,6 +3360,16 @@ test('Issue 3.17: concurrent guests preserve each others claims and all open scr
         'Осталось нераспределённых частей',
       );
     }
+
+    // The selected participant is represented by aria-pressed, while
+    // "Также выбрали" names OTHER participants, never the active person.
+    // The creator (who claimed neither dish) sees both names.
+    await expect(creatorPage.getByTestId('claim-item-0')).toContainText('Анна');
+    await expect(creatorPage.getByTestId('claim-item-0')).toContainText('Борис');
+    await expect(page.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('claim-item-0')).toContainText('Борис');
+    await expect(borisPage.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'true');
+    await expect(borisPage.getByTestId('claim-item-0')).toContainText('Анна');
 
     // Now each guest changes a different position while the same shared
     // position is released by Anna; Boriss assignment must not disappear.
@@ -3393,9 +3401,13 @@ test('Issue 3.17: concurrent guests preserve each others claims and all open scr
       await expect(viewer.getByTestId('person-total-1')).toContainText('2,00');
       await expect(viewer.getByTestId('person-total-2')).toContainText('7,01');
       await expect(viewer.getByTestId('claim-item-0')).not.toContainText('Анна');
-      await expect(viewer.getByTestId('claim-item-0')).toContainText('Борис');
       await fitsPhone(viewer);
     }
+    // Boris is the only claimant now: other devices name him and his own
+    // mobile card stays selected instead of redundantly showing his name.
+    await expect(creatorPage.getByTestId('claim-item-0')).toContainText('Борис');
+    await expect(page.getByTestId('claim-item-0')).toContainText('Борис');
+    await expect(borisPage.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'true');
 
     // The creator now specifies exactly one original piece for the shared
     // pizza. A new simultaneous claim for it must be refused without
