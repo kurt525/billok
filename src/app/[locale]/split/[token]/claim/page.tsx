@@ -7,6 +7,7 @@ import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { GUEST_PRESENCE_HEARTBEAT_MS } from '@/lib/guest-presence';
+import { guestPresenceSummary } from '@/lib/guest-presence-summary';
 import { formatCents, centsToDecimal, isValidMoneyInput, parseToCents, MAX_MONEY_CENTS } from '@/lib/money';
 import { copyToClipboard } from '@/lib/clipboard';
 import {
@@ -117,12 +118,15 @@ function removePersonalLinkFromAddressBar() {
 function OrganizerPresence({
   people,
   presence,
+  organizerPersonId,
 }: {
-  people: { id: string; name: string; isRegistered: boolean }[];
+  people: { id: string; name: string; hasJoined: boolean; isRegistered: boolean }[];
   presence: { personId: string; status: 'not-joined' | 'joined' | 'online' | 'offline' }[];
+  organizerPersonId?: string | undefined;
 }) {
   const t = useTranslations('split.claim');
   const ta = useTranslations('split.accountStatus');
+  const counters = guestPresenceSummary(people, presence, organizerPersonId);
   const statusById = new Map(presence.map((entry) => [entry.personId, entry.status]));
   const label = {
     'not-joined': t('presenceNotJoined'),
@@ -135,7 +139,34 @@ function OrganizerPresence({
       <CardHeader className="pb-2">
         <CardTitle className="text-base">{t('presenceTitle')}</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-2">
+      <CardContent className="space-y-3">
+        <dl
+          className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4"
+          data-testid="organizer-presence-counters"
+          aria-label={t('presenceCountersTitle')}
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {(
+            [
+              ['invited', t('presenceInvited'), counters.invited],
+              ['waiting', t('presenceWaiting'), counters.waiting],
+              ['joined', t('presenceJoinedCount'), counters.joined],
+              ['online', t('presenceOnlineCount'), counters.online],
+            ] as const
+          ).map(([kind, label, value]) => (
+            <div
+              key={kind}
+              className="min-w-0 rounded-lg border bg-muted/40 p-2"
+              data-testid={'presence-count-' + kind}
+            >
+              <dt className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{label}</dt>
+              <dd className="text-xl font-semibold tabular-nums" data-testid={'presence-count-' + kind + '-value'}>
+                {value}
+              </dd>
+            </div>
+          ))}
+        </dl>
         {people.map((person) => {
           const status = statusById.get(person.id) ?? 'not-joined';
           return (
@@ -2126,7 +2157,13 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           onConfirm={() => data.canFinalize && finalizeSession.mutate({ token })}
         />
 
-        {data.presence && <OrganizerPresence people={data.people} presence={data.presence} />}
+        {data.presence && (
+          <OrganizerPresence
+            people={data.people}
+            presence={data.presence}
+            organizerPersonId={data.receiptData.organizerPersonId}
+          />
+        )}
 
         {/* Join form */}
         <Card data-testid="claim-join-form">
@@ -3012,7 +3049,13 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         </Card>
       )}
 
-      {data.presence && <OrganizerPresence people={data.people} presence={data.presence} />}
+      {data.presence && (
+        <OrganizerPresence
+          people={data.people}
+          presence={data.presence}
+          organizerPersonId={data.receiptData.organizerPersonId}
+        />
+      )}
       {presenceConnectionLost && (
         <p className="text-sm text-destructive" role="status" data-testid="presence-connection-lost">
           {t('presenceConnectionLost')}

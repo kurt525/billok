@@ -2890,6 +2890,135 @@ test('Issue 3.6: simultaneous mobile guests cannot claim the same Unicode-normal
   }
 });
 
+test('Issue 3.12: two guest devices count as one; joins, name changes and roles update without reload', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(175_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const creatorDevice = await browser.newContext({
+    viewport: { width: 320, height: 700 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const secondGuestDevice = await browser.newContext({
+    viewport: { width: 360, height: 700 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  let token: string | undefined;
+  try {
+    const createdRes = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: {
+        merchantName: 'Синхронизация 3.12',
+        subtotal: 2500,
+        total: 2500,
+        tax: 0,
+        tip: 0,
+        currency: 'RUB',
+      },
+      items: [{ name: 'Блюдо', quantity: 1, unitPrice: 2500, totalPrice: 2500 }],
+      guestCount: 2,
+      paidByGuestSlot: 2,
+      joinCreator: true,
+    });
+    expect(createdRes.ok(), await createdRes.text()).toBe(true);
+    const created = JSON.parse(await createdRes.text()).result.data.json as {
+      shareToken: string;
+      creator: { personId: string; personToken: string; name: string };
+    };
+    token = created.shareToken;
+    const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const firstId = initial.people[1].id as string;
+    const secondId = initial.people[2].id as string;
+
+    const ownerPage = await creatorDevice.newPage();
+    await ownerPage.goto('/login');
+    await ownerPage.locator('input[type=email]').fill(users.alice.email);
+    await ownerPage.locator('input[type=password]').fill(users.alice.password);
+    await ownerPage.getByRole('button', { name: 'Войти', exact: true }).click();
+    await expect(ownerPage).toHaveURL(/\/dashboard/);
+    await rememberClaimIdentity(creatorDevice, token, created.creator);
+    await ownerPage.goto('/split/' + token + '/claim');
+    const counters = ownerPage.getByTestId('organizer-presence-counters');
+    await expect(counters).toBeVisible({ timeout: 20_000 });
+    const count = (name: string) => counters.getByTestId('presence-count-' + name + '-value');
+    await expect(count('invited')).toHaveText('2');
+    await expect(count('waiting')).toHaveText('2');
+    await expect(count('joined')).toHaveText('0');
+    await expect(count('online')).toHaveText('0');
+    await expect(ownerPage.getByTestId('invited-person-2').getByTestId('receipt-role-payer')).toContainText(
+      'Плательщик',
+    );
+
+    const joinOne = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: firstId,
+      name: 'Борис',
+    });
+    expect(joinOne.ok(), await joinOne.text()).toBe(true);
+    const first = JSON.parse(await joinOne.text()).result.data.json as {
+      name: string;
+      personToken: string;
+      personId: string;
+    };
+    expect(first.personId).toBe(firstId);
+    await expect(count('waiting')).toHaveText('1', { timeout: 25_000 });
+    await expect(count('joined')).toHaveText('1', { timeout: 25_000 });
+    await expect(ownerPage.getByTestId('presence-person-' + firstId)).toContainText('Борис');
+
+    await rememberClaimIdentity(page.context(), token, first);
+    await rememberClaimIdentity(secondGuestDevice, token, first);
+    await page.goto('/split/' + token + '/claim');
+    const otherGuestPage = await secondGuestDevice.newPage();
+    await otherGuestPage.goto('/split/' + token + '/claim');
+    await expect(page.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+    await expect(otherGuestPage.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+    await expect(count('online')).toHaveText('1', { timeout: 25_000 });
+    // Both browsers have separate device heartbeats but one immutable personId.
+    await expect(count('joined')).toHaveText('1');
+    await expect(count('invited')).toHaveText('2');
+
+    const rename = await trpcMutation(owner, 'guest.editPersonName', {
+      token,
+      targetId: firstId,
+      newName: 'Борис П.',
+    });
+    expect(rename.ok(), await rename.text()).toBe(true);
+    await expect(ownerPage.getByTestId('presence-person-' + firstId)).toContainText('Борис П.', {
+      timeout: 25_000,
+    });
+    await expect(page.getByText('Борис П.').first()).toBeVisible({ timeout: 25_000 });
+    await expect(otherGuestPage.getByText('Борис П.').first()).toBeVisible({ timeout: 25_000 });
+
+    const joinTwo = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: secondId,
+      name: 'Сергей',
+    });
+    expect(joinTwo.ok(), await joinTwo.text()).toBe(true);
+    await expect(count('invited')).toHaveText('2', { timeout: 25_000 });
+    await expect(count('waiting')).toHaveText('0', { timeout: 25_000 });
+    await expect(count('joined')).toHaveText('2', { timeout: 25_000 });
+    await expect(count('online')).toHaveText('1', { timeout: 25_000 });
+    await expect(ownerPage.getByTestId('invited-person-2').getByTestId('receipt-role-payer')).toBeVisible();
+    await expect(ownerPage.getByTestId('presence-person-' + secondId)).toContainText('Сергей');
+
+    const publicState = await trpcResult(await trpcQuery(page.request, 'guest.getSession', { token }));
+    expect(publicState.presence).toBeNull();
+    expect(JSON.stringify(publicState)).not.toContain(first.personToken);
+    expect(publicState.people).toHaveLength(3);
+    await fitsPhone(ownerPage);
+    await fitsPhone(page);
+    await fitsPhone(otherGuestPage);
+  } finally {
+    if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await secondGuestDevice.close();
+    await creatorDevice.close();
+    await owner.dispose();
+  }
+});
+
 test('Issue 3.5: organizer sees joined, live, lost and reconnected mobile guests without refresh', async ({
   page,
   browser,

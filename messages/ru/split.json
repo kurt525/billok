@@ -279,7 +279,12 @@
     "creatorGuestLinkRotateWarning": "Старая персональная ссылка участника {name} немедленно перестанет работать на всех устройствах. Его блюда, чаевые, платежи и место сохранятся. Новый доступ потребуется передать гостю.",
     "creatorGuestLinkRotateConfirm": "Да, перевыпустить ссылку",
     "creatorGuestLinkRotated": "Старая ссылка отозвана. Скопируйте новую и передайте только этому гостю.",
-    "creatorGuestLinkRotationEvent": "Перевыпуск ссылки: {count}, последнее событие: {date}."
+    "creatorGuestLinkRotationEvent": "Перевыпуск ссылки: {count}, последнее событие: {date}.",
+    "presenceCountersTitle": "Счётчики приглашённых участников",
+    "presenceInvited": "Приглашено",
+    "presenceWaiting": "Ожидаются",
+    "presenceJoinedCount": "Присоединились",
+    "presenceOnlineCount": "Онлайн"
   },
   "result": {
     "loading": "Загрузка расчёта…",

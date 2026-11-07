@@ -274,7 +274,12 @@
     "creatorGuestLinkRotateWarning": "The previous personal link for {name} will immediately stop working on all devices. Their dishes, tips, payments and place remain intact. Send the new link privately.",
     "creatorGuestLinkRotateConfirm": "Yes, reissue the link",
     "creatorGuestLinkRotated": "Old link revoked. Copy the new link and send it only to this guest.",
-    "creatorGuestLinkRotationEvent": "Link rotations: {count}, last event: {date}."
+    "creatorGuestLinkRotationEvent": "Link rotations: {count}, last event: {date}.",
+    "presenceCountersTitle": "Invited participant counts",
+    "presenceInvited": "Invited",
+    "presenceWaiting": "Waiting",
+    "presenceJoinedCount": "Joined",
+    "presenceOnlineCount": "Online"
   },
   "result": {
     "loading": "Loading split...",
