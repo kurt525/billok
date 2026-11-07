@@ -284,7 +284,21 @@
     "presenceInvited": "Приглашено",
     "presenceWaiting": "Ожидаются",
     "presenceJoinedCount": "Присоединились",
-    "presenceOnlineCount": "Онлайн"
+    "presenceOnlineCount": "Онлайн",
+    "itemCorrectionEdit": "Исправить позицию чека",
+    "itemCorrectionTitle": "Исправление позиции чека",
+    "itemCorrectionName": "Название позиции",
+    "itemCorrectionQuantity": "Количество в чеке",
+    "itemCorrectionPrice": "Цена за единицу, ₽",
+    "itemCorrectionSave": "Сохранить исправление",
+    "itemCorrectionSaved": "Исправление чека сохранено. Итоги обновлены у участников.",
+    "itemCorrectionHint": "Исправление названия, количества или цены изменяет сумму исходного чека и доли участников. Исходное количество съеденных частей задаётся отдельно.",
+    "allocatedNow": "Распределено по участникам",
+    "remainingToAllocate": "Ещё не распределено",
+    "distributedBillTotal": "Общий итог чека",
+    "distributionComplete": "Все позиции назначены. Ожидается подтверждение организатора.",
+    "distributionConfirmed": "Распределение частей подтверждено организатором.",
+    "distributionIncomplete": "Есть позиции, которые ещё никто не выбрал."
   },
   "result": {
     "loading": "Загрузка расчёта…",

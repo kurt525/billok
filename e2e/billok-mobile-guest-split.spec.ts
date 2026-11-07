@@ -3020,6 +3020,221 @@ test('Issue 3.12: two guest devices count as one; joins, name changes and roles 
   }
 });
 
+test('Issue 3.15: receipt corrections recalculate claims and known pieces on three mobile screens', async ({
+  browser,
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const creatorDevice = await browser.newContext({
+    viewport: { width: 320, height: 760 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const guestDevice = await browser.newContext({
+    viewport: { width: 360, height: 760 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  let token: string | undefined;
+  try {
+    const response = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: {
+        merchantName: 'Коррекция общего чека',
+        subtotal: 800,
+        total: 800,
+        tax: 0,
+        tip: 0,
+        currency: 'RUB',
+      },
+      items: [
+        { name: 'Салат', quantity: 1, unitPrice: 300, totalPrice: 300 },
+        { name: 'Суп', quantity: 1, unitPrice: 500, totalPrice: 500 },
+      ],
+      guestCount: 2,
+      joinCreator: true,
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    const created = JSON.parse(await response.text()).result.data.json as {
+      shareToken: string;
+      creator: { personId: string; personToken: string; name: string };
+    };
+    token = created.shareToken;
+    const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const first = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[1].id,
+      name: 'Анна',
+    });
+    expect(first.ok(), await first.text()).toBe(true);
+    const anna = JSON.parse(await first.text()).result.data.json;
+    const second = await trpcMutation(guestDevice.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[2].id,
+      name: 'Борис',
+    });
+    expect(second.ok(), await second.text()).toBe(true);
+    const boris = JSON.parse(await second.text()).result.data.json;
+    await rememberClaimIdentity(page.context(), token, anna);
+    await page.setViewportSize({ width: 393, height: 760 });
+    await rememberClaimIdentity(guestDevice, token, boris);
+    const creatorPage = await creatorDevice.newPage();
+    await creatorPage.goto('/login');
+    await creatorPage.locator('input[type=email]').fill(users.alice.email);
+    await creatorPage.locator('input[type=password]').fill(users.alice.password);
+    await creatorPage.getByRole('button', { name: 'Войти', exact: true }).click();
+    await expect(creatorPage).toHaveURL(/\/dashboard/);
+    await rememberClaimIdentity(creatorDevice, token, created.creator);
+    await creatorPage.goto('/split/' + token + '/claim');
+    await page.goto('/split/' + token + '/claim');
+    const guestPage = await guestDevice.newPage();
+    await guestPage.goto('/split/' + token + '/claim');
+    for (const viewer of [creatorPage, page, guestPage]) {
+      await expect(viewer.getByTestId('claim-allocation-summary')).toBeVisible({ timeout: 25_000 });
+      await expect(viewer.getByTestId('claim-allocated-total')).toContainText('0,00');
+      await expect(viewer.getByTestId('claim-unallocated-total')).toContainText('8,00');
+      await expect(viewer.getByTestId('claim-distributed-total')).toContainText('8,00');
+      await expect(viewer.getByTestId('claim-distribution-status')).toContainText('ещё никто не выбрал');
+    }
+    const aSave = await trpcMutation(page.request, 'guest.claimItems', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+      addItemIndices: [0],
+    });
+    expect(aSave.ok(), await aSave.text()).toBe(true);
+    for (const viewer of [creatorPage, page, guestPage]) {
+      await expect(viewer.getByTestId('claim-allocated-total')).toContainText('3,00', { timeout: 25_000 });
+      await expect(viewer.getByTestId('claim-unallocated-total')).toContainText('5,00');
+      await expect(viewer.getByTestId('person-total-1')).toContainText('3,00');
+    }
+    const bSave = await trpcMutation(guestDevice.request, 'guest.claimItems', {
+      token,
+      personId: boris.personId,
+      personToken: boris.personToken,
+      addItemIndices: [1],
+    });
+    expect(bSave.ok(), await bSave.text()).toBe(true);
+    for (const viewer of [creatorPage, page, guestPage]) {
+      await expect(viewer.getByTestId('claim-allocated-total')).toContainText('8,00', { timeout: 25_000 });
+      await expect(viewer.getByTestId('claim-unallocated-total')).toContainText('0,00');
+      await expect(viewer.getByTestId('person-total-2')).toContainText('5,00');
+      await expect(viewer.getByTestId('claim-distribution-status')).toContainText('Ожидается подтверждение');
+    }
+    // The authorized creator changes a real item, not a detached expense.
+    // Draft-only changes must NEVER alter the saved shared counters or
+    // publish an uncommitted amount to the other device.
+    await guestPage.getByTestId('claim-item-1').click({ position: { x: 36, y: 44 } });
+    await expect(guestPage.getByTestId('claim-item-1')).toHaveAttribute('aria-pressed', 'false');
+    await expect(guestPage.getByTestId('save-claims-btn')).toBeEnabled();
+    await expect(guestPage.getByTestId('claim-allocated-total')).toContainText('8,00');
+    await expect(guestPage.getByTestId('claim-unallocated-total')).toContainText('0,00');
+    await expect(creatorPage.getByTestId('claim-allocated-total')).toContainText('8,00');
+    await guestPage.getByTestId('claim-item-1').click({ position: { x: 36, y: 44 } });
+    await expect(guestPage.getByTestId('save-claims-btn')).toBeDisabled();
+
+    const approved = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
+    expect(approved.ok(), await approved.text()).toBe(true);
+    for (const viewer of [creatorPage, page, guestPage]) {
+      await expect(viewer.getByTestId('claim-distribution-status')).toContainText('подтверждено организатором', {
+        timeout: 25_000,
+      });
+    }
+    await expect(guestPage.getByTestId('receipt-item-edit-0')).toHaveCount(0);
+    await creatorPage.getByTestId('receipt-item-edit-0').click();
+    await creatorPage.getByTestId('receipt-item-name-0').fill('Салат исправленный');
+    await creatorPage.getByTestId('receipt-item-qty-0').fill('2');
+    await creatorPage.getByTestId('receipt-item-price-0').fill('2,50');
+    await creatorPage.getByTestId('receipt-item-save-0').click();
+    for (const viewer of [creatorPage, page, guestPage]) {
+      await expect(viewer.getByTestId('claim-item-0')).toContainText('Салат исправленный', { timeout: 25_000 });
+      await expect(viewer.getByTestId('claim-item-0')).toContainText('x2');
+      await expect(viewer.getByTestId('claim-allocated-total')).toContainText('10,00');
+      await expect(viewer.getByTestId('claim-unallocated-total')).toContainText('0,00');
+      await expect(viewer.getByTestId('claim-distributed-total')).toContainText('10,00');
+      await expect(viewer.getByTestId('person-total-1')).toContainText('5,00');
+      await expect(viewer.getByTestId('person-total-2')).toContainText('5,00');
+      await expect(viewer.getByTestId('claim-distribution-status')).toContainText('Ожидается подтверждение');
+    }
+    const corrected = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(corrected.items.map((row: { totalPrice: number }) => row.totalPrice)).toEqual([500, 500]);
+    expect(corrected.receiptData.total).toBe(1000);
+    expect(corrected.receiptData.subtotal).toBe(1000);
+    expect(corrected.receiptData.tax).toBe(0);
+    expect(corrected.receiptData.tip).toBe(0);
+    expect(corrected.partsConfirmed).toBe(false);
+    // Another person starts sharing the corrected item. Their share of
+    // the same receipt amount changes; no second charge or extra receipt.
+    const share = await trpcMutation(guestDevice.request, 'guest.claimItems', {
+      token,
+      personId: boris.personId,
+      personToken: boris.personToken,
+      addItemIndices: [0],
+    });
+    expect(share.ok(), await share.text()).toBe(true);
+    const known = await trpcMutation(owner, 'guest.setKnownItemParts', { token, itemIndex: 0, totalParts: 10 });
+    expect(known.ok(), await known.text()).toBe(true);
+    const aParts = await trpcMutation(page.request, 'guest.setMyItemParts', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+      itemIndex: 0,
+      parts: 3,
+    });
+    expect(aParts.ok(), await aParts.text()).toBe(true);
+    const bParts = await trpcMutation(guestDevice.request, 'guest.setMyItemParts', {
+      token,
+      personId: boris.personId,
+      personToken: boris.personToken,
+      itemIndex: 0,
+      parts: 5,
+    });
+    expect(bParts.ok(), await bParts.text()).toBe(true);
+    for (const viewer of [creatorPage, page, guestPage]) {
+      const parts = viewer.getByTestId('guest-claimed-parts-progress-0');
+      await expect(parts).toContainText('Всего заявлено частей: 8', { timeout: 25_000 });
+      await expect(parts).toContainText('Осталось нераспределённых частей: 2');
+      await expect(viewer.getByTestId('claim-allocated-total')).toContainText('10,00');
+      await expect(viewer.getByTestId('claim-unallocated-total')).toContainText('0,00');
+      await expect(viewer.getByTestId('person-total-1')).not.toContainText('5,00');
+      await expect(viewer.getByTestId('person-total-2')).not.toContainText('5,00');
+    }
+    const unknown = await trpcMutation(owner, 'guest.setKnownItemParts', {
+      token,
+      itemIndex: 0,
+      totalParts: null,
+    });
+    expect(unknown.ok(), await unknown.text()).toBe(true);
+    for (const viewer of [creatorPage, page, guestPage]) {
+      const parts = viewer.getByTestId('guest-claimed-parts-progress-0');
+      await expect(parts).toContainText('Исходное количество неизвестно', { timeout: 25_000 });
+      await expect(parts).not.toContainText('Осталось нераспределённых частей');
+    }
+    const renamed = await trpcMutation(owner, 'guest.editPersonName', {
+      token,
+      targetId: initial.people[2].id,
+      newName: 'Борис П.',
+    });
+    expect(renamed.ok(), await renamed.text()).toBe(true);
+    for (const viewer of [creatorPage, page, guestPage]) {
+      await expect(viewer.getByTestId('person-total-2')).toContainText('Борис П.', { timeout: 25_000 });
+      await fitsPhone(viewer);
+    }
+    const final = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(final.people).toHaveLength(3);
+    expect(final.receiptData.total).toBe(1000);
+    expect(final.assignments.find((entry: { itemIndex: number }) => entry.itemIndex === 0)?.personIndices).toEqual([
+      1, 2,
+    ]);
+    expect(final.assignments.find((entry: { itemIndex: number }) => entry.itemIndex === 1)?.personIndices).toEqual([2]);
+  } finally {
+    if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await guestDevice.close();
+    await creatorDevice.close();
+    await owner.dispose();
+  }
+});
+
 test('Issue 3.14: claims and shared positions reach every open mobile receipt', async ({ page, browser }) => {
   test.setTimeout(170_000);
   const owner = await authedContext(users.alice.email, users.alice.password);

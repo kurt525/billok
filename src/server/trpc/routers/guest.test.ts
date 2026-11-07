@@ -4809,3 +4809,123 @@ describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () =
     expect(JSON.stringify(publicView)).not.toContain('paymentDeclaredAt');
   });
 });
+
+describe('Issue 3.15: creator may correct receipt lines without adding outside expenses', () => {
+  const line = { name: 'Салат', quantity: 1, unitPrice: 300, totalPrice: 300 };
+  const p1 = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Создатель', accountUserId: 'user-1' };
+  const p2 = {
+    id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    name: 'Гость',
+    personToken: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  };
+  function record(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'split-315',
+      userId: 'user-1',
+      shareToken: 'share-315',
+      status: 'CLAIMING',
+      expiresAt: new Date(Date.now() + 86400000),
+      people: [p1, p2],
+      items: [line],
+      assignments: [{ itemIndex: 0, personIndices: [0, 1], partsByPersonId: { [p1.id]: 3, [p2.id]: 5 } }],
+      receiptData: {
+        merchantName: 'Кафе',
+        subtotal: 300,
+        total: 300,
+        tax: 0,
+        tip: 0,
+        currency: 'RUB',
+        organizerPersonId: p1.id,
+        knownPartsByItem: { '0': 10 },
+        partsApprovalHash: 'old-approval',
+      },
+      ...overrides,
+    };
+  }
+  const edit = {
+    token: 'share-315',
+    itemIndex: 0,
+    name: 'Салат большой',
+    quantity: 2,
+    unitPrice: 200,
+  };
+
+  test('editing name, quantity and price changes only receipt total; no loss of saved shares', async () => {
+    mockDb.guestSplit.findUnique.mockResolvedValue(record());
+    mockDb.guestSplit.update.mockResolvedValue({});
+    const result = await (await caller(signedIn)).updateClaimReceiptItem(edit);
+    expect(result).toEqual({ success: true, total: 400, itemIndex: 0 });
+    const patch = mockDb.guestSplit.update.mock.calls.at(-1)![0].data as {
+      items: { name: string; quantity: number; unitPrice: number; totalPrice: number }[];
+      receiptData: {
+        subtotal: number;
+        total: number;
+        tax: number;
+        tip: number;
+        partsApprovalHash?: string;
+        knownPartsByItem: Record<string, number>;
+      };
+      assignments?: unknown;
+      people?: unknown;
+    };
+    expect(patch.items).toEqual([{ name: 'Салат большой', quantity: 2, unitPrice: 200, totalPrice: 400 }]);
+    expect(patch.receiptData).toMatchObject({
+      subtotal: 400,
+      total: 400,
+      tax: 0,
+      tip: 0,
+      knownPartsByItem: { '0': 10 },
+    });
+    expect(patch.receiptData.partsApprovalHash).toBeUndefined();
+    expect(patch.assignments).toBeUndefined();
+    expect(patch.people).toBeUndefined();
+  });
+
+  test('anonymous guest and logged-in noncreator cannot change receipt positions', async () => {
+    mockDb.guestSplit.findUnique.mockResolvedValue(record());
+    await expect((await caller()).updateClaimReceiptItem(edit)).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    await expect((await caller({ user: { id: 'user-2' } })).updateClaimReceiptItem(edit)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('finalized or expired receipts reject edits', async () => {
+    mockDb.guestSplit.findUnique.mockResolvedValue(record({ status: 'FINALIZED' }));
+    await expect((await caller(signedIn)).updateClaimReceiptItem(edit)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    mockDb.guestSplit.findUnique.mockResolvedValue(record({ expiresAt: new Date(Date.now() - 1000) }));
+    await expect((await caller(signedIn)).updateClaimReceiptItem(edit)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('cannot modify a missing row, send negative prices, overflow RUB or introduce extra money', async () => {
+    mockDb.guestSplit.findUnique.mockResolvedValue(record());
+    const api = await caller(signedIn);
+    await expect(api.updateClaimReceiptItem({ ...edit, itemIndex: 4 })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(api.updateClaimReceiptItem({ ...edit, unitPrice: -2 })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(api.updateClaimReceiptItem({ ...edit, quantity: 200, unitPrice: 2147483647 })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    mockDb.guestSplit.findUnique.mockResolvedValue(
+      record({
+        receiptData: { subtotal: 300, total: 300, tax: 5, tip: 0, currency: 'RUB' },
+      }),
+    );
+    await expect(api.updateClaimReceiptItem(edit)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('same correction is idempotent and leaves approval and assignments intact', async () => {
+    const original = record({
+      items: [{ name: 'Салат большой', quantity: 2, unitPrice: 200, totalPrice: 400 }],
+      receiptData: { subtotal: 400, total: 400, tax: 0, tip: 0, currency: 'RUB', partsApprovalHash: 'approved' },
+    });
+    mockDb.guestSplit.findUnique.mockResolvedValue(original);
+    expect(await (await caller(signedIn)).updateClaimReceiptItem(edit)).toEqual({
+      success: true,
+      total: 400,
+      itemIndex: 0,
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+});

@@ -2169,6 +2169,81 @@ export const guestRouter = createTRPCRouter({
     };
   }),
 
+  // 3.15: creator corrections are edits of the ORIGINAL receipt position,
+  // not a new expense or payment. Every viewer sees the corrected saved item
+  // and the recomputed total through the existing getSession update path.
+  // Keep the index and the identities/portion assignments stable; replacing
+  // or renumbering other rows is not allowed through this operation.
+  updateClaimReceiptItem: protectedProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        itemIndex: z.number().int().min(0),
+        name: z.string().trim().min(1).max(160),
+        quantity: z.number().int().min(1).max(200),
+        unitPrice: z.number().int().min(1).max(MAX_MONEY_CENTS),
+      }),
+    )
+    .mutation(async ({ ctx, input }) =>
+      guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionAlreadyFinalized');
+        if (session.userId !== ctx.user.id || ctx.impersonating) throw new AppError('FORBIDDEN');
+
+        const items = parseGuestItems(session.items);
+        if (input.itemIndex >= items.length) throw new AppError('BAD_REQUEST', 'invalidItemIndex');
+        const value = input.quantity * input.unitPrice;
+        if (!Number.isSafeInteger(value) || value > MAX_MONEY_CENTS) {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'receipt amount' });
+        }
+        const nextItems = items.map((item, index) =>
+          index === input.itemIndex
+            ? { name: input.name, quantity: input.quantity, unitPrice: input.unitPrice, totalPrice: value }
+            : item,
+        );
+        const total = nextItems.reduce((sum, item) => sum + item.totalPrice, 0);
+        if (!Number.isSafeInteger(total) || total > MAX_MONEY_CENTS) {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'receipt total' });
+        }
+        const originalData = parseExtractedData(session.receiptData);
+        // New BillOK receipts have no extra tax/shared tip. Corrections must
+        // never create an amount independent of an actual position in the bill.
+        if (originalData.tax !== 0 || originalData.tip !== 0 || originalData.currency !== 'RUB') {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'receipt correction' });
+        }
+        const changed = items[input.itemIndex]!;
+        if (
+          changed.name === input.name &&
+          changed.quantity === input.quantity &&
+          changed.unitPrice === input.unitPrice &&
+          changed.totalPrice === value &&
+          originalData.subtotal === total &&
+          originalData.total === total
+        )
+          return { success: true, total, itemIndex: input.itemIndex };
+
+        enforceGuestKnownParts(
+          nextItems,
+          parseGuestPeople(session.people),
+          parseGuestAssignments(session.assignments),
+          originalData.knownPartsByItem,
+          false,
+        );
+        const nextData: Record<string, unknown> = { ...originalData, subtotal: total, total };
+        delete nextData.partsApprovalHash;
+        await tx.guestSplit.update({
+          where: { id: session.id },
+          data: {
+            items: nextItems as unknown as Prisma.InputJsonValue,
+            receiptData: nextData as Prisma.InputJsonValue,
+          },
+        });
+        return { success: true, total, itemIndex: input.itemIndex };
+      }),
+    ),
+
   // Only the registered creator may declare or clear an original number of
   // portions for a guest item. This is NOT the item quantity or a price.
   setKnownItemParts: protectedProcedure

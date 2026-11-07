@@ -279,7 +279,21 @@
     "presenceInvited": "Invited",
     "presenceWaiting": "Waiting",
     "presenceJoinedCount": "Joined",
-    "presenceOnlineCount": "Online"
+    "presenceOnlineCount": "Online",
+    "itemCorrectionEdit": "Correct receipt item",
+    "itemCorrectionTitle": "Receipt item correction",
+    "itemCorrectionName": "Item name",
+    "itemCorrectionQuantity": "Quantity on receipt",
+    "itemCorrectionPrice": "Unit price, RUB",
+    "itemCorrectionSave": "Save correction",
+    "itemCorrectionSaved": "Receipt correction saved. Participants see updated totals.",
+    "itemCorrectionHint": "Changing an item name, quantity or price updates the original receipt total and participant shares. The original number of consumed pieces is a separate field.",
+    "allocatedNow": "Allocated to participants",
+    "remainingToAllocate": "Not allocated yet",
+    "distributedBillTotal": "Receipt total",
+    "distributionComplete": "Every item is assigned. Awaiting organizer approval.",
+    "distributionConfirmed": "The organizer confirmed the distribution.",
+    "distributionIncomplete": "Some receipt items are still unclaimed."
   },
   "result": {
     "loading": "Loading split...",

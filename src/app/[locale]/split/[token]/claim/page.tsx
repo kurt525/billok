@@ -274,6 +274,12 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const pendingRotation = useRef<{ personId: string; requestKey: string } | null>(null);
   const [editingName, setEditingName] = useState('');
   const [editingGroupSize, setEditingGroupSize] = useState(1);
+  const [receiptItemEdit, setReceiptItemEdit] = useState<{
+    itemIndex: number;
+    name: string;
+    quantity: string;
+    price: string;
+  } | null>(null);
   const [splittingItemIdx, setSplittingItemIdx] = useState<number | null>(null);
   const [splitQty, setSplitQty] = useState('');
   const [removeFor, setRemoveFor] = useState<{ id: string; name: string } | null>(null);
@@ -518,6 +524,17 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     };
   }, [token, identity?.personId, identity?.personToken, myPresenceReady, session.data?.status, sendPresenceHeartbeat]);
 
+  // The creator corrects receipt positions, never participant payment amounts.
+  // The same server update triggers a recheck for the editing device; other
+  // active devices see the changed item and all derived totals on their poll.
+  const updateClaimReceiptItem = trpc.guest.updateClaimReceiptItem.useMutation({
+    onSuccess: async () => {
+      setReceiptItemEdit(null);
+      await utils.guest.getSession.invalidate({ token });
+      toast.success(t('itemCorrectionSaved'));
+    },
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
+  });
   const setKnownItemParts = trpc.guest.setKnownItemParts.useMutation({
     onSuccess: async (_result, variables) => {
       setKnownPartsDrafts((drafts) => {
@@ -1004,8 +1021,25 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     return [...unclaimed, ...claimed];
   }, [session.data, claimedByAnyone]);
 
-  // Calculate per-person totals using the full local claims Map merged with server assignments.
-  // Tax and tip are prorated over every item, so unclaimed items keep their share (#264).
+  // All devices must agree on accounted money: local unsubmitted drafts
+  // affect the personal preview only, not the shared saved allocation summary.
+  const savedSplitTotals = useMemo(() => {
+    if (!session.data) return { people: [], unclaimed: null };
+    return calculateClaimTotals({
+      items: session.data.items,
+      assignments: guestPortionAssignments(session.data.assignments, session.data.people),
+      tax: session.data.receiptData.tax,
+      tip: session.data.receiptData.tip,
+      peopleCount: session.data.people.length,
+      balanceAcrossItems: session.data.receiptData.roundingBalanced === true,
+      organizerIndex: session.data.people.findIndex(
+        (person) => person.id === session.data.receiptData.organizerPersonId,
+      ),
+      ...groupSizeWeights(session.data.people),
+    });
+  }, [session.data]);
+
+  // This device's per-person preview may additionally show unsaved taps.
   const splitTotals = useMemo(() => {
     if (!session.data) return { people: [], unclaimed: null };
 
@@ -1057,19 +1091,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       });
     }
 
-    return calculateClaimTotals({
-      items: session.data.items,
-      assignments: guestPortionAssignments(serverAssignments, session.data.people),
-      tax: session.data.receiptData.tax,
-      tip: session.data.receiptData.tip,
-      peopleCount: session.data.people.length,
-      balanceAcrossItems: session.data.receiptData.roundingBalanced === true,
-      organizerIndex: session.data.people.findIndex(
-        (person) => person.id === session.data.receiptData.organizerPersonId,
-      ),
-      ...weightsParam,
-    });
-  }, [session.data, baseClaimsMap, localEdits, pendingByIndex]);
+    return savedSplitTotals;
+  }, [session.data, baseClaimsMap, localEdits, pendingByIndex, savedSplitTotals]);
 
   // --- Handlers ---
   function handleJoin() {
@@ -2751,6 +2774,144 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                               : t('knownPartsRemaining', { count: savedPortionProgress.remainingParts })}
                         </p>
                       </div>
+                      {/* 3.15: editing the receipt is a creator-only correction
+                          of existing line data. It never edits guest claims,
+                          phone/bank details or creates an expense outside it. */}
+                      {data.isCreator && data.status === 'CLAIMING' && (
+                        <div
+                          className="mt-2 min-w-0 space-y-2"
+                          data-testid={'receipt-item-correction-' + idx}
+                          onClick={(event) => event.stopPropagation()}
+                          onKeyDown={(event) => event.stopPropagation()}
+                        >
+                          {receiptItemEdit?.itemIndex !== idx ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="min-h-11 min-w-11"
+                              data-testid={'receipt-item-edit-' + idx}
+                              onClick={() =>
+                                setReceiptItemEdit({
+                                  itemIndex: idx,
+                                  name: item.name,
+                                  quantity: String(item.quantity),
+                                  price: centsToDecimal(item.unitPrice),
+                                })
+                              }
+                            >
+                              <Pencil className="mr-1 h-4 w-4" />
+                              {t('itemCorrectionEdit')}
+                            </Button>
+                          ) : (
+                            <form
+                              className="min-w-0 space-y-2 rounded-lg border p-3"
+                              data-testid={'receipt-item-edit-form-' + idx}
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                if (!receiptItemEdit) return;
+                                const qty = Number(receiptItemEdit.quantity);
+                                const price = parseToCents(receiptItemEdit.price);
+                                if (
+                                  !receiptItemEdit.name.trim() ||
+                                  !Number.isSafeInteger(qty) ||
+                                  qty < 1 ||
+                                  qty > 200 ||
+                                  !isValidMoneyInput(receiptItemEdit.price) ||
+                                  price < 1 ||
+                                  price * qty > MAX_MONEY_CENTS ||
+                                  updateClaimReceiptItem.isPending
+                                )
+                                  return;
+                                updateClaimReceiptItem.mutate({
+                                  token,
+                                  itemIndex: idx,
+                                  name: receiptItemEdit.name.trim(),
+                                  quantity: qty,
+                                  unitPrice: price,
+                                });
+                              }}
+                            >
+                              <p className="font-medium">{t('itemCorrectionTitle')}</p>
+                              <p className="text-muted-foreground">{t('itemCorrectionHint')}</p>
+                              <label htmlFor={'receipt-item-name-' + idx} className="block text-xs font-medium">
+                                {t('itemCorrectionName')}
+                              </label>
+                              <Input
+                                id={'receipt-item-name-' + idx}
+                                className="min-h-11 min-w-0 text-base"
+                                maxLength={160}
+                                value={receiptItemEdit.name}
+                                onChange={(event) =>
+                                  setReceiptItemEdit((previous) =>
+                                    previous ? { ...previous, name: event.target.value } : null,
+                                  )
+                                }
+                                data-testid={'receipt-item-name-' + idx}
+                              />
+                              <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2">
+                                <div className="min-w-0 space-y-1">
+                                  <label htmlFor={'receipt-item-qty-' + idx} className="block text-xs font-medium">
+                                    {t('itemCorrectionQuantity')}
+                                  </label>
+                                  <Input
+                                    id={'receipt-item-qty-' + idx}
+                                    className="min-h-11 min-w-0 text-base"
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={1}
+                                    max={200}
+                                    value={receiptItemEdit.quantity}
+                                    onChange={(event) =>
+                                      setReceiptItemEdit((previous) =>
+                                        previous ? { ...previous, quantity: event.target.value } : null,
+                                      )
+                                    }
+                                    data-testid={'receipt-item-qty-' + idx}
+                                  />
+                                </div>
+                                <div className="min-w-0 space-y-1">
+                                  <label htmlFor={'receipt-item-price-' + idx} className="block text-xs font-medium">
+                                    {t('itemCorrectionPrice')}
+                                  </label>
+                                  <Input
+                                    id={'receipt-item-price-' + idx}
+                                    className="min-h-11 min-w-0 text-base"
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={receiptItemEdit.price}
+                                    onChange={(event) =>
+                                      setReceiptItemEdit((previous) =>
+                                        previous ? { ...previous, price: event.target.value } : null,
+                                      )
+                                    }
+                                    data-testid={'receipt-item-price-' + idx}
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex min-w-0 flex-wrap gap-2">
+                                <Button
+                                  type="submit"
+                                  className="min-h-11 min-w-11 whitespace-normal"
+                                  disabled={updateClaimReceiptItem.isPending}
+                                  data-testid={'receipt-item-save-' + idx}
+                                >
+                                  {updateClaimReceiptItem.isPending ? t('saving') : t('itemCorrectionSave')}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="min-h-11 min-w-11"
+                                  onClick={() => setReceiptItemEdit(null)}
+                                  data-testid={'receipt-item-cancel-' + idx}
+                                >
+                                  {t('cancelButton')}
+                                </Button>
+                              </div>
+                            </form>
+                          )}
+                        </div>
+                      )}
                       {data.isCreator && (
                         <div
                           className="mt-2 space-y-1 rounded-md border p-2 text-xs"
@@ -3186,6 +3347,45 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           )}
         </div>
       )}
+
+      {/* 3.15: one server-backed source for every visible kopeck.
+          No external expense, payment or guessed unconsumed pieces. */}
+      <Card data-testid="claim-allocation-summary" aria-live="polite" aria-atomic="true">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">{t('distributedBillTotal')}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+            <span>{t('allocatedNow')}</span>
+            <span className="font-semibold tabular-nums" data-testid="claim-allocated-total">
+              {formatCents(
+                savedSplitTotals.people.reduce((sum, entry) => sum + entry.total, 0),
+                currency,
+                locale,
+              )}
+            </span>
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+            <span>{t('remainingToAllocate')}</span>
+            <span className="font-semibold tabular-nums" data-testid="claim-unallocated-total">
+              {formatCents(savedSplitTotals.unclaimed?.total ?? 0, currency, locale)}
+            </span>
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t pt-2">
+            <span className="font-semibold">{t('totalBill')}</span>
+            <span className="font-bold tabular-nums" data-testid="claim-distributed-total">
+              {formatCents(data.receiptData.total, currency, locale)}
+            </span>
+          </div>
+          <p className="text-muted-foreground" data-testid="claim-distribution-status">
+            {!allItemsClaimed
+              ? t('distributionIncomplete')
+              : data.partsConfirmed
+                ? t('distributionConfirmed')
+                : t('distributionComplete')}
+          </p>
+        </CardContent>
+      </Card>
 
       {!knownPartsReady && (
         <p
