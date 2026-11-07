@@ -3020,6 +3020,131 @@ test('Issue 3.12: two guest devices count as one; joins, name changes and roles 
   }
 });
 
+test('Issue 3.14: claims and shared positions reach every open mobile receipt', async ({ page, browser }) => {
+  test.setTimeout(170_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const creatorDevice = await browser.newContext({
+    viewport: { width: 320, height: 720 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const guestDevice = await browser.newContext({
+    viewport: { width: 360, height: 720 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  let token: string | undefined;
+  try {
+    const res = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Синхронизация блюд', subtotal: 2300, total: 2300, tax: 0, tip: 0, currency: 'RUB' },
+      items: [
+        { name: 'Салат', quantity: 1, unitPrice: 800, totalPrice: 800 },
+        { name: 'Суп', quantity: 1, unitPrice: 900, totalPrice: 900 },
+        { name: 'Чай', quantity: 1, unitPrice: 600, totalPrice: 600 },
+      ],
+      guestCount: 2,
+      joinCreator: true,
+    });
+    expect(res.ok(), await res.text()).toBe(true);
+    const created = JSON.parse(await res.text()).result.data.json as {
+      shareToken: string;
+      creator: { personId: string; personToken: string; name: string };
+    };
+    token = created.shareToken;
+    const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const aJoin = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[1].id,
+      name: 'Андрей',
+    });
+    expect(aJoin.ok(), await aJoin.text()).toBe(true);
+    const a = JSON.parse(await aJoin.text()).result.data.json;
+    const bJoin = await trpcMutation(guestDevice.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[2].id,
+      name: 'Борис',
+    });
+    expect(bJoin.ok(), await bJoin.text()).toBe(true);
+    const b = JSON.parse(await bJoin.text()).result.data.json;
+    await rememberClaimIdentity(page.context(), token, a);
+    await rememberClaimIdentity(guestDevice, token, b);
+    const creatorPage = await creatorDevice.newPage();
+    await creatorPage.goto('/login');
+    await creatorPage.locator('input[type=email]').fill(users.alice.email);
+    await creatorPage.locator('input[type=password]').fill(users.alice.password);
+    await creatorPage.getByRole('button', { name: 'Войти', exact: true }).click();
+    await expect(creatorPage).toHaveURL(/\/dashboard/);
+    await rememberClaimIdentity(creatorDevice, token, created.creator);
+    await creatorPage.goto('/split/' + token + '/claim');
+    await page.goto('/split/' + token + '/claim');
+    const guestPage = await guestDevice.newPage();
+    await guestPage.goto('/split/' + token + '/claim');
+    for (const viewer of [creatorPage, page, guestPage]) {
+      await expect(viewer.getByTestId('claim-item-0')).toBeVisible({ timeout: 25_000 });
+    }
+    // A saved choice is delivered to all three open screens by server polling.
+    // B's unsaved choice of a different dish must stay local.
+    await guestPage.getByTestId('claim-item-2').click();
+    await expect(guestPage.getByTestId('claim-item-2')).toHaveAttribute('aria-pressed', 'true');
+    await page.getByTestId('claim-item-0').click();
+    await page.getByTestId('save-claims-btn').click();
+    await expect(creatorPage.getByTestId('claim-item-0')).toContainText('Андрей', { timeout: 25_000 });
+    await expect(guestPage.getByTestId('claim-item-0')).toContainText('Андрей', { timeout: 25_000 });
+    await expect(guestPage.getByTestId('claim-item-2')).toHaveAttribute('aria-pressed', 'true');
+    await expect(guestPage.getByTestId('save-claims-btn')).toBeEnabled();
+    const firstSave = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(firstSave.assignments.find((row: { itemIndex: number }) => row.itemIndex === 0)?.personIndices).toEqual([1]);
+    expect(firstSave.assignments.some((row: { itemIndex: number }) => row.itemIndex === 2)).toBe(false);
+
+    // The amount actually consumed is published, without inventing a total.
+    await expect(page.getByTestId('personal-parts-0')).toBeVisible({ timeout: 25_000 });
+    await page.getByTestId('personal-parts-input-0').fill('3');
+    await page.getByTestId('personal-parts-save-0').click();
+    await expect(creatorPage.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 3', {
+      timeout: 25_000,
+    });
+    await expect(guestPage.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 3', {
+      timeout: 25_000,
+    });
+    // B joins A's salad and saves tea; owner sees both saved names.
+    await guestPage.getByTestId('claim-item-0').click();
+    await guestPage.getByTestId('save-claims-btn').click();
+    await expect(page.getByTestId('claim-item-0')).toContainText('Борис', { timeout: 25_000 });
+    await expect(creatorPage.getByTestId('claim-item-0')).toContainText('Борис', { timeout: 25_000 });
+    await expect(creatorPage.getByTestId('claim-item-0')).toContainText('Андрей');
+    await expect(page.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 4', {
+      timeout: 25_000,
+    });
+    const shared = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(
+      new Set(shared.assignments.find((row: { itemIndex: number }) => row.itemIndex === 0)?.personIndices),
+    ).toEqual(new Set([1, 2]));
+    expect(shared.assignments.find((row: { itemIndex: number }) => row.itemIndex === 2)?.personIndices).toEqual([2]);
+
+    // A withdraws from the shared position; B's portion must remain.
+    await page.getByTestId('claim-item-0').click();
+    await page.getByTestId('save-claims-btn').click();
+    await expect(creatorPage.getByTestId('claim-item-0')).not.toContainText('Андрей', { timeout: 25_000 });
+    await expect(creatorPage.getByTestId('claim-item-0')).toContainText('Борис');
+    await expect(guestPage.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'true');
+    await expect(guestPage.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 1', {
+      timeout: 25_000,
+    });
+    const final = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(final.assignments.find((row: { itemIndex: number }) => row.itemIndex === 0)?.personIndices).toEqual([2]);
+    expect(final.assignments.find((row: { itemIndex: number }) => row.itemIndex === 2)?.personIndices).toEqual([2]);
+    expect(final.people.map((row: { id: string }) => row.id)).toEqual(
+      initial.people.map((row: { id: string }) => row.id),
+    );
+    for (const viewer of [creatorPage, page, guestPage]) await fitsPhone(viewer);
+  } finally {
+    if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await guestDevice.close();
+    await creatorDevice.close();
+    await owner.dispose();
+  }
+});
+
 test('Issue 3.5: organizer sees joined, live, lost and reconnected mobile guests without refresh', async ({
   page,
   browser,

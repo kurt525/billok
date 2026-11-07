@@ -296,6 +296,12 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const session = trpc.guest.getSession.useQuery(
     { token },
     {
+      // 3.14: keep every *visible* participant/creator screen in sync with
+      // committed item claims, portions and shared positions; hidden tabs
+      // catch up immediately upon focus instead of showing stale allocations.
+      // Dedicated server-side delivery/reconnect is a separate 3.16 task.
+      refetchOnWindowFocus: 'always',
+      refetchOnReconnect: 'always',
       refetchInterval: (query) =>
         claimPollInterval({
           finalized: query.state.data?.status === 'FINALIZED',
