@@ -290,6 +290,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const { data: authSession } = useSession();
 
   // --- tRPC ---
+  const [liveStreamConnected, setLiveStreamConnected] = useState(false);
   const venmoSetting = trpc.admin.getVenmoEnabled.useQuery();
   const profile = trpc.auth.getProfile.useQuery(undefined, {
     enabled: !!authSession?.user && !!venmoSetting.data?.enabled,
@@ -303,19 +304,52 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const session = trpc.guest.getSession.useQuery(
     { token },
     {
-      // 3.14: keep every *visible* participant/creator screen in sync with
-      // committed item claims, portions and shared positions; hidden tabs
-      // catch up immediately upon focus instead of showing stale allocations.
-      // Dedicated server-side delivery/reconnect is a separate 3.16 task.
+      // 3.16: SSE delivers committed state changes. When a connection drops,
+      // keep polling as a fallback until EventSource reconnects.
       refetchOnWindowFocus: 'always',
       refetchOnReconnect: 'always',
       refetchInterval: (query) =>
-        claimPollInterval({
-          finalized: query.state.data?.status === 'FINALIZED',
-          error: query.state.error && { httpStatus: query.state.error.data?.httpStatus },
-        }),
+        liveStreamConnected
+          ? false
+          : claimPollInterval({
+              finalized: query.state.data?.status === 'FINALIZED',
+              error: query.state.error && { httpStatus: query.state.error.data?.httpStatus },
+            }),
     },
   );
+
+  // SSE carries only a change signal. The tRPC query is the source of truth.
+  // A ready event on every re-connection rechecks changes missed while offline.
+  const refreshLiveSession = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    refreshLiveSession.current = () => void utils.guest.getSession.invalidate({ token });
+  }, [token, utils]);
+  useEffect(() => {
+    if (session.data?.status === 'FINALIZED' || session.error?.data?.httpStatus === 404) return;
+    if (typeof EventSource === 'undefined') return;
+    const events = new EventSource('/api/guest/' + encodeURIComponent(token) + '/events');
+    const refresh = () => refreshLiveSession.current();
+    const onReady = () => {
+      setLiveStreamConnected(true);
+      refresh();
+    };
+    const onChanged = () => refresh();
+    const onGone = () => {
+      setLiveStreamConnected(false);
+      events.close();
+      refresh();
+    };
+    const onError = () => setLiveStreamConnected(false);
+    events.addEventListener('ready', onReady);
+    events.addEventListener('changed', onChanged);
+    events.addEventListener('gone', onGone);
+    events.onerror = onError;
+    return () => {
+      events.close();
+      setLiveStreamConnected(false);
+    };
+  }, [token, session.data?.status, session.error?.data?.httpStatus]);
+
   // A creator-only explicit POST fetches the sensitive guest bearer secret;
   // the common getSession query never exposes it. Copy must be triggered by
   // a separate gesture to work in mobile browsers after this async request.
@@ -3358,7 +3392,12 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
       {/* 3.15: one server-backed source for every visible kopeck.
           No external expense, payment or guessed unconsumed pieces. */}
-      <Card data-testid="claim-allocation-summary" aria-live="polite" aria-atomic="true">
+      <Card
+        data-testid="claim-allocation-summary"
+        data-sync-mode={liveStreamConnected ? 'sse' : 'fallback'}
+        aria-live="polite"
+        aria-atomic="true"
+      >
         <CardHeader className="pb-2">
           <CardTitle className="text-base">{t('distributedBillTotal')}</CardTitle>
         </CardHeader>

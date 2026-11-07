@@ -10,6 +10,9 @@ import {
   users,
 } from './helpers';
 
+// Claim pages maintain a persistent SSE connection (3.16); waiting for
+// networkidle on their navigation/reload would never settle. Assert the
+// actual content/state instead of relying on transport becoming idle.
 /** Signed-in creator, anonymous recipient: real persistence, no photo, OCR, or AI. */
 async function fitsPhone(page: Page) {
   const { width, scrollWidth } = await page.evaluate(() => ({
@@ -425,7 +428,7 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
     await visitor.getByTestId('personal-tip-save').click();
     await expect(visitorTip).toHaveValue('3.50', { timeout: 15_000 });
     await expect(visitor.getByTestId('personal-tip-save')).toBeDisabled();
-    await visitor.reload({ waitUntil: 'networkidle' });
+    await visitor.reload({ waitUntil: 'domcontentloaded' });
     await expect(visitorTip).toHaveValue('3.50', { timeout: 15_000 });
 
     // The minimum positive tip is one kopeck. Editing Boris's amount from
@@ -434,7 +437,7 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
     await expect(visitor.getByTestId('personal-tip-save')).toBeEnabled();
     await visitor.getByTestId('personal-tip-save').click();
     await expect(visitorTip).toHaveValue('0.01', { timeout: 15_000 });
-    await visitor.reload({ waitUntil: 'networkidle' });
+    await visitor.reload({ waitUntil: 'domcontentloaded' });
     await expect(visitorTip).toHaveValue('0.01', { timeout: 15_000 });
     await fitsPhone(visitor);
 
@@ -480,7 +483,7 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
       await expect(tipSave).toBeDisabled();
       await fitsPhone(page);
     }
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('personal-tip-input')).toHaveValue('0.02', { timeout: 15_000 });
     const afterKeyboard = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     expect(
@@ -525,7 +528,7 @@ test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobil
 
     // Before anyone selects this pizza, zero declared portions are visible.
     // The whole receipt remains unclaimed, never automatically charged.
-    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 0');
     await expect(page.getByTestId('unclaimed-total')).toContainText('8,00');
     await expect(page.getByTestId('guest-parts-preliminary')).toBeVisible();
@@ -563,8 +566,8 @@ test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobil
 
     const alicePage = page;
     const bobPage = await second.newPage();
-    await alicePage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
-    await bobPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await alicePage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    await bobPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     const aliceInput = alicePage.getByTestId('personal-parts-input-0');
     const bobInput = bobPage.getByTestId('personal-parts-input-0');
     await expect(alicePage.getByTestId('guest-parts-preliminary')).toContainText('Предварительный расчёт');
@@ -768,7 +771,7 @@ test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobil
     await alicePage.locator('input[type=password]').fill(users.alice.password);
     await alicePage.getByRole('button', { name: 'Войти', exact: true }).click();
     await expect(alicePage).toHaveURL(/\/dashboard/);
-    await alicePage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await alicePage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     const original = alicePage.getByTestId('guest-known-parts-input-0');
     const saveOriginal = alicePage.getByTestId('guest-known-parts-save-0');
     await expect(original).toBeVisible();
@@ -915,7 +918,7 @@ test('Issue 2.16.3: nine one-kopeck guest dishes balance 3:3:3 in preview, final
     expect(stored.items.map((entry: { totalPrice: number }) => entry.totalPrice)).toEqual(Array(9).fill(1));
     expect(stored.assignments).toHaveLength(9);
 
-    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     for (const index of [0, 1, 2]) {
       await expect(page.getByTestId('person-total-' + index)).toContainText('0,03', { timeout: 15_000 });
     }
@@ -1025,7 +1028,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
 
     // Anna voluntarily tips 1.25 RUB via the actual mobile editor. Boris leaves
     // zero by default, and Victor tips 0.75 RUB for his shared portion.
-    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('personal-tip-input')).toHaveValue('0.00', { timeout: 15_000 });
     await page.getByTestId('personal-tip-input').fill('1,25');
     await page.getByTestId('personal-tip-save').click();
@@ -1038,7 +1041,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     });
     expect(victorTip.ok(), await victorTip.text()).toBe(true);
 
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
     await expect(page.getByTestId('guest-parts-awaiting-confirmation')).toBeVisible();
     // The anonymous personal-link page cannot approve for the registered creator.
@@ -1093,7 +1096,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       timeout: 15_000,
     });
     await expect(page.getByTestId('guest-personal-reimbursement')).toContainText('Борис');
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('finalized-bill-total')).toContainText('12,01', { timeout: 15_000 });
     await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('4,59');
     await fitsPhone(page);
@@ -1102,7 +1105,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // Hard reload at each width avoids carrying stale mobile viewport offsets.
     for (const width of [320, 360, 430, 480, 600, 720]) {
       await page.setViewportSize({ width, height: 300 });
-      await page.reload({ waitUntil: 'networkidle' });
+      await page.reload({ waitUntil: 'domcontentloaded' });
       await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
       await expect(page.getByTestId('finalized-bill-total')).toContainText('12,01', { timeout: 15_000 });
       await expect(page.getByTestId('finalized-food-total')).toContainText('10,01');
@@ -1174,7 +1177,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       await fitsPhone(page);
     }
     // Restore a normal font before testing the remaining payment workflow.
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
 
     // A participant can copy the exact RUB amount (with comma and kopecks)
     // to paste into their bank app; this does not report a payment.
@@ -1207,7 +1210,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
 
     const otherPage = await otherDevice.newPage();
     await monitorPayerReviewDuplicates(otherPage);
-    await otherPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await otherPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(otherPage.getByTestId('finalized-bill-total')).toContainText('12,01', { timeout: 15_000 });
     // Boris pays but did not create the receipt: his 3.34 RUB is not reimbursed.
     // Anna's 4.59 + Victor's 4.08 = 8.67 RUB owed to Boris.
@@ -1260,7 +1263,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // required to fetch Boris's destination. It is absent from public getSession.
     const publicView = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     expect(JSON.stringify(publicView)).not.toContain('+79991234567');
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('guest-sbp-reimbursement-details')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('guest-sbp-reimbursement-bank')).toContainText('Озон Банк');
     await expect(page.getByTestId('guest-sbp-reimbursement-phone')).toContainText('+79991234567');
@@ -1298,12 +1301,12 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(payerNotice).toHaveCount(1, { timeout: 25_000 });
     await expect(payerNotice).toBeVisible();
     await expect(page.getByText('Поступление денег ещё не проверено плательщиком.')).toBeVisible();
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено', { timeout: 15_000 });
     await expect(page.getByTestId('guest-mark-paid')).toHaveCount(0);
     await expect(page.getByTestId('guest-payer-sbp-form')).toHaveCount(0);
 
-    await otherPage.reload({ waitUntil: 'networkidle' });
+    await otherPage.reload({ waitUntil: 'domcontentloaded' });
     await expect(otherPage.getByTestId('guest-mark-paid')).toHaveCount(0);
     await expect(otherPage.getByTestId('guest-payment-declared')).toHaveCount(0);
     // Only Boris's personal payer token can inspect and verify Annа's transfer.
@@ -1329,7 +1332,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
 
     // Stress a second full reload before confirmation: intermittently a new
     // hydrated payer review coexists with an older route's visible card.
-    await otherPage.reload({ waitUntil: 'networkidle' });
+    await otherPage.reload({ waitUntil: 'domcontentloaded' });
     try {
       await expect(payerReview).toHaveCount(1, { timeout: 15_000 });
     } catch (error) {
@@ -1373,7 +1376,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     const debtorNotice = page.getByText('Плательщик подтвердил поступление денег.');
     await expect(debtorNotice).toHaveCount(1, { timeout: 15_000 });
     await expect(debtorNotice).toBeVisible();
-    await otherPage.reload({ waitUntil: 'networkidle' });
+    await otherPage.reload({ waitUntil: 'domcontentloaded' });
     try {
       await expect(payerReview).toHaveCount(1, { timeout: 15_000 });
     } catch (error) {
@@ -1392,7 +1395,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     );
     // A second reload must not reintroduce a stale payer review after the
     // receipt confirmation was already persisted on the server.
-    await otherPage.reload({ waitUntil: 'networkidle' });
+    await otherPage.reload({ waitUntil: 'domcontentloaded' });
     try {
       await expect(payerReview).toHaveCount(1, { timeout: 15_000 });
     } catch (error) {
@@ -1414,10 +1417,10 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // A payer may also revoke this receipt-specific destination.
     await otherPage.getByTestId('guest-payer-sbp-clear').click();
     await otherPage.getByTestId('guest-payer-sbp-save').click();
-    await otherPage.reload({ waitUntil: 'networkidle' });
+    await otherPage.reload({ waitUntil: 'domcontentloaded' });
     await expect(otherPage.getByTestId('guest-payer-sbp-phone')).toHaveValue('', { timeout: 15_000 });
     // Revocation takes effect on the server, not just in the payer's UI.
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('guest-sbp-not-configured')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('guest-sbp-reimbursement-phone')).toHaveCount(0);
     await fitsPhone(otherPage);
@@ -1462,7 +1465,7 @@ test('anonymous mobile participant can join a long-name slot and edit it with to
     expect(created.ok(), JSON.stringify(response)).toBe(true);
     token = response.result.data.json.shareToken;
 
-    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('claim-join-form')).toBeVisible();
     await page.setViewportSize({ width: 320, height: 460 });
     await fitsPhone(page);
@@ -1560,7 +1563,7 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
     token = JSON.parse(body).result.data.json.shareToken as string;
 
     await page.setViewportSize({ width: 320, height: 460 });
-    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('claim-join-form')).toBeVisible();
     await page.getByTestId('rejoin-person-1').click();
     await expect(page.getByTestId('claim-item-0')).toBeVisible({ timeout: 15_000 });
@@ -1588,7 +1591,7 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
     await save.click();
     await expect(save).toBeDisabled({ timeout: 15_000 });
 
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('claim-item-' + ownPart)).toHaveAttribute('aria-pressed', 'true', {
       timeout: 15_000,
     });
@@ -1607,7 +1610,7 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
     // which makes Playwright boundingBox report false negative x values.
     for (const width of [320, 360, 430, 480, 600, 720]) {
       await page.setViewportSize({ width, height: 360 });
-      await page.reload({ waitUntil: 'networkidle' });
+      await page.reload({ waitUntil: 'domcontentloaded' });
       await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
       const card = page.getByTestId('claim-item-' + ownPart);
       await expect(card).toHaveAttribute('aria-pressed', 'true', { timeout: 15_000 });
@@ -1721,7 +1724,7 @@ test('Issue 2.19.3: guest personal links count 0, 3, 8 portions and cannot final
     await rememberClaimIdentity(page.context(), token, anna);
     await rememberClaimIdentity(second, token, boris);
 
-    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     const pizzaProgress = page.getByTestId('guest-claimed-parts-progress-0');
     const waterProgress = page.getByTestId('guest-claimed-parts-progress-1');
     await expect(pizzaProgress).toContainText('Всего заявлено частей: 0');
@@ -1788,12 +1791,12 @@ test('Issue 2.19.3: guest personal links count 0, 3, 8 portions and cannot final
     // Two real devices: the guest's anonymous link never approves the receipt
     // for the signed-in creator, but both see the saved counts and provisional amount.
     const guestPage = await second.newPage();
-    await guestPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await guestPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(guestPage.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 8');
     await expect(guestPage.getByTestId('guest-confirm-parts-btn')).toHaveCount(0);
     for (const width of [320, 360, 430, 480, 600, 720]) {
       await page.setViewportSize({ width, height: 360 });
-      await page.reload({ waitUntil: 'networkidle' });
+      await page.reload({ waitUntil: 'domcontentloaded' });
       await expect(page.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 8', {
         timeout: 15_000,
       });
@@ -1923,7 +1926,7 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
     // This browser has no session, email or registration form.
     const authBefore = await trpcResult(await trpcQuery(page.request, 'auth.getSession'));
     expect(authBefore?.user?.id).toBeFalsy();
-    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('claim-join-form')).toBeVisible();
     await expect(page.locator('input[type=email]')).toHaveCount(0);
     await page.getByTestId('claim-name-input').fill('Борис');
@@ -1967,7 +1970,7 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
       expect(rect!.x + rect!.width, 'Guest result right at ' + width).toBeLessThanOrEqual(width + 1);
       await fitsPhone(page);
     }
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
     await expect(page.getByTestId('person-total-1')).toContainText('6,01', { timeout: 15_000 });
     const authAfter = await trpcResult(await trpcQuery(page.request, 'auth.getSession'));
@@ -2747,7 +2750,7 @@ test('Issue 3.6.2: creator renames unjoined guests on mobile; guests can edit on
     await ownerPage.locator('input[type=password]').fill(users.alice.password);
     await ownerPage.getByRole('button', { name: 'Войти', exact: true }).click();
     await expect(ownerPage).toHaveURL(/\/dashboard/);
-    await ownerPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await ownerPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(ownerPage.getByTestId('claim-join-form')).toBeVisible();
     await expect(ownerPage.getByTestId('creator-edit-person-1')).toBeVisible();
     await ownerPage.getByTestId('creator-edit-person-1').click();
@@ -2767,7 +2770,7 @@ test('Issue 3.6.2: creator renames unjoined guests on mobile; guests can edit on
     expect(after.receiptData.total).toBe(1001);
 
     // The shared link never grants permission to rename anyone.
-    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('creator-edit-person-1')).toHaveCount(0);
     const denied = await trpcMutation(page.request, 'guest.editPersonName', {
       token,
@@ -2780,7 +2783,7 @@ test('Issue 3.6.2: creator renames unjoined guests on mobile; guests can edit on
     const joined = await joinGuestSession(page.request, { token, name: 'Андрей П.' });
     expect(joined.personId).toBe(guestId);
     await rememberClaimIdentity(page.context(), token, { name: joined.name, personToken: joined.personToken });
-    await page.reload({ waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
     await expect(page.getByTestId('edit-person-0')).toHaveCount(0);
     await expect(page.getByTestId('edit-person-1')).toBeVisible();
@@ -2880,7 +2883,7 @@ test('Issue 3.6: simultaneous mobile guests cannot claim the same Unicode-normal
       newName: 'Алексей П.',
     });
     expect(renamed.ok(), await renamed.text()).toBe(true);
-    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(page.getByText('Алексей П.').first()).toBeVisible({ timeout: 15_000 });
     await fitsPhone(page);
   } finally {
@@ -3235,6 +3238,98 @@ test('Issue 3.15: receipt corrections recalculate claims and known pieces on thr
   }
 });
 
+test('Issue 3.16: SSE delivers receipt edits and reconnects after a real mobile network outage', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(140_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const secondDevice = await browser.newContext({
+    viewport: { width: 360, height: 760 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  let token: string | undefined;
+  try {
+    const create = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'SSE receipt', subtotal: 300, total: 300, tax: 0, tip: 0, currency: 'RUB' },
+      items: [{ name: 'Салат', quantity: 1, unitPrice: 300, totalPrice: 300 }],
+      guestCount: 2,
+      joinCreator: true,
+    });
+    expect(create.ok(), await create.text()).toBe(true);
+    const created = JSON.parse(await create.text()).result.data.json as { shareToken: string };
+    token = created.shareToken;
+    const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const joinFirst = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[1].id,
+      name: 'Анна',
+    });
+    expect(joinFirst.ok(), await joinFirst.text()).toBe(true);
+    const joinSecond = await trpcMutation(secondDevice.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[2].id,
+      name: 'Борис',
+    });
+    expect(joinSecond.ok(), await joinSecond.text()).toBe(true);
+    const first = JSON.parse(await joinFirst.text()).result.data.json;
+    const second = JSON.parse(await joinSecond.text()).result.data.json;
+    await rememberClaimIdentity(page.context(), token, first);
+    await rememberClaimIdentity(secondDevice, token, second);
+    await page.setViewportSize({ width: 320, height: 760 });
+    const otherPage = await secondDevice.newPage();
+    await page.goto('/split/' + token + '/claim');
+    await otherPage.goto('/split/' + token + '/claim');
+    for (const viewer of [page, otherPage]) {
+      const total = viewer.getByTestId('claim-allocation-summary');
+      await expect(total).toBeVisible({ timeout: 25_000 });
+      await expect(total).toHaveAttribute('data-sync-mode', 'sse', { timeout: 25_000 });
+      await expect(viewer.getByTestId('claim-distributed-total')).toContainText('3,00');
+    }
+
+    const saved = await trpcMutation(owner, 'guest.updateClaimReceiptItem', {
+      token,
+      itemIndex: 0,
+      name: 'Обновлённый салат',
+      quantity: 1,
+      unitPrice: 450,
+    });
+    expect(saved.ok(), await saved.text()).toBe(true);
+    for (const viewer of [page, otherPage]) {
+      await expect(viewer.getByTestId('claim-distributed-total')).toContainText('4,50', { timeout: 15_000 });
+    }
+
+    // Simulate a real dropped connection, change the saved receipt on the server,
+    // then let EventSource reconnect and verify the latest state without reload.
+    await page.context().setOffline(true);
+    const offlineUpdate = await trpcMutation(owner, 'guest.updateClaimReceiptItem', {
+      token,
+      itemIndex: 0,
+      name: 'После восстановления связи',
+      quantity: 1,
+      unitPrice: 650,
+    });
+    expect(offlineUpdate.ok(), await offlineUpdate.text()).toBe(true);
+    await expect(otherPage.getByTestId('claim-distributed-total')).toContainText('6,50', { timeout: 15_000 });
+    await page.context().setOffline(false);
+    await expect(page.getByTestId('claim-allocation-summary')).toHaveAttribute('data-sync-mode', 'sse', {
+      timeout: 25_000,
+    });
+    await expect(page.getByTestId('claim-distributed-total')).toContainText('6,50', { timeout: 25_000 });
+    await expect(page.getByTestId('claim-item-0')).toContainText('После восстановления связи');
+    for (const viewer of [page, otherPage]) await fitsPhone(viewer);
+
+    const missing = await owner.get('/api/guest/not-a-real-receipt/events');
+    expect(missing.status()).toBe(404);
+  } finally {
+    await page.context().setOffline(false);
+    if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await secondDevice.close();
+    await owner.dispose();
+  }
+});
+
 test('Issue 3.14: claims and shared positions reach every open mobile receipt', async ({ page, browser }) => {
   test.setTimeout(170_000);
   const owner = await authedContext(users.alice.email, users.alice.password);
@@ -3417,7 +3512,7 @@ test('Issue 3.5: organizer sees joined, live, lost and reconnected mobile guests
     await ownerPage.getByRole('button', { name: 'Войти', exact: true }).click();
     await expect(ownerPage).toHaveURL(/\/dashboard/);
     await rememberClaimIdentity(organizerBrowser, token, created.creator);
-    await ownerPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await ownerPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
 
     const ownerSession = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     const creatorId = ownerSession.people[0].id as string;
@@ -3434,7 +3529,7 @@ test('Issue 3.5: organizer sees joined, live, lost and reconnected mobile guests
     await fitsPhone(ownerPage);
 
     await page.setViewportSize({ width: 360, height: 620 });
-    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('organizer-presence')).toHaveCount(0);
     await page.getByTestId('rejoin-person-1').click();
     await expect(page.getByTestId('claim-item-0')).toBeVisible({ timeout: 15_000 });
@@ -3534,7 +3629,7 @@ test('Issue 3.4: mobile creator explicitly delegates approval and finalization, 
 
     // Personal tokens give guest participation only, even when all items are claimed.
     await rememberClaimIdentity(page.context(), token, boris);
-    await page.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('claim-item-0')).toBeVisible();
     await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
     await expect(page.getByTestId('guest-confirm-parts-btn')).toHaveCount(0);
@@ -3559,7 +3654,7 @@ test('Issue 3.4: mobile creator explicitly delegates approval and finalization, 
     await ownerPage.getByRole('button', { name: 'Войти', exact: true }).click();
     await expect(ownerPage).toHaveURL(/\/dashboard/);
     await rememberClaimIdentity(organizerBrowser, token, anna);
-    await ownerPage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await ownerPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     const panel = ownerPage.getByTestId('finalization-organizer-panel');
     await expect(panel).toBeVisible({ timeout: 15_000 });
     await panel.getByTestId('finalization-organizer-email').fill(users.charlie.email);
@@ -3572,7 +3667,7 @@ test('Issue 3.4: mobile creator explicitly delegates approval and finalization, 
     await delegatePage.locator('input[type=password]').fill(users.charlie.password);
     await delegatePage.getByRole('button', { name: 'Войти', exact: true }).click();
     await expect(delegatePage).toHaveURL(/\/dashboard/);
-    await delegatePage.goto('/split/' + token + '/claim', { waitUntil: 'networkidle' });
+    await delegatePage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     // The co-organizer did not eat: no fictitious guest or personal token.
     await expect(delegatePage.getByTestId('finalization-organizer-panel')).toHaveCount(0);
     await expect(delegatePage.getByTestId('finalization-organizer-no-claim')).toBeVisible();
