@@ -12,7 +12,7 @@ import { formatCents, centsToDecimal, isValidMoneyInput, parseToCents, MAX_MONEY
 import { copyToClipboard } from '@/lib/clipboard';
 import {
   canAdoptAnswer,
-  claimPollInterval,
+  claimLivePollInterval,
   getStoredClaimIdentity,
   isSessionLost,
   joinKeyFor,
@@ -304,17 +304,19 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const session = trpc.guest.getSession.useQuery(
     { token },
     {
-      // 3.16: SSE delivers committed state changes. When a connection drops,
-      // keep polling as a fallback until EventSource reconnects.
+      // 3.16: SSE delivers receipt changes, but online/offline presence lives
+      // in separate guestPresence rows. Keep polling for organizer/delegate
+      // presence while a healthy SSE stream avoids duplicate reads for guests.
       refetchOnWindowFocus: 'always',
       refetchOnReconnect: 'always',
       refetchInterval: (query) =>
-        liveStreamConnected
-          ? false
-          : claimPollInterval({
-              finalized: query.state.data?.status === 'FINALIZED',
-              error: query.state.error && { httpStatus: query.state.error.data?.httpStatus },
-            }),
+        claimLivePollInterval({
+          finalized: query.state.data?.status === 'FINALIZED',
+          error: query.state.error && { httpStatus: query.state.error.data?.httpStatus },
+          sseConnected: liveStreamConnected,
+          // Null is the guest view; undefined (loading) retains fallback.
+          presenceVisible: query.state.data?.presence !== null,
+        }),
     },
   );
 

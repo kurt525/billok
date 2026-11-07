@@ -213,6 +213,22 @@ export function claimPollInterval(poll: {
 }
 
 /**
+ * A live SSE stream invalidates receipt changes, not guestPresence rows.
+ * Keep creator/delegate presence live through the existing short poll.
+ * Guests with a healthy SSE connection can avoid duplicate receipt reads;
+ * transient tRPC errors still use the retry interval.
+ */
+export function claimLivePollInterval(poll: {
+  finalized: boolean;
+  error: { httpStatus: number | undefined } | null;
+  sseConnected: boolean;
+  presenceVisible: boolean;
+}): number | false {
+  if (poll.sseConnected && !poll.presenceVisible && poll.error === null) return false;
+  return claimPollInterval({ finalized: poll.finalized, error: poll.error });
+}
+
+/**
  * After guest.getSession failed, whether the claim page gives up on the session and shows the
  * not-found screen: when it never loaded, or the server says it's gone (404). A session already
  * on screen stays there through any other failed reload while the poll tries again, instead of

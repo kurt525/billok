@@ -5,6 +5,7 @@ import {
   canAdoptAnswer,
   canStoreClaimIdentity,
   claimPollInterval,
+  claimLivePollInterval,
   isGuestSessionToken,
   normalizeGuestName,
   hasDuplicateGuestNames,
@@ -231,6 +232,43 @@ describe('claimPollInterval', () => {
     expect(claimPollInterval({ finalized: false, error: { httpStatus: 429 } })).toBe(CLAIM_POLL_RETRY_MS);
     expect(claimPollInterval({ finalized: false, error: { httpStatus: 500 } })).toBe(CLAIM_POLL_RETRY_MS);
     expect(claimPollInterval({ finalized: false, error: { httpStatus: undefined } })).toBe(CLAIM_POLL_RETRY_MS);
+  });
+});
+
+describe('Issue 3.16: live SSE does not freeze creator presence (3.5, 3.12)', () => {
+  const base = { finalized: false, error: null };
+
+  test('an SSE-connected guest uses server notifications instead of duplicate polling', () => {
+    expect(claimLivePollInterval({ ...base, sseConnected: true, presenceVisible: false })).toBe(false);
+  });
+
+  test('the organizer/delegate keeps receiving online/offline presence even with SSE connected', () => {
+    expect(claimLivePollInterval({ ...base, sseConnected: true, presenceVisible: true })).toBe(CLAIM_POLL_MS);
+  });
+
+  test('both guest and creator restore fallback reads when SSE disconnects', () => {
+    for (const presenceVisible of [true, false]) {
+      expect(claimLivePollInterval({ ...base, sseConnected: false, presenceVisible })).toBe(CLAIM_POLL_MS);
+    }
+  });
+
+  test('a transient query error retries even when SSE reports connected; finalization still stops', () => {
+    expect(
+      claimLivePollInterval({
+        finalized: false,
+        error: { httpStatus: 500 },
+        sseConnected: true,
+        presenceVisible: false,
+      }),
+    ).toBe(CLAIM_POLL_RETRY_MS);
+    expect(
+      claimLivePollInterval({
+        finalized: true,
+        error: null,
+        sseConnected: true,
+        presenceVisible: true,
+      }),
+    ).toBe(false);
   });
 });
 
