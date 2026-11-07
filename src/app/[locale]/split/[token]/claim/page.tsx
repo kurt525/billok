@@ -57,6 +57,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -2804,111 +2805,118 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                               {t('itemCorrectionEdit')}
                             </Button>
                           ) : (
-                            <form
-                              className="min-w-0 space-y-2 rounded-lg border p-3"
-                              data-testid={'receipt-item-edit-form-' + idx}
-                              onSubmit={(event) => {
-                                event.preventDefault();
-                                if (!receiptItemEdit) return;
-                                const qty = Number(receiptItemEdit.quantity);
-                                const price = parseToCents(receiptItemEdit.price);
-                                if (
-                                  !receiptItemEdit.name.trim() ||
-                                  !Number.isSafeInteger(qty) ||
-                                  qty < 1 ||
-                                  qty > 200 ||
-                                  !isValidMoneyInput(receiptItemEdit.price) ||
-                                  price < 1 ||
-                                  price * qty > MAX_MONEY_CENTS ||
-                                  updateClaimReceiptItem.isPending
-                                )
-                                  return;
-                                updateClaimReceiptItem.mutate({
-                                  token,
-                                  itemIndex: idx,
-                                  name: receiptItemEdit.name.trim(),
-                                  quantity: qty,
-                                  unitPrice: price,
-                                });
-                              }}
-                            >
-                              <p className="font-medium">{t('itemCorrectionTitle')}</p>
-                              <p className="text-muted-foreground">{t('itemCorrectionHint')}</p>
-                              <label htmlFor={'receipt-item-name-' + idx} className="block text-xs font-medium">
-                                {t('itemCorrectionName')}
-                              </label>
-                              <Input
-                                id={'receipt-item-name-' + idx}
-                                className="min-h-11 min-w-0 text-base"
-                                maxLength={160}
-                                value={receiptItemEdit.name}
-                                onChange={(event) =>
-                                  setReceiptItemEdit((previous) =>
-                                    previous ? { ...previous, name: event.target.value } : null,
-                                  )
-                                }
-                                data-testid={'receipt-item-name-' + idx}
-                              />
-                              <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2">
-                                <div className="min-w-0 space-y-1">
-                                  <label htmlFor={'receipt-item-qty-' + idx} className="block text-xs font-medium">
-                                    {t('itemCorrectionQuantity')}
+                            <Dialog open onOpenChange={(open) => !open && setReceiptItemEdit(null)}>
+                              <DialogContent className="min-w-0 max-w-[calc(100%-1rem)] sm:max-w-sm">
+                                <form
+                                  className="min-w-0 space-y-2"
+                                  data-testid={'receipt-item-edit-form-' + idx}
+                                  onSubmit={(event) => {
+                                    event.preventDefault();
+                                    if (!receiptItemEdit) return;
+                                    const qty = Number(receiptItemEdit.quantity);
+                                    const price = parseToCents(receiptItemEdit.price);
+                                    if (
+                                      !receiptItemEdit.name.trim() ||
+                                      !Number.isSafeInteger(qty) ||
+                                      qty < 1 ||
+                                      qty > 200 ||
+                                      !isValidMoneyInput(receiptItemEdit.price) ||
+                                      price < 1 ||
+                                      price * qty > MAX_MONEY_CENTS ||
+                                      updateClaimReceiptItem.isPending
+                                    )
+                                      return;
+                                    updateClaimReceiptItem.mutate({
+                                      token,
+                                      itemIndex: idx,
+                                      name: receiptItemEdit.name.trim(),
+                                      quantity: qty,
+                                      unitPrice: price,
+                                    });
+                                  }}
+                                >
+                                  <DialogTitle>{t('itemCorrectionTitle')}</DialogTitle>
+                                  <DialogDescription>{t('itemCorrectionHint')}</DialogDescription>
+                                  <label htmlFor={'receipt-item-name-' + idx} className="block text-xs font-medium">
+                                    {t('itemCorrectionName')}
                                   </label>
                                   <Input
-                                    id={'receipt-item-qty-' + idx}
+                                    id={'receipt-item-name-' + idx}
                                     className="min-h-11 min-w-0 text-base"
-                                    type="number"
-                                    inputMode="numeric"
-                                    min={1}
-                                    max={200}
-                                    value={receiptItemEdit.quantity}
+                                    maxLength={160}
+                                    value={receiptItemEdit.name}
                                     onChange={(event) =>
                                       setReceiptItemEdit((previous) =>
-                                        previous ? { ...previous, quantity: event.target.value } : null,
+                                        previous ? { ...previous, name: event.target.value } : null,
                                       )
                                     }
-                                    data-testid={'receipt-item-qty-' + idx}
+                                    data-testid={'receipt-item-name-' + idx}
                                   />
-                                </div>
-                                <div className="min-w-0 space-y-1">
-                                  <label htmlFor={'receipt-item-price-' + idx} className="block text-xs font-medium">
-                                    {t('itemCorrectionPrice')}
-                                  </label>
-                                  <Input
-                                    id={'receipt-item-price-' + idx}
-                                    className="min-h-11 min-w-0 text-base"
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={receiptItemEdit.price}
-                                    onChange={(event) =>
-                                      setReceiptItemEdit((previous) =>
-                                        previous ? { ...previous, price: event.target.value } : null,
-                                      )
-                                    }
-                                    data-testid={'receipt-item-price-' + idx}
-                                  />
-                                </div>
-                              </div>
-                              <div className="flex min-w-0 flex-wrap gap-2">
-                                <Button
-                                  type="submit"
-                                  className="min-h-11 min-w-11 whitespace-normal"
-                                  disabled={updateClaimReceiptItem.isPending}
-                                  data-testid={'receipt-item-save-' + idx}
-                                >
-                                  {updateClaimReceiptItem.isPending ? t('saving') : t('itemCorrectionSave')}
-                                </Button>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  className="min-h-11 min-w-11"
-                                  onClick={() => setReceiptItemEdit(null)}
-                                  data-testid={'receipt-item-cancel-' + idx}
-                                >
-                                  {t('cancelButton')}
-                                </Button>
-                              </div>
-                            </form>
+                                  <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2">
+                                    <div className="min-w-0 space-y-1">
+                                      <label htmlFor={'receipt-item-qty-' + idx} className="block text-xs font-medium">
+                                        {t('itemCorrectionQuantity')}
+                                      </label>
+                                      <Input
+                                        id={'receipt-item-qty-' + idx}
+                                        className="min-h-11 min-w-0 text-base"
+                                        type="number"
+                                        inputMode="numeric"
+                                        min={1}
+                                        max={200}
+                                        value={receiptItemEdit.quantity}
+                                        onChange={(event) =>
+                                          setReceiptItemEdit((previous) =>
+                                            previous ? { ...previous, quantity: event.target.value } : null,
+                                          )
+                                        }
+                                        data-testid={'receipt-item-qty-' + idx}
+                                      />
+                                    </div>
+                                    <div className="min-w-0 space-y-1">
+                                      <label
+                                        htmlFor={'receipt-item-price-' + idx}
+                                        className="block text-xs font-medium"
+                                      >
+                                        {t('itemCorrectionPrice')}
+                                      </label>
+                                      <Input
+                                        id={'receipt-item-price-' + idx}
+                                        className="min-h-11 min-w-0 text-base"
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={receiptItemEdit.price}
+                                        onChange={(event) =>
+                                          setReceiptItemEdit((previous) =>
+                                            previous ? { ...previous, price: event.target.value } : null,
+                                          )
+                                        }
+                                        data-testid={'receipt-item-price-' + idx}
+                                      />
+                                    </div>
+                                  </div>
+                                  <div className="flex min-w-0 flex-wrap gap-2">
+                                    <Button
+                                      type="submit"
+                                      className="min-h-11 min-w-11 whitespace-normal"
+                                      disabled={updateClaimReceiptItem.isPending}
+                                      data-testid={'receipt-item-save-' + idx}
+                                    >
+                                      {updateClaimReceiptItem.isPending ? t('saving') : t('itemCorrectionSave')}
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      className="min-h-11 min-w-11"
+                                      onClick={() => setReceiptItemEdit(null)}
+                                      data-testid={'receipt-item-cancel-' + idx}
+                                    >
+                                      {t('cancelButton')}
+                                    </Button>
+                                  </div>
+                                </form>
+                              </DialogContent>
+                            </Dialog>
                           )}
                         </div>
                       )}
