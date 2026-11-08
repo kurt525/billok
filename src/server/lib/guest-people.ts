@@ -37,6 +37,9 @@ export type GuestSessionPerson = {
   // Keeping the most recent request id makes a network retry idempotent.
   personalLinkRotation?: { requestKey: string; rotatedAt: string; count: number };
   groupSize?: number; // defaults to 1, > 1 means this person represents a group
+  // 3.24.1.1: optional server-controlled reimbursement group leader personId;
+  // separate from legacy groupSize (which changes weights, not identities).
+  paymentGroupRepresentativeId?: string;
   // Voluntary tip personally chosen for this receipt, integer RUB kopecks; missing = 0.
   tipCents?: number;
   // Participant's declaration only; does NOT mean funds arrived or were verified.
