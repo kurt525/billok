@@ -4292,11 +4292,11 @@ test('Issue 3.22: registered groups retain exact debts, payments and history', a
       currency: 'RUB',
     });
     expect(created.ok(), await created.text()).toBe(true);
-    groupId = (await trpcResult(created)).id as string;
+    groupId = (await created.json()).result.data.json.id as string;
     const invite = await trpcMutation(alice, 'groups.createInvite', { groupId });
     expect(invite.ok(), await invite.text()).toBe(true);
     const join = await trpcMutation(bob, 'groups.joinByInvite', {
-      token: (await trpcResult(invite)).token,
+      token: (await invite.json()).result.data.json.token,
     });
     expect(join.ok(), await join.text()).toBe(true);
     const group = await trpcResult(await trpcQuery(alice, 'groups.get', { groupId }));
@@ -4319,7 +4319,7 @@ test('Issue 3.22: registered groups retain exact debts, payments and history', a
       ],
     });
     expect(spend.ok(), await spend.text()).toBe(true);
-    const expenseId = (await trpcResult(spend)).id as string;
+    const expenseId = (await spend.json()).result.data.json.id as string;
     const debts = async () =>
       (await trpcResult(await trpcQuery(bob, 'balances.getSimplifiedDebts', { groupId }))).debts;
     expect(await debts()).toEqual([{ from: bobId, to: aliceId, amount: 600 }]);
@@ -4331,7 +4331,7 @@ test('Issue 3.22: registered groups retain exact debts, payments and history', a
       currency: 'RUB',
     });
     expect(payment.ok(), await payment.text()).toBe(true);
-    const paymentId = (await trpcResult(payment)).id as string;
+    const paymentId = (await payment.json()).result.data.json.id as string;
     expect(await debts()).toEqual([{ from: bobId, to: aliceId, amount: 350 }]);
     const expenses = await trpcResult(await trpcQuery(alice, 'expenses.list', { groupId }));
     expect(expenses.expenses.some((e: { id: string }) => e.id === expenseId)).toBe(true);
@@ -4368,7 +4368,7 @@ test('Issue 3.22: registered groups retain exact debts, payments and history', a
       currency: 'RUB',
     });
     expect(final.ok(), await final.text()).toBe(true);
-    const finalId = (await trpcResult(final)).id as string;
+    const finalId = (await final.json()).result.data.json.id as string;
     expect(await debts()).toEqual([]);
 
     const archived = await trpcMutation(alice, 'groups.archive', { groupId });
