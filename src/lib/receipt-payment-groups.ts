@@ -169,3 +169,46 @@ export function aggregateReceiptPaymentGroups(
   }
   return { groups, payerTotalCents, totalCents, tipsCents };
 }
+
+/**
+ * Replace the complete set of reimbursement groups atomically.
+ * [] breaks every group; a different leader transfers responsibility.
+ * Keep stable person IDs and all unrelated data unchanged.
+ */
+export function setReceiptPaymentGroups<T extends ReceiptPaymentPerson>(
+  people: readonly T[],
+  paidByIndex: number,
+  groups: readonly { representativeId: string; memberIds: readonly string[] }[],
+): T[] {
+  receiptPaymentMemberships(people, paidByIndex);
+  const assigned = new Map<string, string>();
+  const byId = new Set(people.map((person) => person.id));
+  for (const group of groups) {
+    if (group.memberIds.length < 2 || new Set(group.memberIds).size !== group.memberIds.length) {
+      throw new Error('Each payment group must have two or more distinct people');
+    }
+    if (!group.memberIds.includes(group.representativeId)) {
+      throw new Error('The representative must belong to their own group');
+    }
+    if (group.memberIds.includes(people[paidByIndex]!.id!)) {
+      throw new Error('The payer cannot join a reimbursement group');
+    }
+    for (const id of group.memberIds) {
+      if (!byId.has(id) || assigned.has(id)) {
+        throw new Error('Missing or duplicated person in payment groups');
+      }
+      assigned.set(id, group.representativeId);
+    }
+  }
+  const updated = people.map((person) => {
+    const representativeId = assigned.get(person.id!);
+    const { paymentGroupRepresentativeId: _previous, ...other } = person;
+    void _previous;
+    return {
+      ...other,
+      ...(representativeId !== undefined ? { paymentGroupRepresentativeId: representativeId } : {}),
+    } as T;
+  });
+  receiptPaymentMemberships(updated, paidByIndex);
+  return updated;
+}

@@ -203,3 +203,63 @@ describe('Issue 3.24.1.1: invalid composition fails closed', () => {
     ).toThrow();
   });
 });
+
+describe('Issue 3.24.1.2: merge, split and reassign without losing private person state', () => {
+  test('supports a family, leader transfer, and ungrouping without touching dishes and tips', async () => {
+    const { setReceiptPaymentGroups } = await import('./receipt-payment-groups');
+    const wife = { id: 'wife', name: 'Wife', tipCents: 40, personToken: 'wife-private', personalLinkReadyAt: 'stamp' };
+    const husband = { id: 'husband', name: 'Husband', tipCents: 0, personToken: 'husband-private' };
+    const child = { id: 'child', name: 'Child', tipCents: 15, guestSlotNumber: 3 };
+    const original = [{ id: 'payer', name: 'Payer' }, wife, husband, child];
+    const mealAssignments = [
+      { itemIndex: 0, personIndices: [1, 2, 3], partsByPersonId: { wife: 1, husband: 2, child: 1 } },
+    ];
+    const untouched = structuredClone(mealAssignments);
+
+    const together = setReceiptPaymentGroups(original, 0, [
+      { representativeId: 'wife', memberIds: ['wife', 'husband', 'child'] },
+    ]);
+    expect(receiptPaymentMemberships(together, 0).filter((g) => g.grouped)).toEqual([
+      { representativeId: 'wife', memberIds: ['wife', 'husband', 'child'], memberIndices: [1, 2, 3], grouped: true },
+    ]);
+    const switched = setReceiptPaymentGroups(together, 0, [
+      { representativeId: 'husband', memberIds: ['wife', 'husband', 'child'] },
+    ]);
+    expect(receiptPaymentMemberships(switched, 0).filter((g) => g.grouped)[0]?.representativeId).toBe('husband');
+    expect(switched.map((person) => person.id)).toEqual(original.map((person) => person.id));
+    expect(switched[1]).toMatchObject(wife);
+    expect(switched[2]).toMatchObject(husband);
+    expect(switched[3]).toMatchObject(child);
+    const ungrouped = setReceiptPaymentGroups(switched, 0, []);
+    expect(ungrouped.every((person) => !('paymentGroupRepresentativeId' in person))).toBe(true);
+    expect(original).toEqual([{ id: 'payer', name: 'Payer' }, wife, husband, child]);
+    expect(mealAssignments).toEqual(untouched);
+    expect(setReceiptPaymentGroups(ungrouped, 0, [])).toEqual(ungrouped);
+  });
+
+  test.each([
+    {
+      description: 'repeated person within group',
+      groups: [{ representativeId: 'wife', memberIds: ['wife', 'wife'] }],
+    },
+    {
+      description: 'overlap across groups',
+      groups: [
+        { representativeId: 'wife', memberIds: ['wife', 'husband'] },
+        { representativeId: 'husband', memberIds: ['husband', 'child'] },
+      ],
+    },
+    { description: 'nonexistent member', groups: [{ representativeId: 'wife', memberIds: ['wife', 'stranger'] }] },
+    {
+      description: 'representative is missing from members',
+      groups: [{ representativeId: 'wife', memberIds: ['husband', 'child'] }],
+    },
+    { description: 'payer in payment group', groups: [{ representativeId: 'wife', memberIds: ['wife', 'payer'] }] },
+    { description: 'only one member', groups: [{ representativeId: 'wife', memberIds: ['wife'] }] },
+  ])('rejects $description atomically', async ({ groups }) => {
+    const { setReceiptPaymentGroups } = await import('./receipt-payment-groups');
+    const original = structuredClone(members);
+    expect(() => setReceiptPaymentGroups(members, 0, groups)).toThrow();
+    expect(members).toEqual(original);
+  });
+});

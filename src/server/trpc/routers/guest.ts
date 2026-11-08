@@ -37,6 +37,7 @@ import { guestPresenceState } from '@/lib/guest-presence';
 import { hasDuplicateGuestNames, normalizeGuestName } from '@/lib/guest-session';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { MAX_MONEY_CENTS } from '@/lib/money';
+import { receiptPaymentMemberships, setReceiptPaymentGroups } from '@/lib/receipt-payment-groups';
 import { normalizeSbpPhone, isSupportedSbpBankId } from '@/lib/sbp-banks';
 import { checkJoinRateLimit } from '../../lib/guest-join-limit';
 import {
@@ -220,6 +221,9 @@ function toClaimPeople(people: IdentifiedGuestPerson[]) {
         }
       : {}),
     tipCents: person.tipCents ?? 0,
+    ...(person.paymentGroupRepresentativeId !== undefined
+      ? { paymentGroupRepresentativeId: person.paymentGroupRepresentativeId }
+      : {}),
   }));
 }
 
@@ -2253,6 +2257,61 @@ export const guestRouter = createTRPCRouter({
   // and the recomputed total through the existing getSession update path.
   // Keep the index and the identities/portion assignments stable; replacing
   // or renumbering other rows is not allowed through this operation.
+  // Issue 3.24.1.2: only the signed-in creator may edit group composition.
+  // One atomic complete set handles merge, split and change of representative.
+  // No dish/portion/tip changes or new receipt rows.
+  setPaymentGroups: protectedProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        groups: z
+          .array(
+            z.object({
+              representativeId: personIdSchema,
+              memberIds: z.array(personIdSchema).min(2).max(MAX_SESSION_PEOPLE),
+            }),
+          )
+          .max(Math.floor(MAX_SESSION_PEOPLE / 2)),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (
+        !checkTokenRateLimit('payment-group-edit:' + JSON.stringify([input.token, ctx.user.id]), 30, 60_000).allowed
+      ) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (!session.userId || session.userId !== ctx.user.id || ctx.impersonating) {
+          throw new AppError('FORBIDDEN', 'notParticipant');
+        }
+        if (session.status !== GuestSplitStatus.CLAIMING) {
+          throw new AppError('BAD_REQUEST', 'sessionFinalized');
+        }
+        const existing = assignPersonIds(session.people as GuestSessionPerson[]);
+        let updated: IdentifiedGuestPerson[];
+        try {
+          updated = setReceiptPaymentGroups(existing, session.paidByIndex, input.groups);
+        } catch {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'payment groups' });
+        }
+        const changed = JSON.stringify(existing) !== JSON.stringify(updated);
+        if (changed || !hasPersonIds(session.people as GuestSessionPerson[])) {
+          await tx.guestSplit.update({
+            where: { id: session.id },
+            data: { people: updated as unknown as Prisma.InputJsonValue },
+          });
+        }
+        return {
+          groups: receiptPaymentMemberships(updated, session.paidByIndex)
+            .filter((group) => group.grouped)
+            .map(({ representativeId, memberIds }) => ({ representativeId, memberIds })),
+        };
+      });
+    }),
+
   updateClaimReceiptItem: protectedProcedure
     .input(
       z.object({

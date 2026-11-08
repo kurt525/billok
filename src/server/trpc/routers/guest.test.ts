@@ -135,6 +135,106 @@ describe('BillOK participant display names: 1–40 chars per receipt', () => {
   });
 });
 
+describe('Issue 3.24.1.2: creator-only atomic payment group edits', () => {
+  const payer = '10000000-0000-4000-8000-000000000001';
+  const wife = '10000000-0000-4000-8000-000000000002';
+  const husband = '10000000-0000-4000-8000-000000000003';
+  const child = '10000000-0000-4000-8000-000000000004';
+  const group = { representativeId: wife, memberIds: [wife, husband, child] };
+  const base = () => ({
+    id: 'receipt-1',
+    userId: 'user-1',
+    shareToken: 'share-1',
+    status: 'CLAIMING',
+    expiresAt: new Date(Date.now() + 3_600_000),
+    paidByIndex: 0,
+    receiptData: { subtotal: 500, total: 500, tax: 0, tip: 0, currency: 'RUB' },
+    items: [{ name: 'Dinner', quantity: 4, unitPrice: 125, totalPrice: 500 }],
+    assignments: [{ itemIndex: 0, personIndices: [1, 2, 3] }],
+    people: [
+      { id: payer, name: 'Payer', personToken: 'payer-secret' },
+      { id: wife, name: 'Wife', personToken: 'wife-secret', tipCents: 30 },
+      { id: husband, name: 'Husband', personToken: 'husband-secret', tipCents: 0 },
+      { id: child, name: 'Child', guestSlotNumber: 3, tipCents: 10 },
+    ],
+  });
+  beforeEach(() => {
+    mockDb.guestSplit.findUnique.mockImplementation(async () => structuredClone(base()));
+    mockDb.guestSplit.update.mockResolvedValue({});
+  });
+
+  test('authenticated creator merges, assigns a new representative, then separates everyone', async () => {
+    let persisted = base();
+    mockDb.guestSplit.findUnique.mockImplementation(async () => structuredClone(persisted));
+    mockDb.guestSplit.update.mockImplementation(async ({ data }: { data: { people: typeof persisted.people } }) => {
+      persisted = { ...persisted, people: data.people };
+      return persisted;
+    });
+    const api = await caller(signedIn);
+    const created = await api.setPaymentGroups({ token: 'share-1', groups: [group] });
+    expect(created.groups).toEqual([group]);
+    expect(persisted.people.map((person) => person.id)).toEqual(base().people.map((person) => person.id));
+    expect(persisted.people[1]).toMatchObject({ tipCents: 30, personToken: 'wife-secret' });
+    expect(persisted.assignments).toEqual(base().assignments);
+
+    await api.setPaymentGroups({
+      token: 'share-1',
+      groups: [{ representativeId: husband, memberIds: [wife, husband, child] }],
+    });
+    expect(persisted.people[1]).toHaveProperty('paymentGroupRepresentativeId', husband);
+    expect(persisted.people[2]).toHaveProperty('paymentGroupRepresentativeId', husband);
+    await api.setPaymentGroups({ token: 'share-1', groups: [] });
+    expect(persisted.people.every((person) => !('paymentGroupRepresentativeId' in person))).toBe(true);
+    expect(mockDb.guestSplit.update).toHaveBeenCalledTimes(3);
+    await api.setPaymentGroups({ token: 'share-1', groups: [] });
+    expect(mockDb.guestSplit.update).toHaveBeenCalledTimes(3);
+  });
+
+  test('unauthenticated users and another registered account cannot edit another receipt', async () => {
+    await expect((await caller()).setPaymentGroups({ token: 'share-1', groups: [group] })).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
+    await expect(
+      (await caller({ user: { id: 'other-account' } })).setPaymentGroups({
+        token: 'share-1',
+        groups: [group],
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects unauthorized or invalid group layouts without writing', async () => {
+    const api = await caller(signedIn);
+    for (const invalid of [
+      [{ representativeId: wife, memberIds: [wife, payer] }],
+      [{ representativeId: wife, memberIds: [wife, '20000000-0000-4000-8000-000000000001'] }],
+      [
+        { representativeId: wife, memberIds: [wife, husband] },
+        { representativeId: husband, memberIds: [husband, child] },
+      ],
+      [{ representativeId: wife, memberIds: [wife, wife] }],
+    ]) {
+      await expect(api.setPaymentGroups({ token: 'share-1', groups: invalid })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('refuses updates to finalized or expired receipts', async () => {
+    const api = await caller(signedIn);
+    mockDb.guestSplit.findUnique.mockResolvedValueOnce({ ...base(), status: 'FINALIZED' });
+    await expect(api.setPaymentGroups({ token: 'share-1', groups: [group] })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    mockDb.guestSplit.findUnique.mockResolvedValueOnce({ ...base(), expiresAt: new Date(0) });
+    await expect(api.setPaymentGroups({ token: 'share-1', groups: [group] })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('BillOK creation permissions', () => {
   const receiptData = { subtotal: 100, tax: 0, tip: 0, total: 100, currency: 'RUB' };
   const items = [{ name: 'Tea', quantity: 1, unitPrice: 100, totalPrice: 100 }];
