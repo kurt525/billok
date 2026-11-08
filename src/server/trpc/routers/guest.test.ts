@@ -3018,6 +3018,151 @@ describe('2.14 guest personal parts cannot change another participant', () => {
   });
 });
 
+describe('Issue 3.20: personal parts saves are idempotent across lost answers', () => {
+  const key = '88888888-8888-4888-8888-888888888888';
+  const newerKey = '99999999-9999-4999-8999-999999999999';
+  const oneDish = [{ name: 'Пицца', quantity: 1, unitPrice: 101, totalPrice: 101 }];
+  const two = [
+    { name: 'Анна', personToken: ALICE_TOKEN },
+    { name: 'Борис', personToken: OTHER_TOKEN },
+  ];
+  const request = {
+    token: 'share-1',
+    personId: pid(0),
+    personToken: ALICE_TOKEN,
+    itemIndex: 0,
+    parts: 3,
+    saveKey: key,
+  };
+  function fixture(
+    assignments = [{ itemIndex: 0, personIndices: [0, 1], partsByPersonId: { [pid(0)]: 1, [pid(1)]: 5 } }],
+    people = two,
+    status = 'CLAIMING',
+  ) {
+    claimSession(people, {
+      status,
+      items: oneDish,
+      receiptData: { subtotal: 101, tax: 0, tip: 0, total: 101, currency: 'RUB', knownPartsByItem: { 0: 10 } },
+      assignments,
+    });
+  }
+
+  test('records a hashed saveKey atomically alongside the absolute portions, separate from claim keys', async () => {
+    fixture();
+    expect(await (await caller()).setMyItemParts(request)).toEqual({
+      success: true,
+      parts: 3,
+      remainingParts: 2,
+    });
+    expect(savedAssignments()).toMatchObject([{ partsByPersonId: { [pid(0)]: 3, [pid(1)]: 5 } }]);
+    const people = savedPeople() as {
+      saves?: unknown[];
+      personalPartSaves?: { key: string; hash: string }[];
+    }[];
+    expect(people[0]?.saves).toBeUndefined();
+    expect(people[1]?.personalPartSaves).toBeUndefined();
+    expect(people[0]?.personalPartSaves).toEqual([{ key, hash: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/) }]);
+  });
+
+  test('a lost answer replay cannot undo newer successful parts, even after finalization', async () => {
+    fixture();
+    const api = await caller();
+    await api.setMyItemParts(request);
+    const recorded = savedPeople() as ((typeof two)[number] & {
+      personalPartSaves?: { key: string; hash: string }[];
+    })[];
+    const changed = [
+      {
+        itemIndex: 0,
+        personIndices: [0, 1],
+        partsByPersonId: { [pid(0)]: 4, [pid(1)]: 5 },
+      },
+    ];
+    fixture(changed, recorded, 'FINALIZED');
+    mockDb.guestSplit.update.mockClear();
+    const result = await api.setMyItemParts(request);
+    // The first save was acknowledged, but the authoritative current state
+    // has since moved from 3 to 4 parts: no stale retry may roll it back.
+    expect(result).toEqual({ success: true, parts: 3, remainingParts: 1 });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    await expect(api.setMyItemParts({ ...request, parts: 7 })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      messageKey: 'saveKeyReused',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('different keys can update the same person, but replay of old key cannot undo the later edit', async () => {
+    fixture();
+    const api = await caller();
+    await api.setMyItemParts(request);
+    const firstPeople = savedPeople() as ((typeof two)[number] & {
+      personalPartSaves?: { key: string; hash: string }[];
+    })[];
+    const firstAssignments = savedAssignments() as {
+      itemIndex: number;
+      personIndices: number[];
+      partsByPersonId: Record<string, number>;
+    }[];
+    fixture(firstAssignments, firstPeople);
+    mockDb.guestSplit.update.mockClear();
+    expect(await api.setMyItemParts({ ...request, parts: 4, saveKey: newerKey })).toMatchObject({
+      success: true,
+      parts: 4,
+      remainingParts: 1,
+    });
+    const secondPeople = savedPeople() as ((typeof two)[number] & {
+      personalPartSaves?: { key: string; hash: string }[];
+    })[];
+    const secondAssignments = savedAssignments() as {
+      itemIndex: number;
+      personIndices: number[];
+      partsByPersonId: Record<string, number>;
+    }[];
+    expect(secondPeople[0]?.personalPartSaves?.map((record) => record.key)).toEqual([key, newerKey]);
+    fixture(secondAssignments, secondPeople);
+    mockDb.guestSplit.update.mockClear();
+    expect(await api.setMyItemParts(request)).toEqual({ success: true, parts: 3, remainingParts: 1 });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    expect(await api.setMyItemParts({ ...request, parts: 4, saveKey: newerKey })).toEqual({
+      success: true,
+      parts: 4,
+      remainingParts: 1,
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('a keyed no-op records identity so a later retry cannot overwrite another request', async () => {
+    fixture([{ itemIndex: 0, personIndices: [0, 1], partsByPersonId: { [pid(0)]: 3, [pid(1)]: 5 } }]);
+    const api = await caller();
+    expect(await api.setMyItemParts(request)).toEqual({ success: true, parts: 3, remainingParts: 2 });
+    const payload = mockDb.guestSplit.update.mock.calls.at(-1)?.[0] as { data: Record<string, unknown> };
+    expect(Object.keys(payload.data)).toEqual(['people']);
+    expect((savedPeople() as { personalPartSaves?: unknown[] }[])[0]?.personalPartSaves).toHaveLength(1);
+  });
+
+  test('cannot replay a recorded key with another guest credential', async () => {
+    fixture();
+    const api = await caller();
+    await api.setMyItemParts(request);
+    const recorded = savedPeople() as typeof two;
+    fixture(undefined, recorded);
+    mockDb.guestSplit.update.mockClear();
+    await expect(api.setMyItemParts({ ...request, personToken: OTHER_TOKEN })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('malformed key is refused before transaction', async () => {
+    fixture();
+    await expect((await caller()).setMyItemParts({ ...request, saveKey: 'fake' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+});
+
 describe('Issue 3.19: claimItems persists actual pieces for all claimants', () => {
   test('upgrades a legacy shared dish and preserves independent proportions on later edits', async () => {
     const people = [

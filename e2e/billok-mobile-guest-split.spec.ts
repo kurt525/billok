@@ -3242,6 +3242,104 @@ test('Issue 3.15: receipt corrections recalculate claims and known pieces on thr
   }
 });
 
+test('Issue 3.20: duplicate personal portion saves are not applied again after a lost answer', async ({ page }) => {
+  test.setTimeout(120_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  let token: string | undefined;
+  try {
+    const create = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: {
+        merchantName: 'Повторное сохранение',
+        subtotal: 501,
+        total: 501,
+        tax: 0,
+        tip: 0,
+        currency: 'RUB',
+      },
+      items: [{ name: 'Пицца', quantity: 1, unitPrice: 501, totalPrice: 501 }],
+      guestCount: 1,
+      joinCreator: true,
+    });
+    expect(create.ok(), await create.text()).toBe(true);
+    token = (JSON.parse(await create.text()).result.data.json as { shareToken: string }).shareToken;
+    const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const join = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[1].id,
+      name: 'Анна',
+    });
+    expect(join.ok(), await join.text()).toBe(true);
+    const anna = JSON.parse(await join.text()).result.data.json as {
+      personId: string;
+      personToken: string;
+      name: string;
+    };
+    await rememberClaimIdentity(page.context(), token, anna);
+    await page.setViewportSize({ width: 393, height: 760 });
+    await page.goto('/split/' + token + '/claim');
+    await expect(page.getByTestId('claim-item-0')).toBeVisible({ timeout: 25_000 });
+    const claim = await trpcMutation(page.request, 'guest.claimItems', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+      addItemIndices: [0],
+    });
+    expect(claim.ok(), await claim.text()).toBe(true);
+    const known = await trpcMutation(owner, 'guest.setKnownItemParts', {
+      token,
+      itemIndex: 0,
+      totalParts: 10,
+    });
+    expect(known.ok(), await known.text()).toBe(true);
+    const first = {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+      itemIndex: 0,
+      parts: 3,
+      saveKey: crypto.randomUUID(),
+    };
+    const simultaneous = await Promise.all([
+      trpcMutation(page.request, 'guest.setMyItemParts', first),
+      trpcMutation(page.request, 'guest.setMyItemParts', first),
+    ]);
+    for (const res of simultaneous) {
+      expect(res.ok(), await res.text()).toBe(true);
+      expect(JSON.parse(await res.text()).result.data.json).toMatchObject({
+        success: true,
+        parts: 3,
+        remainingParts: 7,
+      });
+    }
+    const newer = await trpcMutation(page.request, 'guest.setMyItemParts', {
+      ...first,
+      parts: 4,
+      saveKey: crypto.randomUUID(),
+    });
+    expect(newer.ok(), await newer.text()).toBe(true);
+    const replay = await trpcMutation(page.request, 'guest.setMyItemParts', first);
+    expect(replay.ok(), await replay.text()).toBe(true);
+    expect(JSON.parse(await replay.text()).result.data.json).toMatchObject({
+      success: true,
+      parts: 3,
+      remainingParts: 6,
+    });
+    const stored = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(stored.assignments[0].partsByPersonId).toEqual({ [anna.personId]: 4 });
+    const reused = await trpcMutation(page.request, 'guest.setMyItemParts', { ...first, parts: 6 });
+    expect(reused.ok()).toBe(false);
+    expect((await trpcError(reused))?.data?.code).toBe('CONFLICT');
+    await expect(page.getByTestId('guest-claimed-parts-progress-0')).toContainText(
+      'Осталось нераспределённых частей: 6',
+      { timeout: 25_000 },
+    );
+    await fitsPhone(page);
+  } finally {
+    if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await owner.dispose();
+  }
+});
+
 test('Issue 3.18: PostgreSQL concurrent personal parts writes are absolute, bounded only by declared original', async ({
   browser,
   page,

@@ -317,6 +317,17 @@ function targetIndexOrThrow(people: readonly { id?: string | undefined }[], id: 
   throw new AppError('CONFLICT', 'personGone');
 }
 
+/** Stable digest of a personal portion SET, not a delta. A key may be
+ * resent only with precisely the same target dish, person and final amount.
+ * These records live in their own namespace, separate from claimItems.
+ */
+function personalPartsSaveHash(input: { personId: string; itemIndex: number; parts: number }): string {
+  return createHash('sha256')
+    .update(JSON.stringify([input.personId, input.itemIndex, input.parts]))
+    .digest('base64url')
+    .slice(0, 16);
+}
+
 function cloneAssignments(assignments: GuestPortionAssignment[]) {
   return assignments.map((assignment) => ({
     ...assignment,
@@ -1683,6 +1694,9 @@ export const guestRouter = createTRPCRouter({
         personToken: z.string().uuid(),
         itemIndex: z.number().int().min(0),
         parts: z.number().int().min(1).max(10000),
+        // The same key identifies the same absolute SET across lost answers,
+        // retries and automatic transaction replay. Old clients may omit it.
+        saveKey: z.string().uuid().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -1693,14 +1707,37 @@ export const guestRouter = createTRPCRouter({
         const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
-        if (session.status !== GuestSplitStatus.CLAIMING) {
-          throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
-        }
         const people = session.people as GuestSessionPerson[];
         const personIndex = people.findIndex(
           (person) => person.id === input.personId && person.personToken === input.personToken,
         );
         if (personIndex < 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+
+        // Look up a previously committed key before checking whether the
+        // split has meanwhile been finalized or a guest unclaimed the dish.
+        // An unchanged replay must NEVER overwrite a later save (including
+        // another save by the very same person on another device).
+        const priorSaves = validSaveRecords(people[personIndex]!.personalPartSaves);
+        const save = input.saveKey ? { key: input.saveKey, hash: personalPartsSaveHash(input) } : null;
+        const earlier = save ? priorSaves.find((record) => record.key === save.key) : undefined;
+        if (save && earlier) {
+          if (earlier.hash !== save.hash) throw new AppError('CONFLICT', 'saveKeyReused');
+          const committedAssignments = session.assignments as GuestPortionAssignment[];
+          const balance = guestKnownPartsBalance({
+            items: session.items as { totalPrice: number }[],
+            people,
+            assignments: committedAssignments,
+            knownPartsByItem: parseExtractedData(session.receiptData).knownPartsByItem,
+          });
+          return {
+            success: true,
+            parts: input.parts,
+            remainingParts: balance.progressByItem[String(input.itemIndex)]?.remainingParts ?? null,
+          };
+        }
+        if (session.status !== GuestSplitStatus.CLAIMING) {
+          throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+        }
         const items = session.items as { totalPrice: number }[];
         if (input.itemIndex >= items.length) throw new AppError('BAD_REQUEST', 'invalidItemIndex');
         const assignments = cloneAssignments(session.assignments as GuestPortionAssignment[]);
@@ -1728,7 +1765,8 @@ export const guestRouter = createTRPCRouter({
           });
         }
         let progressAfter = progressBefore;
-        if (target.partsByPersonId?.[input.personId] !== input.parts) {
+        const changed = target.partsByPersonId?.[input.personId] !== input.parts;
+        if (changed) {
           target.partsByPersonId = { ...target.partsByPersonId, [input.personId]: input.parts };
           progressAfter = enforceGuestKnownParts(items, people, assignments, knownPartsByItem, false).progressByItem[
             String(input.itemIndex)
@@ -1743,18 +1781,32 @@ export const guestRouter = createTRPCRouter({
             peopleCount: people.length,
             ...groupSizeWeights(people),
           });
+        }
+        // Record the operation key in the SAME database transaction as the
+        // count. Under PostgreSQL Repeatable Read any concurrent write to
+        // this GuestSplit row aborts/retries both together, never just one.
+        if (changed || save) {
+          const updatePeople =
+            save || (!people[personIndex]!.personalLinkReadyAt && people[personIndex]!.guestSlotNumber !== undefined)
+              ? people.map((person, index) =>
+                  index !== personIndex
+                    ? person
+                    : {
+                        ...(changed ? markPersonalLinkReady(person) : person),
+                        ...(save ? { personalPartSaves: [...priorSaves, save].slice(-SAVE_KEYS_KEPT) } : {}),
+                      },
+                )
+              : null;
           await tx.guestSplit.update({
             where: { id: session.id },
             data: {
-              assignments: assignments as unknown as Prisma.InputJsonValue,
-              ...(!people[personIndex]!.personalLinkReadyAt && people[personIndex]!.guestSlotNumber !== undefined
+              ...(changed
                 ? {
-                    people: people.map((person, index) =>
-                      index === personIndex ? markPersonalLinkReady(person) : person,
-                    ) as unknown as Prisma.InputJsonValue,
+                    assignments: assignments as unknown as Prisma.InputJsonValue,
+                    ...invalidatePartsApproval(session.receiptData),
                   }
                 : {}),
-              ...invalidatePartsApproval(session.receiptData),
+              ...(updatePeople ? { people: updatePeople as unknown as Prisma.InputJsonValue } : {}),
             },
           });
         }

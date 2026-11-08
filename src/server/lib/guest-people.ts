@@ -50,6 +50,10 @@ export type GuestSessionPerson = {
   // digest of the changes, so a retry of a save whose answer was lost isn't applied twice (#238).
   // Read through validSaveRecords (json-schemas.ts), which skips malformed records.
   saves?: { key: string; hash: string }[];
+  // Distinct from claimItems saves: an acknowledged personal-parts set may
+  // be repeated after a network timeout even if this guest edited it again.
+  // Store the operation digest on the authenticated person, not the dish.
+  personalPartSaves?: { key: string; hash: string }[];
 };
 
 export type IdentifiedGuestPerson = GuestSessionPerson & { id: string };

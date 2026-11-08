@@ -398,6 +398,12 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   });
 
   const setMyItemParts = trpc.guest.setMyItemParts.useMutation({
+    // After a response is lost, React Query retries the SAME mutation
+    // variables (and saveKey), never inventing another operation. Server
+    // deduplication handles a successful commit followed by a lost answer.
+    retry: (failures, error) =>
+      failures < 2 && (error.data?.httpStatus === 503 || error.data?.httpStatus === undefined),
+    retryDelay: (attempt) => Math.min(2000, 250 * 2 ** attempt),
     onSuccess: async (_result, variables) => {
       await utils.guest.getSession.invalidate({ token });
       if (identityRef.current?.personId === variables.personId) {
@@ -3160,6 +3166,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                                       personToken,
                                       itemIndex: idx,
                                       parts: parsed,
+                                      saveKey: newRequestKey(),
                                     });
                                   }}
                                 >
