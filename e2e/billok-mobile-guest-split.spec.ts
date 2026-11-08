@@ -4280,6 +4280,140 @@ test('Issue 3.4: mobile creator explicitly delegates approval and finalization, 
   }
 });
 
+test('Issue 3.22: registered groups retain exact debts, payments and history', async () => {
+  test.setTimeout(130_000);
+  const alice = await authedContext(users.alice.email, users.alice.password);
+  const bob = await authedContext(users.bob.email, users.bob.password);
+  const other = await authedContext(users.charlie.email, users.charlie.password);
+  let groupId: string | undefined;
+  try {
+    const created = await trpcMutation(alice, 'groups.create', {
+      name: '3.22 history ' + Date.now(),
+      currency: 'RUB',
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    groupId = (await trpcResult(created)).id as string;
+    const invite = await trpcMutation(alice, 'groups.createInvite', { groupId });
+    expect(invite.ok(), await invite.text()).toBe(true);
+    const join = await trpcMutation(bob, 'groups.joinByInvite', {
+      token: (await trpcResult(invite)).token,
+    });
+    expect(join.ok(), await join.text()).toBe(true);
+    const group = await trpcResult(await trpcQuery(alice, 'groups.get', { groupId }));
+    const memberId = (email: string): string =>
+      group.members.find((m: { user: { email: string } }) => m.user.email === email).user.id;
+    const aliceId = memberId(users.alice.email);
+    const bobId = memberId(users.bob.email);
+
+    // Exactly one paid receipt, distributed as 4.01 + 6.00 RUB.
+    const spend = await trpcMutation(alice, 'expenses.create', {
+      groupId,
+      title: '3.22 Dinner',
+      amount: 1001,
+      currency: 'RUB',
+      paidById: aliceId,
+      splitMode: 'EXACT',
+      shares: [
+        { userId: aliceId, amount: 401 },
+        { userId: bobId, amount: 600 },
+      ],
+    });
+    expect(spend.ok(), await spend.text()).toBe(true);
+    const expenseId = (await trpcResult(spend)).id as string;
+    const debts = async () =>
+      (await trpcResult(await trpcQuery(bob, 'balances.getSimplifiedDebts', { groupId }))).debts;
+    expect(await debts()).toEqual([{ from: bobId, to: aliceId, amount: 600 }]);
+
+    const payment = await trpcMutation(bob, 'settlements.create', {
+      groupId,
+      toId: aliceId,
+      amount: 250,
+      currency: 'RUB',
+    });
+    expect(payment.ok(), await payment.text()).toBe(true);
+    const paymentId = (await trpcResult(payment)).id as string;
+    expect(await debts()).toEqual([{ from: bobId, to: aliceId, amount: 350 }]);
+    const expenses = await trpcResult(await trpcQuery(alice, 'expenses.list', { groupId }));
+    expect(expenses.expenses.some((e: { id: string }) => e.id === expenseId)).toBe(true);
+    const settlements = await trpcResult(await trpcQuery(bob, 'settlements.list', { groupId }));
+    expect(settlements.items.some((e: { id: string }) => e.id === paymentId)).toBe(true);
+    const activity = await trpcResult(await trpcQuery(alice, 'activity.getGroupActivity', { groupId }));
+    expect(activity.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'EXPENSE_CREATED', entityId: expenseId }),
+        expect.objectContaining({ type: 'SETTLEMENT_CREATED', entityId: paymentId }),
+      ]),
+    );
+    // Signed-in strangers must not read another group's money or history,
+    // even when given the correct permanent group identifier.
+    for (const proc of [
+      'groups.get',
+      'expenses.list',
+      'settlements.list',
+      'balances.getGroupBalances',
+      'activity.getGroupActivity',
+    ]) {
+      const response = await trpcQuery(other, proc, { groupId });
+      expect((await trpcError(response))?.data?.code, proc).toBe('FORBIDDEN');
+    }
+    // An open 3.50 RUB debt must not vanish when archiving the group.
+    const premature = await trpcMutation(alice, 'groups.archive', { groupId });
+    expect(premature.ok()).toBe(false);
+    expect((await trpcError(premature))?.data?.code).toBe('PRECONDITION_FAILED');
+
+    const final = await trpcMutation(bob, 'settlements.create', {
+      groupId,
+      toId: aliceId,
+      amount: 350,
+      currency: 'RUB',
+    });
+    expect(final.ok(), await final.text()).toBe(true);
+    const finalId = (await trpcResult(final)).id as string;
+    expect(await debts()).toEqual([]);
+
+    const archived = await trpcMutation(alice, 'groups.archive', { groupId });
+    expect(archived.ok(), await archived.text()).toBe(true);
+    expect(
+      (await trpcResult(await trpcQuery(bob, 'groups.listArchived'))).some((g: { id: string }) => g.id === groupId),
+    ).toBe(true);
+    const history = await trpcResult(await trpcQuery(bob, 'activity.getGroupActivity', { groupId }));
+    expect(history.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'EXPENSE_CREATED', entityId: expenseId }),
+        expect.objectContaining({ type: 'SETTLEMENT_CREATED', entityId: paymentId }),
+        expect.objectContaining({ type: 'SETTLEMENT_CREATED', entityId: finalId }),
+        expect.objectContaining({ type: 'GROUP_ARCHIVED' }),
+      ]),
+    );
+    expect(
+      (await trpcResult(await trpcQuery(alice, 'expenses.list', { groupId }))).expenses.some(
+        (e: { id: string }) => e.id === expenseId,
+      ),
+    ).toBe(true);
+
+    // History survives archive/unarchive, a fresh login and further reads.
+    const restore = await trpcMutation(alice, 'groups.unarchive', { groupId });
+    expect(restore.ok(), await restore.text()).toBe(true);
+    const refreshed = await authedContext(users.bob.email, users.bob.password);
+    try {
+      expect(
+        (await trpcResult(await trpcQuery(refreshed, 'groups.list'))).some((g: { id: string }) => g.id === groupId),
+      ).toBe(true);
+      expect((await trpcResult(await trpcQuery(refreshed, 'settlements.list', { groupId }))).items).toHaveLength(2);
+      expect((await trpcResult(await trpcQuery(refreshed, 'balances.getSimplifiedDebts', { groupId }))).debts).toEqual(
+        [],
+      );
+    } finally {
+      await refreshed.dispose();
+    }
+  } finally {
+    if (groupId) await trpcMutation(alice, 'groups.delete', { groupId }).catch(() => undefined);
+    await other.dispose();
+    await bob.dispose();
+    await alice.dispose();
+  }
+});
+
 test('Issue 3.2: a registered owner independently creates groups, receipts and expenses; other account is isolated', async () => {
   test.setTimeout(180_000);
   const owner = await authedContext(users.alice.email, users.alice.password);
