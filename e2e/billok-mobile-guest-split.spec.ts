@@ -3766,12 +3766,16 @@ test('Issue 3.21: an SSE ticket from one guest cannot stream another receipt', a
       personToken: string;
       name: string;
     };
-    await page.setViewportSize({ width: 360, height: 760 });
-    await page.goto('/split/' + a + '/claim');
-    await expect(page.getByTestId('claim-item-0')).toBeVisible({ timeout: 25_000 });
-    // The share/invitation token on its own grants no SSE access.
+    // The invitation token alone grants no SSE access, before this browser
+    // establishes its personal identity and receives a scoped live ticket.
     const unauthorized = await page.request.get('/api/guest/' + a + '/events');
     expect(unauthorized.status()).toBe(404);
+    // Like all other mobile guest E2E tests, explicitly restore the joined
+    // person's identity on this browser before opening the claim page.
+    await rememberClaimIdentity(page.context(), a, anna);
+    await page.setViewportSize({ width: 360, height: 760 });
+    await page.goto('/split/' + a + '/claim', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId('claim-item-0')).toBeVisible({ timeout: 25_000 });
     const forbidden = await page.request.post('/api/guest/' + b + '/events', {
       data: { personId: anna.personId, personToken: anna.personToken },
     });
