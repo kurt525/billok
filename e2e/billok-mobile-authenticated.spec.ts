@@ -281,6 +281,9 @@ test('mobile SBP profile persists phone and selected bank without verification c
   await phone.fill('8 (999) 123-45-67');
   await tbankRow.click();
   await expect(selectedTbank).toBeChecked();
+  const selectedBank = page.getByTestId('sbp-bank-selected');
+  await expect(selectedBank).toContainText('Т-Банк');
+  await expect(selectedBank.locator('img')).toHaveAttribute('src', '/banks/tbank.svg');
   await search.fill('АК БАРС');
   await expect(selectedTbank).toBeChecked();
   await expect(page.getByTestId('sbp-bank-option-akbars')).toBeVisible();
@@ -303,6 +306,10 @@ test('mobile SBP profile persists phone and selected bank without verification c
   await expect(page.getByText('Профиль обновлён!')).toBeVisible();
   await page.reload({ waitUntil: 'networkidle' });
   await expect(page.getByTestId('sbp-bank-radio-100000000273')).toBeChecked();
+  await expect(page.getByTestId('sbp-bank-selected').locator('img')).toHaveAttribute(
+    'src',
+    '/banks/nspk/100000000273.webp',
+  );
   await checkPhoneLayout(page, 320);
 
   // Complete mobile profile acceptance: real name editing and contact data,

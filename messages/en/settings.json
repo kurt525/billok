@@ -20,6 +20,7 @@
     "sbpBankSearch": "Search banks",
     "sbpBankSearchPlaceholder": "Enter a bank name",
     "sbpBankNoResults": "No matching bank in the current list.",
+    "sbpBankLogoUnavailable": "Bank logo unavailable",
     "sbpBankRemoved": "This bank is no longer listed in the NSPK registry. Choose another bank."
   },
   "password": {

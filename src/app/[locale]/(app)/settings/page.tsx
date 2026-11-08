@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import Image from 'next/image';
 import { Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useSession } from 'next-auth/react';
@@ -14,6 +13,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { SBP_BANKS, searchSbpBanks } from '@/lib/sbp-banks';
+import { SbpBankLogo } from '@/components/sbp-bank-logo';
 
 // Rendered only once the profile has loaded, so all fields can be
 // initialized directly from the data (no sync-from-query effects that
@@ -98,6 +98,18 @@ function ProfileForm({
       </div>
       <div className="space-y-2">
         <Label htmlFor="sbp-bank">{t('profile.sbpBank')}</Label>
+        {selectedSbpBank && (
+          <div
+            className="flex min-w-0 items-center gap-3 rounded-lg border bg-muted/30 p-2"
+            data-testid="sbp-bank-selected"
+          >
+            <SbpBankLogo bank={selectedSbpBank} unavailableLabel={t('profile.sbpBankLogoUnavailable')} />
+            <span className="min-w-0 flex-1 break-words text-sm font-medium">{selectedSbpBank.name}</span>
+            {selectedSbpBank.active === false && (
+              <span className="text-xs text-muted-foreground">{t('profile.sbpBankRemoved')}</span>
+            )}
+          </div>
+        )}
         <Input
           id="sbp-bank-search"
           type="search"
@@ -157,25 +169,7 @@ function ProfileForm({
                 className="sr-only"
                 data-testid={'sbp-bank-radio-' + bank.id}
               />
-              {bank.icon ? (
-                <Image
-                  src={bank.icon}
-                  width={40}
-                  height={40}
-                  alt=""
-                  unoptimized
-                  className="size-10 shrink-0 rounded-md"
-                  aria-hidden="true"
-                />
-              ) : (
-                <span
-                  className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold"
-                  aria-hidden="true"
-                  data-testid={'sbp-bank-fallback-' + bank.id}
-                >
-                  {bank.name.trim().slice(0, 2).toLocaleUpperCase('ru-RU')}
-                </span>
-              )}
+              <SbpBankLogo bank={bank} unavailableLabel={t('profile.sbpBankLogoUnavailable')} />
               <span className="min-w-0 flex-1 text-sm font-medium">
                 {bank.name}
                 {bank.active === false && (

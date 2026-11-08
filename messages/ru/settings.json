@@ -20,6 +20,7 @@
     "sbpBankSearch": "Поиск банка",
     "sbpBankSearchPlaceholder": "Введите название банка",
     "sbpBankNoResults": "По вашему запросу банк не найден в текущем списке.",
+    "sbpBankLogoUnavailable": "Логотип банка недоступен",
     "sbpBankRemoved": "Банк больше не числится в каталоге НСПК. Выберите действующий банк."
   },
   "password": {

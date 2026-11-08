@@ -8,6 +8,7 @@ import { normalizeSbpPhone, searchSbpBanks, SBP_BANKS } from '@/lib/sbp-banks';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { SbpBankLogo } from '@/components/sbp-bank-logo';
 
 export function GuestPayerSbpForm({
   token,
@@ -95,6 +96,15 @@ export function GuestPayerSbpForm({
             <label className="block text-sm font-medium" htmlFor="guest-sbp-search">
               {t('payerSbpBank')}
             </label>
+            {selected && (
+              <div
+                className="flex min-w-0 items-center gap-3 rounded-lg border bg-muted/30 p-2"
+                data-testid="guest-payer-sbp-selected-bank"
+              >
+                <SbpBankLogo bank={selected} unavailableLabel={t('payerSbpLogoUnavailable')} />
+                <span className="min-w-0 flex-1 break-words text-sm font-medium">{selected.name}</span>
+              </div>
+            )}
             <Input
               id="guest-sbp-search"
               type="search"
@@ -108,13 +118,13 @@ export function GuestPayerSbpForm({
             <div
               role="radiogroup"
               aria-label={t('payerSbpBank')}
-              className="max-h-48 space-y-1 overflow-y-auto rounded-lg border p-1"
+              className="max-h-48 min-w-0 space-y-1 overflow-y-auto overscroll-contain rounded-lg border p-1"
               data-testid="guest-payer-sbp-bank-list"
             >
               {visible.slice(0, 30).map((bank) => (
                 <label
                   key={bank.id}
-                  className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md px-2 py-1 focus-within:ring-2 focus-within:ring-ring"
+                  className="flex min-h-11 min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 focus-within:ring-2 focus-within:ring-ring"
                   data-testid={'guest-payer-sbp-bank-' + bank.id}
                 >
                   <input
@@ -126,7 +136,8 @@ export function GuestPayerSbpForm({
                     disabled={bank.active === false}
                     className="size-4"
                   />
-                  <span className="min-w-0 flex-1 text-sm">{bank.name}</span>
+                  <SbpBankLogo bank={bank} unavailableLabel={t('payerSbpLogoUnavailable')} />
+                  <span className="min-w-0 flex-1 break-words text-sm">{bank.name}</span>
                 </label>
               ))}
               {matched.length === 0 && <p className="p-2 text-sm text-muted-foreground">{t('payerSbpNoBanks')}</p>}

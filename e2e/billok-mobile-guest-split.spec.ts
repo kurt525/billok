@@ -1254,8 +1254,15 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       }
     }
     await otherPage.setViewportSize({ width: 320, height: 800 });
+    const ozonBankLogo = sbpBank.locator('img');
+    await expect(ozonBankLogo).toHaveAttribute('src', '/banks/nspk/100000000273.webp');
+    await expect.poll(() => ozonBankLogo.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
     await sbpBank.click();
     await expect(sbpBank.locator('input')).toBeChecked();
+    const selectedGuestBank = otherPage.getByTestId('guest-payer-sbp-selected-bank');
+    await expect(selectedGuestBank).toContainText('Озон Банк');
+    await expect(selectedGuestBank.locator('img')).toHaveAttribute('src', '/banks/nspk/100000000273.webp');
+    await fitsPhone(otherPage);
     await otherPage.getByTestId('guest-payer-sbp-save').click();
     await expect(otherPage.getByText('Реквизиты сохранены')).toBeVisible();
 
