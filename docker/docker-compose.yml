@@ -36,7 +36,7 @@ services:
       - AUTH_RATE_LIMIT_MAX=${AUTH_RATE_LIMIT_MAX:-5}
       - AUTH_IP_RATE_LIMIT_MAX=${AUTH_IP_RATE_LIMIT_MAX:-30}
       - REGISTER_RATE_LIMIT_MAX=${REGISTER_RATE_LIMIT_MAX:-10}
-      - GUEST_RATE_LIMIT_MAX=${GUEST_RATE_LIMIT_MAX:-10}
+      - GUEST_RATE_LIMIT_MAX=${GUEST_RATE_LIMIT_MAX:-60}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - pgdata:/var/lib/postgresql/data

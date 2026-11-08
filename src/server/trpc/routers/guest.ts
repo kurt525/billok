@@ -4,13 +4,13 @@ import { AppError } from '@/server/lib/app-error';
 import { Prisma, GuestSplitStatus } from '@/generated/prisma/client';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
 import { logger } from '../../lib/logger';
-import { checkRateLimit, checkTokenRateLimit } from '../../lib/rate-limit';
+import { checkTokenRateLimit } from '../../lib/rate-limit';
 import {
   checkClaimWriteRateLimit,
   checkSessionReadRateLimit,
   checkGuestPresenceHeartbeatLimit,
 } from '../../lib/guest-session-limits';
-import { getClientIp } from '../../lib/client-ip';
+import { checkGuestReceiptCreationLimit } from '../../lib/guest-receipt-create-limit';
 import { guestTransaction } from '../../lib/guest-transaction';
 import {
   deleteExpiredSplits,
@@ -631,10 +631,7 @@ export const guestRouter = createTRPCRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const ip = getClientIp(ctx.headers);
-      const maxGuest = parseInt(process.env.GUEST_RATE_LIMIT_MAX ?? '10', 10) || 10;
-      const { allowed } = checkRateLimit(`guest-create-split:${ip}`, maxGuest, 60 * 60 * 1000);
-      if (!allowed) {
+      if (!checkGuestReceiptCreationLimit(ctx.user.id)) {
         throw new AppError('TOO_MANY_REQUESTS', 'splitsRateLimited');
       }
 
@@ -843,10 +840,7 @@ export const guestRouter = createTRPCRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const ip = getClientIp(ctx.headers);
-      const maxGuest = parseInt(process.env.GUEST_RATE_LIMIT_MAX ?? '10', 10) || 10;
-      const { allowed } = checkRateLimit(`guest-create-claim:${ip}`, maxGuest, 60 * 60 * 1000);
-      if (!allowed) {
+      if (!checkGuestReceiptCreationLimit(ctx.user.id)) {
         throw new AppError('TOO_MANY_REQUESTS', 'sessionsRateLimited');
       }
 

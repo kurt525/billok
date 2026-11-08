@@ -5,9 +5,10 @@
  * - Login (`src/server/auth.ts`) skips its per-IP bucket on this value —
  *   a shared bucket would let one client lock every user out, and the
  *   per-email bucket still bounds attempts.
- * - Guest endpoints (createSplit/createClaim, uploads) deliberately keep
- *   it as a shared key: with no client identity, one conservative global
- *   throttle on unauthenticated traffic is the safer failure mode.
+ * - Receipt creation is now authenticated and limits bursts by user ID
+ *   (Issue 3.23), so users on the same restaurant Wi-Fi never share a
+ *   creation budget. Other public per-IP endpoints may still use the
+ *   shared fallback to conservatively bound unauthenticated requests.
  */
 export const FALLBACK_IP = 'global';
 

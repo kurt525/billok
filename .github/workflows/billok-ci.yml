@@ -198,9 +198,9 @@ jobs:
           # and application authentication remain unchanged.
           export AUTH_RATE_LIMIT_MAX=1000
           export AUTH_IP_RATE_LIMIT_MAX=10000
-          # All 74 mobile Chromium specs share this one loopback IP. Their
-          # disposable receipt creations exhaust the production 10/hour
-          # per-IP quota; match full-E2E QA without relaxing production limits.
+          # Disposable mobile E2E tests create many receipts with shared
+          # seeded accounts; raise only their per-account/minute burst,
+          # preserving the production default of 60 without an hourly cap.
           export GUEST_RATE_LIMIT_MAX=1000
           echo "NEXTAUTH_URL=$NEXTAUTH_URL" >> "$GITHUB_ENV"
           echo "AUTH_URL=$AUTH_URL" >> "$GITHUB_ENV"

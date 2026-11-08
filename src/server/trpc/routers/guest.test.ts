@@ -49,6 +49,10 @@ vi.mock('@/server/lib/rate-limit', () => ({
   refundRateLimit: vi.fn(),
   checkTokenRateLimit: checkRateLimit,
   peekTokenRateLimit: peekRateLimit,
+  parsePositiveInt: (value: string | undefined, fallback: number) => {
+    const parsed = Number.parseInt(value ?? '', 10);
+    return parsed > 0 ? parsed : fallback;
+  },
 }));
 
 type Session = { user: { id: string } } | null;
@@ -177,6 +181,49 @@ describe('BillOK creation permissions', () => {
       expect(mockDb.guestSplit.create).toHaveBeenCalledWith({
         data: expect.objectContaining({ userId: 'user-1' }),
       });
+    },
+  );
+});
+
+describe('Issue 3.23: shared account-based receipt creation burst', () => {
+  const receiptData = { merchantName: 'Ужин', subtotal: 100, total: 100, tax: 0, tip: 0, currency: 'RUB' };
+  const items = [{ name: 'Чай', quantity: 1, unitPrice: 100, totalPrice: 100 }];
+  const operations = {
+    createSplit: (api: Awaited<ReturnType<typeof caller>>) =>
+      api.createSplit({
+        receiptData,
+        items,
+        people: [{ name: 'Анна' }],
+        assignments: [{ itemIndex: 0, personIndices: [0] }],
+      }),
+    createClaimSession: (api: Awaited<ReturnType<typeof caller>>) =>
+      api.createClaimSession({ receiptData, items, creatorName: 'Анна', paidByName: 'Анна' }),
+  };
+  test.each(Object.keys(operations) as (keyof typeof operations)[])(
+    '%s uses the same signed-in user ID, not shared IP or hourly bucket',
+    async (operation) => {
+      vi.stubEnv('GUEST_RATE_LIMIT_MAX', '60');
+      try {
+        mockDb.guestSplit.create.mockResolvedValue({ id: 'receipt-1', shareToken: 'share-1' });
+        await operations[operation](await caller(signedIn));
+        expect(checkRateLimit).toHaveBeenCalledWith('guest-create-account:user-1', 60, 60_000);
+        expect(checkRateLimit.mock.calls.some(([key]) => String(key).includes('guest-create-claim:'))).toBe(false);
+        expect(checkRateLimit.mock.calls.some(([key]) => String(key).includes('guest-create-split:'))).toBe(false);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  test.each(Object.keys(operations) as (keyof typeof operations)[])(
+    '%s rejects an exhausted creator burst before writing a receipt',
+    async (operation) => {
+      checkRateLimit.mockReturnValueOnce({ allowed: false, retryAfterMs: 8_000 });
+      await expect(operations[operation](await caller(signedIn))).rejects.toMatchObject({
+        code: 'TOO_MANY_REQUESTS',
+      });
+      expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+      expect(checkRateLimit).toHaveBeenCalledOnce();
     },
   );
 });
