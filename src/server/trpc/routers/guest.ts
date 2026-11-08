@@ -2693,6 +2693,28 @@ export const guestRouter = createTRPCRouter({
           name: people[s.personIndex]?.name ?? `Person ${s.personIndex + 1}`,
         }));
 
+        // A payer can cover the family bill without eating a dish. The
+        // calculator omits non-consumers; the payment ledger needs exactly
+        // one row per participant. Add only zero-kopeck entries in grouped
+        // receipts; the original dish allocations and tips remain intact.
+        if (
+          (session.people as GuestSessionPerson[]).some((person) => person.paymentGroupRepresentativeId !== undefined)
+        ) {
+          const included = new Set(summary.map((person) => person.personIndex));
+          people.forEach((person, personIndex) => {
+            if (!included.has(personIndex)) {
+              summaryWithNames.push({
+                personIndex,
+                name: person.name,
+                itemTotal: 0,
+                tax: 0,
+                tip: 0,
+                total: 0,
+              });
+            }
+          });
+        }
+
         await tx.guestSplit.update({
           where: { id: session.id },
           data: {

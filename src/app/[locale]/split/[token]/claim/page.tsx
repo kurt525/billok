@@ -1733,7 +1733,12 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           : null
         : data.summary!.find((person) => person.personIndex === myPersonIndex && person.total > 0)
       : null;
-  const tipTargetIndex = personIndex !== null && activeId && canEditFor(activeId) ? personIndex : myPersonIndex;
+  // Ungrouped receipts preserve the historical personal-tip contract:
+  // switching the dish claimant never changes whose tip is being edited.
+  // Only the responsible person of an actual payment group can edit a
+  // group member's own tip through the existing personal token.
+  const tipTargetIndex =
+    hasPaymentGroups && personIndex !== null && activeId && canEditFor(activeId) ? personIndex : myPersonIndex;
   const tipTarget = tipTargetIndex === null ? null : data.people[tipTargetIndex];
   const savedPersonalTip = tipTarget?.tipCents ?? 0;
   const personalTipValue = personalTipDraft ?? centsToDecimal(savedPersonalTip);
@@ -1941,11 +1946,11 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
         {payerReimbursements && payerSummary && myPersonId && personToken && (
           <GuestPayerPaymentReview
-            people={data.people}
             key={`payer-review:${personToken}`}
             token={token}
             personId={myPersonId}
             personToken={personToken}
+            people={data.people}
           />
         )}
 
@@ -2012,11 +2017,11 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               )}
               {myPersonId && personToken && (
                 <GuestPaymentDeclaration
-                  canDeclare={canDeclareGroupPayment}
                   key={`payment-declaration:${personToken}`}
                   token={token}
                   personId={myPersonId}
                   personToken={personToken}
+                  canDeclare={canDeclareGroupPayment}
                 />
               )}
               <p className="text-xs text-muted-foreground">{t('personalReimbursementNote')}</p>
@@ -3245,7 +3250,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         personToken &&
                         data.assignments.some(
                           (assignment) =>
-                            assignment.itemIndex === idx && assignment.personIndices.includes(myPersonIndex),
+                            assignment.itemIndex === idx && assignment.personIndices.includes(personIndex),
                         ) &&
                         (() => {
                           const savedAssignment = data.assignments.find((assignment) => assignment.itemIndex === idx)!;

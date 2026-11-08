@@ -4673,7 +4673,9 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     const finalized = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     expect(finalized.status).toBe('FINALIZED');
     expect(finalized.summary.reduce((sum: number, person: { total: number }) => sum + person.total, 0)).toBe(1001);
-    expect(finalized.summary[childIndex].tip).toBe(50);
+    expect(finalized.summary.find((person: { personIndex: number }) => person.personIndex === childIndex)?.tip).toBe(
+      50,
+    );
 
     await page.reload({ waitUntil: 'domcontentloaded' });
     const familyView = page.getByTestId('guest-group-reimbursement-detail');
