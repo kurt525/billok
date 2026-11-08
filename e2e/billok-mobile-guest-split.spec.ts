@@ -3735,6 +3735,78 @@ test('Issue 3.17: concurrent guests preserve each others claims and all open scr
   }
 });
 
+test('Issue 3.21: an SSE ticket from one guest cannot stream another receipt', async ({ page }) => {
+  test.setTimeout(120_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const created: string[] = [];
+  try {
+    const create = async (merchantName: string) => {
+      const res = await trpcMutation(owner, 'guest.createClaimSession', {
+        receiptData: { merchantName, subtotal: 300, total: 300, tax: 0, tip: 0, currency: 'RUB' },
+        items: [{ name: 'Чай', quantity: 1, unitPrice: 300, totalPrice: 300 }],
+        guestCount: 1,
+        joinCreator: true,
+      });
+      expect(res.ok(), await res.text()).toBe(true);
+      const token = (JSON.parse(await res.text()).result.data.json as { shareToken: string }).shareToken;
+      created.push(token);
+      return token;
+    };
+    const a = await create('Чек А');
+    const b = await create('Чек Б');
+    const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: a }));
+    const join = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token: a,
+      slotId: initial.people[1].id,
+      name: 'Анна',
+    });
+    expect(join.ok(), await join.text()).toBe(true);
+    const anna = JSON.parse(await join.text()).result.data.json as {
+      personId: string;
+      personToken: string;
+      name: string;
+    };
+    await page.setViewportSize({ width: 360, height: 760 });
+    await page.goto('/split/' + a + '/claim');
+    await expect(page.getByTestId('claim-item-0')).toBeVisible({ timeout: 25_000 });
+    // The share/invitation token on its own grants no SSE access.
+    const unauthorized = await page.request.get('/api/guest/' + a + '/events');
+    expect(unauthorized.status()).toBe(404);
+    const forbidden = await page.request.post('/api/guest/' + b + '/events', {
+      data: { personId: anna.personId, personToken: anna.personToken },
+    });
+    expect(forbidden.status()).toBe(404);
+    const grant = await page.request.post('/api/guest/' + a + '/events', {
+      data: { personId: anna.personId, personToken: anna.personToken },
+    });
+    expect(grant.status()).toBe(200);
+    expect(grant.headers()['set-cookie']).not.toContain(anna.personToken);
+    // HttpOnly ticket is scoped to receipt A, not receipt B.
+    const results = await page.evaluate(
+      async ({ a, b }) => {
+        const attempt = async (token: string) => {
+          const response = await fetch('/api/guest/' + token + '/events');
+          if (response.body) await response.body.cancel();
+          return response.status;
+        };
+        return [await attempt(a), await attempt(b)];
+      },
+      { a, b },
+    );
+    expect(results).toEqual([200, 404]);
+    // Malformed credentials and foreign-origin ticket issuance fail.
+    const forged = await page.request.post('/api/guest/' + a + '/events', {
+      headers: { Origin: 'https://untrusted.invalid' },
+      data: { personId: anna.personId, personToken: anna.personToken },
+    });
+    expect(forged.status()).toBe(403);
+    await fitsPhone(page);
+  } finally {
+    for (const token of created) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await owner.dispose();
+  }
+});
+
 test('Issue 3.16: SSE delivers receipt edits and reconnects after a real mobile network outage', async ({
   page,
   browser,

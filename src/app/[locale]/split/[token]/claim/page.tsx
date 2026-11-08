@@ -329,28 +329,85 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   useEffect(() => {
     if (session.data?.status === 'FINALIZED' || session.error?.data?.httpStatus === 404) return;
     if (typeof EventSource === 'undefined') return;
-    const events = new EventSource('/api/guest/' + encodeURIComponent(token) + '/events');
+    // Possessing only an invitation/share URL is NOT sufficient to receive
+    // live notifications. An authenticated creator or a verified guest with
+    // this device's personal token may establish a receipt-scoped SSE ticket.
+    if (!identity && !authSession?.user?.id) return;
+    const url = '/api/guest/' + encodeURIComponent(token) + '/events';
+    const credential = identity ? { personId: identity.personId, personToken: identity.personToken } : {};
+    const controller = new AbortController();
+    let closed = false;
+    let stopped = false;
+    let attempts = 0;
+    let events: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let renewalTimer: ReturnType<typeof setTimeout> | null = null;
     const refresh = () => refreshLiveSession.current();
-    const onReady = () => {
-      setLiveStreamConnected(true);
-      refresh();
-    };
-    const onChanged = () => refresh();
-    const onGone = () => {
+    const retry = () => {
+      if (closed || stopped || controller.signal.aborted) return;
       setLiveStreamConnected(false);
-      events.close();
-      refresh();
+      events?.close();
+      events = null;
+      if (renewalTimer) clearTimeout(renewalTimer);
+      renewalTimer = null;
+      if (retryTimer) clearTimeout(retryTimer);
+      // Reissue credentials over POST on each reconnect; an expired cookie
+      // never becomes an unbounded bearer credential.
+      retryTimer = setTimeout(() => void connect(), Math.min(30_000, 2000 * 2 ** Math.min(attempts++, 4)));
     };
-    const onError = () => setLiveStreamConnected(false);
-    events.addEventListener('ready', onReady);
-    events.addEventListener('changed', onChanged);
-    events.addEventListener('gone', onGone);
-    events.onerror = onError;
+    const connect = async () => {
+      if (closed || stopped || controller.signal.aborted) return;
+      try {
+        const ticket = await fetch(url, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(credential),
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!ticket.ok) {
+          // Invalid/rotated credentials: keep polling instead of leaking SSE.
+          return retry();
+        }
+        if (closed || stopped || controller.signal.aborted) return;
+        events?.close();
+        const source = new EventSource(url);
+        events = source;
+        source.addEventListener('ready', () => {
+          attempts = 0;
+          setLiveStreamConnected(true);
+          refresh();
+          // Refresh short-lived HttpOnly authorization while this tab stays
+          // open, without putting any personal token into a GET URL.
+          if (renewalTimer) clearTimeout(renewalTimer);
+          renewalTimer = setTimeout(() => {
+            source.close();
+            void connect();
+          }, 4 * 60_000);
+        });
+        source.addEventListener('changed', refresh);
+        source.addEventListener('gone', () => {
+          stopped = true;
+          setLiveStreamConnected(false);
+          source.close();
+          refresh();
+        });
+        source.onerror = retry;
+      } catch {
+        retry();
+      }
+    };
+    void connect();
     return () => {
-      events.close();
+      closed = true;
+      controller.abort();
+      events?.close();
+      if (retryTimer) clearTimeout(retryTimer);
+      if (renewalTimer) clearTimeout(renewalTimer);
       setLiveStreamConnected(false);
     };
-  }, [token, session.data?.status, session.error?.data?.httpStatus]);
+  }, [token, identity, authSession?.user?.id, session.data?.status, session.error?.data?.httpStatus]);
 
   // A creator-only explicit POST fetches the sensitive guest bearer secret;
   // the common getSession query never exposes it. Copy must be triggered by
