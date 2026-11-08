@@ -5328,3 +5328,113 @@ describe('Issue 3.15: creator may correct receipt lines without adding outside e
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 });
+
+describe('Issue 3.24.1.3: delegated group edits to dishes, parts and personal tips', () => {
+  const family = [
+    { name: 'Payer', personToken: D_TOKEN },
+    { name: 'Wife', personToken: ALICE_TOKEN, paymentGroupRepresentativeId: pid(1) },
+    { name: 'Husband', personToken: OTHER_TOKEN, paymentGroupRepresentativeId: pid(1) },
+    { name: 'Child', paymentGroupRepresentativeId: pid(1) },
+    { name: 'Other', personToken: '44444444-4444-4444-8444-444444444444' },
+  ];
+  function fixture() {
+    claimSession(family, {
+      items: items(2),
+      assignments: [{ itemIndex: 0, personIndices: [2, 3], partsByPersonId: { [pid(3)]: 1 } }],
+    });
+  }
+
+  test('wife changes only her family child tip with actor/target recorded privately', async () => {
+    fixture();
+    const response = await (
+      await caller()
+    ).setPersonalTip({
+      token: 'share-1',
+      personId: pid(3),
+      personToken: ALICE_TOKEN,
+      tipCents: 250,
+    });
+    expect(response).toEqual({ success: true, tipCents: 250 });
+    const stored = savedPeople() as { tipCents?: number; delegatedReceiptAudit?: unknown[] }[];
+    expect(stored[3]).toMatchObject({
+      tipCents: 250,
+      delegatedReceiptAudit: [{ actorId: pid(1), targetId: pid(3), action: 'personal-tip', at: expect.any(String) }],
+    });
+    expect(stored[1]?.delegatedReceiptAudit).toBeUndefined();
+    expect(stored[2]?.tipCents).toBeUndefined();
+    expect(JSON.stringify(stored[3]?.delegatedReceiptAudit)).not.toContain(ALICE_TOKEN);
+  });
+
+  test('wife saves the number of parts eaten by her child without shifting husband shares', async () => {
+    fixture();
+    expect(
+      await (
+        await caller()
+      ).setMyItemParts({
+        token: 'share-1',
+        personId: pid(3),
+        personToken: ALICE_TOKEN,
+        itemIndex: 0,
+        parts: 3,
+      }),
+    ).toMatchObject({ success: true, parts: 3 });
+    expect(savedAssignments()).toMatchObject([{ itemIndex: 0, partsByPersonId: { [pid(3)]: 3 } }]);
+    expect((savedPeople() as { delegatedReceiptAudit?: unknown[] }[])[3]).toMatchObject({
+      delegatedReceiptAudit: [
+        { actorId: pid(1), targetId: pid(3), action: 'item-parts', itemIndex: 0, at: expect.any(String) },
+      ],
+    });
+  });
+
+  test('wife adds a dish for husband and audits the actual target rather than the caller', async () => {
+    fixture();
+    const response = await (
+      await caller()
+    ).claimItems({
+      token: 'share-1',
+      personId: pid(2),
+      personToken: ALICE_TOKEN,
+      addItemIndices: [1],
+    });
+    expect(response.success).toBe(true);
+    expect(savedAssignments()).toEqual([
+      { itemIndex: 0, personIndices: [3, 2], partsByPersonId: { [pid(3)]: 1, [pid(2)]: 1 } },
+      { itemIndex: 1, personIndices: [2], partsByPersonId: { [pid(2)]: 1 } },
+    ]);
+    const people = savedPeople() as { delegatedReceiptAudit?: unknown[] }[];
+    expect(people[2]).toMatchObject({
+      delegatedReceiptAudit: [{ actorId: pid(1), targetId: pid(2), action: 'claim-items', at: expect.any(String) }],
+    });
+    expect(people[1]?.delegatedReceiptAudit).toBeUndefined();
+  });
+
+  test('nobody may edit a person outside their group, including via the historical claim API', async () => {
+    fixture();
+    const api = await caller();
+    const base = { token: 'share-1', personId: pid(4), personToken: ALICE_TOKEN };
+    await expect(api.setPersonalTip({ ...base, tipCents: 100 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.setMyItemParts({ ...base, itemIndex: 0, parts: 2 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.claimItems({ ...base, addItemIndices: [1] })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      api.claimItems({
+        token: 'share-1',
+        personId: pid(3),
+        personToken: OTHER_TOKEN,
+        addItemIndices: [1],
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('child needs no token of their own; private audit is absent from public session', async () => {
+    fixture();
+    const session = await (await caller()).getSession({ token: 'share-1' });
+    expect(session.people[3]).toMatchObject({
+      id: pid(3),
+      paymentGroupRepresentativeId: pid(1),
+      hasJoined: false,
+    });
+    expect(JSON.stringify(session)).not.toContain('delegatedReceiptAudit');
+    expect(JSON.stringify(session)).not.toContain(ALICE_TOKEN);
+  });
+});

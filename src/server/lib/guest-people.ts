@@ -40,6 +40,15 @@ export type GuestSessionPerson = {
   // 3.24.1.1: optional server-controlled reimbursement group leader personId;
   // separate from legacy groupSize (which changes weights, not identities).
   paymentGroupRepresentativeId?: string;
+  // Server-only bounded record of delegated actions; never serialize this
+  // (or the actor's private token) into the public receipt or claim payload.
+  delegatedReceiptAudit?: {
+    actorId: string;
+    targetId: string;
+    action: 'claim-items' | 'item-parts' | 'personal-tip';
+    at: string;
+    itemIndex?: number;
+  }[];
   // Voluntary tip personally chosen for this receipt, integer RUB kopecks; missing = 0.
   tipCents?: number;
   // Participant's declaration only; does NOT mean funds arrived or were verified.

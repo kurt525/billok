@@ -38,6 +38,7 @@ import { hasDuplicateGuestNames, normalizeGuestName } from '@/lib/guest-session'
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { MAX_MONEY_CENTS } from '@/lib/money';
 import { receiptPaymentMemberships, setReceiptPaymentGroups } from '@/lib/receipt-payment-groups';
+import { authorizeReceiptPersonEdit, appendDelegatedReceiptAudit } from '../../lib/guest-group-delegation';
 import { normalizeSbpPhone, isSupportedSbpBankId } from '@/lib/sbp-banks';
 import { checkJoinRateLimit } from '../../lib/guest-join-limit';
 import {
@@ -1636,9 +1637,9 @@ export const guestRouter = createTRPCRouter({
       });
     }),
 
-  // Every participant chooses only their own voluntary tip. This intentionally
-  // does not yet alter shares or final totals: those are handled with the
-  // subsequent personal-tip settlement and UI stages.
+  // Each person retains their own voluntary tip; the authorized payment
+  // group representative may edit it on that person's behalf. This does
+  // not add a shared tip or an extra item to the original receipt.
   setPersonalTip: publicProcedure
     .input(
       z.object({
@@ -1661,17 +1662,22 @@ export const guestRouter = createTRPCRouter({
         }
 
         const people = session.people as GuestSessionPerson[];
-        const personIndex = people.findIndex((person) => person.personToken === input.personToken);
-        if (personIndex < 0 || people[personIndex]?.id !== input.personId) {
-          throw new AppError('FORBIDDEN', 'invalidPersonToken');
-        }
+        const {
+          actorIndex,
+          targetIndex: personIndex,
+          delegated,
+        } = authorizeReceiptPersonEdit(people, session.paidByIndex, input.personToken, input.personId);
 
         // Setting the same amount twice, including the default zero, is a
         // no-op. Different devices are serialized through guestTransaction.
         if ((people[personIndex]!.tipCents ?? 0) !== input.tipCents) {
-          const updated = people.map((person, index) =>
-            index === personIndex ? markPersonalLinkReady({ ...person, tipCents: input.tipCents }) : person,
-          );
+          const updated = people.map((person, index) => {
+            if (index !== personIndex) return person;
+            const changed = { ...person, tipCents: input.tipCents };
+            return delegated
+              ? appendDelegatedReceiptAudit(changed, people[actorIndex]!.id!, input.personId, 'personal-tip')
+              : markPersonalLinkReady(changed);
+          });
           await tx.guestSplit.update({
             where: { id: session.id },
             data: { people: updated as unknown as Prisma.InputJsonValue },
@@ -1681,9 +1687,9 @@ export const guestRouter = createTRPCRouter({
       });
     }),
 
-  // A guest may adjust only their own number of consumed portions. Keep the
-  // existing claim/save semantics, but never trust name, person index or share
-  // URL as authority to change another person's count.
+  // A guest adjusts their own portions, or a group representative adjusts
+  // portions for a member of their current validated payment group. Preserve
+  // the same atomic save and parts-balance semantics for both callers.
   setMyItemParts: publicProcedure
     .input(
       z.object({
@@ -1706,10 +1712,11 @@ export const guestRouter = createTRPCRouter({
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         const people = session.people as GuestSessionPerson[];
-        const personIndex = people.findIndex(
-          (person) => person.id === input.personId && person.personToken === input.personToken,
-        );
-        if (personIndex < 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        const {
+          actorIndex,
+          targetIndex: personIndex,
+          delegated,
+        } = authorizeReceiptPersonEdit(people, session.paidByIndex, input.personToken, input.personId);
 
         // Look up a previously committed key before checking whether the
         // split has meanwhile been finalized or a guest unclaimed the dish.
@@ -1785,15 +1792,28 @@ export const guestRouter = createTRPCRouter({
         // this GuestSplit row aborts/retries both together, never just one.
         if (changed || save) {
           const updatePeople =
-            save || (!people[personIndex]!.personalLinkReadyAt && people[personIndex]!.guestSlotNumber !== undefined)
-              ? people.map((person, index) =>
-                  index !== personIndex
-                    ? person
-                    : {
-                        ...(changed ? markPersonalLinkReady(person) : person),
-                        ...(save ? { personalPartSaves: [...priorSaves, save].slice(-SAVE_KEYS_KEPT) } : {}),
-                      },
-                )
+            save ||
+            (changed && delegated) ||
+            (!people[personIndex]!.personalLinkReadyAt && people[personIndex]!.guestSlotNumber !== undefined)
+              ? people.map((person, index) => {
+                  if (index !== personIndex) return person;
+                  const edited =
+                    changed && delegated
+                      ? appendDelegatedReceiptAudit(
+                          person,
+                          people[actorIndex]!.id!,
+                          input.personId,
+                          'item-parts',
+                          input.itemIndex,
+                        )
+                      : changed
+                        ? markPersonalLinkReady(person)
+                        : person;
+                  return {
+                    ...edited,
+                    ...(save ? { personalPartSaves: [...priorSaves, save].slice(-SAVE_KEYS_KEPT) } : {}),
+                  };
+                })
               : null;
           await tx.guestSplit.update({
             where: { id: session.id },
@@ -1859,10 +1879,18 @@ export const guestRouter = createTRPCRouter({
         const people = session.people as GuestSessionPerson[];
         const items = session.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[];
 
-        // Validate personToken belongs to ANY participant (allows claiming for others)
+        // Validate an actual participant token; in grouped receipts, edits
+        // for others require the current group's representative credential.
         const callerIndex = people.findIndex((p) => p.personToken === input.personToken);
         if (callerIndex < 0) {
           throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        // In receipts containing payment groups, every cross-person claim
+        // must be authorized against the current group snapshot, including
+        // retries after a representative has been replaced.
+        const groupedReceipt = people.some((p) => p.paymentGroupRepresentativeId !== undefined);
+        if (groupedReceipt) {
+          authorizeReceiptPersonEdit(people, session.paidByIndex, input.personToken, input.personId, true);
         }
 
         // A retry of a save that was stored: answer as stored, without applying it again. Checked
@@ -1884,6 +1912,13 @@ export const guestRouter = createTRPCRouter({
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
 
         const personIndex = targetIndexOrThrow(people, input.personId);
+        const { delegated } = authorizeReceiptPersonEdit(
+          people,
+          session.paidByIndex,
+          input.personToken,
+          input.personId,
+          true,
+        );
 
         for (const idx of [
           ...(input.claimedItemIndices ?? []),
@@ -1948,16 +1983,19 @@ export const guestRouter = createTRPCRouter({
         );
 
         // The save key goes on the caller's person with this save, newest last
-        const actualOwnEdit =
-          callerIndex === personIndex &&
-          (earlierClaims.size !== claimedSet.size || [...claimedSet].some((item) => !earlierClaims.has(item)));
+        const actualTargetEdit =
+          earlierClaims.size !== claimedSet.size || [...claimedSet].some((item) => !earlierClaims.has(item));
+        const actualOwnEdit = callerIndex === personIndex && actualTargetEdit;
         const withSaveKey =
-          save || actualOwnEdit
+          save || actualOwnEdit || (delegated && actualTargetEdit)
             ? people.map((person, index) => {
                 const withSave =
                   save && index === callerIndex
                     ? { ...person, saves: [...callerSaves, save].slice(-SAVE_KEYS_KEPT) }
                     : person;
+                if (index === personIndex && delegated && actualTargetEdit) {
+                  return appendDelegatedReceiptAudit(withSave, people[callerIndex]!.id!, input.personId, 'claim-items');
+                }
                 return index === personIndex && actualOwnEdit ? markPersonalLinkReady(withSave) : withSave;
               })
             : null;
