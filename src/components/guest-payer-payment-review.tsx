@@ -16,6 +16,8 @@ type PaymentRow = {
   amount: number;
   declaredPaidAt: string | null;
   verifiedAt: string | null;
+  memberIds?: string[];
+  members?: { personId: string; personIndex: number; amountCents: number; tipCents: number }[];
 };
 
 /** Shows the payer only the receipt's outstanding, declared and verified transfers.
@@ -25,10 +27,12 @@ export function GuestPayerPaymentReview({
   token,
   personId,
   personToken,
+  people,
 }: {
   token: string;
   personId: string;
   personToken: string;
+  people?: { id: string; name: string }[];
 }) {
   const t = useTranslations('split.claim');
   const locale = useLocale();
@@ -156,6 +160,24 @@ export function GuestPayerPaymentReview({
                     {formatCents(payment.amount, 'RUB', locale)}
                   </span>
                 </div>
+                {payment.members && (
+                  <div
+                    className="min-w-0 space-y-1 text-xs text-muted-foreground"
+                    data-testid={'payer-payment-group-members-' + payment.personId}
+                  >
+                    <p className="font-medium">{t('paymentGroupTotal')}</p>
+                    {payment.members.map((member) => (
+                      <p key={member.personId} className="min-w-0 break-words tabular-nums">
+                        {t('paymentGroupPersonal', {
+                          name:
+                            people?.find((person) => person.id === member.personId)?.name ??
+                            t('personFallback', { index: member.personIndex + 1 }),
+                          amount: formatCents(member.amountCents, 'RUB', locale),
+                        })}
+                      </p>
+                    ))}
+                  </div>
+                )}
                 <p
                   className="text-xs text-muted-foreground"
                   data-testid={'guest-payer-payment-status-' + payment.personId}

@@ -4500,3 +4500,225 @@ test('Issue 3.2: a registered owner independently creates groups, receipts and e
     await owner.dispose();
   }
 });
+
+test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer and one payer confirmation', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(210_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const organizerDevice = await browser.newContext({
+    viewport: { width: 360, height: 730 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  let token: string | undefined;
+  try {
+    const create = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: {
+        merchantName: 'Семейный ужин 3.24',
+        subtotal: 951,
+        total: 951,
+        tax: 0,
+        tip: 0,
+        currency: 'RUB',
+      },
+      items: [
+        { name: 'Суп', quantity: 1, unitPrice: 321, totalPrice: 321 },
+        { name: 'Пицца', quantity: 1, unitPrice: 380, totalPrice: 380 },
+        { name: 'Десерт', quantity: 1, unitPrice: 250, totalPrice: 250 },
+      ],
+      people: ['Жена', 'Муж', 'Ребёнок'],
+      creatorName: 'Плательщик',
+      paidByName: 'Плательщик',
+      joinCreator: true,
+    });
+    const createdBody = await create.text();
+    expect(create.ok(), createdBody).toBe(true);
+    const created = JSON.parse(createdBody).result.data.json as {
+      shareToken: string;
+      creator: { personId: string; personToken: string; name: string };
+    };
+    token = created.shareToken;
+    const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const id = (name: string) =>
+      (initial.people as { id: string; name: string }[]).find((person) => person.name === name)!.id;
+    const wifeId = id('Жена');
+    const husbandId = id('Муж');
+    const childId = id('Ребёнок');
+
+    const creatorPage = await organizerDevice.newPage();
+    await creatorPage.goto('/login');
+    await creatorPage.locator('input[type=email]').fill(users.alice.email);
+    await creatorPage.locator('input[type=password]').fill(users.alice.password);
+    await creatorPage.getByRole('button', { name: 'Войти', exact: true }).click();
+    await expect(creatorPage).toHaveURL(/\/dashboard/);
+    await rememberClaimIdentity(organizerDevice, token, created.creator);
+    await creatorPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    const editor = creatorPage.getByTestId('receipt-payment-groups-editor');
+    await expect(editor).toBeVisible({ timeout: 20_000 });
+    await editor.getByTestId('payment-group-leader-select').selectOption(wifeId);
+    await editor
+      .getByTestId('payment-group-member-' + husbandId)
+      .locator('input')
+      .check();
+    await editor
+      .getByTestId('payment-group-member-' + childId)
+      .locator('input')
+      .check();
+    await editor.getByTestId('payment-group-create').click();
+    await expect(editor.getByTestId('receipt-payment-group-0')).toContainText('Жена', { timeout: 20_000 });
+    const groups = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(
+      (groups.people as { id: string; paymentGroupRepresentativeId?: string }[])
+        .filter((person) => [wifeId, husbandId, childId].includes(person.id))
+        .every((person) => person.paymentGroupRepresentativeId === wifeId),
+    ).toBe(true);
+    await fitsPhone(creatorPage);
+
+    const wife = await joinGuestSession(page.request, { token, name: 'Жена' });
+    await rememberClaimIdentity(page.context(), token, wife);
+    await page.setViewportSize({ width: 320, height: 760 });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId('claim-item-0')).toBeVisible({ timeout: 20_000 });
+    expect(await page.getByTestId('receipt-payment-groups-editor').count()).toBe(0);
+    const wifeIndex = initial.people.findIndex((person: { id: string }) => person.id === wifeId);
+    const husbandIndex = initial.people.findIndex((person: { id: string }) => person.id === husbandId);
+    const childIndex = initial.people.findIndex((person: { id: string }) => person.id === childId);
+    await expect(page.getByTestId('switch-person-' + childIndex)).toBeEnabled();
+    await page.getByTestId('switch-person-' + childIndex).click();
+    await expect(page.getByTestId('payment-group-edit-target')).toContainText('Ребёнок');
+    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('save-claims-btn').click();
+    await expect
+      .poll(
+        async () => {
+          const state = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+          return state.assignments
+            .find((row: { itemIndex: number }) => row.itemIndex === 2)
+            ?.personIndices.includes(childIndex);
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(true);
+
+    // The same representative records the child eating two parts, without
+    // requiring the child to log in or possess a personal device.
+    await expect(page.getByTestId('personal-parts-2')).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId('personal-parts-input-2').fill('2');
+    await page.getByTestId('personal-parts-save-2').click();
+    await expect
+      .poll(
+        async () => {
+          const state = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+          return (
+            state.assignments.find(
+              (row: { itemIndex: number; partsByPersonId?: Record<string, number> }) => row.itemIndex === 2,
+            )?.partsByPersonId?.[childId] ?? null
+          );
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(2);
+
+    await page.getByTestId('personal-tip-input').fill('0,50');
+    await page.getByTestId('personal-tip-save').click();
+    await expect
+      .poll(
+        async () => {
+          const state = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+          return state.people[childIndex]?.tipCents;
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(50);
+
+    await page.getByTestId('switch-person-' + husbandIndex).click();
+    await page.getByTestId('claim-item-1').click();
+    await page.getByTestId('save-claims-btn').click();
+    await expect
+      .poll(
+        async () => {
+          const state = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+          return state.assignments
+            .find((row: { itemIndex: number }) => row.itemIndex === 1)
+            ?.personIndices.includes(husbandIndex);
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(true);
+    await page.getByTestId('switch-person-' + wifeIndex).click();
+    await page.getByTestId('claim-item-0').click();
+    await page.getByTestId('save-claims-btn').click();
+    await expect
+      .poll(
+        async () => {
+          const state = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+          return state.assignments
+            .find((row: { itemIndex: number }) => row.itemIndex === 0)
+            ?.personIndices.includes(wifeIndex);
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(true);
+    for (const width of [320, 393, 720]) {
+      await page.setViewportSize({ width, height: 760 });
+      await fitsPhone(page);
+    }
+
+    const confirm = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
+    expect(confirm.ok(), await confirm.text()).toBe(true);
+    const finalize = await trpcMutation(owner, 'guest.finalizeSession', { token });
+    expect(finalize.ok(), await finalize.text()).toBe(true);
+    const finalized = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(finalized.status).toBe('FINALIZED');
+    expect(finalized.summary.reduce((sum: number, person: { total: number }) => sum + person.total, 0)).toBe(1001);
+    expect(finalized.summary[childIndex].tip).toBe(50);
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const familyView = page.getByTestId('guest-group-reimbursement-detail');
+    await expect(familyView).toBeVisible({ timeout: 20_000 });
+    await expect(familyView).toContainText('Жена');
+    await expect(familyView).toContainText('Муж');
+    await expect(familyView).toContainText('Ребёнок');
+    await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('10,01');
+    await expect(page.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 20_000 });
+    await fitsPhone(page);
+    await page.getByTestId('guest-mark-paid').click();
+    await expect(page.getByTestId('guest-payment-declared')).toBeVisible({ timeout: 20_000 });
+
+    await creatorPage.reload({ waitUntil: 'domcontentloaded' });
+    const review = creatorPage.getByTestId('guest-payer-payment-review');
+    await expect(review).toBeVisible({ timeout: 25_000 });
+    await expect(review.getByTestId('guest-payer-payment-' + wifeId)).toHaveCount(1);
+    await expect(review.getByTestId('guest-payer-payment-' + husbandId)).toHaveCount(0);
+    await expect(review.getByTestId('guest-payer-payment-' + childId)).toHaveCount(0);
+    const amount = review.getByTestId('guest-payer-payment-amount');
+    await expect(amount).toContainText('10,01');
+    const verify = creatorPage.getByTestId('guest-payer-verify-' + wifeId);
+    await expect(verify).toBeVisible();
+    await verify.click();
+    await expect(creatorPage.getByTestId('guest-payer-payment-status-' + wifeId)).toContainText(
+      'Поступление проверено',
+      { timeout: 20_000 },
+    );
+    const reviewResult = await trpcMutation(owner, 'guest.getMyPayerPaymentReview', {
+      token,
+      personId: created.creator.personId,
+      personToken: created.creator.personToken,
+    });
+    expect(reviewResult.ok(), await reviewResult.text()).toBe(true);
+    const payments = (await reviewResult.json()).result.data.json.payments as {
+      personId: string;
+      amount: number;
+      verifiedAt: string | null;
+    }[];
+    expect(payments).toHaveLength(1);
+    expect(payments[0]).toMatchObject({ personId: wifeId, amount: 1001, verifiedAt: expect.any(String) });
+    await fitsPhone(creatorPage);
+  } finally {
+    if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await organizerDevice.close();
+    await owner.dispose();
+  }
+});

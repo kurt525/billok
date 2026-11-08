@@ -12,10 +12,12 @@ export function GuestPaymentDeclaration({
   token,
   personId,
   personToken,
+  canDeclare = true,
 }: {
   token: string;
   personId: string;
   personToken: string;
+  canDeclare?: boolean;
 }) {
   const t = useTranslations('split.claim');
   const read = trpc.guest.getMyPaymentDeclaration.useMutation();
@@ -58,7 +60,7 @@ export function GuestPaymentDeclaration({
   }, [readStatus, token, personId, personToken, t]);
 
   async function declarePayment() {
-    if (!loaded || declaredAt || mark.isPending) return;
+    if (!canDeclare || !loaded || declaredAt || mark.isPending) return;
     try {
       const result = await mark.mutateAsync({ token, personId, personToken });
       setDeclaredAt(result.declaredPaidAt);
@@ -87,7 +89,7 @@ export function GuestPaymentDeclaration({
             {verifiedAt ? t('payerPaymentVerified') : t('paymentAwaitingVerification')}
           </p>
         </>
-      ) : (
+      ) : canDeclare ? (
         <>
           <Button
             type="button"
@@ -100,6 +102,10 @@ export function GuestPaymentDeclaration({
           </Button>
           <p className="text-xs text-muted-foreground">{t('paymentDeclarationDisclaimer')}</p>
         </>
+      ) : (
+        <p className="text-xs text-muted-foreground" data-testid="guest-group-payment-readonly">
+          {t('paymentGroupStatusOnly')}
+        </p>
       )}
     </div>
   );

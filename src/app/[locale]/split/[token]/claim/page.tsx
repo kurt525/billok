@@ -52,6 +52,7 @@ import {
 } from '@/lib/claim-save';
 import { calculateClaimTotals, groupSizeWeights } from '@/lib/split-calculator';
 import { guestPortionAssignments, guestPortionProgress } from '@/lib/guest-portions';
+import { aggregateReceiptPaymentGroups } from '@/lib/receipt-payment-groups';
 import { guestKnownPartsBalance } from '@/lib/guest-known-parts';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -88,6 +89,7 @@ import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
 import { GuestSbpReimbursementDetails } from '@/components/guest-sbp-reimbursement-details';
 import { GuestPaymentDeclaration } from '@/components/guest-payment-declaration';
 import { GuestPayerPaymentReview } from '@/components/guest-payer-payment-review';
+import { GuestPaymentGroupsEditor } from '@/components/guest-payment-groups-editor';
 
 // How one claim save attempt ended: the answer's conflicts when stored, the server's message
 // when refused
@@ -463,14 +465,12 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     retryDelay: (attempt) => Math.min(2000, 250 * 2 ** attempt),
     onSuccess: async (_result, variables) => {
       await utils.guest.getSession.invalidate({ token });
-      if (identityRef.current?.personId === variables.personId) {
-        setPortionDrafts((drafts) => {
-          const next = { ...drafts };
-          delete next[variables.itemIndex];
-          return next;
-        });
-        toast.success(t('partsSaved'));
-      }
+      setPortionDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[variables.itemIndex];
+        return next;
+      });
+      toast.success(t('partsSaved'));
     },
     onError: (error) => {
       // A concurrent saved edit can consume the remaining original pieces
@@ -482,12 +482,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   });
 
   const setPersonalTip = trpc.guest.setPersonalTip.useMutation({
-    onSuccess: async (_result, variables) => {
+    onSuccess: async () => {
       await utils.guest.getSession.invalidate({ token });
-      if (identityRef.current?.personId === variables.personId) {
-        setPersonalTipDraft(null);
-        toast.success(t('personalTipSaved'));
-      }
+      setPersonalTipDraft(null);
+      toast.success(t('personalTipSaved'));
     },
     onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
   });
@@ -508,8 +506,25 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // null while this device's person isn't in the session as loaded: they just joined (the
   // session is loaded again right away), or someone removed them (checked below)
   const myPersonIndex = myPersonId === null ? null : (indexById.get(myPersonId) ?? null);
-  // Claiming for: the person picked, while they're still in the split, otherwise this device's person
-  const personIndex = (activePersonId === null ? undefined : indexById.get(activePersonId)) ?? myPersonIndex;
+  // The original ungrouped receipt keeps its old claim flow. In grouped
+  // receipts the responsible diner's own token can edit only their group.
+  const hasPaymentGroups =
+    session.data?.people.some((person) => person.paymentGroupRepresentativeId !== undefined) ?? false;
+  const myPerson = myPersonIndex === null ? null : session.data?.people[myPersonIndex];
+  const canEditFor = (targetId: string) => {
+    if (!hasPaymentGroups) return true;
+    if (myPersonId === targetId) return true;
+    return (
+      !!myPersonId &&
+      myPerson?.paymentGroupRepresentativeId === myPersonId &&
+      session.data?.people.some(
+        (person) => person.id === targetId && person.paymentGroupRepresentativeId === myPersonId,
+      ) === true
+    );
+  };
+  const selectedIndex = activePersonId === null ? undefined : indexById.get(activePersonId);
+  const selectedId = selectedIndex === undefined ? null : (session.data?.people[selectedIndex]?.id ?? null);
+  const personIndex = selectedId && canEditFor(selectedId) ? selectedIndex! : myPersonIndex;
   const activeId = personIndex === null ? null : (session.data?.people[personIndex]?.id ?? null);
 
   // 3.6.1: when the verified BillOK owner joins after a guest named Илья,
@@ -1672,31 +1687,55 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // Finalized total includes personal tips, not just the restaurant subtotal.
   const finalizedTotal = data.summary?.reduce((sum, person) => sum + person.total, 0) ?? data.receiptData.total;
   const finalizedPersonalTips = data.summary?.reduce((sum, person) => sum + person.tip, 0) ?? 0;
-  // Identify the payer by this device's resumed personal token, not by the
-  // currently edited person. This is the original receipt balance, not a bank payment.
+  // The payer must see a single reimbursement per group. Every diner still
+  // retains their own receipt allocation and voluntary tip in the summary.
+  const finalizedPaymentGroups = (() => {
+    if (!hasPaymentGroups || !data.summary || currency !== 'RUB') return null;
+    try {
+      return aggregateReceiptPaymentGroups(data.people, data.paidByIndex, data.summary, data.receiptData.total).groups;
+    } catch {
+      return null;
+    }
+  })();
   const payerSummary = data.summary?.find((person) => person.personIndex === data.paidByIndex);
-  const payerReimbursements =
+  const summaryReconciled =
     currency === 'RUB' &&
     data.receiptData.tax === 0 &&
     data.receiptData.tip === 0 &&
-    myPersonIndex === data.paidByIndex &&
-    payerSummary &&
     data.summary?.every((person) => Number.isSafeInteger(person.total) && person.total >= 0) &&
-    finalizedTotal === data.receiptData.total + finalizedPersonalTips
-      ? data.summary.filter((person) => person.personIndex !== data.paidByIndex && person.total > 0)
+    finalizedTotal === data.receiptData.total + finalizedPersonalTips;
+  const payerReimbursements =
+    summaryReconciled && myPersonIndex === data.paidByIndex && payerSummary
+      ? hasPaymentGroups
+        ? (finalizedPaymentGroups
+            ?.filter((group) => group.totalCents > 0)
+            .map((group) => {
+              const representativeIndex = data.people.findIndex((person) => person.id === group.representativeId);
+              return {
+                personIndex: representativeIndex,
+                name: data.people[representativeIndex]?.name ?? '',
+                total: group.totalCents,
+                memberNames: group.memberIndices.map((index) => data.people[index]!.name),
+              };
+            }) ?? null)
+        : data.summary!.filter((person) => person.personIndex !== data.paidByIndex && person.total > 0)
       : null;
   const payerReimbursementTotal = payerReimbursements?.reduce((sum, person) => sum + person.total, 0) ?? 0;
+  const myPaymentGroup = finalizedPaymentGroups?.find(
+    (group) => myPersonIndex !== null && group.memberIndices.includes(myPersonIndex),
+  );
+  const canDeclareGroupPayment = !myPaymentGroup || myPaymentGroup.representativeId === myPersonId;
   const personalReimbursement =
-    currency === 'RUB' &&
-    data.receiptData.tax === 0 &&
-    data.receiptData.tip === 0 &&
-    myPersonIndex !== null &&
-    myPersonIndex !== data.paidByIndex &&
-    data.summary?.every((person) => Number.isSafeInteger(person.total) && person.total >= 0) &&
-    finalizedTotal === data.receiptData.total + finalizedPersonalTips
-      ? data.summary.find((person) => person.personIndex === myPersonIndex && person.total > 0)
+    summaryReconciled && myPersonIndex !== null && myPersonIndex !== data.paidByIndex
+      ? hasPaymentGroups
+        ? myPaymentGroup && myPaymentGroup.totalCents > 0
+          ? { personIndex: myPersonIndex, name: data.people[myPersonIndex]!.name, total: myPaymentGroup.totalCents }
+          : null
+        : data.summary!.find((person) => person.personIndex === myPersonIndex && person.total > 0)
       : null;
-  const savedPersonalTip = myPersonIndex === null ? 0 : (data.people[myPersonIndex]?.tipCents ?? 0);
+  const tipTargetIndex = personIndex !== null && activeId && canEditFor(activeId) ? personIndex : myPersonIndex;
+  const tipTarget = tipTargetIndex === null ? null : data.people[tipTargetIndex];
+  const savedPersonalTip = tipTarget?.tipCents ?? 0;
   const personalTipValue = personalTipDraft ?? centsToDecimal(savedPersonalTip);
   const personalTipCents = parseToCents(personalTipValue);
   const personalTipIsValid =
@@ -1873,6 +1912,14 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                   >
                     {formatCents(person.total, currency, locale)}
                   </span>
+                  {'memberNames' in person && person.memberNames && person.memberNames.length > 1 && (
+                    <span
+                      className="w-full break-words text-xs text-muted-foreground"
+                      data-testid={'guest-payer-group-members-' + person.personIndex}
+                    >
+                      {t('paymentGroupMembers', { names: person.memberNames.join(', ') })}
+                    </span>
+                  )}
                 </div>
               ))}
               <Separator />
@@ -1894,6 +1941,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
         {payerReimbursements && payerSummary && myPersonId && personToken && (
           <GuestPayerPaymentReview
+            people={data.people}
             key={`payer-review:${personToken}`}
             token={token}
             personId={myPersonId}
@@ -1920,23 +1968,41 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                   name: data.people[data.paidByIndex]?.name ?? t('personFallback', { index: data.paidByIndex + 1 }),
                 })}
               </p>
+              {myPaymentGroup?.grouped && (
+                <div className="min-w-0 space-y-1" data-testid="guest-group-reimbursement-detail">
+                  <p className="text-sm font-semibold">{t('paymentGroupTotal')}</p>
+                  <p className="break-words text-xs text-muted-foreground">
+                    {t('paymentGroupMembers', {
+                      names: myPaymentGroup.memberIndices.map((index) => data.people[index]!.name).join(', '),
+                    })}
+                  </p>
+                  {myPaymentGroup.members.map((member) => (
+                    <p key={member.personId} className="flex min-w-0 flex-wrap justify-between gap-2 text-xs">
+                      <span className="min-w-0 break-words">{data.people[member.personIndex]!.name}</span>
+                      <span className="tabular-nums">{formatCents(member.amountCents, currency, locale)}</span>
+                    </p>
+                  ))}
+                </div>
+              )}
               <p
                 className="min-w-0 max-w-full text-2xl font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
                 data-testid="guest-personal-reimbursement-amount"
               >
                 {formatCents(personalReimbursement.total, currency, locale)}
               </p>
-              <Button
-                type="button"
-                variant="outline"
-                className="min-h-11 w-full"
-                onClick={() => copyReimbursementAmount(personalReimbursement.total)}
-                data-testid="guest-copy-reimbursement-amount"
-              >
-                <Copy className="mr-2 size-4" aria-hidden="true" />
-                {t('copyReimbursementAmount')}
-              </Button>
-              {myPersonId && personToken && (
+              {canDeclareGroupPayment && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 w-full"
+                  onClick={() => copyReimbursementAmount(personalReimbursement.total)}
+                  data-testid="guest-copy-reimbursement-amount"
+                >
+                  <Copy className="mr-2 size-4" aria-hidden="true" />
+                  {t('copyReimbursementAmount')}
+                </Button>
+              )}
+              {canDeclareGroupPayment && myPersonId && personToken && (
                 <GuestSbpReimbursementDetails
                   key={`reimbursement-details:${personToken}`}
                   token={token}
@@ -1946,6 +2012,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               )}
               {myPersonId && personToken && (
                 <GuestPaymentDeclaration
+                  canDeclare={canDeclareGroupPayment}
                   key={`payment-declaration:${personToken}`}
                   token={token}
                   personId={myPersonId}
@@ -2508,19 +2575,28 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
       {/* Personal tips belong to this device's identity, never the person selected
           for editing dish claims. Individual tips are included when finalizing. */}
-      {myPersonIndex !== null && myPersonId && personToken && (
+      {tipTarget && myPersonId && personToken && (
         <Card data-testid="personal-tip-card">
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">{t('personalTipTitle')}</CardTitle>
+            <CardTitle className="text-base">
+              {tipTarget.id === myPersonId ? t('personalTipTitle') : t('paymentGroupTipFor', { name: tipTarget.name })}
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">{t('personalTipDescription')}</p>
+            <p className="text-sm text-muted-foreground">
+              {tipTarget.id === myPersonId ? t('personalTipDescription') : t('paymentGroupDisclaimer')}
+            </p>
+            {tipTarget.id !== myPersonId && (
+              <p className="text-sm font-medium" data-testid="payment-group-tip-target">
+                {t('paymentGroupTipFor', { name: tipTarget.name })}
+              </p>
+            )}
             <form
               className="flex flex-wrap items-end gap-3"
               onSubmit={(event) => {
                 event.preventDefault();
                 if (!personalTipIsValid || personalTipCents === savedPersonalTip || setPersonalTip.isPending) return;
-                setPersonalTip.mutate({ token, personId: myPersonId, personToken, tipCents: personalTipCents });
+                setPersonalTip.mutate({ token, personId: tipTarget.id, personToken, tipCents: personalTipCents });
               }}
             >
               <div className="min-w-0 flex-1 space-y-1">
@@ -2588,6 +2664,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           )}
         </>
       )}
+
+      {data.isCreator && <GuestPaymentGroupsEditor token={token} people={data.people} paidByIndex={data.paidByIndex} />}
 
       {/* People in session */}
       <Card>
@@ -2701,7 +2779,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
                     )}
-                    {data.people.length > 1 && (
+                    {data.people.length > 1 && (!hasPaymentGroups || data.isCreator) && (
                       <button
                         type="button"
                         onClick={() => setRemoveFor({ id: person.id, name: person.name })}
@@ -2724,12 +2802,23 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       {/* Claim as selector */}
       <div className="space-y-2">
         <p className="text-sm font-medium">{t('claimingFor')}</p>
+        {activeId && activeId !== myPersonId && (
+          <p className="text-xs font-medium" data-testid="payment-group-edit-target">
+            {t('paymentGroupEditFor', { name: data.people[personIndex!]?.name ?? '' })}
+          </p>
+        )}
         <div className="flex flex-wrap gap-2">
           {data.people.map((person, idx) => (
             <button
               key={person.id}
               type="button"
-              onClick={() => setActivePersonId(person.id)}
+              onClick={() => {
+                if (!canEditFor(person.id)) return;
+                setActivePersonId(person.id);
+                setPersonalTipDraft(null);
+                setPortionDrafts({});
+              }}
+              disabled={!canEditFor(person.id)}
               data-testid={`switch-person-${idx}`}
               className={`flex min-h-11 min-w-0 max-w-full items-center gap-2 rounded-2xl px-3 py-1.5 transition-colors ${
                 idx === personIndex
@@ -3147,12 +3236,12 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           );
                         })()}
 
-                      {/* Only the owner of this personal token may save their own portions.
-                          An unsaved item claim must first be stored, so updates cannot
-                          accidentally create a new claim or overwrite another person. */}
+                      {/* The representative may edit portions of their own group
+                          without altering other people's shares or original totals. */}
                       {myPersonIndex !== null &&
-                        personIndex === myPersonIndex &&
-                        activeId === myPersonId &&
+                        personIndex !== null &&
+                        activeId !== null &&
+                        canEditFor(activeId) &&
                         personToken &&
                         data.assignments.some(
                           (assignment) =>
@@ -3161,9 +3250,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         (() => {
                           const savedAssignment = data.assignments.find((assignment) => assignment.itemIndex === idx)!;
                           const savedParts =
-                            savedAssignment.partsByPersonId?.[myPersonId!] ??
-                            data.people[myPersonIndex]?.groupSize ??
-                            1;
+                            savedAssignment.partsByPersonId?.[activeId] ?? data.people[personIndex]?.groupSize ?? 1;
                           const value = portionDrafts[idx] ?? String(savedParts);
                           const parsed = /^\d+$/.test(value) ? Number(value) : NaN;
                           const valid =
@@ -3212,14 +3299,14 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                                     if (
                                       !valid ||
                                       !respectsOriginal ||
-                                      !myPersonId ||
+                                      !activeId ||
                                       !personToken ||
                                       setMyItemParts.isPending
                                     )
                                       return;
                                     setMyItemParts.mutate({
                                       token,
-                                      personId: myPersonId,
+                                      personId: activeId,
                                       personToken,
                                       itemIndex: idx,
                                       parts: parsed,
