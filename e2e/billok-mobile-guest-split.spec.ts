@@ -1602,7 +1602,11 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
     const guestIndex = saved.people.findIndex((person: { name: string }) => person.name === 'Илья');
     expect(guestIndex).toBeGreaterThanOrEqual(0);
     expect(saved.assignments.filter((a: { personIndices: number[] }) => a.personIndices.includes(guestIndex))).toEqual([
-      { itemIndex: ownPart, personIndices: [guestIndex] },
+      {
+        itemIndex: ownPart,
+        personIndices: [guestIndex],
+        partsByPersonId: { [saved.people[guestIndex].id]: saved.people[guestIndex].groupSize ?? 1 },
+      },
     ]);
 
     // Treat each viewport as a fresh phone launch. Resizing an already
@@ -2281,7 +2285,7 @@ test('Issue 3.8.3: a clean Android browser restores exactly one guest, saved dis
     const before = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
     expect(before.people).toHaveLength(3);
     expect(before.people[1]).toMatchObject({ id: guestId, personalLinkReady: true, tipCents: 175 });
-    expect(before.assignments).toEqual([{ itemIndex: 0, personIndices: [1] }]);
+    expect(before.assignments).toEqual([{ itemIndex: 0, personIndices: [1], partsByPersonId: { [guestId]: 1 } }]);
 
     const secret = await trpcMutation(creator, 'guest.getGuestPersonalLink', { token, personId: guestId });
     expect(secret.ok(), await secret.text()).toBe(true);

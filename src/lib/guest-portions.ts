@@ -8,6 +8,35 @@ export type GuestPortionAssignment = {
   partsByPersonId?: Record<string, number> | undefined;
 };
 
+/**
+ * Materialize every claimant's actual number of consumed pieces when a
+ * claim is saved. Legacy ShareTab assignments store only personIndices;
+ * their original group-size weight is the initial number of pieces.
+ * From this point forward each person has a stable count keyed by person
+ * UUID, independent of position changes and other guests' next saves.
+ *
+ * Old records are read with the same fallback by guestPortionAssignments;
+ * a claim save upgrades the affected receipt's assignment rows in place.
+ */
+export function materializeGuestPersonalParts(
+  assignments: readonly GuestPortionAssignment[],
+  people: readonly { id?: string | undefined; groupSize?: number | undefined }[],
+): GuestPortionAssignment[] {
+  return assignments.map((assignment) => {
+    const partsByPersonId: Record<string, number> = {};
+    for (const index of assignment.personIndices) {
+      const person = people[index];
+      if (!person?.id) throw new RangeError('Missing guest identity');
+      const parts = assignment.partsByPersonId?.[person.id] ?? person.groupSize ?? 1;
+      if (!Number.isSafeInteger(parts) || parts < 1 || parts > 10000) {
+        throw new RangeError('Invalid guest portion count');
+      }
+      partsByPersonId[person.id] = parts;
+    }
+    return { ...assignment, partsByPersonId };
+  });
+}
+
 export function guestPortionAssignments(
   assignments: readonly GuestPortionAssignment[],
   people: readonly { id?: string | undefined; groupSize?: number | undefined }[],

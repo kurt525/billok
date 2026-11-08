@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { calculateSplitTotals, calculateClaimTotals, personItemShares } from './split-calculator';
-import { guestPortionAssignments, guestPortionProgress } from './guest-portions';
+import { guestPortionAssignments, guestPortionProgress, materializeGuestPersonalParts } from './guest-portions';
 import { manualPortionProgress } from './manual-receipt-split';
 
 const people = [{ id: 'alice' }, { id: 'bob' }];
@@ -60,5 +60,59 @@ describe('Issue 2.14: both guest portion modes and RUB reconciliation', () => {
     expect(() => guestPortionAssignments([{ ...claimed[0]!, partsByPersonId: { alice: value } }], people)).toThrow(
       RangeError,
     );
+  });
+});
+
+describe('Issue 3.19: persistent consumed parts per claimant', () => {
+  const participants = [
+    { id: 'alice', groupSize: 3 },
+    { id: 'bob', groupSize: 1 },
+  ];
+
+  test('new claims get independent explicit counts even if none were customized', () => {
+    const persisted = materializeGuestPersonalParts([{ itemIndex: 0, personIndices: [0, 1] }], participants);
+    expect(persisted).toEqual([{ itemIndex: 0, personIndices: [0, 1], partsByPersonId: { alice: 3, bob: 1 } }]);
+    const rows = calculateSplitTotals({
+      ...bill(101),
+      assignments: guestPortionAssignments(persisted, participants),
+    });
+    expect(rows.map((row) => row.itemTotal)).toEqual([76, 25]);
+    expect(guestPortionProgress(persisted[0]!, participants)).toEqual({
+      countedParts: 4,
+      remainingParts: null,
+    });
+    expect(guestPortionProgress(persisted[0]!, participants, 5)).toEqual({
+      countedParts: 4,
+      remainingParts: 1,
+    });
+  });
+
+  test('another claimant joining or leaving preserves recorded parts by stable person ID', () => {
+    const before = [{ itemIndex: 0, personIndices: [0], partsByPersonId: { alice: 5 } }];
+    const joined = materializeGuestPersonalParts([{ ...before[0]!, personIndices: [0, 1] }], participants);
+    expect(joined[0]!.partsByPersonId).toEqual({ alice: 5, bob: 1 });
+    const after = materializeGuestPersonalParts([{ ...joined[0]!, personIndices: [1] }], participants);
+    expect(after[0]!.partsByPersonId).toEqual({ bob: 1 });
+    expect(guestPortionAssignments(joined, participants)[0]!.portions).toEqual([5, 1]);
+  });
+
+  test('legacy rows upgrade with the same weighting; irrelevant prior names and IDs are pruned', () => {
+    const old = [{ itemIndex: 0, personIndices: [0, 1], partsByPersonId: { removed: 100, alice: 2 } }];
+    const upgraded = materializeGuestPersonalParts(old, participants);
+    expect(upgraded[0]!.partsByPersonId).toEqual({ alice: 2, bob: 1 });
+    const rows = calculateSplitTotals({
+      ...bill(101),
+      assignments: guestPortionAssignments(upgraded, participants),
+    });
+    expect(rows.reduce((sum, row) => sum + row.itemTotal, 0)).toBe(101);
+  });
+
+  test('invalid prior count cannot silently become a new guest share', () => {
+    expect(() =>
+      materializeGuestPersonalParts(
+        [{ itemIndex: 0, personIndices: [0], partsByPersonId: { alice: 0 } }],
+        participants,
+      ),
+    ).toThrow(RangeError);
   });
 });

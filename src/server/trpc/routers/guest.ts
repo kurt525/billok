@@ -26,7 +26,11 @@ import {
   validSaveRecords,
 } from '../../lib/json-schemas';
 import { calculateSplitTotals, addPersonalGuestTips, groupSizeWeights } from '@/lib/split-calculator';
-import { guestPortionAssignments, type GuestPortionAssignment } from '@/lib/guest-portions';
+import {
+  guestPortionAssignments,
+  materializeGuestPersonalParts,
+  type GuestPortionAssignment,
+} from '@/lib/guest-portions';
 import { guestPartsConfirmationSnapshot } from '@/lib/guest-parts-confirmation';
 import { guestKnownPartsBalance } from '@/lib/guest-known-parts';
 import { guestPresenceState } from '@/lib/guest-presence';
@@ -1875,8 +1879,15 @@ export const guestRouter = createTRPCRouter({
           }
         }
 
-        // Clean up empty assignments
-        const cleanedAssignments = assignments.filter((a) => a.personIndices.length > 0);
+        // The upstream personIndices list only records *who* chose the
+        // dish. BillOK stores *how many parts* every claimant consumes in a
+        // separate, stable-ID map. Keep prior explicit numbers when a second
+        // guest joins; initialize a new claimant from their group size.
+        // Also migrate pre-3.19 rows without changing the proportions.
+        const cleanedAssignments = materializeGuestPersonalParts(
+          assignments.filter((a) => a.personIndices.length > 0),
+          people,
+        );
 
         enforceGuestKnownParts(
           items,

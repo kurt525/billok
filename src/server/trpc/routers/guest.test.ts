@@ -3018,6 +3018,65 @@ describe('2.14 guest personal parts cannot change another participant', () => {
   });
 });
 
+describe('Issue 3.19: claimItems persists actual pieces for all claimants', () => {
+  test('upgrades a legacy shared dish and preserves independent proportions on later edits', async () => {
+    const people = [
+      { name: 'Анна', groupSize: 3, personToken: ALICE_TOKEN },
+      { name: 'Борис', groupSize: 1, personToken: OTHER_TOKEN },
+    ];
+    claimSession(people, {
+      items: [{ name: 'Пицца', quantity: 1, unitPrice: 101, totalPrice: 101 }],
+      receiptData: { subtotal: 101, tax: 0, tip: 0, total: 101, currency: 'RUB' },
+      // Imported ShareTab row contains only the person index, no amount.
+      assignments: [{ itemIndex: 0, personIndices: [0] }],
+    });
+    const api = await caller();
+    expect(
+      await api.claimItems({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        personId: pid(1),
+        addItemIndices: [0],
+      }),
+    ).toMatchObject({ success: true });
+    const saved = savedAssignments() as {
+      itemIndex: number;
+      personIndices: number[];
+      partsByPersonId: Record<string, number>;
+    }[];
+    expect(saved).toEqual([
+      {
+        itemIndex: 0,
+        personIndices: [0, 1],
+        partsByPersonId: { [pid(0)]: 3, [pid(1)]: 1 },
+      },
+    ]);
+
+    // Later changes to Boris's consumed parts do not modify Anna's.
+    claimSession(people, {
+      items: [{ name: 'Пицца', quantity: 1, unitPrice: 101, totalPrice: 101 }],
+      receiptData: { subtotal: 101, tax: 0, tip: 0, total: 101, currency: 'RUB' },
+      assignments: saved,
+    });
+    expect(
+      await api.setMyItemParts({
+        token: 'share-1',
+        personId: pid(1),
+        personToken: OTHER_TOKEN,
+        itemIndex: 0,
+        parts: 5,
+      }),
+    ).toEqual({ success: true, parts: 5, remainingParts: null });
+    expect(savedAssignments()).toEqual([
+      {
+        itemIndex: 0,
+        personIndices: [0, 1],
+        partsByPersonId: { [pid(0)]: 3, [pid(1)]: 5 },
+      },
+    ]);
+  });
+});
+
 describe('guest.claimItems with added and removed items (#226)', () => {
   // Cat's own phone saved items 0 and 1 while Ann's page was editing Cat's claims
   function catSavedMeanwhile() {
@@ -3047,24 +3106,24 @@ describe('guest.claimItems with added and removed items (#226)', () => {
     catSavedMeanwhile();
     await (await caller()).claimItems(forCat({ addItemIndices: [2] }));
     expect(savedAssignments()).toEqual([
-      { itemIndex: 0, personIndices: [1] },
-      { itemIndex: 1, personIndices: [1] },
-      { itemIndex: 2, personIndices: [1] },
+      { itemIndex: 0, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
+      { itemIndex: 1, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
+      { itemIndex: 2, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
     ]);
   });
 
   test('removes only the items named', async () => {
     catSavedMeanwhile();
     await (await caller()).claimItems(forCat({ removeItemIndices: [0] }));
-    expect(savedAssignments()).toEqual([{ itemIndex: 1, personIndices: [1] }]);
+    expect(savedAssignments()).toEqual([{ itemIndex: 1, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } }]);
   });
 
   test('adds and removes in one save', async () => {
     catSavedMeanwhile();
     await (await caller()).claimItems(forCat({ addItemIndices: [2], removeItemIndices: [0] }));
     expect(savedAssignments()).toEqual([
-      { itemIndex: 1, personIndices: [1] },
-      { itemIndex: 2, personIndices: [1] },
+      { itemIndex: 1, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
+      { itemIndex: 2, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
     ]);
   });
 
@@ -3072,8 +3131,8 @@ describe('guest.claimItems with added and removed items (#226)', () => {
     catSavedMeanwhile();
     await (await caller()).claimItems(forCat({ addItemIndices: [0], removeItemIndices: [2] }));
     expect(savedAssignments()).toEqual([
-      { itemIndex: 0, personIndices: [1] },
-      { itemIndex: 1, personIndices: [1] },
+      { itemIndex: 0, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
+      { itemIndex: 1, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
     ]);
   });
 
@@ -3087,8 +3146,8 @@ describe('guest.claimItems with added and removed items (#226)', () => {
     );
     await (await caller()).claimItems(forCat({ addItemIndices: [1], removeItemIndices: [0] }));
     expect(savedAssignments()).toEqual([
-      { itemIndex: 0, personIndices: [0] },
-      { itemIndex: 1, personIndices: [1] },
+      { itemIndex: 0, personIndices: [0], partsByPersonId: { [pid(0)]: 1 } },
+      { itemIndex: 1, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
     ]);
   });
 
@@ -3121,7 +3180,7 @@ describe('guest.claimItems with added and removed items (#226)', () => {
   test('the whole claim set still replaces what is stored (older clients)', async () => {
     catSavedMeanwhile();
     await (await caller()).claimItems({ ...forCat({}), claimedItemIndices: [2] });
-    expect(savedAssignments()).toEqual([{ itemIndex: 2, personIndices: [1] }]);
+    expect(savedAssignments()).toEqual([{ itemIndex: 2, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } }]);
   });
 });
 
@@ -3167,7 +3226,7 @@ describe('guest.claimItems with a save key (#238)', () => {
   test("records the key on the caller's person with the save", async () => {
     session([]);
     await (await caller()).claimItems(forCat({ addItemIndices: [2] }));
-    expect(savedAssignments()).toEqual([{ itemIndex: 2, personIndices: [1] }]);
+    expect(savedAssignments()).toEqual([{ itemIndex: 2, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } }]);
     const people = savedPeople() as { saves?: { key: string }[] }[];
     expect(people[0]!.saves?.map((s) => s.key)).toEqual([SAVE_KEY]);
     expect(people[1]!.saves).toBeUndefined();
@@ -3305,7 +3364,7 @@ describe('guest.claimItems with a save key (#238)', () => {
     const junk = [null, 'x', { key: 1, hash: 'y' }, { key: SAVE_KEY }] as unknown as { key: string; hash: string }[];
     session([], junk);
     await (await caller()).claimItems(forCat({ addItemIndices: [2] }));
-    expect(savedAssignments()).toEqual([{ itemIndex: 2, personIndices: [1] }]);
+    expect(savedAssignments()).toEqual([{ itemIndex: 2, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } }]);
     const people = savedPeople() as { saves?: { key: string }[] }[];
     expect(people[0]!.saves?.map((s) => s.key)).toEqual([SAVE_KEY]);
   });
@@ -3348,8 +3407,8 @@ describe('guest.claimItems', () => {
       await caller()
     ).claimItems({ token: 'share-1', personToken: OTHER_TOKEN, personId: pid(2), claimedItemIndices: [0] });
     expect(savedAssignments()).toEqual([
-      { itemIndex: 1, personIndices: [2] },
-      { itemIndex: 0, personIndices: [1] },
+      { itemIndex: 1, personIndices: [2], partsByPersonId: { [pid(3)]: 1 } },
+      { itemIndex: 0, personIndices: [1], partsByPersonId: { [pid(2)]: 1 } },
     ]);
   });
 
@@ -3655,7 +3714,7 @@ describe('guest.claimItems with three people', () => {
     await (
       await caller()
     ).claimItems({ token: 'share-1', personToken: OTHER_TOKEN, personId: pid(2), claimedItemIndices: [0] });
-    expect(savedAssignments()).toEqual([{ itemIndex: 0, personIndices: [1] }]);
+    expect(savedAssignments()).toEqual([{ itemIndex: 0, personIndices: [1], partsByPersonId: { [pid(2)]: 1 } }]);
   });
 });
 
