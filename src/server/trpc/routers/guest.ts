@@ -37,7 +37,11 @@ import { guestPresenceState } from '@/lib/guest-presence';
 import { hasDuplicateGuestNames, normalizeGuestName } from '@/lib/guest-session';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { MAX_MONEY_CENTS } from '@/lib/money';
-import { receiptPaymentMemberships, setReceiptPaymentGroups } from '@/lib/receipt-payment-groups';
+import {
+  aggregateReceiptPaymentGroups,
+  receiptPaymentMemberships,
+  setReceiptPaymentGroups,
+} from '@/lib/receipt-payment-groups';
 import { authorizeReceiptPersonEdit, appendDelegatedReceiptAudit } from '../../lib/guest-group-delegation';
 import { normalizeSbpPhone, isSupportedSbpBankId } from '@/lib/sbp-banks';
 import { checkJoinRateLimit } from '../../lib/guest-join-limit';
@@ -341,6 +345,26 @@ function cloneAssignments(assignments: GuestPortionAssignment[]) {
   }));
 }
 
+/**
+ * A finalized receipt contains one group debt for every reimbursement
+ * representative. Its individual row totals are immutable: group money is a
+ * computed view, not new money and never a separate transfer per member.
+ * Existing non-grouped receipts retain the original payment protocol.
+ */
+function finalizedPaymentGroups(
+  people: GuestSessionPerson[],
+  paidByIndex: number,
+  summary: { personIndex: number; total: number; tip: number }[],
+  receiptTotal: number,
+) {
+  if (!people.some((person) => person.paymentGroupRepresentativeId !== undefined)) return null;
+  try {
+    return aggregateReceiptPaymentGroups(people, paidByIndex, summary, receiptTotal).groups;
+  } catch {
+    throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  }
+}
+
 /** Return only a verified non-payer with a positive, reconciled personal debt.
  * Never authorize using a public share token, creator login or display name.
  */
@@ -391,9 +415,15 @@ function requireGuestDebtor(
   ) {
     throw new AppError('FORBIDDEN', 'invalidPersonToken');
   }
+  const paymentGroups = finalizedPaymentGroups(people, split.paidByIndex, summary, receipt.total!);
+  const group = paymentGroups?.find((entry) => entry.memberIndices.includes(personIndex));
   const due = summary.find((entry) => entry.personIndex === personIndex);
-  if (!due || due.total <= 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
-  return { people, person, personIndex };
+  if (group ? group.totalCents <= 0 : !due || due.total <= 0) {
+    throw new AppError('FORBIDDEN', 'invalidPersonToken');
+  }
+  const paymentIndex =
+    group?.memberIndices.find((index) => people[index]!.id === group.representativeId) ?? personIndex;
+  return { people, person, personIndex, paymentIndex, paymentPerson: people[paymentIndex]!, group };
 }
 
 /** Check payer's identity and reconcile the finalized receipt before allowing
@@ -444,7 +474,8 @@ function requireGuestPayerReview(
   ) {
     throw new AppError('FORBIDDEN', 'invalidPersonToken');
   }
-  return { people, summary };
+  const paymentGroups = finalizedPaymentGroups(people, split.paidByIndex, summary, receipt.total!);
+  return { people, summary, paymentGroups };
 }
 
 // ─── Shared Zod schemas (Finding #27) ────────────────────────────
@@ -2696,10 +2727,10 @@ export const guestRouter = createTRPCRouter({
       });
       if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
       if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
-      const { person } = requireGuestDebtor(split, input.personId, input.personToken);
+      const { paymentPerson } = requireGuestDebtor(split, input.personId, input.personToken);
       return {
-        declaredPaidAt: person.paymentDeclaredAt ?? null,
-        verifiedAt: person.paymentDeclaredAt ? (person.paymentVerifiedAt ?? null) : null,
+        declaredPaidAt: paymentPerson.paymentDeclaredAt ?? null,
+        verifiedAt: paymentPerson.paymentDeclaredAt ? (paymentPerson.paymentVerifiedAt ?? null) : null,
       };
     }),
 
@@ -2713,14 +2744,21 @@ export const guestRouter = createTRPCRouter({
         const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
         if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
-        const { people, person, personIndex } = requireGuestDebtor(split, input.personId, input.personToken);
-        if (person.paymentDeclaredAt) {
-          // Idempotent when a delayed retry or a second tab sends the same action.
-          return { declaredPaidAt: person.paymentDeclaredAt };
+        const { people, paymentPerson, paymentIndex, personIndex } = requireGuestDebtor(
+          split,
+          input.personId,
+          input.personToken,
+        );
+        // A group member's personal link can read the group status but can
+        // never declare another transfer for the same shared debt.
+        if (paymentIndex !== personIndex) throw new AppError('FORBIDDEN', 'notParticipant');
+        if (paymentPerson.paymentDeclaredAt) {
+          // One declaration per group, idempotent across devices/retries.
+          return { declaredPaidAt: paymentPerson.paymentDeclaredAt };
         }
         const timestamp = new Date().toISOString();
         const updated = people.map((entry, index) =>
-          index === personIndex ? { ...entry, paymentDeclaredAt: timestamp } : entry,
+          index === paymentIndex ? { ...entry, paymentDeclaredAt: timestamp } : entry,
         );
         await tx.guestSplit.update({
           where: { id: split.id },
@@ -2744,20 +2782,34 @@ export const guestRouter = createTRPCRouter({
       });
       if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
       if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
-      const { people, summary } = requireGuestPayerReview(split, input.personId, input.personToken);
+      const { people, summary, paymentGroups } = requireGuestPayerReview(split, input.personId, input.personToken);
       return {
-        payments: summary
-          .filter((entry) => entry.personIndex !== split.paidByIndex && entry.total > 0)
-          .map((entry) => {
-            const person = people[entry.personIndex]!;
-            return {
-              personId: person.id!,
-              name: person.name,
-              amount: entry.total,
-              declaredPaidAt: person.paymentDeclaredAt ?? null,
-              verifiedAt: person.paymentDeclaredAt ? (person.paymentVerifiedAt ?? null) : null,
-            };
-          }),
+        payments: paymentGroups
+          ? paymentGroups
+              .filter((group) => group.totalCents > 0)
+              .map((group) => {
+                const representative = people.find((person) => person.id === group.representativeId)!;
+                return {
+                  personId: representative.id!,
+                  name: representative.name,
+                  amount: group.totalCents,
+                  declaredPaidAt: representative.paymentDeclaredAt ?? null,
+                  verifiedAt: representative.paymentDeclaredAt ? (representative.paymentVerifiedAt ?? null) : null,
+                  ...(group.grouped ? { memberIds: group.memberIds, members: group.members } : {}),
+                };
+              })
+          : summary
+              .filter((entry) => entry.personIndex !== split.paidByIndex && entry.total > 0)
+              .map((entry) => {
+                const person = people[entry.personIndex]!;
+                return {
+                  personId: person.id!,
+                  name: person.name,
+                  amount: entry.total,
+                  declaredPaidAt: person.paymentDeclaredAt ?? null,
+                  verifiedAt: person.paymentDeclaredAt ? (person.paymentVerifiedAt ?? null) : null,
+                };
+              }),
       };
     }),
 
@@ -2778,12 +2830,15 @@ export const guestRouter = createTRPCRouter({
         const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
         if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
-        const { people, summary } = requireGuestPayerReview(split, input.personId, input.personToken);
+        const { people, summary, paymentGroups } = requireGuestPayerReview(split, input.personId, input.personToken);
         const debtorIndex = people.findIndex((person) => person.id === input.debtorId);
+        const validGroup = paymentGroups?.find(
+          (group) => group.representativeId === input.debtorId && group.totalCents > 0,
+        );
         if (
           debtorIndex < 0 ||
           debtorIndex === split.paidByIndex ||
-          !summary.some((entry) => entry.personIndex === debtorIndex && entry.total > 0)
+          (paymentGroups ? !validGroup : !summary.some((entry) => entry.personIndex === debtorIndex && entry.total > 0))
         ) {
           throw new AppError('FORBIDDEN', 'invalidPersonToken');
         }
@@ -2889,8 +2944,15 @@ export const guestRouter = createTRPCRouter({
       ) {
         throw new AppError('FORBIDDEN', 'invalidPersonToken');
       }
-      const owed = summary.find((person) => person.personIndex === personIndex);
-      if (!owed || owed.total <= 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      const groupPayments = finalizedPaymentGroups(people, split.paidByIndex, summary, receipt.total!);
+      if (groupPayments) {
+        const payment = groupPayments.find((group) => group.representativeId === input.personId);
+        // A group is paid once by its representative, not by every diner.
+        if (!payment || payment.totalCents <= 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      } else {
+        const owed = summary.find((person) => person.personIndex === personIndex);
+        if (!owed || owed.total <= 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      }
       return {
         phone: split.payerSbpPhone && split.payerSbpBankId ? split.payerSbpPhone : null,
         bankId: split.payerSbpPhone && split.payerSbpBankId ? split.payerSbpBankId : null,

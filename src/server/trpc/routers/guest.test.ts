@@ -5438,3 +5438,193 @@ describe('Issue 3.24.1.3: delegated group edits to dishes, parts and personal ti
     expect(JSON.stringify(session)).not.toContain(ALICE_TOKEN);
   });
 });
+
+describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once', () => {
+  const payerId = '10000000-0000-4000-8000-000000000001';
+  const wifeId = '10000000-0000-4000-8000-000000000002';
+  const husbandId = '10000000-0000-4000-8000-000000000003';
+  const childId = '10000000-0000-4000-8000-000000000004';
+  const soloId = '10000000-0000-4000-8000-000000000005';
+  const payerToken = '20000000-0000-4000-8000-000000000001';
+  const wifeToken = '20000000-0000-4000-8000-000000000002';
+  const husbandToken = '20000000-0000-4000-8000-000000000003';
+  const soloToken = '20000000-0000-4000-8000-000000000005';
+  const auth = (personId: string, personToken: string) => ({
+    token: 'family-receipt',
+    personId,
+    personToken,
+  });
+  const wifeAuth = auth(wifeId, wifeToken);
+  const husbandAuth = auth(husbandId, husbandToken);
+  const soloAuth = auth(soloId, soloToken);
+  const payerAuth = auth(payerId, payerToken);
+  const start = () => ({
+    id: 'family-split-1',
+    shareToken: 'family-receipt',
+    status: 'FINALIZED',
+    expiresAt: new Date(Date.now() + 86_400_000),
+    paidByIndex: 0,
+    receiptData: { subtotal: 1201, total: 1201, tax: 0, tip: 0, currency: 'RUB' },
+    summary: [
+      { personIndex: 0, total: 100, tip: 0 },
+      { personIndex: 1, total: 250, tip: 0 },
+      { personIndex: 2, total: 300, tip: 0 },
+      { personIndex: 3, total: 401, tip: 50 },
+      { personIndex: 4, total: 200, tip: 0 },
+    ],
+    people: [
+      { id: payerId, personToken: payerToken, name: 'Плательщик' },
+      { id: wifeId, personToken: wifeToken, name: 'Жена', paymentGroupRepresentativeId: wifeId },
+      { id: husbandId, personToken: husbandToken, name: 'Муж', paymentGroupRepresentativeId: wifeId },
+      { id: childId, name: 'Ребёнок', paymentGroupRepresentativeId: wifeId },
+      { id: soloId, personToken: soloToken, name: 'Друг' },
+    ],
+    payerSbpPhone: '+79991234567',
+    payerSbpBankId: '100000000273',
+  });
+
+  beforeEach(() => {
+    mockDb.guestSplit.findUnique.mockImplementation(async () => structuredClone(start()));
+    mockDb.guestSplit.update.mockResolvedValue({ id: 'family-split-1' });
+  });
+
+  test('payer sees ONE 951-kopeck family transfer, 200-kopeck solo debt and no duplicated debt', async () => {
+    const result = await (await caller()).getMyPayerPaymentReview(payerAuth);
+    expect(result.payments).toEqual([
+      {
+        personId: wifeId,
+        name: 'Жена',
+        amount: 951,
+        declaredPaidAt: null,
+        verifiedAt: null,
+        memberIds: [wifeId, husbandId, childId],
+        members: [
+          { personId: wifeId, personIndex: 1, amountCents: 250, tipCents: 0 },
+          { personId: husbandId, personIndex: 2, amountCents: 300, tipCents: 0 },
+          { personId: childId, personIndex: 3, amountCents: 401, tipCents: 50 },
+        ],
+      },
+      { personId: soloId, name: 'Друг', amount: 200, declaredPaidAt: null, verifiedAt: null },
+    ]);
+    expect(result.payments.reduce((sum, payment) => sum + payment.amount, 0)).toBe(1151);
+    expect(start().summary.reduce((sum, person) => sum + person.total, 0)).toBe(1251);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('only representative declares the whole group payment; retry writes no second payment', async () => {
+    const api = await caller();
+    const result = await api.markMyPayment(wifeAuth);
+    expect(new Date(result.declaredPaidAt).toISOString()).toBe(result.declaredPaidAt);
+    const changed = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(changed[1].paymentDeclaredAt).toBe(result.declaredPaidAt);
+    expect(changed[2].paymentDeclaredAt).toBeUndefined();
+    expect(changed[3].paymentDeclaredAt).toBeUndefined();
+    expect(changed[4].paymentDeclaredAt).toBeUndefined();
+    expect(mockDb.guestSplit.update).toHaveBeenCalledOnce();
+
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...start(), people: changed });
+    mockDb.guestSplit.update.mockClear();
+    await expect(api.markMyPayment(wifeAuth)).resolves.toEqual(result);
+    await expect(api.getMyPaymentDeclaration(husbandAuth)).resolves.toEqual({
+      declaredPaidAt: result.declaredPaidAt,
+      verifiedAt: null,
+    });
+    await expect(api.markMyPayment(husbandAuth)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('payer verifies group transfer once; members see the same verified status', async () => {
+    const declared = '2026-11-08T18:00:00.000Z';
+    const saved = start();
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...saved,
+      people: saved.people.map((person, index) => (index === 1 ? { ...person, paymentDeclaredAt: declared } : person)),
+    });
+    const api = await caller();
+    const confirmed = await api.confirmGuestPaymentReceived({ ...payerAuth, debtorId: wifeId });
+    expect(new Date(confirmed.verifiedAt).toISOString()).toBe(confirmed.verifiedAt);
+    const updated = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(updated[1].paymentVerifiedAt).toBe(confirmed.verifiedAt);
+    expect(updated[2].paymentVerifiedAt).toBeUndefined();
+    expect(updated[3].paymentVerifiedAt).toBeUndefined();
+    expect(mockDb.guestSplit.update).toHaveBeenCalledOnce();
+
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...saved, people: updated });
+    mockDb.guestSplit.update.mockClear();
+    await expect(api.confirmGuestPaymentReceived({ ...payerAuth, debtorId: wifeId })).resolves.toEqual(confirmed);
+    await expect(api.getMyPaymentDeclaration(husbandAuth)).resolves.toEqual({
+      declaredPaidAt: declared,
+      verifiedAt: confirmed.verifiedAt,
+    });
+    const review = await api.getMyPayerPaymentReview(payerAuth);
+    expect(review.payments).toHaveLength(2);
+    expect(review.payments[0]).toMatchObject({
+      personId: wifeId,
+      amount: 951,
+      declaredPaidAt: declared,
+      verifiedAt: confirmed.verifiedAt,
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects duplicate confirmation using other group member, prior to declaration or with a foreign token', async () => {
+    const api = await caller();
+    await expect(api.confirmGuestPaymentReceived({ ...payerAuth, debtorId: husbandId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(api.confirmGuestPaymentReceived({ ...payerAuth, debtorId: childId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(api.confirmGuestPaymentReceived({ ...payerAuth, debtorId: wifeId })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await expect(api.confirmGuestPaymentReceived({ ...husbandAuth, debtorId: wifeId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(api.markMyPayment({ ...wifeAuth, personToken: husbandToken })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(api.markMyPayment({ ...soloAuth, personId: husbandId })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('only group representative receives payer SBP details for the one shared transfer', async () => {
+    const api = await caller();
+    await expect(api.getPayerSbpForReimbursement(wifeAuth)).resolves.toEqual({
+      phone: '+79991234567',
+      bankId: '100000000273',
+    });
+    await expect(api.getPayerSbpForReimbursement(husbandAuth)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.getPayerSbpForReimbursement(soloAuth)).resolves.toEqual({
+      phone: '+79991234567',
+      bankId: '100000000273',
+    });
+  });
+
+  test('group leader with zero personal share may still declare payment of relatives debt', async () => {
+    const record = start();
+    record.summary[1]!.total = 0;
+    record.summary[3]!.total = 651;
+    mockDb.guestSplit.findUnique.mockResolvedValue(record);
+    const api = await caller();
+    expect((await api.getMyPayerPaymentReview(payerAuth)).payments[0]).toMatchObject({
+      personId: wifeId,
+      amount: 951,
+    });
+    await expect(api.markMyPayment(wifeAuth)).resolves.toHaveProperty('declaredPaidAt');
+    await expect(api.getPayerSbpForReimbursement(wifeAuth)).resolves.toHaveProperty('phone', '+79991234567');
+  });
+
+  test('invalid financial totals or incorrect group topology fail closed', async () => {
+    const api = await caller();
+    const corrupted = start();
+    corrupted.receiptData.total = 1202;
+    mockDb.guestSplit.findUnique.mockResolvedValueOnce(corrupted);
+    await expect(api.getMyPayerPaymentReview(payerAuth)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const missingLeader = start();
+    missingLeader.people[1]!.paymentGroupRepresentativeId = husbandId;
+    mockDb.guestSplit.findUnique.mockResolvedValueOnce(missingLeader);
+    await expect(api.markMyPayment(wifeAuth)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+});
