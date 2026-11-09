@@ -337,7 +337,13 @@
     "payerPaymentGroupVerified": "Поступление подтверждено",
     "payerPaymentGroupAwaiting": "Сообщили об оплате — ожидают проверки",
     "payerPaymentGroupUnpaid": "Не оплатили",
-    "payerPaymentGroupEmpty": "Участников в этой группе пока нет."
+    "payerPaymentGroupEmpty": "Участников в этой группе пока нет.",
+    "payerSummaryTotal": "Всего должны вернуть",
+    "payerSummaryVerified": "Поступление подтверждено",
+    "payerSummaryAwaiting": "Ожидают проверки",
+    "payerSummaryUnpaid": "Ещё не оплатили",
+    "payerSummaryOutstanding": "Осталось получить / подтвердить",
+    "payerSummaryUnavailable": "Не удалось проверить суммы поступлений. Обновите страницу."
   },
   "result": {
     "loading": "Загрузка расчёта…",

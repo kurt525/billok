@@ -332,7 +332,13 @@
     "payerPaymentGroupVerified": "Receipt confirmed",
     "payerPaymentGroupAwaiting": "Reported payment — awaiting verification",
     "payerPaymentGroupUnpaid": "Not paid",
-    "payerPaymentGroupEmpty": "No participants in this group yet."
+    "payerPaymentGroupEmpty": "No participants in this group yet.",
+    "payerSummaryTotal": "Total owed to payer",
+    "payerSummaryVerified": "Receipt confirmed",
+    "payerSummaryAwaiting": "Awaiting verification",
+    "payerSummaryUnpaid": "Not paid yet",
+    "payerSummaryOutstanding": "Still to receive or verify",
+    "payerSummaryUnavailable": "Could not reconcile payment amounts. Refresh this page."
   },
   "result": {
     "loading": "Loading split...",

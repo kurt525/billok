@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { formatCents } from '@/lib/money';
 import { groupGuestPayerPayments, type GuestPayerPaymentGroup } from '@/lib/guest-payer-payment-groups';
+import { summarizeGuestPayerPaymentGroups } from '@/lib/guest-payer-payment-summary';
 import { mergeGuestPaymentStatuses, newlyDeclaredGuestPayments } from '@/lib/guest-payment-notifications';
 import { getDocumentActiveMountRegistry } from '@/lib/latest-active-mount';
 import { trpc } from '@/lib/trpc';
@@ -216,6 +217,7 @@ export function GuestPayerPaymentReview({
   }
 
   const paymentGroups = groupGuestPayerPayments(payments ?? [], personId);
+  const paymentSummary = summarizeGuestPayerPaymentGroups(paymentGroups);
   const groupLabels: Record<GuestPayerPaymentGroup, string> = {
     verified: t('payerPaymentGroupVerified'),
     awaiting: t('payerPaymentGroupAwaiting'),
@@ -240,6 +242,37 @@ export function GuestPayerPaymentReview({
         )}
         {!payments ? null : (
           <div className="space-y-3" data-testid="guest-payer-payment-groups">
+            {paymentSummary ? (
+              <dl
+                className="min-w-0 space-y-2 rounded-lg border p-3 text-sm"
+                data-testid="guest-payer-payment-summary"
+                aria-live="polite"
+              >
+                {(
+                  [
+                    ['total', 'payerSummaryTotal', paymentSummary.total],
+                    ['verified', 'payerSummaryVerified', paymentSummary.verified],
+                    ['awaiting', 'payerSummaryAwaiting', paymentSummary.awaiting],
+                    ['unpaid', 'payerSummaryUnpaid', paymentSummary.unpaid],
+                    ['outstanding', 'payerSummaryOutstanding', paymentSummary.outstanding],
+                  ] as const
+                ).map(([key, label, amount]) => (
+                  <div key={key} className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                    <dt className="min-w-0 [overflow-wrap:anywhere]">{t(label)}</dt>
+                    <dd
+                      className="min-w-0 max-w-full font-semibold tabular-nums [overflow-wrap:anywhere]"
+                      data-testid={'guest-payer-summary-' + key}
+                    >
+                      {formatCents(amount, 'RUB', locale)}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              <p className="text-sm text-destructive" data-testid="guest-payer-summary-invalid">
+                {t('payerSummaryUnavailable')}
+              </p>
+            )}
             {payments.length === 0 && <p className="text-sm text-muted-foreground">{t('payerPaymentReviewNone')}</p>}
             {statusOrder.map((status) => (
               <details
