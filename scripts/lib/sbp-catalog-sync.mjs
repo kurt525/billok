@@ -10,6 +10,11 @@ export function reconcileSbpCatalog(current, source) {
   if (!current || !Array.isArray(current.banks) || current.banks.length < MIN_BANKS) {
     throw new Error('Missing or invalid local SBP catalog');
   }
+  // The legacy updater reads the C2B QR-member registry. Once a reviewed
+  // C2C-only catalog is introduced, refuse to reactivate C2B-only banks.
+  if (current.sourceSystem !== 'NSPK C2B bank registry (not a guarantee of C2C phone transfers)') {
+    throw new Error('C2B updater cannot overwrite a non-C2B bank catalog');
+  }
   const date = Date.parse(source?.updatedAt);
   if (!Number.isFinite(date)) throw new Error('Invalid upstream catalog date');
   if (!Array.isArray(source.banks) || source.banks.length < MIN_BANKS || source.banks.length > MAX_BANKS) {
