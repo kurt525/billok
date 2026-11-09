@@ -1369,9 +1369,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(debtorSecondTab.getByTestId('guest-payment-declared')).toHaveText('Оплачено', {
       timeout: 15_000,
     });
-    await expect(debtorSecondTab.getByTestId('guest-payment-awaiting')).toHaveText(
-      'Ожидает подтверждения получателем',
-    );
+    await expect(debtorSecondTab.getByTestId('guest-payment-awaiting')).toHaveText('Ожидает подтверждения получателем');
 
     await otherPage.reload({ waitUntil: 'domcontentloaded' });
     await expect(otherPage.getByTestId('guest-mark-paid')).toHaveCount(0);

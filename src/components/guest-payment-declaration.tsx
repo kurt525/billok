@@ -92,10 +92,7 @@ export function GuestPaymentDeclaration({
     <div className="space-y-2" aria-live="polite" data-testid="guest-payment-declaration">
       {verifiedAt ? (
         <>
-          <p
-            className="text-sm font-semibold text-green-700 dark:text-green-400"
-            data-testid="guest-payment-verified"
-          >
+          <p className="text-sm font-semibold text-green-700 dark:text-green-400" data-testid="guest-payment-verified">
             {t('paymentVerifiedByRecipient')}
           </p>
           {declaredAt && (
@@ -106,10 +103,7 @@ export function GuestPaymentDeclaration({
         </>
       ) : declaredAt ? (
         <>
-          <p
-            className="text-sm font-semibold text-green-700 dark:text-green-400"
-            data-testid="guest-payment-declared"
-          >
+          <p className="text-sm font-semibold text-green-700 dark:text-green-400" data-testid="guest-payment-declared">
             {t('paymentDeclared')}
           </p>
           <p className="break-words text-sm tabular-nums" data-testid="guest-payment-declared-amount">
