@@ -1280,6 +1280,12 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       .poll(() => payerDestinationBank.locator('img').evaluate((img) => (img as HTMLImageElement).naturalWidth))
       .toBeGreaterThan(0);
     await expect(page.getByTestId('guest-sbp-reimbursement-phone')).toContainText('+79991234567');
+    // 4.7: SBP reimbursement never exposes a payment link, QR or bank-app redirect.
+    const sbpDetails = page.getByTestId('guest-sbp-reimbursement-details');
+    await expect(sbpDetails.locator('a[href], canvas, [data-testid*="qr"], [data-testid*="payment-link"]')).toHaveCount(
+      0,
+    );
+    await expect(sbpDetails.locator('button')).toHaveCount(1);
     await fitsPhone(page);
     await expect(page.getByTestId('guest-payer-sbp-form')).toHaveCount(0);
     await page.evaluate(() => {
