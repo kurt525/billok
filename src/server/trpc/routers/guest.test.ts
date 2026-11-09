@@ -5055,6 +5055,57 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
+  test('debtor may cancel their unverified declaration without changing the finalized receipt or other participants', async () => {
+    const api = await caller();
+    const timestamp = '2026-10-28T18:00:00.000Z';
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...base,
+      people: [{ ...base.people[0], paymentDeclaredAt: timestamp }, base.people[1]],
+    });
+    await expect(api.unmarkMyPayment(debtorAuth)).resolves.toEqual({ declaredPaidAt: null, verifiedAt: null });
+    const data = mockDb.guestSplit.update.mock.calls[0]![0].data;
+    expect(data.people[0].paymentDeclaredAt).toBeUndefined();
+    expect(data.people[0].paymentVerifiedAt).toBeUndefined();
+    expect(data.people[1]).toEqual(base.people[1]);
+    expect(data).not.toHaveProperty('summary');
+    expect(data).not.toHaveProperty('status');
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: data.people });
+    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({ declaredPaidAt: null, verifiedAt: null });
+    await expect(api.markMyPayment(debtorAuth)).resolves.toHaveProperty('declaredPaidAt');
+  });
+
+  test('repeated cancellation without a declaration is idempotent and creates no write', async () => {
+    await expect((await caller()).unmarkMyPayment(debtorAuth)).resolves.toEqual({
+      declaredPaidAt: null,
+      verifiedAt: null,
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('a confirmed receipt cannot be cancelled by the debtor or a forged token', async () => {
+    const timestamp = '2026-10-28T18:00:00.000Z';
+    const verified = '2026-10-28T18:02:00.000Z';
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...base,
+      people: [{ ...base.people[0], paymentDeclaredAt: timestamp, paymentVerifiedAt: verified }, base.people[1]],
+    });
+    const api = await caller();
+    await expect(api.unmarkMyPayment(debtorAuth)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(api.unmarkMyPayment({ ...debtorAuth, personToken: payerToken })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      api.unmarkMyPayment({ ...debtorAuth, personId: payerId, personToken: payerToken }),
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({
+      declaredPaidAt: timestamp,
+      verifiedAt: verified,
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
   test('rejects a nonfinalized, expired, zero-due or unreconciled receipt', async () => {
     const api = await caller();
     const scenarios = [
@@ -5548,6 +5599,26 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
     });
     await expect(api.markMyPayment(husbandAuth)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('only the family group representative may cancel one unverified group declaration', async () => {
+    const record = start();
+    const declared = '2026-11-08T18:00:00.000Z';
+    const markedPeople = record.people.map((person, index) =>
+      index === 1 ? { ...person, paymentDeclaredAt: declared } : person,
+    );
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...record, people: markedPeople });
+    const api = await caller();
+    await expect(api.unmarkMyPayment(husbandAuth)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.unmarkMyPayment(wifeAuth)).resolves.toEqual({ declaredPaidAt: null, verifiedAt: null });
+    const changed = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(changed[1].paymentDeclaredAt).toBeUndefined();
+    expect(changed[2]).toEqual(markedPeople[2]);
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...record, people: changed });
+    await expect(api.getMyPaymentDeclaration(husbandAuth)).resolves.toEqual({
+      declaredPaidAt: null,
+      verifiedAt: null,
+    });
   });
 
   test('payer verifies group transfer once; members see the same verified status', async () => {

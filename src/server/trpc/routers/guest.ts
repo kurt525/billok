@@ -2790,6 +2790,45 @@ export const guestRouter = createTRPCRouter({
       });
     }),
 
+  // A debtor may retract their own claim, but never undo the payer's confirmed receipt.
+  // The read and write share the same serialized GuestSplit transaction as payer confirmation.
+  unmarkMyPayment: publicProcedure
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payment-declaration-write', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const { people, paymentPerson, paymentIndex, personIndex } = requireGuestDebtor(
+          split,
+          input.personId,
+          input.personToken,
+        );
+        if (paymentIndex !== personIndex) throw new AppError('FORBIDDEN', 'notParticipant');
+        if (paymentPerson.paymentVerifiedAt) {
+          throw new AppError('BAD_REQUEST', 'paymentAlreadyVerified');
+        }
+        if (!paymentPerson.paymentDeclaredAt) {
+          return { declaredPaidAt: null, verifiedAt: null };
+        }
+        const updated = people.map((entry, index) => {
+          if (index !== paymentIndex) return entry;
+          const cleared = { ...entry };
+          delete cleared.paymentDeclaredAt;
+          delete cleared.paymentVerifiedAt;
+          return cleared;
+        });
+        await tx.guestSplit.update({
+          where: { id: split.id },
+          data: { people: updated as unknown as Prisma.InputJsonValue },
+        });
+        return { declaredPaidAt: null, verifiedAt: null };
+      });
+    }),
+
   // Payer-only private overview, including who declared a transfer and who
   // has had their incoming payment independently verified by the payer.
   getMyPayerPaymentReview: publicProcedure

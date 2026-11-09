@@ -176,5 +176,6 @@
   "receiptKnownPartsSplitItem": "To split this item, first clear its known original portion count.",
   "guestSlotTaken": "This guest place has already been taken. Choose another available place.",
   "guestPersonalLinkNotJoined": "The guest has not claimed this place yet.",
-  "guestPersonalLinkNotReady": "The guest has not saved their first change yet."
+  "guestPersonalLinkNotReady": "The guest has not saved their first change yet.",
+  "paymentAlreadyVerified": "The recipient has already confirmed receipt. The participant cannot cancel the declaration."
 }

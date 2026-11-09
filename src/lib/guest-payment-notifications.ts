@@ -11,14 +11,10 @@ export function mergeGuestPaymentStatuses<T extends GuestPaymentNoticeRow>(
   previous: readonly T[] | null,
   incoming: readonly T[],
 ): T[] {
-  return incoming.map((row) => {
-    const old = previous?.find((person) => person.personId === row.personId);
-    return {
-      ...row,
-      declaredPaidAt: row.declaredPaidAt ?? old?.declaredPaidAt ?? null,
-      verifiedAt: row.verifiedAt ?? old?.verifiedAt ?? null,
-    };
-  });
+  // Callers discard out-of-order read responses. Null from the newest server
+  // snapshot must clear a cancelled declaration, not resurrect an old status.
+  void previous;
+  return incoming.map((row) => ({ ...row }));
 }
 
 /** First successful poll establishes a baseline; do not notify on page reload. */

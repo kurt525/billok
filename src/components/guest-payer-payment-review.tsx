@@ -42,6 +42,9 @@ export function GuestPayerPaymentReview({
   const [loadFailed, setLoadFailed] = useState(false);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const latestPayments = useRef<PaymentRow[] | null>(null);
+  const latestRead = useRef(0);
+  const writeInFlight = useRef(false);
+  const refreshCurrent = useRef<() => void>(() => {});
   const readPayments = read.mutateAsync;
   const activePayerReviews = getDocumentActiveMountRegistry();
   const [mountId] = useState(() => Symbol('payer-review'));
@@ -68,10 +71,12 @@ export function GuestPayerPaymentReview({
     if (!isActiveReview) return;
     let cancelled = false;
     const refresh = () => {
+      if (writeInFlight.current) return;
+      const readId = ++latestRead.current;
       // Always read a fresh snapshot using the payer's personal token.
       void readPayments({ token, personId, personToken })
         .then((result) => {
-          if (cancelled) return;
+          if (cancelled || writeInFlight.current || readId !== latestRead.current) return;
           const merged = mergeGuestPaymentStatuses(latestPayments.current, result.payments);
           const newlyDeclared = newlyDeclaredGuestPayments(latestPayments.current, merged);
           latestPayments.current = merged;
@@ -96,19 +101,28 @@ export function GuestPayerPaymentReview({
           setLoadFailed(false);
         })
         .catch(() => {
-          if (!cancelled) setLoadFailed(true);
+          if (!cancelled && !writeInFlight.current && readId === latestRead.current) setLoadFailed(true);
         });
     };
+    refreshCurrent.current = refresh;
     refresh();
     const interval = setInterval(refresh, 12000);
     return () => {
       cancelled = true;
       clearInterval(interval);
+      refreshCurrent.current = () => {};
     };
   }, [isActiveReview, readPayments, token, personId, personToken, t]);
 
   async function confirmReceipt(debtorId: string) {
-    if (verifyingId || !payments?.some((p) => p.personId === debtorId && p.declaredPaidAt && !p.verifiedAt)) return;
+    if (
+      verifyingId ||
+      writeInFlight.current ||
+      !payments?.some((p) => p.personId === debtorId && p.declaredPaidAt && !p.verifiedAt)
+    )
+      return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
     setVerifyingId(debtorId);
     try {
       const result = await verify.mutateAsync({ token, personId, personToken, debtorId });
@@ -122,7 +136,9 @@ export function GuestPayerPaymentReview({
     } catch {
       toast.error(t('payerPaymentVerifyFailed'));
     } finally {
+      writeInFlight.current = false;
       setVerifyingId(null);
+      refreshCurrent.current();
     }
   }
 

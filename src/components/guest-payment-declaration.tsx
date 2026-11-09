@@ -25,35 +25,42 @@ export function GuestPaymentDeclaration({
   const t = useTranslations('split.claim');
   const read = trpc.guest.getMyPaymentDeclaration.useMutation();
   const mark = trpc.guest.markMyPayment.useMutation();
+  const unmark = trpc.guest.unmarkMyPayment.useMutation();
   const [declaredAt, setDeclaredAt] = useState<string | null>(null);
   const [verifiedAt, setVerifiedAt] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const lastVerified = useRef<string | null | undefined>(undefined);
+  const latestRead = useRef(0);
+  const writeInFlight = useRef(false);
+  const refreshCurrent = useRef<() => void>(() => {});
   const readStatus = read.mutateAsync;
 
   useEffect(() => {
     let cancelled = false;
     const refresh = () => {
+      if (writeInFlight.current) return;
+      const readId = ++latestRead.current;
       void readStatus({ token, personId, personToken })
         .then((data) => {
-          if (cancelled) return;
+          if (cancelled || writeInFlight.current || readId !== latestRead.current) return;
           if (becameVerified(lastVerified.current, data.verifiedAt)) {
             toast.success(t('paymentVerifiedNotice'), {
               id: 'billok-verified-' + token + '-' + personId + '-' + data.verifiedAt,
             });
           }
-          lastVerified.current = data.verifiedAt ?? lastVerified.current ?? null;
-          // Never roll the visible payment state back on an older poll result.
-          setDeclaredAt((previous) => data.declaredPaidAt ?? previous);
-          setVerifiedAt((previous) => data.verifiedAt ?? previous);
+          lastVerified.current = data.verifiedAt;
+          // A current server snapshot may legitimately clear a declaration; stale reads are ignored above.
+          setDeclaredAt(data.declaredPaidAt);
+          setVerifiedAt(data.verifiedAt);
           setLoaded(true);
           setFailed(false);
         })
         .catch(() => {
-          if (!cancelled) setFailed(true);
+          if (!cancelled && !writeInFlight.current && readId === latestRead.current) setFailed(true);
         });
     };
+    refreshCurrent.current = refresh;
     refresh();
     const interval = setInterval(refresh, 12000);
     // Refresh promptly when another tab/device changed the persisted payment state.
@@ -69,17 +76,42 @@ export function GuestPaymentDeclaration({
       window.removeEventListener('focus', refresh);
       window.removeEventListener('online', refresh);
       document.removeEventListener('visibilitychange', refreshOnVisible);
+      refreshCurrent.current = () => {};
     };
   }, [readStatus, token, personId, personToken, t]);
 
   async function declarePayment() {
-    if (!canDeclare || !loaded || declaredAt || mark.isPending) return;
+    if (!canDeclare || !loaded || declaredAt || verifiedAt || writeInFlight.current) return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
     try {
       const result = await mark.mutateAsync({ token, personId, personToken });
       setDeclaredAt(result.declaredPaidAt);
       toast.success(t('paymentDeclared'));
     } catch {
       toast.error(t('paymentDeclarationFailed'));
+    } finally {
+      writeInFlight.current = false;
+      refreshCurrent.current();
+    }
+  }
+
+  async function cancelDeclaration() {
+    if (!canDeclare || !loaded || !declaredAt || verifiedAt || writeInFlight.current) return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
+    try {
+      await unmark.mutateAsync({ token, personId, personToken });
+      setDeclaredAt(null);
+      setVerifiedAt(null);
+      lastVerified.current = null;
+      toast.success(t('paymentUnmarked'));
+    } catch {
+      // A payer may have verified this payment while cancellation was in flight.
+      toast.error(t('paymentUnmarkFailed'));
+    } finally {
+      writeInFlight.current = false;
+      refreshCurrent.current();
     }
   }
   if (!loaded)
@@ -112,6 +144,18 @@ export function GuestPaymentDeclaration({
           <p className="text-xs text-muted-foreground" data-testid="guest-payment-awaiting">
             {t('paymentAwaitingRecipient')}
           </p>
+          {canDeclare && (
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere]"
+              onClick={cancelDeclaration}
+              disabled={unmark.isPending || mark.isPending}
+              data-testid="guest-unmark-paid"
+            >
+              {t('paymentUnmarkAction')}
+            </Button>
+          )}
         </>
       ) : canDeclare ? (
         <>

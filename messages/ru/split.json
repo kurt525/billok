@@ -330,7 +330,10 @@
     "distributedBillTotal": "Общий итог чека",
     "distributionComplete": "Все позиции назначены. Ожидается подтверждение организатора.",
     "distributionConfirmed": "Распределение частей подтверждено организатором.",
-    "distributionIncomplete": "Есть позиции, которые ещё никто не выбрал."
+    "distributionIncomplete": "Есть позиции, которые ещё никто не выбрал.",
+    "paymentUnmarkAction": "Отменить отметку об оплате",
+    "paymentUnmarked": "Отметка об оплате отменена",
+    "paymentUnmarkFailed": "Не удалось отменить отметку. Возможно, получатель уже подтвердил поступление."
   },
   "result": {
     "loading": "Загрузка расчёта…",

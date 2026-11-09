@@ -1371,6 +1371,22 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     });
     await expect(debtorSecondTab.getByTestId('guest-payment-awaiting')).toHaveText('Ожидает подтверждения получателем');
 
+    // 5.3: the debtor retracts a mistaken declaration before the payer confirms receipt.
+    await page.getByTestId('guest-unmark-paid').click();
+    await expect(page.getByTestId('guest-mark-paid')).toBeVisible();
+    await expect(page.getByTestId('guest-mark-paid')).toHaveClass(/text-red-700/);
+    await expect(page.getByTestId('guest-payment-declared')).toHaveCount(0);
+    await debtorSecondTab.reload({ waitUntil: 'domcontentloaded' });
+    await expect(debtorSecondTab.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 15_000 });
+    await expect(livePayerReview.getByTestId('guest-payer-payment-status-' + anna.personId)).toContainText(
+      'Ожидается отметка участника',
+      { timeout: 25_000 },
+    );
+    // Sending a real transfer later can be declared again. There is still one debt.
+    await page.getByTestId('guest-mark-paid').click();
+    await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено');
+    await expect(page.getByTestId('guest-unmark-paid')).toBeVisible();
+
     await otherPage.reload({ waitUntil: 'domcontentloaded' });
     await expect(otherPage.getByTestId('guest-mark-paid')).toHaveCount(0);
     await expect(otherPage.getByTestId('guest-payment-declared')).toHaveCount(0);
@@ -1437,6 +1453,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(annaPayment).toContainText('Поступление проверено');
     await expect(payerReview.getByTestId('guest-payer-verify-' + anna.personId)).toHaveCount(0);
     // The debtor learns the independent payer verification without reloading.
+    await expect(page.getByTestId('guest-unmark-paid')).toHaveCount(0);
     await expect(page.getByTestId('guest-payment-verified')).toHaveText('Поступление подтверждено получателем', {
       timeout: 25_000,
     });

@@ -325,7 +325,10 @@
     "distributedBillTotal": "Receipt total",
     "distributionComplete": "Every item is assigned. Awaiting organizer approval.",
     "distributionConfirmed": "The organizer confirmed the distribution.",
-    "distributionIncomplete": "Some receipt items are still unclaimed."
+    "distributionIncomplete": "Some receipt items are still unclaimed.",
+    "paymentUnmarkAction": "Cancel payment declaration",
+    "paymentUnmarked": "Payment declaration cancelled",
+    "paymentUnmarkFailed": "Could not cancel the declaration. The recipient may already have verified receipt."
   },
   "result": {
     "loading": "Loading split...",

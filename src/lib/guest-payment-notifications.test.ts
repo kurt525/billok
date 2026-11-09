@@ -23,8 +23,9 @@ describe('guest receipt notification transitions', () => {
     expect(newlyDeclaredGuestPayments([b], [marked, b])).toEqual([]);
     expect(newlyDeclaredGuestPayments([marked, b], [b, verified])).toEqual([]);
   });
-  it('keeps confirmed statuses when an older poll completes late', () => {
-    expect(mergeGuestPaymentStatuses([verified, b], [a, b])[0]).toEqual(verified);
+  it('accepts an authoritative cancellation or revoked verification after stale reads are filtered by the caller', () => {
+    expect(mergeGuestPaymentStatuses([marked, b], [a, b])[0]).toEqual(a);
+    expect(mergeGuestPaymentStatuses([verified, b], [marked, b])[0]).toEqual(marked);
   });
   it('only notifies a debtor of a new verification after an initial read', () => {
     expect(becameVerified(undefined, verified.verifiedAt)).toBe(false);
