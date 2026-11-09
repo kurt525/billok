@@ -2836,6 +2836,7 @@ export const guestRouter = createTRPCRouter({
           delete cleared.paymentDeclaredAt;
           delete cleared.paymentDeclaredAmountCents;
           delete cleared.paymentVerifiedAt;
+          delete cleared.paymentVerifiedByPersonId;
           return cleared;
         });
         await tx.guestSplit.update({
@@ -2873,6 +2874,10 @@ export const guestRouter = createTRPCRouter({
                   amount: group.totalCents,
                   declaredPaidAt: representative.paymentDeclaredAt ?? null,
                   verifiedAt: representative.paymentDeclaredAt ? (representative.paymentVerifiedAt ?? null) : null,
+                  verifiedByPersonId:
+                    representative.paymentDeclaredAt && representative.paymentVerifiedAt
+                      ? (representative.paymentVerifiedByPersonId ?? null)
+                      : null,
                   ...(group.grouped ? { memberIds: group.memberIds, members: group.members } : {}),
                 };
               })
@@ -2886,6 +2891,10 @@ export const guestRouter = createTRPCRouter({
                   amount: entry.total,
                   declaredPaidAt: person.paymentDeclaredAt ?? null,
                   verifiedAt: person.paymentDeclaredAt ? (person.paymentVerifiedAt ?? null) : null,
+                  verifiedByPersonId:
+                    person.paymentDeclaredAt && person.paymentVerifiedAt
+                      ? (person.paymentVerifiedByPersonId ?? null)
+                      : null,
                 };
               }),
       };
@@ -2928,7 +2937,9 @@ export const guestRouter = createTRPCRouter({
         if (debtor.paymentVerifiedAt) return { verifiedAt: debtor.paymentVerifiedAt };
         const verifiedAt = new Date().toISOString();
         const updated = people.map((person, index) =>
-          index === debtorIndex ? { ...person, paymentVerifiedAt: verifiedAt } : person,
+          index === debtorIndex
+            ? { ...person, paymentVerifiedAt: verifiedAt, paymentVerifiedByPersonId: input.personId }
+            : person,
         );
         await tx.guestSplit.update({
           where: { id: split.id },

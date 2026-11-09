@@ -58,6 +58,8 @@ export type GuestSessionPerson = {
   paymentDeclaredAmountCents?: number;
   // Payer's independent verification after checking actual incoming funds.
   paymentVerifiedAt?: string;
+  // Private audit: stable personId of the actual payer who confirmed this transfer, never a display name.
+  paymentVerifiedByPersonId?: string;
   // The join that created (or first claimed) this person: its idempotency key and the normalized
   // name it was made with, replayable until expiresAt (epoch ms). See guest.joinSession.
   join?: { key: string; name: string; expiresAt: number };

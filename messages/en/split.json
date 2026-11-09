@@ -244,8 +244,8 @@
     "payerPaymentReviewNone": "No reimbursements from other participants.",
     "payerPaymentNotDeclared": "Awaiting participant declaration",
     "payerPaymentDeclared": "Participant marked paid — check receipt",
-    "payerPaymentVerified": "Receipt verified",
-    "payerPaymentVerifyAction": "Verify receipt of funds",
+    "payerPaymentVerified": "Receipt confirmed",
+    "payerPaymentVerifyAction": "Confirm receipt of funds",
     "payerPaymentVerifiedToast": "Receipt marked as verified",
     "payerPaymentVerifyFailed": "Could not confirm funds received",
     "payerPaymentDeclarationNotice": "New payment declaration: {name} — {amount}. Check incoming funds.",
@@ -338,7 +338,9 @@
     "payerSummaryAwaiting": "Awaiting verification",
     "payerSummaryUnpaid": "Not paid yet",
     "payerSummaryOutstanding": "Still to receive or verify",
-    "payerSummaryUnavailable": "Could not reconcile payment amounts. Refresh this page."
+    "payerSummaryUnavailable": "Could not reconcile payment amounts. Refresh this page.",
+    "payerPaymentVerifiedAudit": "Confirmed by {payer} · {at}",
+    "payerPaymentVerifierFallback": "payer"
   },
   "result": {
     "loading": "Loading split...",

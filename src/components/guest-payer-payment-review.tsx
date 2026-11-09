@@ -18,6 +18,7 @@ type PaymentRow = {
   amount: number;
   declaredPaidAt: string | null;
   verifiedAt: string | null;
+  verifiedByPersonId: string | null;
   memberIds?: string[];
   members?: { personId: string; personIndex: number; amountCents: number; tipCents: number }[];
 };
@@ -339,6 +340,31 @@ export function GuestPayerPaymentReview({
                             ? t('payerPaymentDeclared')
                             : t('payerPaymentNotDeclared')}
                       </p>
+                      {payment.verifiedAt && (
+                        <>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="min-h-11 w-full min-w-0 whitespace-normal border-green-600 bg-green-50 text-center text-green-800 [overflow-wrap:anywhere] disabled:cursor-default disabled:opacity-100 dark:border-green-700 dark:bg-green-950 dark:text-green-300"
+                            disabled
+                            data-testid={'guest-payer-verified-' + payment.personId}
+                          >
+                            {t('payerPaymentVerified')}
+                          </Button>
+                          <p
+                            className="min-w-0 break-words text-xs text-muted-foreground"
+                            data-testid={'guest-payer-verified-audit-' + payment.personId}
+                          >
+                            {t('payerPaymentVerifiedAudit', {
+                              payer: payment.verifiedByPersonId
+                                ? (people?.find((person) => person.id === payment.verifiedByPersonId)?.name ??
+                                  t('payerPaymentVerifierFallback'))
+                                : t('payerPaymentVerifierFallback'),
+                              at: new Date(payment.verifiedAt).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US'),
+                            })}
+                          </p>
+                        </>
+                      )}
                       {payment.declaredPaidAt && !payment.verifiedAt && (
                         <Button
                           type="button"

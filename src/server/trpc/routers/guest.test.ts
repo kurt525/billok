@@ -5212,8 +5212,22 @@ describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () =
     const api = await caller();
     await expect(api.getMyPayerPaymentReview(payerAuth)).resolves.toEqual({
       payments: [
-        { personId: debtorId, name: 'Анна', amount: 459, declaredPaidAt: marked, verifiedAt: null },
-        { personId: anotherId, name: 'Виктор', amount: 408, declaredPaidAt: null, verifiedAt: null },
+        {
+          personId: debtorId,
+          name: 'Анна',
+          amount: 459,
+          declaredPaidAt: marked,
+          verifiedAt: null,
+          verifiedByPersonId: null,
+        },
+        {
+          personId: anotherId,
+          name: 'Виктор',
+          amount: 408,
+          declaredPaidAt: null,
+          verifiedAt: null,
+          verifiedByPersonId: null,
+        },
       ],
     });
   });
@@ -5224,10 +5238,25 @@ describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () =
     expect(new Date(result.verifiedAt).toISOString()).toBe(result.verifiedAt);
     const update = mockDb.guestSplit.update.mock.calls[0]![0];
     expect(update.data.people[0].paymentVerifiedAt).toBe(result.verifiedAt);
+    expect(update.data.people[0].paymentVerifiedByPersonId).toBe(payerId);
     expect(update.data.people[1].paymentVerifiedAt).toBeUndefined();
+    expect(update.data.people[1].paymentVerifiedByPersonId).toBeUndefined();
     expect(update.data.people[2].paymentVerifiedAt).toBeUndefined();
     expect(update.data).not.toHaveProperty('summary');
     expect(update.data).not.toHaveProperty('status');
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: update.data.people });
+    await expect(api.getMyPayerPaymentReview(payerAuth)).resolves.toMatchObject({
+      payments: [
+        {
+          personId: debtorId,
+          amount: 459,
+          verifiedAt: result.verifiedAt,
+          verifiedByPersonId: payerId,
+        },
+        { personId: anotherId, verifiedAt: null, verifiedByPersonId: null },
+      ],
+    });
+    // The receipt is still unpaid at the bank level: this is solely the payer's attestation.
   });
 
   test('repeated verification returns original timestamp without another write', async () => {
@@ -5308,6 +5337,7 @@ describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () =
     });
     const publicView = await api.getSession({ token: payerAuth.token });
     expect(JSON.stringify(publicView)).not.toContain('paymentVerifiedAt');
+    expect(JSON.stringify(publicView)).not.toContain('paymentVerifiedByPersonId');
     expect(JSON.stringify(publicView)).not.toContain('paymentDeclaredAt');
   });
 });
@@ -5600,6 +5630,7 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
         amount: 951,
         declaredPaidAt: null,
         verifiedAt: null,
+        verifiedByPersonId: null,
         memberIds: [wifeId, husbandId, childId],
         members: [
           { personId: wifeId, personIndex: 1, amountCents: 250, tipCents: 0 },
@@ -5607,7 +5638,7 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
           { personId: childId, personIndex: 3, amountCents: 401, tipCents: 50 },
         ],
       },
-      { personId: soloId, name: 'Друг', amount: 200, declaredPaidAt: null, verifiedAt: null },
+      { personId: soloId, name: 'Друг', amount: 200, declaredPaidAt: null, verifiedAt: null, verifiedByPersonId: null },
     ]);
     expect(result.payments.reduce((sum, payment) => sum + payment.amount, 0)).toBe(1151);
     expect(start().summary.reduce((sum, person) => sum + person.total, 0)).toBe(1251);
@@ -5673,7 +5704,9 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
     expect(new Date(confirmed.verifiedAt).toISOString()).toBe(confirmed.verifiedAt);
     const updated = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
     expect(updated[1].paymentVerifiedAt).toBe(confirmed.verifiedAt);
+    expect(updated[1].paymentVerifiedByPersonId).toBe(payerId);
     expect(updated[2].paymentVerifiedAt).toBeUndefined();
+    expect(updated[2].paymentVerifiedByPersonId).toBeUndefined();
     expect(updated[3].paymentVerifiedAt).toBeUndefined();
     expect(mockDb.guestSplit.update).toHaveBeenCalledOnce();
 
@@ -5692,6 +5725,7 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
       amount: 951,
       declaredPaidAt: declared,
       verifiedAt: confirmed.verifiedAt,
+      verifiedByPersonId: payerId,
     });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });

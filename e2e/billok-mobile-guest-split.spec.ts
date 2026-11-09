@@ -1477,6 +1477,8 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // Android display or Galaxy S23 with enlarged text and a short viewport.
     await otherPage.addStyleTag({ content: 'html { font-size: 20px !important; }' });
     const verifyAnna = payerReview.getByTestId('guest-payer-verify-' + anna.personId);
+    await expect(verifyAnna).toHaveText('Подтвердить поступление');
+    await expect(verifyAnna).toBeEnabled();
     for (const width of [360, 430, 720]) {
       await otherPage.setViewportSize({ width, height: 380 });
       await expect(payerReview).toHaveCount(1);
@@ -1500,7 +1502,14 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       expect(buttonBounds!.x + buttonBounds!.width).toBeLessThanOrEqual(width);
     }
     await verifyAnna.click();
-    await expect(annaPayment).toContainText('Поступление проверено');
+    await expect(annaPayment).toContainText('Поступление подтверждено');
+    const verifiedButton = payerReview.getByTestId('guest-payer-verified-' + anna.personId);
+    await expect(verifiedButton).toHaveText('Поступление подтверждено');
+    await expect(verifiedButton).toBeDisabled();
+    await expect(verifiedButton).toHaveClass(/border-green-600/);
+    const confirmedAudit = payerReview.getByTestId('guest-payer-verified-audit-' + anna.personId);
+    await expect(confirmedAudit).toContainText('Подтвердил: Борис', { timeout: 15_000 });
+    await expect(confirmedAudit).toContainText('20');
     const confirmedSummary = payerReview.getByTestId('guest-payer-payment-summary');
     await expect(confirmedSummary.getByTestId('guest-payer-summary-total')).toContainText('8,67');
     await expect(confirmedSummary.getByTestId('guest-payer-summary-verified')).toContainText('4,59');
@@ -1552,7 +1561,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       );
     }
     await expect(payerReview.getByTestId('guest-payer-payment-' + anna.personId)).toContainText(
-      'Поступление проверено',
+      'Поступление подтверждено',
       {
         timeout: 15_000,
       },
@@ -1569,7 +1578,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       );
     }
     await expect(payerReview.getByTestId('guest-payer-payment-' + anna.personId)).toContainText(
-      'Поступление проверено',
+      'Поступление подтверждено',
     );
     await requireNoPaintedPayerReviewDuplicates(otherPage);
     await expect(page.getByTestId('guest-payer-payment-review')).toHaveCount(0);
@@ -4876,7 +4885,10 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await expect(groupSummary.getByTestId('guest-payer-summary-unpaid')).toContainText('0,00');
     const verify = creatorPage.getByTestId('guest-payer-verify-' + wifeId);
     await expect(verify).toBeVisible();
+    await expect(verify).toHaveText('Подтвердить поступление');
     await verify.click();
+    await expect(review.getByTestId('guest-payer-verified-' + wifeId)).toBeDisabled();
+    await expect(review.getByTestId('guest-payer-verified-audit-' + wifeId)).toContainText('Подтвердил:');
     await expect(
       review.getByTestId('guest-payer-group-verified').getByTestId('guest-payer-payment-' + wifeId),
     ).toHaveCount(1);
@@ -4884,7 +4896,7 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await expect(groupSummary.getByTestId('guest-payer-summary-verified')).toContainText('10,01');
     await expect(groupSummary.getByTestId('guest-payer-summary-outstanding')).toContainText('0,00');
     await expect(creatorPage.getByTestId('guest-payer-payment-status-' + wifeId)).toContainText(
-      'Поступление проверено',
+      'Поступление подтверждено',
       { timeout: 20_000 },
     );
     const reviewResult = await trpcMutation(owner, 'guest.getMyPayerPaymentReview', {
