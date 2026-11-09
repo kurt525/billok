@@ -235,6 +235,8 @@
     "markMyPayment": "Я оплатил",
     "paymentDeclaredAmount": "Сумма заявленного перевода: {amount}",
     "paymentDeclared": "Оплачено",
+    "paymentAwaitingRecipient": "Ожидает подтверждения получателем",
+    "paymentVerifiedByRecipient": "Поступление подтверждено получателем",
     "paymentAwaitingVerification": "Вы отметили оплату. Поступление денег ещё не проверено плательщиком.",
     "paymentDeclarationDisclaimer": "Нажимайте только после фактического перевода. Кнопка не переводит деньги и не подтверждает их поступление.",
     "paymentDeclarationFailed": "Не удалось сохранить отметку об оплате",

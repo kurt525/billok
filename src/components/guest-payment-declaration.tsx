@@ -56,9 +56,19 @@ export function GuestPaymentDeclaration({
     };
     refresh();
     const interval = setInterval(refresh, 12000);
+    // Refresh promptly when another tab/device changed the persisted payment state.
+    window.addEventListener('focus', refresh);
+    window.addEventListener('online', refresh);
+    const refreshOnVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    document.addEventListener('visibilitychange', refreshOnVisible);
     return () => {
       cancelled = true;
       clearInterval(interval);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('online', refresh);
+      document.removeEventListener('visibilitychange', refreshOnVisible);
     };
   }, [readStatus, token, personId, personToken, t]);
 
@@ -79,20 +89,34 @@ export function GuestPaymentDeclaration({
       </p>
     );
   return (
-    <div className="space-y-2" data-testid="guest-payment-declaration">
-      {declaredAt ? (
+    <div className="space-y-2" aria-live="polite" data-testid="guest-payment-declaration">
+      {verifiedAt ? (
         <>
-          <p className="text-sm font-semibold text-green-700 dark:text-green-400" data-testid="guest-payment-declared">
+          <p
+            className="text-sm font-semibold text-green-700 dark:text-green-400"
+            data-testid="guest-payment-verified"
+          >
+            {t('paymentVerifiedByRecipient')}
+          </p>
+          {declaredAt && (
+            <p className="break-words text-sm tabular-nums" data-testid="guest-payment-declared-amount">
+              {t('paymentDeclaredAmount', { amount: amountLabel })}
+            </p>
+          )}
+        </>
+      ) : declaredAt ? (
+        <>
+          <p
+            className="text-sm font-semibold text-green-700 dark:text-green-400"
+            data-testid="guest-payment-declared"
+          >
             {t('paymentDeclared')}
           </p>
           <p className="break-words text-sm tabular-nums" data-testid="guest-payment-declared-amount">
             {t('paymentDeclaredAmount', { amount: amountLabel })}
           </p>
-          <p
-            className="text-xs text-muted-foreground"
-            data-testid={verifiedAt ? 'guest-payment-verified' : 'guest-payment-awaiting'}
-          >
-            {verifiedAt ? t('payerPaymentVerified') : t('paymentAwaitingVerification')}
+          <p className="text-xs text-muted-foreground" data-testid="guest-payment-awaiting">
+            {t('paymentAwaitingRecipient')}
           </p>
         </>
       ) : canDeclare ? (

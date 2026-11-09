@@ -1357,11 +1357,21 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     const payerNotice = otherPage.getByText('Новая отметка об оплате: Анна. Проверьте поступление.');
     await expect(payerNotice).toHaveCount(1, { timeout: 25_000 });
     await expect(payerNotice).toBeVisible();
-    await expect(page.getByText('Поступление денег ещё не проверено плательщиком.')).toBeVisible();
+    await expect(page.getByTestId('guest-payment-awaiting')).toHaveText('Ожидает подтверждения получателем');
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено', { timeout: 15_000 });
     await expect(page.getByTestId('guest-mark-paid')).toHaveCount(0);
+    await expect(page.getByTestId('guest-payment-awaiting')).toHaveText('Ожидает подтверждения получателем');
     await expect(page.getByTestId('guest-payer-sbp-form')).toHaveCount(0);
+    // A different tab must restore the same server-side status, not a local toast.
+    const debtorSecondTab = await page.context().newPage();
+    await debtorSecondTab.goto(page.url(), { waitUntil: 'domcontentloaded' });
+    await expect(debtorSecondTab.getByTestId('guest-payment-declared')).toHaveText('Оплачено', {
+      timeout: 15_000,
+    });
+    await expect(debtorSecondTab.getByTestId('guest-payment-awaiting')).toHaveText(
+      'Ожидает подтверждения получателем',
+    );
 
     await otherPage.reload({ waitUntil: 'domcontentloaded' });
     await expect(otherPage.getByTestId('guest-mark-paid')).toHaveCount(0);
@@ -1429,7 +1439,20 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(annaPayment).toContainText('Поступление проверено');
     await expect(payerReview.getByTestId('guest-payer-verify-' + anna.personId)).toHaveCount(0);
     // The debtor learns the independent payer verification without reloading.
-    await expect(page.getByTestId('guest-payment-verified')).toHaveText('Поступление проверено', { timeout: 25_000 });
+    await expect(page.getByTestId('guest-payment-verified')).toHaveText('Поступление подтверждено получателем', {
+      timeout: 25_000,
+    });
+    await expect(page.getByTestId('guest-payment-verified')).toHaveClass(/text-green-700/);
+    await expect(debtorSecondTab.getByTestId('guest-payment-verified')).toHaveText(
+      'Поступление подтверждено получателем',
+      { timeout: 25_000 },
+    );
+    await debtorSecondTab.reload({ waitUntil: 'domcontentloaded' });
+    await expect(debtorSecondTab.getByTestId('guest-payment-verified')).toHaveText(
+      'Поступление подтверждено получателем',
+      { timeout: 15_000 },
+    );
+    await debtorSecondTab.close();
     const debtorNotice = page.getByText('Плательщик подтвердил поступление денег.');
     await expect(debtorNotice).toHaveCount(1, { timeout: 15_000 });
     await expect(debtorNotice).toBeVisible();
