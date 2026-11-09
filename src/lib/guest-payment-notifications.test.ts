@@ -19,6 +19,12 @@ describe('guest receipt notification transitions', () => {
     expect(newlyDeclaredGuestPayments([a, b], [marked, b])).toEqual([marked]);
     expect(newlyDeclaredGuestPayments([marked, b], [marked, b])).toEqual([]);
   });
+  it('preserves the exact server-calculated amount and participant identity for a new notification', () => {
+    const previous = [{ ...a, name: 'Анна', amount: 459 }];
+    const incoming = [{ ...marked, name: 'Анна', amount: 459 }];
+    expect(newlyDeclaredGuestPayments(previous, incoming)).toEqual(incoming);
+    expect(newlyDeclaredGuestPayments(incoming, incoming)).toEqual([]);
+  });
   it('ignores newly introduced identities, reordered rows and unrelated verification', () => {
     expect(newlyDeclaredGuestPayments([b], [marked, b])).toEqual([]);
     expect(newlyDeclaredGuestPayments([marked, b], [b, verified])).toEqual([]);

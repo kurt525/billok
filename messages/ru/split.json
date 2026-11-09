@@ -253,7 +253,7 @@
     "payerPaymentVerifyAction": "Поступление проверено",
     "payerPaymentVerifiedToast": "Поступление отмечено как проверенное",
     "payerPaymentVerifyFailed": "Не удалось подтвердить поступление",
-    "payerPaymentDeclarationNotice": "Новая отметка об оплате: {name}. Проверьте поступление.",
+    "payerPaymentDeclarationNotice": "Новая отметка об оплате: {name} — {amount}. Проверьте поступление.",
     "payerPaymentDeclarationBatchNotice": "Новые отметки об оплате: {count}. Проверьте поступления.",
     "paymentVerifiedNotice": "Плательщик подтвердил поступление денег.",
     "organizerRoundingCorrection": "Корректировка округления организатору (уже учтена)",

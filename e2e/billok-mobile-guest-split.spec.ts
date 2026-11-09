@@ -1354,9 +1354,15 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     );
     await expect(declareButton).toHaveCount(0);
     // A private live notification reaches the payer on their already-open page.
-    const payerNotice = otherPage.getByText('Новая отметка об оплате: Анна. Проверьте поступление.');
-    await expect(payerNotice).toHaveCount(1, { timeout: 25_000 });
+    const payerNotice = otherPage.getByText('Новая отметка об оплате: Анна — 4,59 ₽. Проверьте поступление.');
+    // The finalized payer's SSE channel refreshes the private payment review
+    // promptly; the 12-second fallback poll must not be needed for this event.
+    await expect(payerNotice).toHaveCount(1, { timeout: 10_000 });
     await expect(payerNotice).toBeVisible();
+    await expect(livePayerReview.getByTestId('guest-payer-payment-status-' + anna.personId)).toContainText(
+      'Участник отметил оплату',
+      { timeout: 10_000 },
+    );
     await expect(page.getByTestId('guest-payment-awaiting')).toHaveText('Ожидает подтверждения получателем');
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено', { timeout: 15_000 });

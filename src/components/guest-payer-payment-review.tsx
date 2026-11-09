@@ -93,7 +93,14 @@ export function GuestPayerPaymentReview({
                 .sort()
                 .join(',');
             if (newlyDeclared.length === 1) {
-              toast.info(t('payerPaymentDeclarationNotice', { name: newlyDeclared[0]!.name }), { id: noticeId });
+              const payment = newlyDeclared[0]!;
+              toast.info(
+                t('payerPaymentDeclarationNotice', {
+                  name: payment.name,
+                  amount: formatCents(payment.amount, 'RUB', locale),
+                }),
+                { id: noticeId },
+              );
             } else {
               toast.info(t('payerPaymentDeclarationBatchNotice', { count: newlyDeclared.length }), { id: noticeId });
             }
@@ -112,7 +119,72 @@ export function GuestPayerPaymentReview({
       clearInterval(interval);
       refreshCurrent.current = () => {};
     };
-  }, [isActiveReview, readPayments, token, personId, personToken, t]);
+  }, [isActiveReview, readPayments, token, personId, personToken, t, locale]);
+
+  // 5.5: receive receipt-scoped change hints promptly, but fetch the actual
+  // amounts only through the payer's existing private tRPC procedure.
+  // SSE has no personal data; the short-lived authorization ticket is issued
+  // over POST with the payer's secret in the body, never the EventSource URL.
+  useEffect(() => {
+    if (!isActiveReview || typeof EventSource === 'undefined') return;
+    const url = '/api/guest/' + encodeURIComponent(token) + '/events';
+    const controller = new AbortController();
+    let closed = false;
+    let retryCount = 0;
+    let source: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let renewTimer: ReturnType<typeof setTimeout> | null = null;
+    const refresh = () => refreshCurrent.current();
+    const retry = () => {
+      if (closed || controller.signal.aborted) return;
+      source?.close();
+      source = null;
+      if (renewTimer) clearTimeout(renewTimer);
+      if (retryTimer) clearTimeout(retryTimer);
+      renewTimer = null;
+      retryTimer = setTimeout(() => void connect(), Math.min(30_000, 2000 * 2 ** Math.min(retryCount++, 4)));
+    };
+    const connect = async () => {
+      if (closed || controller.signal.aborted) return;
+      try {
+        const ticket = await fetch(url, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ personId, personToken }),
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!ticket.ok) return retry();
+        if (closed || controller.signal.aborted) return;
+        source?.close();
+        const events = new EventSource(url);
+        source = events;
+        events.addEventListener('ready', () => {
+          if (closed) return;
+          retryCount = 0;
+          refresh();
+          if (renewTimer) clearTimeout(renewTimer);
+          renewTimer = setTimeout(() => {
+            events.close();
+            void connect();
+          }, 4 * 60_000);
+        });
+        events.addEventListener('changed', refresh);
+        events.onerror = retry;
+      } catch {
+        retry();
+      }
+    };
+    void connect();
+    return () => {
+      closed = true;
+      controller.abort();
+      source?.close();
+      if (retryTimer) clearTimeout(retryTimer);
+      if (renewTimer) clearTimeout(renewTimer);
+    };
+  }, [isActiveReview, token, personId, personToken]);
 
   async function confirmReceipt(debtorId: string) {
     if (

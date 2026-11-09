@@ -248,7 +248,7 @@
     "payerPaymentVerifyAction": "Verify receipt of funds",
     "payerPaymentVerifiedToast": "Receipt marked as verified",
     "payerPaymentVerifyFailed": "Could not confirm funds received",
-    "payerPaymentDeclarationNotice": "New payment declaration: {name}. Check incoming funds.",
+    "payerPaymentDeclarationNotice": "New payment declaration: {name} — {amount}. Check incoming funds.",
     "payerPaymentDeclarationBatchNotice": "New payment declarations: {count}. Check incoming funds.",
     "paymentVerifiedNotice": "The payer confirmed receipt of your transfer.",
     "organizerRoundingCorrection": "Creator rounding adjustment (already included)",
