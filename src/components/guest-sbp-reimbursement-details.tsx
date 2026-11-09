@@ -6,6 +6,7 @@ import { Copy } from 'lucide-react';
 import { toast } from 'sonner';
 import { trpc } from '@/lib/trpc';
 import { SBP_BANKS } from '@/lib/sbp-banks';
+import { SbpBankLogo } from '@/components/sbp-bank-logo';
 import { copyToClipboard } from '@/lib/clipboard';
 import { Button } from '@/components/ui/button';
 
@@ -14,10 +15,12 @@ export function GuestSbpReimbursementDetails({
   token,
   personId,
   personToken,
+  payerName,
 }: {
   token: string;
   personId: string;
   personToken: string;
+  payerName: string;
 }) {
   const t = useTranslations('split.claim');
   const tc = useTranslations('common');
@@ -60,9 +63,13 @@ export function GuestSbpReimbursementDetails({
   return (
     <div className="space-y-2 rounded-lg border p-3" data-testid="guest-sbp-reimbursement-details">
       <p className="text-sm font-medium">{t('payerSbpRecipientTitle')}</p>
-      <p className="text-sm" data-testid="guest-sbp-reimbursement-bank">
-        {bank?.name ?? t('payerSbpRecipientUnknownBank')}
+      <p className="min-w-0 break-words text-sm" data-testid="guest-sbp-reimbursement-payer-name">
+        {t('payerSbpRecipientName', { name: payerName })}
       </p>
+      <div className="flex min-w-0 items-center gap-3" data-testid="guest-sbp-reimbursement-bank">
+        {bank && <SbpBankLogo bank={bank} unavailableLabel={t('payerSbpLogoUnavailable')} />}
+        <span className="min-w-0 flex-1 break-words text-sm">{bank?.name ?? t('payerSbpRecipientUnknownBank')}</span>
+      </div>
       <p className="text-base font-semibold tabular-nums" data-testid="guest-sbp-reimbursement-phone">
         {contact.phone}
       </p>

@@ -2013,6 +2013,9 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                   token={token}
                   personId={myPersonId}
                   personToken={personToken}
+                  payerName={
+                    data.people[data.paidByIndex]?.name ?? t('personFallback', { index: data.paidByIndex + 1 })
+                  }
                 />
               )}
               {myPersonId && personToken && (

@@ -211,6 +211,7 @@
     "payerSbpRecipientUnavailable": "Could not load payer details. Refresh the page.",
     "payerSbpRecipientLoading": "Loading payer details…",
     "payerSbpRecipientNotConfigured": "The payer has not provided an SBP destination yet.",
+    "payerSbpRecipientName": "Recipient: {name}",
     "payerSbpRecipientTitle": "Payer details for reimbursement",
     "payerSbpRecipientUnknownBank": "Bank no longer in directory — ask the payer",
     "payerSbpRecipientCopied": "Payer phone copied",

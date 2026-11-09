@@ -1272,8 +1272,15 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     expect(JSON.stringify(publicView)).not.toContain('+79991234567');
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('guest-sbp-reimbursement-details')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId('guest-sbp-reimbursement-bank')).toContainText('Озон Банк');
+    await expect(page.getByTestId('guest-sbp-reimbursement-payer-name')).toContainText('Борис');
+    const payerDestinationBank = page.getByTestId('guest-sbp-reimbursement-bank');
+    await expect(payerDestinationBank).toContainText('Озон Банк');
+    await expect(payerDestinationBank.locator('img')).toHaveAttribute('src', '/banks/nspk/100000000273.webp');
+    await expect
+      .poll(() => payerDestinationBank.locator('img').evaluate((img) => (img as HTMLImageElement).naturalWidth))
+      .toBeGreaterThan(0);
     await expect(page.getByTestId('guest-sbp-reimbursement-phone')).toContainText('+79991234567');
+    await fitsPhone(page);
     await expect(page.getByTestId('guest-payer-sbp-form')).toHaveCount(0);
     await page.evaluate(() => {
       Object.defineProperty(navigator, 'clipboard', {
@@ -4691,6 +4698,9 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await expect(familyView).toContainText('Муж');
     await expect(familyView).toContainText('Ребёнок');
     await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('10,01');
+    // The responsible group member gets one total; missing payer bank details
+    // must not trigger a fake payment destination or a second payer.
+    await expect(page.getByTestId('guest-sbp-not-configured')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 20_000 });
     await fitsPhone(page);
     await page.getByTestId('guest-mark-paid').click();

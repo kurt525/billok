@@ -216,6 +216,7 @@
     "payerSbpRecipientUnavailable": "Не удалось получить реквизиты плательщика. Обновите страницу.",
     "payerSbpRecipientLoading": "Получаем реквизиты плательщика…",
     "payerSbpRecipientNotConfigured": "Плательщик пока не указал реквизиты для СБП.",
+    "payerSbpRecipientName": "Получатель: {name}",
     "payerSbpRecipientTitle": "Реквизиты плательщика для возмещения",
     "payerSbpRecipientUnknownBank": "Банк больше не найден в каталоге — уточните его у плательщика",
     "payerSbpRecipientCopied": "Номер плательщика скопирован",
