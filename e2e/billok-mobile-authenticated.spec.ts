@@ -278,6 +278,8 @@ test('mobile SBP profile persists phone and selected bank without verification c
   await expect(page.getByTestId('sbp-bank-fallback-100000000313')).toBeVisible();
   await search.fill('ТИНЬКОФФ');
   await expect(page.getByText('Номер не проверяется по СМС')).toBeVisible();
+  await expect(page.getByTestId('sbp-profile-receipt-scope')).toContainText('не меняют реквизиты уже созданных чеков');
+
   await phone.fill('8 (999) 123-45-67');
   await tbankRow.click();
   await expect(selectedTbank).toBeChecked();

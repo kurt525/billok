@@ -197,7 +197,7 @@
     "reimbursementAmountCopyFailed": "Could not copy amount",
     "reimbursementAmountCopied": "Transfer amount copied",
     "payerSbpTitle": "My SBP reimbursement details",
-    "payerSbpPrivacy": "For this bill. Only you can change your details. Other participants cannot see them yet.",
+    "payerSbpPrivacy": "Details are saved separately for this bill. Changing your profile phone or bank will not change them here; only you can edit this bill’s details.",
     "payerSbpLoading": "Loading bank details…",
     "payerSbpLoadError": "Could not load details. Refresh the page.",
     "payerSbpPhone": "My SBP phone number",

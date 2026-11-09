@@ -4874,6 +4874,23 @@ describe('BillOK guest payer-only SBP contact (Issue #1 1.3.19)', () => {
       });
     });
 
+    test('Issue 4.12: an edited user profile never silently changes a saved receipt recipient', async () => {
+      mockDb.user.findUnique.mockResolvedValue({
+        id: 'user-1',
+        suspendedAt: null,
+        sbpPhone: '+79005550000',
+        sbpBankId: 'tbank',
+      });
+      const api = await caller(signedIn);
+      // The user profile points to a different phone and bank. A finalized
+      // receipt must return only the destination explicitly stored for it.
+      await expect(api.getPayerSbpForReimbursement(otherAuth)).resolves.toEqual({
+        phone: '+79991234567',
+        bankId: '100000000273',
+      });
+      expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    });
+
     test('creator account alone, unrelated token, swapped ID or payer token do not expose the contact', async () => {
       const api = await caller(signedIn);
       for (const credentials of [

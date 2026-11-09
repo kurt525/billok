@@ -181,6 +181,9 @@ function ProfileForm({
           ))}
         </div>
         <p className="text-xs text-muted-foreground">{t('profile.sbpBankHint')}</p>
+        <p className="text-xs text-muted-foreground" data-testid="sbp-profile-receipt-scope">
+          {t('profile.sbpReceiptScope')}
+        </p>
       </div>
       <Button
         type="submit"

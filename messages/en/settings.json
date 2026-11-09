@@ -16,6 +16,7 @@
     "sbpPhoneUnverified": "This number is not verified by SMS.",
     "sbpBank": "Bank for SBP",
     "sbpBankNotSelected": "No bank selected",
+    "sbpReceiptScope": "Changes to your profile phone or bank do not update existing bills. Review and, if needed, correct the details on each bill’s personal page.",
     "sbpBankHint": "Banks from the NSPK registry. Phone transfer availability depends on the bank.",
     "sbpBankSearch": "Search banks",
     "sbpBankSearchPlaceholder": "Enter a bank name",

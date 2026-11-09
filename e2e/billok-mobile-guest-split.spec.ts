@@ -1226,6 +1226,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // Only Boris's personal device can edit the payer's SBP destination.
     const payerForm = otherPage.getByTestId('guest-payer-sbp-form');
     await expect(payerForm).toBeVisible();
+    await expect(payerForm).toContainText('Изменение номера или банка в профиле не меняет их здесь');
     const payerPhone = otherPage.getByTestId('guest-payer-sbp-phone');
     await expect(payerPhone).toBeVisible({ timeout: 15_000 });
     await payerPhone.fill('8 (999) 123-45-67');
