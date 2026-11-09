@@ -1280,6 +1280,8 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       .poll(() => payerDestinationBank.locator('img').evaluate((img) => (img as HTMLImageElement).naturalWidth))
       .toBeGreaterThan(0);
     await expect(page.getByTestId('guest-sbp-reimbursement-phone')).toHaveText('+7 (999) 123-45-67');
+    await expect(page.getByTestId('guest-sbp-reimbursement-phone')).toHaveCSS('user-select', 'text');
+    await expect(page.getByTestId('guest-personal-reimbursement-amount')).toHaveCSS('user-select', 'text');
     await expect(page.getByTestId('guest-sbp-manual-instructions')).toContainText(
       'Выберите перевод по номеру телефона через СБП.',
     );
@@ -1311,6 +1313,23 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect
       .poll(() => page.evaluate(() => (window as Window & { __billokCopiedPhone?: string }).__billokCopiedPhone))
       .toBe('9991234567');
+    // Failure from both clipboard strategies must not be reported as success.
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async () => {
+            throw new Error('Clipboard blocked');
+          },
+        },
+      });
+      Object.defineProperty(document, 'execCommand', {
+        configurable: true,
+        value: () => false,
+      });
+    });
+    await page.getByTestId('guest-sbp-copy-phone').click();
+    await expect(page.getByText('Не удалось скопировать номер')).toBeVisible();
 
     // Boris's review must already have its baseline, or a fresh page
     // should not toast about declarations that existed before it loaded.

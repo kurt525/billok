@@ -23,7 +23,6 @@ export function GuestSbpReimbursementDetails({
   payerName: string;
 }) {
   const t = useTranslations('split.claim');
-  const tc = useTranslations('common');
   const read = trpc.guest.getPayerSbpForReimbursement.useMutation();
   const [contact, setContact] = useState<{ phone: string | null; bankId: string | null } | null>(null);
   const [failed, setFailed] = useState(false);
@@ -59,7 +58,7 @@ export function GuestSbpReimbursementDetails({
     if (digitsForBank && (await copyToClipboard(digitsForBank))) {
       toast.success(t('payerSbpRecipientCopied'));
     } else {
-      toast.error(tc('actions.copyFailed'));
+      toast.error(t('payerSbpRecipientCopyFailed'));
     }
   }
   return (
