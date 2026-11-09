@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { trpc } from '@/lib/trpc';
 import { becameVerified } from '@/lib/guest-payment-notifications';
+import { formatCents } from '@/lib/money';
 import { Button } from '@/components/ui/button';
 
 /** The payer confirms receipt separately. This button records only the debtor's own declaration. */
@@ -23,10 +24,12 @@ export function GuestPaymentDeclaration({
   amountLabel: string;
 }) {
   const t = useTranslations('split.claim');
+  const locale = useLocale();
   const read = trpc.guest.getMyPaymentDeclaration.useMutation();
   const mark = trpc.guest.markMyPayment.useMutation();
   const unmark = trpc.guest.unmarkMyPayment.useMutation();
   const [declaredAt, setDeclaredAt] = useState<string | null>(null);
+  const [declaredAmountCents, setDeclaredAmountCents] = useState<number | null>(null);
   const [verifiedAt, setVerifiedAt] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -52,6 +55,7 @@ export function GuestPaymentDeclaration({
           lastVerified.current = data.verifiedAt;
           // A current server snapshot may legitimately clear a declaration; stale reads are ignored above.
           setDeclaredAt(data.declaredPaidAt);
+          setDeclaredAmountCents(data.declaredAmountCents);
           setVerifiedAt(data.verifiedAt);
           setLoaded(true);
           setFailed(false);
@@ -87,6 +91,7 @@ export function GuestPaymentDeclaration({
     try {
       const result = await mark.mutateAsync({ token, personId, personToken });
       setDeclaredAt(result.declaredPaidAt);
+      setDeclaredAmountCents(result.declaredAmountCents);
       toast.success(t('paymentDeclared'));
     } catch {
       toast.error(t('paymentDeclarationFailed'));
@@ -103,6 +108,7 @@ export function GuestPaymentDeclaration({
     try {
       await unmark.mutateAsync({ token, personId, personToken });
       setDeclaredAt(null);
+      setDeclaredAmountCents(null);
       setVerifiedAt(null);
       lastVerified.current = null;
       toast.success(t('paymentUnmarked'));
@@ -114,6 +120,8 @@ export function GuestPaymentDeclaration({
       refreshCurrent.current();
     }
   }
+  const exactDeclaredAmount =
+    declaredAmountCents !== null ? formatCents(declaredAmountCents, 'RUB', locale) : amountLabel;
   if (!loaded)
     return (
       <p className="text-xs text-muted-foreground" data-testid="guest-payment-declaration-loading">
@@ -129,7 +137,7 @@ export function GuestPaymentDeclaration({
           </p>
           {declaredAt && (
             <p className="break-words text-sm tabular-nums" data-testid="guest-payment-declared-amount">
-              {t('paymentDeclaredAmount', { amount: amountLabel })}
+              {t('paymentDeclaredAmount', { amount: exactDeclaredAmount })}
             </p>
           )}
         </>
@@ -139,7 +147,7 @@ export function GuestPaymentDeclaration({
             {t('paymentDeclared')}
           </p>
           <p className="break-words text-sm tabular-nums" data-testid="guest-payment-declared-amount">
-            {t('paymentDeclaredAmount', { amount: amountLabel })}
+            {t('paymentDeclaredAmount', { amount: exactDeclaredAmount })}
           </p>
           <p className="text-xs text-muted-foreground" data-testid="guest-payment-awaiting">
             {t('paymentAwaitingRecipient')}

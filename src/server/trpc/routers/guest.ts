@@ -423,7 +423,15 @@ function requireGuestDebtor(
   }
   const paymentIndex =
     group?.memberIndices.find((index) => people[index]!.id === group.representativeId) ?? personIndex;
-  return { people, person, personIndex, paymentIndex, paymentPerson: people[paymentIndex]!, group };
+  return {
+    people,
+    person,
+    personIndex,
+    paymentIndex,
+    paymentPerson: people[paymentIndex]!,
+    amountCents: group ? group.totalCents : due!.total,
+    group,
+  };
 }
 
 /** Check payer's identity and reconcile the finalized receipt before allowing
@@ -2749,15 +2757,18 @@ export const guestRouter = createTRPCRouter({
       });
       if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
       if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
-      const { paymentPerson } = requireGuestDebtor(split, input.personId, input.personToken);
+      const { paymentPerson, amountCents } = requireGuestDebtor(split, input.personId, input.personToken);
       return {
         declaredPaidAt: paymentPerson.paymentDeclaredAt ?? null,
+        declaredAmountCents: paymentPerson.paymentDeclaredAt
+          ? (paymentPerson.paymentDeclaredAmountCents ?? amountCents)
+          : null,
         verifiedAt: paymentPerson.paymentDeclaredAt ? (paymentPerson.paymentVerifiedAt ?? null) : null,
       };
     }),
 
   markMyPayment: publicProcedure
-    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .input(z.strictObject({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       if (!checkClaimWriteRateLimit('payment-declaration-write', input.token, input.personToken)) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
@@ -2766,7 +2777,7 @@ export const guestRouter = createTRPCRouter({
         const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
         if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
-        const { people, paymentPerson, paymentIndex, personIndex } = requireGuestDebtor(
+        const { people, paymentPerson, paymentIndex, personIndex, amountCents } = requireGuestDebtor(
           split,
           input.personId,
           input.personToken,
@@ -2775,18 +2786,23 @@ export const guestRouter = createTRPCRouter({
         // never declare another transfer for the same shared debt.
         if (paymentIndex !== personIndex) throw new AppError('FORBIDDEN', 'notParticipant');
         if (paymentPerson.paymentDeclaredAt) {
-          // One declaration per group, idempotent across devices/retries.
-          return { declaredPaidAt: paymentPerson.paymentDeclaredAt };
+          // One declaration per group, idempotent across devices/retries, including the original amount.
+          return {
+            declaredPaidAt: paymentPerson.paymentDeclaredAt,
+            declaredAmountCents: paymentPerson.paymentDeclaredAmountCents ?? amountCents,
+          };
         }
         const timestamp = new Date().toISOString();
         const updated = people.map((entry, index) =>
-          index === paymentIndex ? { ...entry, paymentDeclaredAt: timestamp } : entry,
+          index === paymentIndex
+            ? { ...entry, paymentDeclaredAt: timestamp, paymentDeclaredAmountCents: amountCents }
+            : entry,
         );
         await tx.guestSplit.update({
           where: { id: split.id },
           data: { people: updated as unknown as Prisma.InputJsonValue },
         });
-        return { declaredPaidAt: timestamp };
+        return { declaredPaidAt: timestamp, declaredAmountCents: amountCents };
       });
     }),
 
@@ -2818,6 +2834,7 @@ export const guestRouter = createTRPCRouter({
           if (index !== paymentIndex) return entry;
           const cleared = { ...entry };
           delete cleared.paymentDeclaredAt;
+          delete cleared.paymentDeclaredAmountCents;
           delete cleared.paymentVerifiedAt;
           return cleared;
         });

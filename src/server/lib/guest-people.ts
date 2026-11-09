@@ -53,6 +53,9 @@ export type GuestSessionPerson = {
   tipCents?: number;
   // Participant's declaration only; does NOT mean funds arrived or were verified.
   paymentDeclaredAt?: string;
+  // Exact finalized receipt debt/group debt in kopecks, captured by the server at declaration time.
+  // Never accept a caller-provided amount; never expose this private record on a public receipt.
+  paymentDeclaredAmountCents?: number;
   // Payer's independent verification after checking actual incoming funds.
   paymentVerifiedAt?: string;
   // The join that created (or first claimed) this person: its idempotency key and the normalized

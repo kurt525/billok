@@ -5004,10 +5004,33 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
     expect(data).not.toHaveProperty('summary');
     expect(data).not.toHaveProperty('status');
     expect(data.people[0].paymentDeclaredAt).toBe(result.declaredPaidAt);
+    expect(data.people[0].paymentDeclaredAmountCents).toBe(459);
+    expect(result.declaredAmountCents).toBe(459);
     expect(data.people[1].paymentDeclaredAt).toBeUndefined();
+    expect(data.people[1].paymentDeclaredAmountCents).toBeUndefined();
     // Returning a timestamp means only that the participant pressed the button.
     expect(result).not.toHaveProperty('confirmedAt');
     expect(result).not.toHaveProperty('receiptVerifiedAt');
+  });
+
+  test('an arbitrary amount is not accepted in the payment declaration payload', async () => {
+    const api = await caller();
+    const forgedPayload = { ...debtorAuth, amount: 1 };
+    await expect(api.markMyPayment(forgedPayload)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('reported amount is the exact finalized debt, including individual tip in kopecks', async () => {
+    const api = await caller();
+    const result = await api.markMyPayment(debtorAuth);
+    expect(result.declaredAmountCents).toBe(459);
+    const people = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people });
+    expect(await api.getMyPaymentDeclaration(debtorAuth)).toEqual({
+      declaredPaidAt: result.declaredPaidAt,
+      declaredAmountCents: 459,
+      verifiedAt: null,
+    });
   });
 
   test('a reload can read the own declaration; repeating mark is idempotent', async () => {
@@ -5019,9 +5042,10 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
     });
     await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({
       declaredPaidAt: marked,
+      declaredAmountCents: 459,
       verifiedAt: null,
     });
-    await expect(api.markMyPayment(debtorAuth)).resolves.toEqual({ declaredPaidAt: marked });
+    await expect(api.markMyPayment(debtorAuth)).resolves.toEqual({ declaredPaidAt: marked, declaredAmountCents: 459 });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
@@ -5035,13 +5059,18 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
     });
     await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({
       declaredPaidAt: declared,
+      declaredAmountCents: 459,
       verifiedAt: verified,
     });
   });
 
   test('unmarked participant receives null, and another identity cannot read or mark', async () => {
     const api = await caller(signedIn);
-    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({ declaredPaidAt: null, verifiedAt: null });
+    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({
+      declaredPaidAt: null,
+      declaredAmountCents: null,
+      verifiedAt: null,
+    });
     const impostors = [
       { ...debtorAuth, personId: payerId },
       { ...debtorAuth, personToken: payerToken },
@@ -5065,12 +5094,17 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
     await expect(api.unmarkMyPayment(debtorAuth)).resolves.toEqual({ declaredPaidAt: null, verifiedAt: null });
     const data = mockDb.guestSplit.update.mock.calls[0]![0].data;
     expect(data.people[0].paymentDeclaredAt).toBeUndefined();
+    expect(data.people[0].paymentDeclaredAmountCents).toBeUndefined();
     expect(data.people[0].paymentVerifiedAt).toBeUndefined();
     expect(data.people[1]).toEqual(base.people[1]);
     expect(data).not.toHaveProperty('summary');
     expect(data).not.toHaveProperty('status');
     mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: data.people });
-    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({ declaredPaidAt: null, verifiedAt: null });
+    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({
+      declaredPaidAt: null,
+      declaredAmountCents: null,
+      verifiedAt: null,
+    });
     await expect(api.markMyPayment(debtorAuth)).resolves.toHaveProperty('declaredPaidAt');
   });
 
@@ -5101,6 +5135,7 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
     });
     await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({
       declaredPaidAt: timestamp,
+      declaredAmountCents: 459,
       verifiedAt: verified,
     });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
@@ -5585,6 +5620,8 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
     expect(new Date(result.declaredPaidAt).toISOString()).toBe(result.declaredPaidAt);
     const changed = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
     expect(changed[1].paymentDeclaredAt).toBe(result.declaredPaidAt);
+    expect(result.declaredAmountCents).toBe(951);
+    expect(changed[1].paymentDeclaredAmountCents).toBe(951);
     expect(changed[2].paymentDeclaredAt).toBeUndefined();
     expect(changed[3].paymentDeclaredAt).toBeUndefined();
     expect(changed[4].paymentDeclaredAt).toBeUndefined();
@@ -5595,6 +5632,7 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
     await expect(api.markMyPayment(wifeAuth)).resolves.toEqual(result);
     await expect(api.getMyPaymentDeclaration(husbandAuth)).resolves.toEqual({
       declaredPaidAt: result.declaredPaidAt,
+      declaredAmountCents: 951,
       verifiedAt: null,
     });
     await expect(api.markMyPayment(husbandAuth)).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -5613,10 +5651,12 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
     await expect(api.unmarkMyPayment(wifeAuth)).resolves.toEqual({ declaredPaidAt: null, verifiedAt: null });
     const changed = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
     expect(changed[1].paymentDeclaredAt).toBeUndefined();
+    expect(changed[1].paymentDeclaredAmountCents).toBeUndefined();
     expect(changed[2]).toEqual(markedPeople[2]);
     mockDb.guestSplit.findUnique.mockResolvedValue({ ...record, people: changed });
     await expect(api.getMyPaymentDeclaration(husbandAuth)).resolves.toEqual({
       declaredPaidAt: null,
+      declaredAmountCents: null,
       verifiedAt: null,
     });
   });
@@ -5642,6 +5682,7 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
     await expect(api.confirmGuestPaymentReceived({ ...payerAuth, debtorId: wifeId })).resolves.toEqual(confirmed);
     await expect(api.getMyPaymentDeclaration(husbandAuth)).resolves.toEqual({
       declaredPaidAt: declared,
+      declaredAmountCents: 951,
       verifiedAt: confirmed.verifiedAt,
     });
     const review = await api.getMyPayerPaymentReview(payerAuth);
