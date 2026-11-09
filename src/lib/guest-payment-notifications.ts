@@ -34,3 +34,14 @@ export function newlyDeclaredGuestPayments<T extends GuestPaymentNoticeRow>(
 export function becameVerified(previous: string | null | undefined, incoming: string | null): boolean {
   return previous === null && incoming !== null;
 }
+
+/** A shared family debt is visible to members, but only its actual sender gets a
+ * personal receipt-confirmation notice. First-load and repeated reads are silent.
+ */
+export function shouldNotifyGuestReceiptConfirmation(
+  wasVerifiedAt: string | null | undefined,
+  verifiedAt: string | null,
+  isPaymentSender: boolean,
+): boolean {
+  return isPaymentSender && becameVerified(wasVerifiedAt, verifiedAt);
+}

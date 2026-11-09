@@ -3,6 +3,7 @@ import {
   becameVerified,
   mergeGuestPaymentStatuses,
   newlyDeclaredGuestPayments,
+  shouldNotifyGuestReceiptConfirmation,
   type GuestPaymentNoticeRow,
 } from './guest-payment-notifications';
 
@@ -38,5 +39,12 @@ describe('guest receipt notification transitions', () => {
     expect(becameVerified(null, verified.verifiedAt)).toBe(true);
     expect(becameVerified(verified.verifiedAt, verified.verifiedAt)).toBe(false);
     expect(becameVerified(null, null)).toBe(false);
+  });
+  it('sends a personal confirmation notice only to the actual sender, not family spectators', () => {
+    expect(shouldNotifyGuestReceiptConfirmation(null, verified.verifiedAt, true)).toBe(true);
+    expect(shouldNotifyGuestReceiptConfirmation(null, verified.verifiedAt, false)).toBe(false);
+    expect(shouldNotifyGuestReceiptConfirmation(undefined, verified.verifiedAt, true)).toBe(false);
+    expect(shouldNotifyGuestReceiptConfirmation(verified.verifiedAt, verified.verifiedAt, true)).toBe(false);
+    expect(shouldNotifyGuestReceiptConfirmation(null, null, true)).toBe(false);
   });
 });

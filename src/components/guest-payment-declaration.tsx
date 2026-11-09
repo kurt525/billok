@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { trpc } from '@/lib/trpc';
-import { becameVerified } from '@/lib/guest-payment-notifications';
+import { shouldNotifyGuestReceiptConfirmation } from '@/lib/guest-payment-notifications';
 import { formatCents } from '@/lib/money';
 import { Button } from '@/components/ui/button';
 
@@ -47,7 +47,7 @@ export function GuestPaymentDeclaration({
       void readStatus({ token, personId, personToken })
         .then((data) => {
           if (cancelled || writeInFlight.current || readId !== latestRead.current) return;
-          if (becameVerified(lastVerified.current, data.verifiedAt)) {
+          if (shouldNotifyGuestReceiptConfirmation(lastVerified.current, data.verifiedAt, canDeclare)) {
             toast.success(t('paymentVerifiedNotice'), {
               id: 'billok-verified-' + token + '-' + personId + '-' + data.verifiedAt,
             });
@@ -82,7 +82,72 @@ export function GuestPaymentDeclaration({
       document.removeEventListener('visibilitychange', refreshOnVisible);
       refreshCurrent.current = () => {};
     };
-  }, [readStatus, token, personId, personToken, t]);
+  }, [readStatus, token, personId, personToken, canDeclare, t]);
+
+  // 5.9: the recipient's manual attestation triggers an invalidation; the
+  // participant's personal token fetches only their own confirmation state.
+  // SSE carries no identifying details and cannot replace the private read.
+  // Finalized receipt pages do not run the pre-finalization claim SSE channel.
+  useEffect(() => {
+    if (typeof EventSource === 'undefined') return;
+    const url = '/api/guest/' + encodeURIComponent(token) + '/events';
+    const controller = new AbortController();
+    let closed = false;
+    let attempts = 0;
+    let source: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let renewTimer: ReturnType<typeof setTimeout> | null = null;
+    const refresh = () => refreshCurrent.current();
+    const retry = () => {
+      if (closed || controller.signal.aborted) return;
+      source?.close();
+      source = null;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (renewTimer) clearTimeout(renewTimer);
+      renewTimer = null;
+      retryTimer = setTimeout(() => void connect(), Math.min(30_000, 2000 * 2 ** Math.min(attempts++, 4)));
+    };
+    const connect = async () => {
+      if (closed || controller.signal.aborted) return;
+      try {
+        const ticket = await fetch(url, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ personId, personToken }),
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!ticket.ok) return retry();
+        if (closed || controller.signal.aborted) return;
+        source?.close();
+        const next = new EventSource(url);
+        source = next;
+        next.addEventListener('ready', () => {
+          if (closed) return;
+          attempts = 0;
+          refresh();
+          if (renewTimer) clearTimeout(renewTimer);
+          renewTimer = setTimeout(() => {
+            next.close();
+            void connect();
+          }, 4 * 60_000);
+        });
+        next.addEventListener('changed', refresh);
+        next.onerror = retry;
+      } catch {
+        retry();
+      }
+    };
+    void connect();
+    return () => {
+      closed = true;
+      controller.abort();
+      source?.close();
+      if (retryTimer) clearTimeout(retryTimer);
+      if (renewTimer) clearTimeout(renewTimer);
+    };
+  }, [token, personId, personToken]);
 
   async function declarePayment() {
     if (!canDeclare || !loaded || declaredAt || verifiedAt || writeInFlight.current) return;
