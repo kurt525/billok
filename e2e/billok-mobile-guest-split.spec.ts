@@ -1340,6 +1340,18 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(livePayerReview.getByTestId('guest-payer-payment-' + anna.personId)).toContainText(
       'Ожидается отметка участника',
     );
+    // 5.6: only the payer sees three private, expandable status groups.
+    const unpaidGroup = livePayerReview.getByTestId('guest-payer-group-unpaid');
+    const awaitingGroup = livePayerReview.getByTestId('guest-payer-group-awaiting');
+    const verifiedGroup = livePayerReview.getByTestId('guest-payer-group-verified');
+    await expect(unpaidGroup.locator('summary')).toContainText('Не оплатили');
+    await expect(awaitingGroup.locator('summary')).toContainText('Сообщили об оплате — ожидают проверки');
+    await expect(verifiedGroup.locator('summary')).toContainText('Поступление подтверждено');
+    await expect(unpaidGroup.getByTestId('guest-payer-payment-' + anna.personId)).toHaveCount(1);
+    await expect(unpaidGroup.getByTestId('guest-payer-payment-' + victor.personId)).toHaveCount(1);
+    await expect(awaitingGroup.getByTestId('guest-payer-payment-' + anna.personId)).toHaveCount(0);
+    await expect(verifiedGroup.getByTestId('guest-payer-payment-' + anna.personId)).toHaveCount(0);
+    await expect(livePayerReview.getByTestId('guest-payer-payment-' + boris.personId)).toHaveCount(0);
 
     // A debtor's declaration is not a bank transaction or payer verification.
     const declareButton = page.getByTestId('guest-mark-paid');
@@ -1359,6 +1371,8 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // promptly; the 12-second fallback poll must not be needed for this event.
     await expect(payerNotice).toHaveCount(1, { timeout: 10_000 });
     await expect(payerNotice).toBeVisible();
+    await expect(awaitingGroup.getByTestId('guest-payer-payment-' + anna.personId)).toHaveCount(1);
+    await expect(unpaidGroup.getByTestId('guest-payer-payment-' + anna.personId)).toHaveCount(0);
     await expect(livePayerReview.getByTestId('guest-payer-payment-status-' + anna.personId)).toContainText(
       'Участник отметил оплату',
       { timeout: 10_000 },
@@ -1382,6 +1396,9 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(page.getByTestId('guest-mark-paid')).toBeVisible();
     await expect(page.getByTestId('guest-mark-paid')).toHaveClass(/text-red-700/);
     await expect(page.getByTestId('guest-payment-declared')).toHaveCount(0);
+    await expect(unpaidGroup.getByTestId('guest-payer-payment-' + anna.personId)).toHaveCount(1, {
+      timeout: 25_000,
+    });
     await debtorSecondTab.reload({ waitUntil: 'domcontentloaded' });
     await expect(debtorSecondTab.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 15_000 });
     await expect(livePayerReview.getByTestId('guest-payer-payment-status-' + anna.personId)).toContainText(
@@ -1392,6 +1409,9 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await page.getByTestId('guest-mark-paid').click();
     await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено');
     await expect(page.getByTestId('guest-unmark-paid')).toBeVisible();
+    await expect(awaitingGroup.getByTestId('guest-payer-payment-' + anna.personId)).toHaveCount(1, {
+      timeout: 25_000,
+    });
 
     await otherPage.reload({ waitUntil: 'domcontentloaded' });
     await expect(otherPage.getByTestId('guest-mark-paid')).toHaveCount(0);
@@ -1457,6 +1477,19 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     }
     await verifyAnna.click();
     await expect(annaPayment).toContainText('Поступление проверено');
+    await expect(
+      payerReview.getByTestId('guest-payer-group-verified').getByTestId('guest-payer-payment-' + anna.personId),
+    ).toHaveCount(1);
+    await expect(
+      payerReview.getByTestId('guest-payer-group-awaiting').getByTestId('guest-payer-payment-' + anna.personId),
+    ).toHaveCount(0);
+    // Native details/summary must remain operable with a finger-sized target.
+    const groupHeader = payerReview.getByTestId('guest-payer-group-verified').locator('summary');
+    await groupHeader.scrollIntoViewIfNeeded();
+    await groupHeader.click();
+    await expect(payerReview.getByTestId('guest-payer-group-verified')).not.toHaveAttribute('open', '');
+    await groupHeader.click();
+    await expect(payerReview.getByTestId('guest-payer-group-verified')).toHaveAttribute('open', '');
     await expect(payerReview.getByTestId('guest-payer-verify-' + anna.personId)).toHaveCount(0);
     // The debtor learns the independent payer verification without reloading.
     await expect(page.getByTestId('guest-unmark-paid')).toHaveCount(0);
@@ -4800,6 +4833,9 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     const review = creatorPage.getByTestId('guest-payer-payment-review');
     await expect(review).toBeVisible({ timeout: 25_000 });
     await expect(review.getByTestId('guest-payer-payment-' + wifeId)).toHaveCount(1);
+    await expect(
+      review.getByTestId('guest-payer-group-awaiting').getByTestId('guest-payer-payment-' + wifeId),
+    ).toHaveCount(1);
     await expect(review.getByTestId('guest-payer-payment-' + husbandId)).toHaveCount(0);
     await expect(review.getByTestId('guest-payer-payment-' + childId)).toHaveCount(0);
     const amount = review.getByTestId('guest-payer-payment-amount');
@@ -4807,6 +4843,9 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     const verify = creatorPage.getByTestId('guest-payer-verify-' + wifeId);
     await expect(verify).toBeVisible();
     await verify.click();
+    await expect(
+      review.getByTestId('guest-payer-group-verified').getByTestId('guest-payer-payment-' + wifeId),
+    ).toHaveCount(1);
     await expect(creatorPage.getByTestId('guest-payer-payment-status-' + wifeId)).toContainText(
       'Поступление проверено',
       { timeout: 20_000 },

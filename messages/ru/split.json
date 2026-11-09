@@ -333,7 +333,11 @@
     "distributionIncomplete": "Есть позиции, которые ещё никто не выбрал.",
     "paymentUnmarkAction": "Отменить отметку об оплате",
     "paymentUnmarked": "Отметка об оплате отменена",
-    "paymentUnmarkFailed": "Не удалось отменить отметку. Возможно, получатель уже подтвердил поступление."
+    "paymentUnmarkFailed": "Не удалось отменить отметку. Возможно, получатель уже подтвердил поступление.",
+    "payerPaymentGroupVerified": "Поступление подтверждено",
+    "payerPaymentGroupAwaiting": "Сообщили об оплате — ожидают проверки",
+    "payerPaymentGroupUnpaid": "Не оплатили",
+    "payerPaymentGroupEmpty": "Участников в этой группе пока нет."
   },
   "result": {
     "loading": "Загрузка расчёта…",

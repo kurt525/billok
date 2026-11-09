@@ -328,7 +328,11 @@
     "distributionIncomplete": "Some receipt items are still unclaimed.",
     "paymentUnmarkAction": "Cancel payment declaration",
     "paymentUnmarked": "Payment declaration cancelled",
-    "paymentUnmarkFailed": "Could not cancel the declaration. The recipient may already have verified receipt."
+    "paymentUnmarkFailed": "Could not cancel the declaration. The recipient may already have verified receipt.",
+    "payerPaymentGroupVerified": "Receipt confirmed",
+    "payerPaymentGroupAwaiting": "Reported payment — awaiting verification",
+    "payerPaymentGroupUnpaid": "Not paid",
+    "payerPaymentGroupEmpty": "No participants in this group yet."
   },
   "result": {
     "loading": "Loading split...",

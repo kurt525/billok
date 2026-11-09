@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { formatCents } from '@/lib/money';
+import { groupGuestPayerPayments, type GuestPayerPaymentGroup } from '@/lib/guest-payer-payment-groups';
 import { mergeGuestPaymentStatuses, newlyDeclaredGuestPayments } from '@/lib/guest-payment-notifications';
 import { getDocumentActiveMountRegistry } from '@/lib/latest-active-mount';
 import { trpc } from '@/lib/trpc';
@@ -214,6 +215,14 @@ export function GuestPayerPaymentReview({
     }
   }
 
+  const paymentGroups = groupGuestPayerPayments(payments ?? [], personId);
+  const groupLabels: Record<GuestPayerPaymentGroup, string> = {
+    verified: t('payerPaymentGroupVerified'),
+    awaiting: t('payerPaymentGroupAwaiting'),
+    unpaid: t('payerPaymentGroupUnpaid'),
+  };
+  const statusOrder: GuestPayerPaymentGroup[] = ['verified', 'awaiting', 'unpaid'];
+
   // Do not server-render an empty review card. On hydration a stale loading
   // card could remain beside the freshly populated card in the DOM.
   // Mount the review card only after its private data has been loaded.
@@ -229,68 +238,92 @@ export function GuestPayerPaymentReview({
             {t('payerPaymentReviewError')}
           </p>
         )}
-        {!payments ? null : payments.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t('payerPaymentReviewNone')}</p>
-        ) : (
-          <div className="space-y-3">
-            {payments.map((payment) => (
-              <div
-                key={payment.personId}
-                className="space-y-2 rounded-lg border p-3"
-                data-testid={'guest-payer-payment-' + payment.personId}
+        {!payments ? null : (
+          <div className="space-y-3" data-testid="guest-payer-payment-groups">
+            {payments.length === 0 && <p className="text-sm text-muted-foreground">{t('payerPaymentReviewNone')}</p>}
+            {statusOrder.map((status) => (
+              <details
+                key={status}
+                className="min-w-0 rounded-lg border"
+                open
+                data-testid={'guest-payer-group-' + status}
               >
-                <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 text-sm">
-                  <span className="min-w-0 [overflow-wrap:anywhere] font-medium">{payment.name}</span>
+                <summary className="min-h-11 min-w-0 cursor-pointer p-3 text-sm font-semibold [overflow-wrap:anywhere]">
+                  <span>{groupLabels[status]}</span>
                   <span
-                    data-testid="guest-payer-payment-amount"
-                    className="ml-auto min-w-0 max-w-full font-semibold tabular-nums [overflow-wrap:anywhere]"
+                    className="ml-2 inline-block tabular-nums text-muted-foreground"
+                    data-testid={'guest-payer-group-count-' + status}
                   >
-                    {formatCents(payment.amount, 'RUB', locale)}
+                    {paymentGroups[status].length}
                   </span>
-                </div>
-                {payment.members && (
-                  <div
-                    className="min-w-0 space-y-1 text-xs text-muted-foreground"
-                    data-testid={'payer-payment-group-members-' + payment.personId}
-                  >
-                    <p className="font-medium">{t('paymentGroupTotal')}</p>
-                    {payment.members.map((member) => (
-                      <p key={member.personId} className="min-w-0 break-words tabular-nums">
-                        {t('paymentGroupPersonal', {
-                          name:
-                            people?.find((person) => person.id === member.personId)?.name ??
-                            t('personFallback', { index: member.personIndex + 1 }),
-                          amount: formatCents(member.amountCents, 'RUB', locale),
-                        })}
+                </summary>
+                <div className="min-w-0 space-y-2 px-3 pb-3">
+                  {paymentGroups[status].length === 0 && (
+                    <p className="text-xs text-muted-foreground" data-testid={'guest-payer-group-empty-' + status}>
+                      {t('payerPaymentGroupEmpty')}
+                    </p>
+                  )}
+                  {paymentGroups[status].map((payment) => (
+                    <div
+                      key={payment.personId}
+                      className="space-y-2 rounded-lg border p-3"
+                      data-testid={'guest-payer-payment-' + payment.personId}
+                    >
+                      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 text-sm">
+                        <span className="min-w-0 [overflow-wrap:anywhere] font-medium">{payment.name}</span>
+                        <span
+                          data-testid="guest-payer-payment-amount"
+                          className="ml-auto min-w-0 max-w-full font-semibold tabular-nums [overflow-wrap:anywhere]"
+                        >
+                          {formatCents(payment.amount, 'RUB', locale)}
+                        </span>
+                      </div>
+                      {payment.members && (
+                        <div
+                          className="min-w-0 space-y-1 text-xs text-muted-foreground"
+                          data-testid={'payer-payment-group-members-' + payment.personId}
+                        >
+                          <p className="font-medium">{t('paymentGroupTotal')}</p>
+                          {payment.members.map((member) => (
+                            <p key={member.personId} className="min-w-0 break-words tabular-nums">
+                              {t('paymentGroupPersonal', {
+                                name:
+                                  people?.find((person) => person.id === member.personId)?.name ??
+                                  t('personFallback', { index: member.personIndex + 1 }),
+                                amount: formatCents(member.amountCents, 'RUB', locale),
+                              })}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                      <p
+                        className="text-xs text-muted-foreground"
+                        data-testid={'guest-payer-payment-status-' + payment.personId}
+                      >
+                        {payment.verifiedAt
+                          ? t('payerPaymentVerified')
+                          : payment.declaredPaidAt
+                            ? t('payerPaymentDeclared')
+                            : t('payerPaymentNotDeclared')}
                       </p>
-                    ))}
-                  </div>
-                )}
-                <p
-                  className="text-xs text-muted-foreground"
-                  data-testid={'guest-payer-payment-status-' + payment.personId}
-                >
-                  {payment.verifiedAt
-                    ? t('payerPaymentVerified')
-                    : payment.declaredPaidAt
-                      ? t('payerPaymentDeclared')
-                      : t('payerPaymentNotDeclared')}
-                </p>
-                {payment.declaredPaidAt && !payment.verifiedAt && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center"
-                    disabled={verifyingId !== null}
-                    onClick={() => {
-                      void confirmReceipt(payment.personId);
-                    }}
-                    data-testid={'guest-payer-verify-' + payment.personId}
-                  >
-                    {t('payerPaymentVerifyAction')}
-                  </Button>
-                )}
-              </div>
+                      {payment.declaredPaidAt && !payment.verifiedAt && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center"
+                          disabled={verifyingId !== null}
+                          onClick={() => {
+                            void confirmReceipt(payment.personId);
+                          }}
+                          data-testid={'guest-payer-verify-' + payment.personId}
+                        >
+                          {t('payerPaymentVerifyAction')}
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </details>
             ))}
           </div>
         )}
