@@ -228,6 +228,7 @@
     "payerSbpRecipientCopyPhone": "Copy phone number",
     "payerSbpRecipientDisclaimer": "Transfer using your bank app. Showing contact information does not confirm payment or receipt.",
     "markMyPayment": "I have paid",
+    "paymentDeclaredAmount": "Declared transfer amount: {amount}",
     "paymentDeclared": "Paid",
     "paymentAwaitingVerification": "You marked the payment. The payer has not verified receipt of funds.",
     "paymentDeclarationDisclaimer": "Press only after making the transfer. This button neither sends nor verifies funds.",

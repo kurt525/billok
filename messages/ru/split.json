@@ -233,6 +233,7 @@
     "payerSbpRecipientCopyPhone": "Скопировать номер",
     "payerSbpRecipientDisclaimer": "Перевод через приложение вашего банка. Отображение реквизитов не подтверждает оплату и не проверяет получение денег.",
     "markMyPayment": "Я оплатил",
+    "paymentDeclaredAmount": "Сумма заявленного перевода: {amount}",
     "paymentDeclared": "Оплачено",
     "paymentAwaitingVerification": "Вы отметили оплату. Поступление денег ещё не проверено плательщиком.",
     "paymentDeclarationDisclaimer": "Нажимайте только после фактического перевода. Кнопка не переводит деньги и не подтверждает их поступление.",

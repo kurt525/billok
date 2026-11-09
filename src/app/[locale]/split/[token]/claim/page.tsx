@@ -2025,6 +2025,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                   personId={myPersonId}
                   personToken={personToken}
                   canDeclare={canDeclareGroupPayment}
+                  amountLabel={formatCents(personalReimbursement.total, currency, locale)}
                 />
               )}
               <p className="text-xs text-muted-foreground">{t('personalReimbursementNote')}</p>

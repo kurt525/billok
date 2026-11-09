@@ -13,11 +13,14 @@ export function GuestPaymentDeclaration({
   personId,
   personToken,
   canDeclare = true,
+  amountLabel,
 }: {
   token: string;
   personId: string;
   personToken: string;
   canDeclare?: boolean;
+  /** Exact finalized receipt/group amount, formatted by the receipt page. */
+  amountLabel: string;
 }) {
   const t = useTranslations('split.claim');
   const read = trpc.guest.getMyPaymentDeclaration.useMutation();
@@ -79,8 +82,11 @@ export function GuestPaymentDeclaration({
     <div className="space-y-2" data-testid="guest-payment-declaration">
       {declaredAt ? (
         <>
-          <p className="text-sm font-semibold" data-testid="guest-payment-declared">
+          <p className="text-sm font-semibold text-green-700 dark:text-green-400" data-testid="guest-payment-declared">
             {t('paymentDeclared')}
+          </p>
+          <p className="break-words text-sm tabular-nums" data-testid="guest-payment-declared-amount">
+            {t('paymentDeclaredAmount', { amount: amountLabel })}
           </p>
           <p
             className="text-xs text-muted-foreground"
@@ -93,7 +99,8 @@ export function GuestPaymentDeclaration({
         <>
           <Button
             type="button"
-            className="min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center"
+            variant="outline"
+            className="min-h-11 w-full min-w-0 whitespace-normal border-red-300 text-center text-red-700 [overflow-wrap:anywhere] hover:text-red-800 dark:border-red-800 dark:text-red-400 dark:hover:text-red-300"
             onClick={declarePayment}
             disabled={mark.isPending}
             data-testid="guest-mark-paid"

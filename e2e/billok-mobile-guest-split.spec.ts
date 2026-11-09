@@ -1342,9 +1342,17 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     );
 
     // A debtor's declaration is not a bank transaction or payer verification.
-    await expect(page.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 15_000 });
-    await page.getByTestId('guest-mark-paid').click();
+    const declareButton = page.getByTestId('guest-mark-paid');
+    await expect(declareButton).toBeVisible({ timeout: 15_000 });
+    await expect(declareButton).toHaveClass(/text-red-700/);
+    await declareButton.click();
     await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено');
+    await expect(page.getByTestId('guest-payment-declared')).toHaveClass(/text-green-700/);
+    await expect(page.getByTestId('guest-payment-declared-amount')).toContainText('Сумма заявленного перевода:');
+    await expect(page.getByTestId('guest-payment-declared-amount')).toContainText(
+      (await page.getByTestId('guest-personal-reimbursement-amount').textContent())!.trim(),
+    );
+    await expect(declareButton).toHaveCount(0);
     // A private live notification reaches the payer on their already-open page.
     const payerNotice = otherPage.getByText('Новая отметка об оплате: Анна. Проверьте поступление.');
     await expect(payerNotice).toHaveCount(1, { timeout: 25_000 });
