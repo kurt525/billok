@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl';
 import { Copy } from 'lucide-react';
 import { toast } from 'sonner';
 import { trpc } from '@/lib/trpc';
-import { SBP_BANKS } from '@/lib/sbp-banks';
+import { formatSbpPhoneForDisplay, sbpPhoneForBankInput, SBP_BANKS } from '@/lib/sbp-banks';
 import { SbpBankLogo } from '@/components/sbp-bank-logo';
 import { copyToClipboard } from '@/lib/clipboard';
 import { Button } from '@/components/ui/button';
@@ -53,8 +53,10 @@ export function GuestSbpReimbursementDetails({
     );
   }
   const bank = SBP_BANKS.find((entry) => entry.id === contact.bankId);
+  const displayPhone = formatSbpPhoneForDisplay(contact.phone);
+  const digitsForBank = sbpPhoneForBankInput(contact.phone);
   async function copyPhone() {
-    if (await copyToClipboard(contact!.phone!)) {
+    if (digitsForBank && (await copyToClipboard(digitsForBank))) {
       toast.success(t('payerSbpRecipientCopied'));
     } else {
       toast.error(tc('actions.copyFailed'));
@@ -70,19 +72,34 @@ export function GuestSbpReimbursementDetails({
         {bank && <SbpBankLogo bank={bank} unavailableLabel={t('payerSbpLogoUnavailable')} />}
         <span className="min-w-0 flex-1 break-words text-sm">{bank?.name ?? t('payerSbpRecipientUnknownBank')}</span>
       </div>
-      <p className="text-base font-semibold tabular-nums" data-testid="guest-sbp-reimbursement-phone">
-        {contact.phone}
+      <p
+        className="select-text break-all text-base font-semibold tabular-nums"
+        data-testid="guest-sbp-reimbursement-phone"
+      >
+        {displayPhone ?? t('payerSbpRecipientInvalidPhone')}
       </p>
       <Button
         type="button"
         variant="outline"
         className="min-h-11 w-full"
         onClick={copyPhone}
+        disabled={!digitsForBank}
         data-testid="guest-sbp-copy-phone"
       >
         <Copy className="mr-2 size-4" aria-hidden="true" />
         {t('payerSbpRecipientCopyPhone')}
       </Button>
+      <div className="space-y-1 text-xs text-muted-foreground" data-testid="guest-sbp-manual-instructions">
+        <p className="font-medium">{t('payerSbpManualTitle')}</p>
+        <ol className="list-decimal space-y-1 pl-5">
+          <li>{t('payerSbpManualOpenBank')}</li>
+          <li>{t('payerSbpManualChooseSbp')}</li>
+          <li>{t('payerSbpManualChooseRecipientBank')}</li>
+          <li>{t('payerSbpManualEnterAmount')}</li>
+          <li>{t('payerSbpManualReview')}</li>
+          <li>{t('payerSbpManualConfirm')}</li>
+        </ol>
+      </div>
       <p className="text-xs text-muted-foreground">{t('payerSbpRecipientDisclaimer')}</p>
     </div>
   );

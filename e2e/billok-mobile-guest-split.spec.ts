@@ -1279,7 +1279,16 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect
       .poll(() => payerDestinationBank.locator('img').evaluate((img) => (img as HTMLImageElement).naturalWidth))
       .toBeGreaterThan(0);
-    await expect(page.getByTestId('guest-sbp-reimbursement-phone')).toContainText('+79991234567');
+    await expect(page.getByTestId('guest-sbp-reimbursement-phone')).toHaveText('+7 (999) 123-45-67');
+    await expect(page.getByTestId('guest-sbp-manual-instructions')).toContainText(
+      'Выберите перевод по номеру телефона через СБП.',
+    );
+    await expect(page.getByTestId('guest-sbp-manual-instructions')).toContainText(
+      'Проверьте имя получателя, сумму и возможную комиссию.',
+    );
+    await expect(page.getByTestId('guest-personal-reimbursement').locator('button[data-testid*="copy"]')).toHaveCount(
+      2,
+    );
     // 4.7: SBP reimbursement never exposes a payment link, QR or bank-app redirect.
     const sbpDetails = page.getByTestId('guest-sbp-reimbursement-details');
     await expect(sbpDetails.locator('a[href], canvas, [data-testid*="qr"], [data-testid*="payment-link"]')).toHaveCount(
@@ -1301,7 +1310,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await page.getByTestId('guest-sbp-copy-phone').click();
     await expect
       .poll(() => page.evaluate(() => (window as Window & { __billokCopiedPhone?: string }).__billokCopiedPhone))
-      .toBe('+79991234567');
+      .toBe('9991234567');
 
     // Boris's review must already have its baseline, or a fresh page
     // should not toast about declarations that existed before it loaded.
@@ -4706,7 +4715,10 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('10,01');
     // The responsible group member gets one total; missing payer bank details
     // must not trigger a fake payment destination or a second payer.
-    await expect(page.getByTestId('guest-sbp-not-configured')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('guest-sbp-not-configured')).toContainText(
+      'Попросите его заполнить их на его персональной странице чека',
+      { timeout: 15_000 },
+    );
     await expect(page.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 20_000 });
     await fitsPhone(page);
     await page.getByTestId('guest-mark-paid').click();

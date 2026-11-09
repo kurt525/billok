@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'vitest';
-import { isSupportedSbpBankId, normalizeSbpPhone, SBP_BANKS, searchSbpBanks } from './sbp-banks';
+import {
+  formatSbpPhoneForDisplay,
+  isSupportedSbpBankId,
+  normalizeSbpPhone,
+  sbpPhoneForBankInput,
+  SBP_BANKS,
+  searchSbpBanks,
+} from './sbp-banks';
 
 describe('SBP profile contracts', () => {
   test('normalizes common Russian dialling formats without verification', () => {
@@ -35,5 +42,20 @@ describe('SBP profile contracts', () => {
     expect(isSupportedSbpBankId('100000000273')).toBe(true);
     expect(isSupportedSbpBankId('100000000150')).toBe(true);
     expect(isSupportedSbpBankId('unknown-bank')).toBe(false);
+  });
+});
+
+describe('Issue 4.8: manual SBP phone display and bank-app paste', () => {
+  test.each([
+    ['+79991234567', '+7 (999) 123-45-67', '9991234567'],
+    ['8 (999) 123-45-67', '+7 (999) 123-45-67', '9991234567'],
+    ['+7 900 000 00 01', '+7 (900) 000-00-01', '9000000001'],
+  ])('formats %s for reading and bank input', (input, display, digits) => {
+    expect(formatSbpPhoneForDisplay(input)).toBe(display);
+    expect(sbpPhoneForBankInput(input)).toBe(digits);
+  });
+  test.each(['+15551234567', '+7000000000', '5551234567', 'abc'])('refuses invalid phone: %s', (input) => {
+    expect(formatSbpPhoneForDisplay(input)).toBeNull();
+    expect(sbpPhoneForBankInput(input)).toBeNull();
   });
 });

@@ -60,3 +60,17 @@ export function normalizeSbpPhone(value: string): string | null {
   if (/^[78]\d{10}$/.test(stripped)) return '+7' + stripped.slice(1);
   return null;
 }
+
+/** Human-readable Russian SBP phone; storage stays in +7XXXXXXXXXX form. */
+export function formatSbpPhoneForDisplay(phone: string): string | null {
+  const normalized = normalizeSbpPhone(phone);
+  if (!normalized) return null;
+  const digits = normalized.slice(2);
+  return '+7 (' + digits.slice(0, 3) + ') ' + digits.slice(3, 6) + '-' + digits.slice(6, 8) + '-' + digits.slice(8, 10);
+}
+
+/** Only ten national digits for manual paste in a Russian banking app. */
+export function sbpPhoneForBankInput(phone: string): string | null {
+  const normalized = normalizeSbpPhone(phone);
+  return normalized ? normalized.slice(2) : null;
+}
