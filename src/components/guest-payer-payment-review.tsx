@@ -305,6 +305,12 @@ export function GuestPayerPaymentReview({
       <CardContent className="space-y-3 py-4">
         <h3 className="font-semibold">{t('payerPaymentReviewTitle')}</h3>
         <p className="text-xs text-muted-foreground">{t('payerPaymentReviewHint')}</p>
+        <p
+          className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]"
+          data-testid="guest-payer-settlement-locked"
+        >
+          {t('payerSettlementLockedNotice')}
+        </p>
         {loadFailed && (
           <p className="text-xs text-destructive" data-testid="guest-payer-review-error">
             {t('payerPaymentReviewError')}

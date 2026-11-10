@@ -370,7 +370,9 @@
     "payerPaymentCancelFailed": "Не удалось отменить подтверждение",
     "paymentCancelNoticeDetailed": "Подтверждение поступления вашего перевода {amount} по чеку «{receipt}» отозвано получателем «{payer}»",
     "paymentCancelNoticeToast": "Подтверждение поступления денег отозвано получателем.",
-    "payerPaymentDeclarationRevokedNotice": "Сообщение об оплате {amount} от участника «{name}» отозвано. Сумма снова числится неоплаченной."
+    "payerPaymentDeclarationRevokedNotice": "Сообщение об оплате {amount} от участника «{name}» отозвано. Сумма снова числится неоплаченной.",
+    "paymentSettlementLockedNotice": "Сумма зафиксирована при завершении чека. После завершения распределение изменить нельзя.",
+    "payerSettlementLockedNotice": "Суммы возмещений закреплены при завершении чека. Сообщения об оплате и подтверждения относятся только к этим суммам."
   },
   "result": {
     "loading": "Загрузка расчёта…",

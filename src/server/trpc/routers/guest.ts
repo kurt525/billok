@@ -44,6 +44,11 @@ import {
 import { guestPartsConfirmationSnapshot } from '@/lib/guest-parts-confirmation';
 import { guestKnownPartsBalance } from '@/lib/guest-known-parts';
 import { guestPresenceState } from '@/lib/guest-presence';
+import {
+  guestSettlementDigest,
+  assertGuestSettlementUnchanged,
+  assertGuestDeclaredAmountsUnchanged,
+} from '../../lib/guest-settlement-lock';
 import { hasDuplicateGuestNames, normalizeGuestName } from '@/lib/guest-session';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { MAX_MONEY_CENTS } from '@/lib/money';
@@ -426,6 +431,19 @@ function requireGuestDebtor(
     throw new AppError('FORBIDDEN', 'invalidPersonToken');
   }
   const paymentGroups = finalizedPaymentGroups(people, split.paidByIndex, summary, receipt.total!);
+  assertGuestSettlementUnchanged({
+    receiptData: split.receiptData,
+    people,
+    paidByIndex: split.paidByIndex,
+    summary,
+    receiptTotalCents: receipt.total!,
+  });
+  assertGuestDeclaredAmountsUnchanged({
+    people,
+    paidByIndex: split.paidByIndex,
+    summary,
+    groupDebts: paymentGroups,
+  });
   const group = paymentGroups?.find((entry) => entry.memberIndices.includes(personIndex));
   const due = summary.find((entry) => entry.personIndex === personIndex);
   if (group ? group.totalCents <= 0 : !due || due.total <= 0) {
@@ -493,6 +511,19 @@ function requireGuestPayerReview(
     throw new AppError('FORBIDDEN', 'invalidPersonToken');
   }
   const paymentGroups = finalizedPaymentGroups(people, split.paidByIndex, summary, receipt.total!);
+  assertGuestSettlementUnchanged({
+    receiptData: split.receiptData,
+    people,
+    paidByIndex: split.paidByIndex,
+    summary,
+    receiptTotalCents: receipt.total!,
+  });
+  assertGuestDeclaredAmountsUnchanged({
+    people,
+    paidByIndex: split.paidByIndex,
+    summary,
+    groupDebts: paymentGroups,
+  });
   return { people, summary, paymentGroups };
 }
 
@@ -803,13 +834,25 @@ export const guestRouter = createTRPCRouter({
     if (split.status !== GuestSplitStatus.FINALIZED) {
       throw new AppError('CONFLICT', 'splitNotFinalized');
     }
+    assertGuestSettlementUnchanged({
+      receiptData: split.receiptData,
+      people: split.people as GuestSessionPerson[],
+      paidByIndex: split.paidByIndex,
+      summary: (split.summary ?? []) as { personIndex: number; total: number; tip: number }[],
+      receiptTotalCents: (split.receiptData as { total: number }).total,
+    });
 
     return {
       id: split.id,
       shareToken: split.shareToken,
       receiptData: (() => {
-        const { finalizationOrganizerUserId: _privateOrganizer, ...visible } = parseExtractedData(split.receiptData);
+        const {
+          finalizationOrganizerUserId: _privateOrganizer,
+          paymentSettlementLock: _privateSettlement,
+          ...visible
+        } = parseExtractedData(split.receiptData);
         void _privateOrganizer;
+        void _privateSettlement;
         return visible;
       })() as {
         merchantName?: string;
@@ -2234,6 +2277,15 @@ export const guestRouter = createTRPCRouter({
     if (!hasPersonIds(session.people as GuestSessionPerson[])) session = await savePersonIds(ctx.db, session.id);
 
     const parsedData = parseExtractedData(session.receiptData);
+    if (session.status === GuestSplitStatus.FINALIZED) {
+      assertGuestSettlementUnchanged({
+        receiptData: session.receiptData,
+        people: session.people as GuestSessionPerson[],
+        paidByIndex: session.paidByIndex,
+        summary: (session.summary ?? []) as { personIndex: number; total: number; tip: number }[],
+        receiptTotalCents: parsedData.total,
+      });
+    }
     const canViewPresence = canFinalizeGuestSession(session.userId, parsedData, ctx.session?.user?.id);
     const latestPresence =
       canViewPresence && session.status === GuestSplitStatus.CLAIMING
@@ -2266,8 +2318,13 @@ export const guestRouter = createTRPCRouter({
       shareToken: session.shareToken,
       status: session.status,
       receiptData: (() => {
-        const { finalizationOrganizerUserId: _privateOrganizer, ...visible } = parseExtractedData(session.receiptData);
+        const {
+          finalizationOrganizerUserId: _privateOrganizer,
+          paymentSettlementLock: _privateSettlement,
+          ...visible
+        } = parseExtractedData(session.receiptData);
         void _privateOrganizer;
+        void _privateSettlement;
         return visible;
       })() as {
         merchantName?: string;
@@ -2733,11 +2790,33 @@ export const guestRouter = createTRPCRouter({
           });
         }
 
+        // Stable personal IDs must already be part of the finalized ledger.
+        // Some legacy sessions were finalized without ever opening getSession;
+        // assign IDs in this SAME transaction so a later read cannot change
+        // the amount lock by lazily assigning IDs.
+        const finalizedPeople = assignPersonIds(session.people as GuestSessionPerson[]);
+
+        // 5.20: commit the exact receipt shares, family-payment membership
+        // and a separate immutable checksum in the SAME finalization write.
+        // Payment actions will reject altered financial rows, rather than
+        // attributing an earlier declaration to a newly calculated amount.
+        const paymentSettlementLock = {
+          version: 1 as const,
+          lockedAt: new Date().toISOString(),
+          digest: guestSettlementDigest({
+            people: finalizedPeople,
+            paidByIndex: session.paidByIndex,
+            summary: summaryWithNames,
+            receiptTotalCents: receiptData.total,
+          }),
+        };
         await tx.guestSplit.update({
           where: { id: session.id },
           data: {
             status: GuestSplitStatus.FINALIZED,
+            people: finalizedPeople as unknown as Prisma.InputJsonValue,
             summary: summaryWithNames as unknown as Prisma.InputJsonValue,
+            receiptData: { ...receiptData, paymentSettlementLock } as Prisma.InputJsonValue,
             assignments: assignments as unknown as Prisma.InputJsonValue,
           },
         });
@@ -3537,6 +3616,19 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('FORBIDDEN', 'invalidPersonToken');
       }
       const groupPayments = finalizedPaymentGroups(people, split.paidByIndex, summary, receipt.total!);
+      assertGuestSettlementUnchanged({
+        receiptData: split.receiptData,
+        people,
+        paidByIndex: split.paidByIndex,
+        summary,
+        receiptTotalCents: receipt.total!,
+      });
+      assertGuestDeclaredAmountsUnchanged({
+        people,
+        paidByIndex: split.paidByIndex,
+        summary,
+        groupDebts: groupPayments,
+      });
       if (groupPayments) {
         const payment = groupPayments.find((group) => group.representativeId === input.personId);
         // A group is paid once by its representative, not by every diner.

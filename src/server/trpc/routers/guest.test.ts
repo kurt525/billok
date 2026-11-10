@@ -4221,6 +4221,108 @@ describe('guest.finalizeSession', () => {
     );
   }
 
+  test('5.20: freezes finalized cents atomically, never reassigns an old payment to a corrected split', async () => {
+    claimSession(
+      [
+        { id: pid(0), name: 'Плательщик', personToken: ALICE_TOKEN },
+        { id: pid(2), name: 'Анна', personToken: OTHER_TOKEN },
+        { id: pid(3), name: 'Борис', personToken: D_TOKEN },
+      ],
+      {
+        items: items(3),
+        receiptData: { subtotal: 300, tax: 0, tip: 0, total: 300, currency: 'RUB' },
+        assignments: [
+          { itemIndex: 0, personIndices: [0] },
+          { itemIndex: 1, personIndices: [1] },
+          { itemIndex: 2, personIndices: [2] },
+        ],
+      },
+    );
+    const before = await mockDb.guestSplit.findUnique();
+    const api = await caller(signedIn);
+    await api.finalizeSession({ token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN });
+    const finalized = mockDb.guestSplit.update.mock.calls.at(-1)![0].data;
+    expect(finalized.status).toBe('FINALIZED');
+    expect(finalized.summary).toHaveLength(3);
+    expect(finalized.receiptData).toMatchObject({
+      paymentSettlementLock: {
+        version: 1,
+        digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        lockedAt: expect.any(String),
+      },
+    });
+    expect(finalized.people).toHaveLength(3);
+    const split = { ...before, ...finalized };
+    mockDb.guestSplit.findUnique.mockResolvedValue(split);
+    const privateGuest = { token: 'share-1', personId: pid(2), personToken: OTHER_TOKEN };
+    const privatePayer = { token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN };
+    const guest = await caller();
+    expect(await guest.getMyPaymentDeclaration(privateGuest)).toMatchObject({
+      declaredPaidAt: null,
+      declaredAmountCents: null,
+    });
+    const publicSession = await guest.getSession({ token: 'share-1' });
+    expect(publicSession.receiptData).not.toHaveProperty('paymentSettlementLock');
+    const publicFinal = await guest.getSplit({ token: 'share-1' });
+    expect(publicFinal.receiptData).not.toHaveProperty('paymentSettlementLock');
+
+    const declaration = await guest.markMyPayment(privateGuest);
+    expect(declaration.declaredAmountCents).toBe(100);
+    const declaredPeople = mockDb.guestSplit.update.mock.calls.at(-1)![0].data.people;
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...split, people: declaredPeople });
+    const payerReview = await guest.getMyPayerPaymentReview(privatePayer);
+    expect(payerReview.payments).toEqual(
+      expect.arrayContaining([expect.objectContaining({ personId: pid(2), amount: 100 })]),
+    );
+    // A hypothetical later correction keeps the overall receipt constant,
+    // but changes two people's shares. There is deliberately no authorized
+    // correction operation after finalization: even an external/stale write
+    // must fail closed rather than silently moving an old declaration.
+    const alteredSummary = (finalized.summary as { personIndex: number; total: number }[]).map((entry) => ({
+      ...entry,
+      total: entry.personIndex === 1 ? 101 : entry.personIndex === 2 ? 99 : entry.total,
+    }));
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...split, people: declaredPeople, summary: alteredSummary });
+    mockDb.guestSplit.update.mockClear();
+    await expect(guest.getMyPaymentDeclaration(privateGuest)).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+    await expect(guest.getMyPayerPaymentReview(privatePayer)).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+    await expect(guest.getSession({ token: 'share-1' })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+    await expect(guest.getSplit({ token: 'share-1' })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...split, people: declaredPeople });
+    expect((await guest.getMyPaymentDeclaration(privateGuest)).declaredAmountCents).toBe(100);
+    await expect(
+      api.updateClaimReceiptItem({
+        token: 'share-1',
+        itemIndex: 1,
+        name: 'Изменённое блюдо',
+        quantity: 1,
+        unitPrice: 101,
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(api.setPaymentGroups({ token: 'share-1', groups: [] })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await expect(
+      guest.setPersonalTip({
+        token: 'share-1',
+        personId: pid(2),
+        personToken: OTHER_TOKEN,
+        tipCents: 20,
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
   test('finalizes as the person the id names, wherever they are now', async () => {
     everyItemClaimed();
     await (await caller(signedIn)).finalizeSession({ token: 'share-1', personToken: OTHER_TOKEN, personId: pid(2) });

@@ -365,7 +365,9 @@
     "payerPaymentCancelFailed": "Could not revoke receipt confirmation",
     "paymentCancelNoticeDetailed": "Confirmation of your {amount} transfer for “{receipt}” was revoked by recipient “{payer}”",
     "paymentCancelNoticeToast": "Confirmation of receipt was withdrawn by the recipient.",
-    "payerPaymentDeclarationRevokedNotice": "Payment report of {amount} from “{name}” was withdrawn. The amount is now unpaid again."
+    "payerPaymentDeclarationRevokedNotice": "Payment report of {amount} from “{name}” was withdrawn. The amount is now unpaid again.",
+    "paymentSettlementLockedNotice": "Your share was fixed when the receipt was finalized. The allocation cannot be edited afterward.",
+    "payerSettlementLockedNotice": "Reimbursement amounts were fixed when this receipt was finalized. Payment reports and confirmations refer only to those amounts."
   },
   "result": {
     "loading": "Loading split...",

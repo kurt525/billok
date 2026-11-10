@@ -316,6 +316,12 @@ export function GuestPaymentDeclaration({
     );
   return (
     <div className="space-y-2" aria-live="polite" data-testid="guest-payment-declaration">
+      <p
+        className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]"
+        data-testid="guest-payment-settlement-locked"
+      >
+        {t('paymentSettlementLockedNotice')}
+      </p>
       {(receiptNotification || cancellationNotifications.length > 0) && canDeclare && (
         <section
           className="min-w-0 space-y-2 rounded-lg border border-border p-3"

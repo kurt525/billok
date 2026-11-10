@@ -1361,6 +1361,14 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     );
     // 5.6: only the payer sees three private, expandable status groups.
     const unpaidGroup = livePayerReview.getByTestId('guest-payer-group-unpaid');
+    // 5.20: the original finalized debt is fixed. Any future correction must
+    // be explicit and reconcile past reports; current final receipts are immutable.
+    await expect(livePayerReview.getByTestId('guest-payer-settlement-locked')).toContainText(
+      'Суммы возмещений закреплены при завершении чека.',
+    );
+    await expect(page.getByTestId('guest-payment-settlement-locked')).toContainText(
+      'Сумма зафиксирована при завершении чека.',
+    );
     const awaitingGroup = livePayerReview.getByTestId('guest-payer-group-awaiting');
     const verifiedGroup = livePayerReview.getByTestId('guest-payer-group-verified');
     await expect(unpaidGroup.locator('summary')).toContainText('Не оплатили');
@@ -1488,6 +1496,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(page.getByTestId('guest-payment-awaiting')).toHaveText('Ожидается проверка поступления');
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('guest-payment-declared')).toHaveText('Об оплате сообщено', { timeout: 15_000 });
+    await expect(page.getByTestId('guest-payment-settlement-locked')).toBeVisible();
     await expect(page.getByTestId('guest-mark-paid')).toHaveCount(0);
     await expect(page.getByTestId('guest-payment-awaiting')).toHaveText('Ожидается проверка поступления');
     await expect(page.getByTestId('guest-payment-not-bank-confirmed')).toBeVisible();

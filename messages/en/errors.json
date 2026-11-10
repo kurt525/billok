@@ -177,5 +177,6 @@
   "guestSlotTaken": "This guest place has already been taken. Choose another available place.",
   "guestPersonalLinkNotJoined": "The guest has not claimed this place yet.",
   "guestPersonalLinkNotReady": "The guest has not saved their first change yet.",
-  "paymentAlreadyVerified": "The recipient has already confirmed receipt. The participant cannot cancel the declaration."
+  "paymentAlreadyVerified": "The recipient has already confirmed receipt. The participant cannot cancel the declaration.",
+  "receiptSettlementChanged": "The finalized receipt amounts have changed. An earlier payment declaration cannot be assigned a new amount automatically. Contact the organizer."
 }
