@@ -89,7 +89,10 @@ export function GuestPaymentDeclaration({
   // SSE carries no identifying details and cannot replace the private read.
   // Finalized receipt pages do not run the pre-finalization claim SSE channel.
   useEffect(() => {
-    if (typeof EventSource === 'undefined') return;
+    // Never race a first-load private status read against the SSE ready hint.
+    // During repeated mobile reloads the ready hint could supersede that
+    // initial response and leave the payment action stuck in loading.
+    if (!loaded || typeof EventSource === 'undefined') return;
     const url = '/api/guest/' + encodeURIComponent(token) + '/events';
     const controller = new AbortController();
     let closed = false;
@@ -147,7 +150,7 @@ export function GuestPaymentDeclaration({
       if (retryTimer) clearTimeout(retryTimer);
       if (renewTimer) clearTimeout(renewTimer);
     };
-  }, [token, personId, personToken]);
+  }, [loaded, token, personId, personToken]);
 
   async function declarePayment() {
     if (!canDeclare || !loaded || declaredAt || verifiedAt || writeInFlight.current) return;

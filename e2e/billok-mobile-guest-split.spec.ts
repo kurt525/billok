@@ -1365,7 +1365,22 @@ test('mobile guest finalization reconciles personal tips for three dining partic
 
     // A debtor's declaration is not a bank transaction or payer verification.
     const declareButton = page.getByTestId('guest-mark-paid');
-    await expect(declareButton).toBeVisible({ timeout: 15_000 });
+    try {
+      await expect(declareButton).toBeVisible({ timeout: 15_000 });
+    } catch (error) {
+      // 5.9 regression diagnostic: describe only public DOM state, never
+      // personal links, tokens, payment secrets or network payloads.
+      const diagnostic = await page.evaluate(() => ({
+        status: document.querySelector('[data-testid="guest-payment-declaration-loading"]')?.textContent ?? null,
+        declarationCount: document.querySelectorAll('[data-testid="guest-payment-declaration"]').length,
+        declaredCount: document.querySelectorAll('[data-testid="guest-payment-declared"]').length,
+        verifiedCount: document.querySelectorAll('[data-testid="guest-payment-verified"]').length,
+        awaitingCount: document.querySelectorAll('[data-testid="guest-payment-awaiting"]').length,
+        readonlyCount: document.querySelectorAll('[data-testid="guest-group-payment-readonly"]').length,
+        personalReimbursementCount: document.querySelectorAll('[data-testid="guest-personal-reimbursement"]').length,
+      }));
+      throw new Error('Missing sender payment action: ' + JSON.stringify(diagnostic) + '\\n' + String(error));
+    }
     await expect(declareButton).toHaveClass(/text-red-700/);
     await declareButton.click();
     await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено');
