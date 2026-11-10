@@ -117,10 +117,22 @@ export function GuestPayerPaymentReview({
     };
     refreshCurrent.current = refresh;
     refresh();
+    // The private SSE subscription normally refreshes the payer within the
+    // receipt's change window. Also read immediately after a phone reconnects
+    // or returns from the background instead of waiting for the 12s fallback.
     const interval = setInterval(refresh, 12000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    window.addEventListener('online', refresh);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
     return () => {
       cancelled = true;
       clearInterval(interval);
+      window.removeEventListener('online', refresh);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
       refreshCurrent.current = () => {};
     };
   }, [isActiveReview, readPayments, token, personId, personToken, t, locale]);

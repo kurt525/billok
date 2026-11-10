@@ -153,6 +153,56 @@ describe('3.21: server-signed per-receipt authorization for SSE invalidations', 
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  test('5.17: one committed payment declaration invalidates every open receipt stream; reconnect starts fresh', async () => {
+    vi.useFakeTimers();
+    let version = '100';
+    queryRaw.mockImplementation(async () => revision(version));
+    const guestCookie = await issueCookie('live-payment');
+    // A registered receipt creator may observe the receipt, but no payment
+    // state, phone, bank or personal secret leaks into the SSE payload.
+    authMock.mockResolvedValue({ user: { id: ownerId } });
+    const payerCookie = await issueCookie('live-payment', {});
+    const guestResponse = await get('live-payment', guestCookie);
+    const payerResponse = await get('live-payment', payerCookie);
+    expect(guestResponse.status).toBe(200);
+    expect(payerResponse.status).toBe(200);
+    const guestReader = guestResponse.body!.getReader();
+    const payerReader = payerResponse.body!.getReader();
+    const decoder = new TextDecoder();
+    expect(decoder.decode((await guestReader.read()).value)).toContain('event: ready');
+    expect(decoder.decode((await payerReader.read()).value)).toContain('event: ready');
+
+    // markMyPayment commits its new GuestSplit.people JSON, changing xmin.
+    // Both authorized devices observe the SAME revision in one 1.5s check.
+    version = '101';
+    await vi.advanceTimersByTimeAsync(1500);
+    const [guestChanged, payerChanged] = await Promise.all([guestReader.read(), payerReader.read()]);
+    for (const item of [guestChanged, payerChanged]) {
+      const hint = decoder.decode(item.value);
+      expect(hint).toContain('event: changed');
+      expect(hint).toContain('data: {}');
+      expect(hint).not.toContain(PERSON_TOKEN);
+      expect(hint).not.toContain(PERSON_ID);
+      expect(hint).not.toContain('paymentDeclaredAt');
+    }
+    await guestReader.cancel();
+
+    // An Android browser reconnection subscribes at the CURRENT committed
+    // revision; the 'ready' event makes the client load its saved status.
+    version = '102';
+    const resumed = await get('live-payment', guestCookie);
+    expect(resumed.status).toBe(200);
+    const resumedReader = resumed.body!.getReader();
+    expect(decoder.decode((await resumedReader.read()).value)).toContain('event: ready');
+    version = '103';
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(decoder.decode((await resumedReader.read()).value)).toContain('event: changed');
+
+    await resumedReader.cancel();
+    await payerReader.cancel();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   test('rotating guest personal link revokes an already connected stream before sending a change', async () => {
     vi.useFakeTimers();
     const cookie = await issueCookie('revoked');

@@ -1406,6 +1406,12 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       );
     }
     await expect(declareButton).toHaveClass(/text-red-700/);
+    // 5.17: a second anonymous phone/tab is ALREADY open before the sender
+    // presses "I paid"; both guest copies and the payer's independent device
+    // must update from the committed server state without a manual reload.
+    const debtorSecondTab = await page.context().newPage();
+    await debtorSecondTab.goto(page.url(), { waitUntil: 'domcontentloaded' });
+    await expect(debtorSecondTab.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 15_000 });
     await declareButton.click();
     await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено');
     await expect(page.getByTestId('guest-payment-declared')).toHaveClass(/text-green-700/);
@@ -1414,6 +1420,43 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       (await page.getByTestId('guest-personal-reimbursement-amount').textContent())!.trim(),
     );
     await expect(declareButton).toHaveCount(0);
+    // The same SSE revision must invalidate ALL subscribed views while the
+    // 12-second fallback has not yet fired. Query every painted view within
+    // one 10-second wall-clock window, instead of sequential 10s waits.
+    await expect
+      .poll(
+        async () => {
+          const [firstGuest, secondGuest, payer] = await Promise.all([
+            page.evaluate(
+              () => document.querySelector('[data-testid="guest-payment-declared"]')?.textContent?.trim() ?? '',
+            ),
+            debtorSecondTab.evaluate(
+              () => document.querySelector('[data-testid="guest-payment-declared"]')?.textContent?.trim() ?? '',
+            ),
+            Promise.all([
+              livePayerReview.getByTestId('guest-payer-summary-awaiting').textContent(),
+              livePayerReview.getByTestId('guest-payer-summary-unpaid').textContent(),
+              livePayerReview.getByTestId('guest-payer-summary-outstanding').textContent(),
+            ]).then(([awaiting, unpaid, outstanding]) => ({
+              awaiting: (awaiting ?? '').replace(/\s+/g, ' ').trim(),
+              unpaid: (unpaid ?? '').replace(/\s+/g, ' ').trim(),
+              outstanding: (outstanding ?? '').replace(/\s+/g, ' ').trim(),
+            })),
+          ]);
+          return { firstGuest, secondGuest, payer };
+        },
+        { timeout: 10_000, intervals: [250, 500, 750, 1000] },
+      )
+      .toEqual({
+        firstGuest: 'Оплачено',
+        secondGuest: 'Оплачено',
+        payer: { awaiting: '4,59 ₽', unpaid: '4,08 ₽', outstanding: '8,67 ₽' },
+      });
+    // No API error, stale snapshot, or phantom bank confirmation should
+    // cause the same debt to be reported twice.
+    await expect(initialSummary.getByTestId('guest-payer-summary-total')).toContainText('8,67');
+    await expect(initialSummary.getByTestId('guest-payer-summary-verified')).toContainText('0,00');
+    await expect(debtorSecondTab.getByTestId('guest-payment-awaiting')).toHaveText('Ожидает подтверждения получателем');
     // A private live notification reaches the payer on their already-open page.
     const payerNotice = otherPage.getByText('Новая отметка об оплате: Анна — 4,59 ₽. Проверьте поступление.');
     // The finalized payer's SSE channel refreshes the private payment review
@@ -1436,9 +1479,9 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(page.getByTestId('guest-mark-paid')).toHaveCount(0);
     await expect(page.getByTestId('guest-payment-awaiting')).toHaveText('Ожидает подтверждения получателем');
     await expect(page.getByTestId('guest-payer-sbp-form')).toHaveCount(0);
-    // A different tab must restore the same server-side status, not a local toast.
-    const debtorSecondTab = await page.context().newPage();
-    await debtorSecondTab.goto(page.url(), { waitUntil: 'domcontentloaded' });
+    // A different already-open tab also retains the same persisted state
+    // across reload, not merely a local toast.
+    await debtorSecondTab.reload({ waitUntil: 'domcontentloaded' });
     await expect(debtorSecondTab.getByTestId('guest-payment-declared')).toHaveText('Оплачено', {
       timeout: 15_000,
     });
