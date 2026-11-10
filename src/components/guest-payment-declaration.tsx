@@ -238,7 +238,9 @@ export function GuestPaymentDeclaration({
       const result = await mark.mutateAsync({ token, personId, personToken });
       setDeclaredAt(result.declaredPaidAt);
       setDeclaredAmountCents(result.declaredAmountCents);
-      toast.success(t('paymentDeclared'));
+      // A concurrent payer verification may commit first. Do not falsely
+      // claim the participant added another declaration afterward.
+      toast.success(result.declaredPaidAt ? t('paymentDeclared') : t('paymentVerifiedByRecipient'));
     } catch {
       toast.error(t('paymentDeclarationFailed'));
     } finally {

@@ -1751,6 +1751,120 @@ test('mobile guest finalization reconciles personal tips for three dining partic
   }
 });
 
+test('5.14: payer confirms an undeclared receipt without an invented sender payment', async ({ page, browser }) => {
+  test.setTimeout(100_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const payerDevice = await browser.newContext({
+    viewport: { width: 320, height: 640 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  try {
+    const createdResponse = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Без отметки оплаты', subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'RUB' },
+      items: [{ name: 'Обед', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
+      people: ['Анна', 'Борис'],
+      creatorName: 'Анна',
+      paidByName: 'Борис',
+      joinCreator: true,
+    });
+    const createdBody = await createdResponse.text();
+    expect(createdResponse.ok(), createdBody).toBe(true);
+    const created = JSON.parse(createdBody);
+    const { shareToken: token, creator: anna } = created.result.data.json as {
+      shareToken: string;
+      creator: { personId: string; personToken: string; name: string };
+    };
+    const boris = await joinGuestSession(payerDevice.request, { token, name: 'Борис' });
+    await rememberClaimIdentity(page.context(), token, { name: anna.name, personToken: anna.personToken });
+    await rememberClaimIdentity(payerDevice, token, { name: boris.name, personToken: boris.personToken });
+    for (const person of [anna, boris]) {
+      const requester = person.personId === anna.personId ? page.request : payerDevice.request;
+      const claimed = await trpcMutation(requester, 'guest.claimItems', {
+        token,
+        personId: person.personId,
+        personToken: person.personToken,
+        claimedItemIndices: [0],
+      });
+      expect(claimed.ok(), await claimed.text()).toBe(true);
+    }
+    const confirmed = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
+    expect(confirmed.ok(), await confirmed.text()).toBe(true);
+    const finalized = await trpcMutation(owner, 'guest.finalizeSession', { token });
+    expect(finalized.ok(), await finalized.text()).toBe(true);
+
+    await page.setViewportSize({ width: 320, height: 640 });
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    const payerPage = await payerDevice.newPage();
+    await payerPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('guest-payment-declared')).toHaveCount(0);
+    const review = payerPage.getByTestId('guest-payer-payment-review');
+    await expect(review).toBeVisible({ timeout: 20_000 });
+    const verify = review.getByTestId('guest-payer-verify-' + anna.personId);
+    await expect(verify).toBeVisible({ timeout: 15_000 });
+    await expect(
+      review.getByTestId('guest-payer-group-unpaid').getByTestId('guest-payer-payment-' + anna.personId),
+    ).toHaveCount(1);
+    await fitsPhone(page);
+    await fitsPhone(payerPage);
+    const bounds = await verify.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.height).toBeGreaterThanOrEqual(44);
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+
+    await verify.click();
+    await expect(page.getByTestId('guest-payment-verified')).toHaveText('Получатель подтвердил поступление', {
+      timeout: 25_000,
+    });
+    await expect(page.getByTestId('guest-mark-paid')).toHaveCount(0);
+    await expect(page.getByTestId('guest-payment-declared')).toHaveCount(0);
+    await expect(page.getByTestId('guest-payment-notification-text')).toContainText('5,00 ₽', {
+      timeout: 15_000,
+    });
+    await expect(
+      review.getByTestId('guest-payer-group-verified').getByTestId('guest-payer-payment-' + anna.personId),
+    ).toHaveCount(1);
+    await expect(
+      review.getByTestId('guest-payer-group-unpaid').getByTestId('guest-payer-payment-' + anna.personId),
+    ).toHaveCount(0);
+    const summary = review.getByTestId('guest-payer-payment-summary');
+    await expect(summary.getByTestId('guest-payer-summary-total')).toContainText('5,00');
+    await expect(summary.getByTestId('guest-payer-summary-verified')).toContainText('5,00');
+    await expect(summary.getByTestId('guest-payer-summary-unpaid')).toContainText('0,00');
+    await expect(summary.getByTestId('guest-payer-summary-outstanding')).toContainText('0,00');
+
+    const status = await trpcMutation(page.request, 'guest.getMyPaymentDeclaration', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+    });
+    expect(status.ok()).toBe(true);
+    const privateStatus = await trpcResult(status);
+    expect(privateStatus.declaredPaidAt).toBeNull();
+    expect(privateStatus.declaredAmountCents).toBeNull();
+    expect(privateStatus.verifiedAt).toBeTruthy();
+    const lateDeclaration = await trpcMutation(page.request, 'guest.markMyPayment', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+    });
+    expect(lateDeclaration.ok()).toBe(true);
+    expect(await trpcResult(lateDeclaration)).toEqual({ declaredPaidAt: null, declaredAmountCents: null });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await payerPage.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId('guest-payment-verified')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('guest-payment-declared')).toHaveCount(0);
+    await expect(payerPage.getByTestId('guest-payer-summary-verified')).toContainText('5,00', { timeout: 20_000 });
+    await fitsPhone(page);
+    await fitsPhone(payerPage);
+  } finally {
+    await payerDevice.close();
+    await owner.dispose();
+  }
+});
+
 test('anonymous mobile participant can join a long-name slot and edit it with touch controls', async ({ page }) => {
   test.setTimeout(90_000);
   const longName = 'Алексей'.repeat(5) + '12345';

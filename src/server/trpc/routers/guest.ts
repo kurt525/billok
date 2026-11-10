@@ -2772,7 +2772,9 @@ export const guestRouter = createTRPCRouter({
         input.personId,
         input.personToken,
       );
-      const verifiedAt = paymentPerson.paymentDeclaredAt ? (paymentPerson.paymentVerifiedAt ?? null) : null;
+      // 5.14: the payer's verified incoming transfer is independent of whether
+      // the sender remembered to declare "I paid" (including family groups).
+      const verifiedAt = paymentPerson.paymentVerifiedAt ?? null;
       // 5.10: notification metadata is private to the actual sender's personal
       // token. Family spectators may see their shared status but not the
       // sender's personal confirmation notification.
@@ -3013,11 +3015,15 @@ export const guestRouter = createTRPCRouter({
         // A group member's personal link can read the group status but can
         // never declare another transfer for the same shared debt.
         if (paymentIndex !== personIndex) throw new AppError('FORBIDDEN', 'notParticipant');
-        if (paymentPerson.paymentDeclaredAt) {
-          // One declaration per group, idempotent across devices/retries, including the original amount.
+        if (paymentPerson.paymentDeclaredAt || paymentPerson.paymentVerifiedAt) {
+          // The payer's independent verification already satisfies the debt.
+          // A late participant declaration must not create a second payment
+          // or fabricate a timestamp for a button they never clicked.
           return {
-            declaredPaidAt: paymentPerson.paymentDeclaredAt,
-            declaredAmountCents: paymentPerson.paymentDeclaredAmountCents ?? amountCents,
+            declaredPaidAt: paymentPerson.paymentDeclaredAt ?? null,
+            declaredAmountCents: paymentPerson.paymentDeclaredAt
+              ? (paymentPerson.paymentDeclaredAmountCents ?? amountCents)
+              : null,
           };
         }
         const timestamp = new Date().toISOString();
@@ -3101,11 +3107,10 @@ export const guestRouter = createTRPCRouter({
                   name: representative.name,
                   amount: group.totalCents,
                   declaredPaidAt: representative.paymentDeclaredAt ?? null,
-                  verifiedAt: representative.paymentDeclaredAt ? (representative.paymentVerifiedAt ?? null) : null,
-                  verifiedByPersonId:
-                    representative.paymentDeclaredAt && representative.paymentVerifiedAt
-                      ? (representative.paymentVerifiedByPersonId ?? null)
-                      : null,
+                  verifiedAt: representative.paymentVerifiedAt ?? null,
+                  verifiedByPersonId: representative.paymentVerifiedAt
+                    ? (representative.paymentVerifiedByPersonId ?? null)
+                    : null,
                   ...(group.grouped ? { memberIds: group.memberIds, members: group.members } : {}),
                 };
               })
@@ -3118,11 +3123,8 @@ export const guestRouter = createTRPCRouter({
                   name: person.name,
                   amount: entry.total,
                   declaredPaidAt: person.paymentDeclaredAt ?? null,
-                  verifiedAt: person.paymentDeclaredAt ? (person.paymentVerifiedAt ?? null) : null,
-                  verifiedByPersonId:
-                    person.paymentDeclaredAt && person.paymentVerifiedAt
-                      ? (person.paymentVerifiedByPersonId ?? null)
-                      : null,
+                  verifiedAt: person.paymentVerifiedAt ?? null,
+                  verifiedByPersonId: person.paymentVerifiedAt ? (person.paymentVerifiedByPersonId ?? null) : null,
                 };
               }),
       };
@@ -3158,10 +3160,8 @@ export const guestRouter = createTRPCRouter({
           throw new AppError('FORBIDDEN', 'invalidPersonToken');
         }
         const debtor = people[debtorIndex]!;
-        // Cannot attest an incoming transfer the debtor never declared.
-        if (!debtor.paymentDeclaredAt) {
-          throw new AppError('BAD_REQUEST', 'paymentNotDeclared');
-        }
+        // 5.14: the payer attests money received, not the sender's own button.
+        // A forgotten declaration never invents a participant action.
         if (debtor.paymentVerifiedAt) return { verifiedAt: debtor.paymentVerifiedAt, delivery: null };
         const verifiedAt = new Date().toISOString();
         const receiptName = (split.receiptData as { merchantName?: unknown }).merchantName;

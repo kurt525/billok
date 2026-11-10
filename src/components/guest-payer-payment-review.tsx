@@ -191,11 +191,7 @@ export function GuestPayerPaymentReview({
   }, [isActiveReview, token, personId, personToken]);
 
   async function confirmReceipt(debtorId: string) {
-    if (
-      verifyingId ||
-      writeInFlight.current ||
-      !payments?.some((p) => p.personId === debtorId && p.declaredPaidAt && !p.verifiedAt)
-    )
+    if (verifyingId || writeInFlight.current || !payments?.some((p) => p.personId === debtorId && !p.verifiedAt))
       return;
     writeInFlight.current = true;
     latestRead.current += 1;
@@ -407,7 +403,7 @@ export function GuestPayerPaymentReview({
                           </Button>
                         </>
                       )}
-                      {payment.declaredPaidAt && !payment.verifiedAt && (
+                      {!payment.verifiedAt && (
                         <Button
                           type="button"
                           variant="outline"

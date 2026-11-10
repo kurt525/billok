@@ -17,7 +17,9 @@ export function groupGuestPayerPayments<T extends GuestPayerPaymentRow>(
   const groups: Record<GuestPayerPaymentGroup, T[]> = { verified: [], awaiting: [], unpaid: [] };
   for (const payment of payments) {
     if (payment.personId === payerPersonId) continue;
-    if (payment.declaredPaidAt && payment.verifiedAt) groups.verified.push(payment);
+    // Payer attestation can precede the sender's declaration; count the
+    // unique transfer once, independently of the declaration timestamp.
+    if (payment.verifiedAt) groups.verified.push(payment);
     else if (payment.declaredPaidAt) groups.awaiting.push(payment);
     else groups.unpaid.push(payment);
   }
