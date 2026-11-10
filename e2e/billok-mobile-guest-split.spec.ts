@@ -1531,10 +1531,18 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await verifyAnna.click();
     // 5.9: a private push invalidation reaches the actual sender's already-open
     // guest page, independently of the payer's confirmation UI, before fallback polling.
-    const debtorNotice = page.getByText('Получатель подтвердил поступление денег.');
+    const debtorNotice = page.getByText('Борис подтвердил получение вашего перевода 4,59 ₽ по чеку «Ужин без налога»');
     await expect(debtorNotice).toHaveCount(1, { timeout: 10_000 });
     await expect(debtorNotice).toBeVisible();
-    await expect(otherPage.getByText('Получатель подтвердил поступление денег.')).toHaveCount(0);
+    const confirmationTime = page.getByTestId('guest-payment-confirmation-time');
+    await expect(confirmationTime).toHaveCount(1);
+    await expect(confirmationTime).toHaveAttribute('datetime', /^20\d{2}-\d{2}-\d{2}T/);
+    const confirmationLink = page.getByTestId('guest-payment-confirmation-link');
+    await expect(confirmationLink).toHaveText('Открыть чек');
+    await expect(confirmationLink).toHaveAttribute('href', '/split/' + token + '/claim');
+    await expect(
+      otherPage.getByText('Борис подтвердил получение вашего перевода 4,59 ₽ по чеку «Ужин без налога»'),
+    ).toHaveCount(0);
     await expect(annaPayment).toContainText('Поступление подтверждено');
     const verifiedButton = payerReview.getByTestId('guest-payer-verified-' + anna.personId);
     await expect(verifiedButton).toHaveText('Поступление подтверждено');

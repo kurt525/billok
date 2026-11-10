@@ -48,9 +48,38 @@ export function GuestPaymentDeclaration({
         .then((data) => {
           if (cancelled || writeInFlight.current || readId !== latestRead.current) return;
           if (shouldNotifyGuestReceiptConfirmation(lastVerified.current, data.verifiedAt, canDeclare)) {
-            toast.success(t('paymentVerifiedNotice'), {
-              id: 'billok-verified-' + token + '-' + personId + '-' + data.verifiedAt,
-            });
+            const notice = data.confirmationNotice;
+            toast.success(
+              notice
+                ? t('paymentVerifiedNoticeDetailed', {
+                    payer: notice.payerName,
+                    amount: formatCents(notice.amountCents, 'RUB', locale),
+                    receipt: notice.receiptName,
+                  })
+                : t('paymentVerifiedNotice'),
+              {
+                id: 'billok-verified-' + token + '-' + personId + '-' + data.verifiedAt,
+                duration: 20_000,
+                ...(notice
+                  ? {
+                      description: (
+                        <div className="flex min-w-0 flex-col gap-1 break-words">
+                          <time dateTime={notice.confirmedAt} data-testid="guest-payment-confirmation-time">
+                            {new Date(notice.confirmedAt).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US')}
+                          </time>
+                          <a
+                            href={notice.receiptHref}
+                            className="font-semibold underline underline-offset-2"
+                            data-testid="guest-payment-confirmation-link"
+                          >
+                            {t('paymentVerifiedNoticeOpenReceipt')}
+                          </a>
+                        </div>
+                      ),
+                    }
+                  : {}),
+              },
+            );
           }
           lastVerified.current = data.verifiedAt;
           // A current server snapshot may legitimately clear a declaration; stale reads are ignored above.
@@ -82,7 +111,7 @@ export function GuestPaymentDeclaration({
       document.removeEventListener('visibilitychange', refreshOnVisible);
       refreshCurrent.current = () => {};
     };
-  }, [readStatus, token, personId, personToken, canDeclare, t]);
+  }, [readStatus, token, personId, personToken, canDeclare, locale, t]);
 
   // 5.9: the recipient's manual attestation triggers an invalidation; the
   // participant's personal token fetches only their own confirmation state.

@@ -345,7 +345,9 @@
     "payerSummaryOutstanding": "Осталось получить / подтвердить",
     "payerSummaryUnavailable": "Не удалось проверить суммы поступлений. Обновите страницу.",
     "payerPaymentVerifiedAudit": "Подтвердил: {payer} · {at}",
-    "payerPaymentVerifierFallback": "плательщик"
+    "payerPaymentVerifierFallback": "плательщик",
+    "paymentVerifiedNoticeDetailed": "{payer} подтвердил получение вашего перевода {amount} по чеку «{receipt}»",
+    "paymentVerifiedNoticeOpenReceipt": "Открыть чек"
   },
   "result": {
     "loading": "Загрузка расчёта…",

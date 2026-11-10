@@ -340,7 +340,9 @@
     "payerSummaryOutstanding": "Still to receive or verify",
     "payerSummaryUnavailable": "Could not reconcile payment amounts. Refresh this page.",
     "payerPaymentVerifiedAudit": "Confirmed by {payer} · {at}",
-    "payerPaymentVerifierFallback": "payer"
+    "payerPaymentVerifierFallback": "payer",
+    "paymentVerifiedNoticeDetailed": "{payer} confirmed receipt of your {amount} transfer for “{receipt}”",
+    "paymentVerifiedNoticeOpenReceipt": "Open receipt"
   },
   "result": {
     "loading": "Loading split...",

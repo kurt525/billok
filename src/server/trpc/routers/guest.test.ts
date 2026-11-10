@@ -5061,7 +5061,50 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
       declaredPaidAt: declared,
       declaredAmountCents: 459,
       verifiedAt: verified,
+      confirmationNotice: {
+        payerName: 'Борис',
+        amountCents: 459,
+        receiptName: 'Чек',
+        confirmedAt: verified,
+        receiptHref: '/split/guest-payment-token/claim',
+      },
     });
+  });
+
+  test('5.10 sends only a signed, personal detailed confirmation with the exact receipt title', async () => {
+    const api = await caller();
+    const declared = '2026-11-10T06:00:00.000Z';
+    const confirmed = '2026-11-10T06:02:00.000Z';
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...base,
+      receiptData: { ...base.receiptData, merchantName: 'Кафе Уют' },
+      people: [
+        {
+          ...base.people[0],
+          paymentDeclaredAt: declared,
+          paymentVerifiedAt: confirmed,
+          paymentVerifiedByPersonId: payerId,
+        },
+        base.people[1],
+      ],
+    });
+    const result = await api.getMyPaymentDeclaration(debtorAuth);
+    expect(result.confirmationNotice).toEqual({
+      payerName: 'Борис',
+      amountCents: 459,
+      receiptName: 'Кафе Уют',
+      confirmedAt: confirmed,
+      receiptHref: '/split/guest-payment-token/claim',
+    });
+    await expect(api.getMyPaymentDeclaration({ ...debtorAuth, personToken: payerToken })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      api.getMyPaymentDeclaration({ ...debtorAuth, personId: payerId, personToken: payerToken }),
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
   test('unmarked participant receives null, and another identity cannot read or mark', async () => {
@@ -5133,10 +5176,16 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
     ).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
-    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({
+    await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toMatchObject({
       declaredPaidAt: timestamp,
       declaredAmountCents: 459,
       verifiedAt: verified,
+      confirmationNotice: {
+        payerName: 'Борис',
+        amountCents: 459,
+        confirmedAt: verified,
+        receiptHref: '/split/guest-payment-token/claim',
+      },
     });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
@@ -5718,6 +5767,17 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
       declaredAmountCents: 951,
       verifiedAt: confirmed.verifiedAt,
     });
+    // Only the wife sent the single group transfer. Husband has the group
+    // status but must not receive her personal notification or details.
+    const wifeConfirmation = await api.getMyPaymentDeclaration(wifeAuth);
+    expect(wifeConfirmation.confirmationNotice).toEqual({
+      payerName: 'Плательщик',
+      amountCents: 951,
+      receiptName: 'Чек',
+      confirmedAt: confirmed.verifiedAt,
+      receiptHref: '/split/family-receipt/claim',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
     const review = await api.getMyPayerPaymentReview(payerAuth);
     expect(review.payments).toHaveLength(2);
     expect(review.payments[0]).toMatchObject({

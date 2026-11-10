@@ -2757,13 +2757,34 @@ export const guestRouter = createTRPCRouter({
       });
       if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
       if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
-      const { paymentPerson, amountCents } = requireGuestDebtor(split, input.personId, input.personToken);
+      const { people, personIndex, paymentIndex, paymentPerson, amountCents } = requireGuestDebtor(
+        split,
+        input.personId,
+        input.personToken,
+      );
+      const verifiedAt = paymentPerson.paymentDeclaredAt ? (paymentPerson.paymentVerifiedAt ?? null) : null;
+      // 5.10: notification metadata is private to the actual sender's personal
+      // token. Family spectators may see their shared status but not the
+      // sender's personal confirmation notification.
+      const receiptName = (split.receiptData as { merchantName?: unknown }).merchantName;
+      const payer = people[split.paidByIndex]!;
       return {
         declaredPaidAt: paymentPerson.paymentDeclaredAt ?? null,
         declaredAmountCents: paymentPerson.paymentDeclaredAt
           ? (paymentPerson.paymentDeclaredAmountCents ?? amountCents)
           : null,
-        verifiedAt: paymentPerson.paymentDeclaredAt ? (paymentPerson.paymentVerifiedAt ?? null) : null,
+        verifiedAt,
+        ...(verifiedAt && personIndex === paymentIndex
+          ? {
+              confirmationNotice: {
+                payerName: payer.name,
+                amountCents,
+                receiptName: typeof receiptName === 'string' && receiptName.trim() ? receiptName.trim() : 'Чек',
+                confirmedAt: verifiedAt,
+                receiptHref: '/split/' + encodeURIComponent(input.token) + '/claim',
+              },
+            }
+          : {}),
       };
     }),
 
