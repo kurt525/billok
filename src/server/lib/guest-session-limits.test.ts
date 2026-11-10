@@ -95,6 +95,38 @@ describe('checkClaimWriteRateLimit', () => {
     expect(checkClaimWriteRateLimit('claim', token, personToken(500))).toBe(true);
   });
 
+  test('private status reads tolerate SSE/mobile reloads without relaxing payment writes', () => {
+    const token = newToken();
+    const person = personToken(1);
+    const reads = Array.from({ length: 121 }, () =>
+      checkClaimWriteRateLimit('payment-declaration-read', token, person),
+    );
+    expect(reads.slice(0, 120)).toEqual(Array(120).fill(true));
+    expect(reads[120]).toBe(false);
+    // A flooded read channel cannot spend the per-person mutation quota.
+    const writes = Array.from({ length: 31 }, () =>
+      checkClaimWriteRateLimit('payment-declaration-write', token, person),
+    );
+    expect(writes.slice(0, 30)).toEqual(Array(30).fill(true));
+    expect(writes[30]).toBe(false);
+  });
+
+  test('one hundred guests can poll private status while a runaway read stays bounded', () => {
+    const token = newToken();
+    const all = people(100);
+    for (let round = 0; round < 20; round += 1) {
+      for (const person of all) {
+        expect(checkClaimWriteRateLimit('payment-declaration-read', token, person)).toBe(true);
+      }
+    }
+    const flooder = personToken(100);
+    for (let i = 0; i < 120; i += 1) {
+      expect(checkClaimWriteRateLimit('payment-declaration-read', token, flooder)).toBe(true);
+    }
+    expect(checkClaimWriteRateLimit('payment-declaration-read', token, flooder)).toBe(false);
+    expect(checkClaimWriteRateLimit('payment-declaration-write', token, flooder)).toBe(true);
+  });
+
   test('gives each kind of change its own budget', () => {
     const token = newToken();
     saveMany(token, Array(30).fill(personToken(1)));

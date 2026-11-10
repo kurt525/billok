@@ -987,6 +987,13 @@ test('Issue 2.16.3: nine one-kopeck guest dishes balance 3:3:3 in preview, final
 
 test('mobile guest finalization reconciles personal tips for three dining participants', async ({ page, browser }) => {
   test.setTimeout(150_000);
+  // Capture only HTTP status codes, not private person tokens or links.
+  const paymentReadFailures: number[] = [];
+  page.on('response', (response) => {
+    if (response.url().includes('/api/trpc/guest.getMyPaymentDeclaration') && response.status() >= 400) {
+      paymentReadFailures.push(response.status());
+    }
+  });
   const owner = await authedContext(users.alice.email, users.alice.password);
   const otherDevice = await browser.newContext({
     viewport: { width: 320, height: 560 },
@@ -1379,7 +1386,12 @@ test('mobile guest finalization reconciles personal tips for three dining partic
         readonlyCount: document.querySelectorAll('[data-testid="guest-group-payment-readonly"]').length,
         personalReimbursementCount: document.querySelectorAll('[data-testid="guest-personal-reimbursement"]').length,
       }));
-      throw new Error('Missing sender payment action: ' + JSON.stringify(diagnostic) + '\\n' + String(error));
+      throw new Error(
+        'Missing sender payment action: ' +
+          JSON.stringify({ ...diagnostic, paymentReadFailureStatuses: paymentReadFailures.slice(-16) }) +
+          '\\n' +
+          String(error),
+      );
     }
     await expect(declareButton).toHaveClass(/text-red-700/);
     await declareButton.click();

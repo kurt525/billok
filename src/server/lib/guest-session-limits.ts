@@ -7,6 +7,12 @@ import { checkTokenRateLimit, peekTokenRateLimit } from './rate-limit';
 const WRITE_LIMIT_PER_PERSON = 30;
 /** Saves of one kind per share token per minute, everyone combined: three for each of the 100 people a session holds. */
 const WRITE_LIMIT_PER_SESSION = 300;
+/** Private status reads have a separate budget: SSE hints, mobile resumes and
+ * six-width regression reloads must not be counted as receipt mutations.
+ * Bound both person and receipt, including attempts with invented tokens.
+ */
+const PAYMENT_STATUS_READ_LIMIT_PER_PERSON = 120;
+const PAYMENT_STATUS_READ_LIMIT_PER_SESSION = 3000;
 /**
  * getSession calls per share token per minute. The claim page polls every 3 s (20 a minute), so
  * 100 open pages make 2000; the rest covers extra tabs and the reloads after each save.
@@ -55,10 +61,16 @@ export function checkClaimWriteRateLimit(action: ClaimWriteAction, token: string
   // JSON-encoded so a token containing ':' can't land on another pair's key
   const personKey = `guest-${action}-person:${JSON.stringify([token, personToken])}`;
 
-  if (!peekTokenRateLimit(sessionKey, WRITE_LIMIT_PER_SESSION).allowed) return false;
-  if (!checkTokenRateLimit(personKey, WRITE_LIMIT_PER_PERSON, WINDOW_MS).allowed) return false;
+  // The read-only payment status is refreshed through SSE and fallback polling.
+  // It must not inherit the 30/min quota intended for financial writes.
+  const isPaymentStatusRead = action === 'payment-declaration-read';
+  const sessionLimit = isPaymentStatusRead ? PAYMENT_STATUS_READ_LIMIT_PER_SESSION : WRITE_LIMIT_PER_SESSION;
+  const personLimit = isPaymentStatusRead ? PAYMENT_STATUS_READ_LIMIT_PER_PERSON : WRITE_LIMIT_PER_PERSON;
+
+  if (!peekTokenRateLimit(sessionKey, sessionLimit).allowed) return false;
+  if (!checkTokenRateLimit(personKey, personLimit, WINDOW_MS).allowed) return false;
   // Synchronous since the peek, so the session budget still has room
-  checkTokenRateLimit(sessionKey, WRITE_LIMIT_PER_SESSION, WINDOW_MS);
+  checkTokenRateLimit(sessionKey, sessionLimit, WINDOW_MS);
   return true;
 }
 
