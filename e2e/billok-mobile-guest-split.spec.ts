@@ -1496,7 +1496,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // durable private payer notice instead (also visible after reconnect).
     const revokedNotice = livePayerReview.getByTestId('guest-payer-unmarked-notice-' + anna.personId);
     await expect(revokedNotice).toHaveText(
-      'Анна отменила отметку об оплате 4,59 ₽. Перевод снова ожидает подтверждения участника.',
+      /^Отметка об оплате 4,59\s+₽ отозвана участником «Анна»\. Сумма снова числится неоплаченной\.$/,
       { timeout: 10_000 },
     );
     await expect(initialSummary.getByTestId('guest-payer-summary-awaiting')).toContainText('0,00', {
