@@ -1357,14 +1357,14 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(livePayerReview).toHaveCount(1, { timeout: 15_000 });
     await requireNoPaintedPayerReviewDuplicates(otherPage);
     await expect(livePayerReview.getByTestId('guest-payer-payment-' + anna.personId)).toContainText(
-      'Ожидается отметка участника',
+      'Ожидается сообщение об оплате',
     );
     // 5.6: only the payer sees three private, expandable status groups.
     const unpaidGroup = livePayerReview.getByTestId('guest-payer-group-unpaid');
     const awaitingGroup = livePayerReview.getByTestId('guest-payer-group-awaiting');
     const verifiedGroup = livePayerReview.getByTestId('guest-payer-group-verified');
     await expect(unpaidGroup.locator('summary')).toContainText('Не оплатили');
-    await expect(awaitingGroup.locator('summary')).toContainText('Сообщили об оплате — ожидают проверки');
+    await expect(awaitingGroup.locator('summary')).toContainText('Сообщения об оплате — ожидают проверки');
     await expect(verifiedGroup.locator('summary')).toContainText('Поступление подтверждено');
     await expect(unpaidGroup.getByTestId('guest-payer-payment-' + anna.personId)).toHaveCount(1);
     await expect(unpaidGroup.getByTestId('guest-payer-payment-' + victor.personId)).toHaveCount(1);
@@ -1406,6 +1406,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       );
     }
     await expect(declareButton).toHaveClass(/text-red-700/);
+    await expect(declareButton).toHaveText('Сообщить об оплате');
     // 5.17: a second anonymous phone/tab is ALREADY open before the sender
     // presses "I paid"; both guest copies and the payer's independent device
     // must update from the committed server state without a manual reload.
@@ -1413,11 +1414,11 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await debtorSecondTab.goto(page.url(), { waitUntil: 'domcontentloaded' });
     await expect(debtorSecondTab.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 15_000 });
     await declareButton.click();
-    await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено');
+    await expect(page.getByTestId('guest-payment-declared')).toHaveText('Об оплате сообщено');
     await expect(page.getByTestId('guest-payment-declared')).toHaveClass(/text-green-700/);
-    // 5.19: green "Оплачено" is the sender's CLAIM only, not bank clearance.
+    // 5.19: green "Об оплате сообщено" is the sender's CLAIM only, not bank clearance.
     await expect(page.getByTestId('guest-payment-not-bank-confirmed')).toHaveText(
-      'Вы сообщили об отправке денег. Зачисление пока не проверено плательщиком.',
+      'Сообщение об оплате отправлено. Зачисление ещё не проверено плательщиком.',
     );
     await expect(page.getByTestId('guest-payment-declared-amount')).toContainText('Сумма заявленного перевода:');
     await expect(page.getByTestId('guest-payment-declared-amount')).toContainText(
@@ -1452,17 +1453,17 @@ test('mobile guest finalization reconciles personal tips for three dining partic
         { timeout: 10_000, intervals: [250, 500, 750, 1000] },
       )
       .toEqual({
-        firstGuest: 'Оплачено',
-        secondGuest: 'Оплачено',
+        firstGuest: 'Об оплате сообщено',
+        secondGuest: 'Об оплате сообщено',
         payer: { awaiting: '4,59 ₽', unpaid: '4,08 ₽', outstanding: '8,67 ₽' },
       });
     // No API error, stale snapshot, or phantom bank confirmation should
     // cause the same debt to be reported twice.
     await expect(initialSummary.getByTestId('guest-payer-summary-total')).toContainText('8,67');
     await expect(initialSummary.getByTestId('guest-payer-summary-verified')).toContainText('0,00');
-    await expect(debtorSecondTab.getByTestId('guest-payment-awaiting')).toHaveText('Ожидает подтверждения получателем');
+    await expect(debtorSecondTab.getByTestId('guest-payment-awaiting')).toHaveText('Ожидается проверка поступления');
     // A private live notification reaches the payer on their already-open page.
-    const payerNotice = otherPage.getByText('Новая отметка об оплате: Анна — 4,59 ₽. Проверьте поступление.');
+    const payerNotice = otherPage.getByText('Сообщение об оплате от участника «Анна»: 4,59 ₽. Проверьте поступление.');
     // The finalized payer's SSE channel refreshes the private payment review
     // promptly; the 12-second fallback poll must not be needed for this event.
     await expect(payerNotice).toHaveCount(1, { timeout: 10_000 });
@@ -1476,7 +1477,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // Only the payer's explicit bank check can change this amber status to
     // "Поступление подтверждено"; BillOK has no automatic bank integration.
     await expect(livePayerReview.getByTestId('guest-payer-payment-status-' + anna.personId)).toHaveText(
-      'Сообщил об оплате — ожидает проверки',
+      'Об оплате сообщено — ожидается проверка',
       { timeout: 10_000 },
     );
     await expect(livePayerReview.getByTestId('guest-payer-payment-status-' + anna.personId)).toHaveClass(
@@ -1484,22 +1485,23 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     );
     await expect(livePayerReview).toContainText('BillOK не получает сведений о поступлениях из банков');
     await expect(livePayerReview.getByTestId('guest-payer-verified-' + anna.personId)).toHaveCount(0);
-    await expect(page.getByTestId('guest-payment-awaiting')).toHaveText('Ожидает подтверждения получателем');
+    await expect(page.getByTestId('guest-payment-awaiting')).toHaveText('Ожидается проверка поступления');
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено', { timeout: 15_000 });
+    await expect(page.getByTestId('guest-payment-declared')).toHaveText('Об оплате сообщено', { timeout: 15_000 });
     await expect(page.getByTestId('guest-mark-paid')).toHaveCount(0);
-    await expect(page.getByTestId('guest-payment-awaiting')).toHaveText('Ожидает подтверждения получателем');
+    await expect(page.getByTestId('guest-payment-awaiting')).toHaveText('Ожидается проверка поступления');
     await expect(page.getByTestId('guest-payment-not-bank-confirmed')).toBeVisible();
     await expect(page.getByTestId('guest-payer-sbp-form')).toHaveCount(0);
     // A different already-open tab also retains the same persisted state
     // across reload, not merely a local toast.
     await debtorSecondTab.reload({ waitUntil: 'domcontentloaded' });
-    await expect(debtorSecondTab.getByTestId('guest-payment-declared')).toHaveText('Оплачено', {
+    await expect(debtorSecondTab.getByTestId('guest-payment-declared')).toHaveText('Об оплате сообщено', {
       timeout: 15_000,
     });
-    await expect(debtorSecondTab.getByTestId('guest-payment-awaiting')).toHaveText('Ожидает подтверждения получателем');
+    await expect(debtorSecondTab.getByTestId('guest-payment-awaiting')).toHaveText('Ожидается проверка поступления');
 
     // 5.3: the debtor retracts a mistaken declaration before the payer confirms receipt.
+    await expect(page.getByTestId('guest-unmark-paid')).toHaveText('Отозвать сообщение об оплате');
     await page.getByTestId('guest-unmark-paid').click();
     // 5.18: an independent, already-open payer phone receives the explicit
     // cancellation notice and recalculates the same 8.67 ₽ debt without a
@@ -1508,7 +1510,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // durable private payer notice instead (also visible after reconnect).
     const revokedNotice = livePayerReview.getByTestId('guest-payer-unmarked-notice-' + anna.personId);
     await expect(revokedNotice).toHaveText(
-      /^Отметка об оплате 4,59\s+₽ отозвана участником «Анна»\. Сумма снова числится неоплаченной\.$/,
+      /^Сообщение об оплате 4,59\s+₽ от участника «Анна» отозвано\. Сумма снова числится неоплаченной\.$/,
       { timeout: 10_000 },
     );
     await expect(initialSummary.getByTestId('guest-payer-summary-awaiting')).toContainText('0,00', {
@@ -1518,6 +1520,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(initialSummary.getByTestId('guest-payer-summary-total')).toContainText('8,67');
     await expect(livePayerReview.getByTestId('guest-payer-payment-' + anna.personId)).toHaveCount(1);
     await expect(page.getByTestId('guest-mark-paid')).toBeVisible();
+    await expect(page.getByTestId('guest-mark-paid')).toHaveText('Сообщить об оплате');
     await expect(page.getByTestId('guest-mark-paid')).toHaveClass(/text-red-700/);
     await expect(page.getByTestId('guest-payment-declared')).toHaveCount(0);
     await expect(unpaidGroup.getByTestId('guest-payer-payment-' + anna.personId)).toHaveCount(1, {
@@ -1528,12 +1531,12 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await debtorSecondTab.reload({ waitUntil: 'domcontentloaded' });
     await expect(debtorSecondTab.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 15_000 });
     await expect(livePayerReview.getByTestId('guest-payer-payment-status-' + anna.personId)).toContainText(
-      'Ожидается отметка участника',
+      'Ожидается сообщение об оплате',
       { timeout: 25_000 },
     );
     // Sending a real transfer later can be declared again. There is still one debt.
     await page.getByTestId('guest-mark-paid').click();
-    await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено');
+    await expect(page.getByTestId('guest-payment-declared')).toHaveText('Об оплате сообщено');
     await expect(page.getByTestId('guest-unmark-paid')).toBeVisible();
     await expect(awaitingGroup.getByTestId('guest-payer-payment-' + anna.personId)).toHaveCount(1, {
       timeout: 25_000,
@@ -1562,10 +1565,10 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     const annaPayment = payerReview.getByTestId('guest-payer-payment-' + anna.personId);
     await expect(annaPayment).toContainText('4,59');
     await expect(annaPayment.getByTestId('guest-payer-payment-status-' + anna.personId)).toHaveText(
-      'Сообщил об оплате — ожидает проверки',
+      'Об оплате сообщено — ожидается проверка',
     );
     const victorPayment = payerReview.getByTestId('guest-payer-payment-' + victor.personId);
-    await expect(victorPayment).toContainText('Ожидается отметка участника');
+    await expect(victorPayment).toContainText('Ожидается сообщение об оплате');
     // 5.14: the payer can attest an actually received transfer even before
     // Victor marks it paid; the unpaid status must remain until that click.
     await expect(payerReview.getByTestId('guest-payer-verify-' + victor.personId)).toBeVisible();
@@ -1586,7 +1589,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       );
     }
     await expect(payerReview.getByTestId('guest-payer-payment-status-' + anna.personId)).toHaveText(
-      'Сообщил об оплате — ожидает проверки',
+      'Об оплате сообщено — ожидается проверка',
     );
 
     // A real payer must be able to verify a declared transfer on a wide
@@ -1622,7 +1625,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // guest page, independently of the payer's confirmation UI, before fallback polling.
     const debtorNotice = page
       .locator('[data-sonner-toast]')
-      .getByText('Борис подтвердил получение вашего перевода 4,59 ₽ по чеку «Ужин без налога»');
+      .getByText('Поступление вашего перевода 4,59 ₽ по чеку «Ужин без налога» подтверждено получателем «Борис»');
     await expect(debtorNotice).toHaveCount(1, { timeout: 10_000 });
     await expect(debtorNotice).toBeVisible();
     const confirmationTime = page.getByTestId('guest-payment-confirmation-time');
@@ -1640,7 +1643,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     );
     await expect(senderNotificationList.getByTestId('guest-payment-unread-count')).toHaveText('Непрочитано: 1');
     await expect(senderNotificationList.getByTestId('guest-payment-notification-text')).toHaveText(
-      'Борис подтвердил получение вашего перевода 4,59 ₽ по чеку «Ужин без налога»',
+      'Поступление вашего перевода 4,59 ₽ по чеку «Ужин без налога» подтверждено получателем «Борис»',
     );
     await expect(senderNotificationList.getByTestId('guest-payment-notification-link')).toHaveAttribute(
       'href',
@@ -1657,7 +1660,9 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     }
     await expect(otherPage.getByTestId('guest-payment-notifications')).toHaveCount(0);
     await expect(
-      otherPage.getByText('Борис подтвердил получение вашего перевода 4,59 ₽ по чеку «Ужин без налога»'),
+      otherPage.getByText(
+        'Поступление вашего перевода 4,59 ₽ по чеку «Ужин без налога» подтверждено получателем «Борис»',
+      ),
     ).toHaveCount(0);
     await expect(annaPayment).toContainText('Поступление подтверждено');
     const verifiedButton = payerReview.getByTestId('guest-payer-verified-' + anna.personId);
@@ -1669,7 +1674,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(verifiedButton).toBeDisabled();
     await expect(verifiedButton).toHaveClass(/border-green-600/);
     const confirmedAudit = payerReview.getByTestId('guest-payer-verified-audit-' + anna.personId);
-    await expect(confirmedAudit).toContainText('Подтвердил: Борис', { timeout: 15_000 });
+    await expect(confirmedAudit).toContainText('Подтверждено получателем «Борис»', { timeout: 15_000 });
     await expect(confirmedAudit).toContainText('20');
     const confirmedSummary = payerReview.getByTestId('guest-payer-payment-summary');
     await expect(confirmedSummary.getByTestId('guest-payer-summary-total')).toContainText('8,67');
@@ -1693,20 +1698,18 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(payerReview.getByTestId('guest-payer-verify-' + anna.personId)).toHaveCount(0);
     // The debtor learns the independent payer verification without reloading.
     await expect(page.getByTestId('guest-unmark-paid')).toHaveCount(0);
-    await expect(page.getByTestId('guest-payment-verified')).toHaveText('Получатель подтвердил поступление', {
+    await expect(page.getByTestId('guest-payment-verified')).toHaveText('Поступление подтверждено', {
       timeout: 25_000,
     });
     await expect(page.getByTestId('guest-payment-verified')).toHaveClass(/text-green-700/);
     await expect(page.getByTestId('guest-payment-not-bank-confirmed')).toHaveCount(0);
-    await expect(debtorSecondTab.getByTestId('guest-payment-verified')).toHaveText(
-      'Получатель подтвердил поступление',
-      { timeout: 25_000 },
-    );
+    await expect(debtorSecondTab.getByTestId('guest-payment-verified')).toHaveText('Поступление подтверждено', {
+      timeout: 25_000,
+    });
     await debtorSecondTab.reload({ waitUntil: 'domcontentloaded' });
-    await expect(debtorSecondTab.getByTestId('guest-payment-verified')).toHaveText(
-      'Получатель подтвердил поступление',
-      { timeout: 15_000 },
-    );
+    await expect(debtorSecondTab.getByTestId('guest-payment-verified')).toHaveText('Поступление подтверждено', {
+      timeout: 15_000,
+    });
     await expect(debtorSecondTab.getByTestId('guest-mark-paid')).toHaveCount(0);
     await expect(debtorSecondTab.getByTestId('guest-unmark-paid')).toHaveCount(0);
     // A fresh/reopened personal page receives the persisted unread entry,
@@ -1717,7 +1720,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       'Новое уведомление',
     );
     await expect(restoredNotifications.getByTestId('guest-payment-notification-text')).toContainText(
-      'Борис подтвердил получение вашего перевода 4,59 ₽',
+      'Поступление вашего перевода 4,59 ₽',
     );
     const readAction = restoredNotifications.getByTestId('guest-payment-notification-mark-read');
     await expect(readAction).toBeEnabled();
@@ -1797,14 +1800,14 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(payerReview.getByTestId('guest-payer-verify-' + anna.personId)).toBeVisible();
     await expect(page.getByTestId('guest-payment-verified')).toHaveCount(0, { timeout: 25_000 });
     await expect(page.getByTestId('guest-payment-cancellation-text')).toContainText(
-      'Борис отменил подтверждение получения вашего перевода 4,59 ₽',
+      'Подтверждение поступления вашего перевода 4,59 ₽',
       { timeout: 25_000 },
     );
     await expect(page.getByTestId('guest-payment-cancellation-status')).toHaveText('Новое уведомление');
     await expect(otherPage.getByTestId('guest-payment-cancellation-text')).toHaveCount(0);
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('guest-payment-cancellation-text')).toContainText(
-      'Борис отменил подтверждение получения вашего перевода 4,59 ₽',
+      'Подтверждение поступления вашего перевода 4,59 ₽',
       { timeout: 15_000 },
     );
     await page.getByTestId('guest-payment-cancellation-mark-read').click();
@@ -1897,7 +1900,7 @@ test('5.14: payer confirms an undeclared receipt without an invented sender paym
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
 
     await verify.click();
-    await expect(page.getByTestId('guest-payment-verified')).toHaveText('Получатель подтвердил поступление', {
+    await expect(page.getByTestId('guest-payment-verified')).toHaveText('Поступление подтверждено', {
       timeout: 25_000,
     });
     await expect(page.getByTestId('guest-mark-paid')).toHaveCount(0);
