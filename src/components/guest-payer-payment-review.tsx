@@ -197,7 +197,13 @@ export function GuestPayerPaymentReview({
     latestRead.current += 1;
     setVerifyingId(debtorId);
     try {
-      const result = await verify.mutateAsync({ token, personId, personToken, debtorId });
+      const result = await verify.mutateAsync({
+        token,
+        personId,
+        personToken,
+        debtorId,
+        requestId: window.crypto.randomUUID(),
+      });
       const updated =
         latestPayments.current?.map((entry) =>
           entry.personId === debtorId ? { ...entry, verifiedAt: result.verifiedAt } : entry,
@@ -226,7 +232,13 @@ export function GuestPayerPaymentReview({
     latestRead.current += 1;
     setVerifyingId(debtorId);
     try {
-      await cancelVerified.mutateAsync({ token, personId, personToken, debtorId });
+      await cancelVerified.mutateAsync({
+        token,
+        personId,
+        personToken,
+        debtorId,
+        requestId: window.crypto.randomUUID(),
+      });
       const updated =
         latestPayments.current?.map((entry) =>
           entry.personId === debtorId ? { ...entry, verifiedAt: null, verifiedByPersonId: null } : entry,

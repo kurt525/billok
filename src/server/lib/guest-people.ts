@@ -61,6 +61,14 @@ export type GuestSessionPerson = {
   paymentVerifiedAt?: string;
   // Private audit: stable personId of the actual payer who confirmed this transfer, never a display name.
   paymentVerifiedByPersonId?: string;
+  // 5.16: bounded, private receipt-status action history, used to reject a
+  // delayed HTTP retry after a newer explicit confirm/cancel has committed.
+  // A key denotes ONE payer tap, not the current mutable status.
+  paymentReceiptStatusRequests?: {
+    id: string;
+    action: 'confirm' | 'cancel';
+    at: string;
+  }[];
   // Private per-person push endpoints; never expose to public getSession/getSplit.
   // Only the sender of a grouped payment can subscribe for that transfer.
   guestPushSubscriptions?: GuestWebPushSubscription[];

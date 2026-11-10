@@ -5477,6 +5477,195 @@ describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () =
     // The receipt is still unpaid at the bank level: this is solely the payer's attestation.
   });
 
+  test('5.16: simultaneous duplicate requests serialize to one status write and one private event', async () => {
+    const stored: Omit<typeof base, 'people'> & {
+      people: import('@/server/lib/guest-people').GuestSessionPerson[];
+    } = structuredClone(base);
+    const originalTransaction = mockDb.$transaction.getMockImplementation();
+    if (!originalTransaction) throw new Error('missing transaction mock');
+    let pending: Promise<void> = Promise.resolve();
+    let writeCount = 0;
+    // Model a single PostgreSQL GuestSplit row serialized through its
+    // transaction boundary. Both in-flight callers then read the winning
+    // committed snapshot; just one can issue a state-changing update.
+    mockDb.$transaction.mockImplementation(async (operation: (tx: unknown) => Promise<unknown>) => {
+      const predecessor = pending;
+      let unlock!: () => void;
+      pending = new Promise<void>((resolve) => {
+        unlock = resolve;
+      });
+      await predecessor;
+      try {
+        return await operation(mockDb);
+      } finally {
+        unlock();
+      }
+    });
+    mockDb.guestSplit.findUnique.mockImplementation(async () => structuredClone(stored));
+    mockDb.guestSplit.update.mockImplementation(async ({ data }: { data: { people: unknown } }) => {
+      stored.people = structuredClone(data.people) as typeof stored.people;
+      writeCount += 1;
+      return { id: base.id };
+    });
+    try {
+      const a = await caller();
+      const b = await caller(signedIn);
+      const requestId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+      const [first, duplicate] = await Promise.all([
+        a.confirmGuestPaymentReceived({ ...payerAuth, debtorId, requestId }),
+        b.confirmGuestPaymentReceived({ ...payerAuth, debtorId, requestId }),
+      ]);
+      expect(duplicate).toEqual(first);
+      expect(writeCount).toBe(1);
+      expect(stored.people[0]!.paymentVerifiedAt).toBe(first.verifiedAt);
+      expect(stored.people[0]!.paymentReceiptStatusRequests).toEqual([
+        { id: requestId, action: 'confirm', at: first.verifiedAt },
+      ]);
+      expect(stored.people[0]!.paymentReceiptNotification).toMatchObject({
+        confirmedAt: first.verifiedAt,
+        amountCents: 459,
+      });
+      expect(stored.people[1]).toEqual(base.people[1]);
+      expect(stored.people[2]).toEqual(base.people[2]);
+
+      const cancelId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+      const [cancellation, cancellationDuplicate] = await Promise.all([
+        b.cancelGuestPaymentReceived({ ...payerAuth, debtorId, requestId: cancelId }),
+        a.cancelGuestPaymentReceived({ ...payerAuth, debtorId, requestId: cancelId }),
+      ]);
+      expect(cancellationDuplicate).toEqual(cancellation);
+      expect(writeCount).toBe(2);
+      expect(stored.people[0]!.paymentVerifiedAt).toBeUndefined();
+      expect(stored.people[0]!.paymentReceiptCancellationNotifications).toHaveLength(1);
+      expect(stored.people[0]!.paymentReceiptStatusRequests).toHaveLength(2);
+      expect(stored.people[1]).toEqual(base.people[1]);
+      expect(stored.people[2]).toEqual(base.people[2]);
+    } finally {
+      mockDb.$transaction.mockImplementation(originalTransaction);
+    }
+  });
+
+  test('5.16: delayed retries cannot re-confirm or retract a newer bank reconciliation', async () => {
+    const guestPayer = await caller();
+    const registeredPayer = await caller(signedIn);
+    const confirmKey = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const cancelKey = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const newConfirmKey = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const initial = await guestPayer.confirmGuestPaymentReceived({
+      ...payerAuth,
+      debtorId,
+      requestId: confirmKey,
+    });
+    const confirmed = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(confirmed[0].paymentReceiptStatusRequests).toEqual([
+      { id: confirmKey, action: 'confirm', at: initial.verifiedAt },
+    ]);
+    expect(confirmed[0].paymentReceiptNotification).toMatchObject({
+      amountCents: 459,
+      confirmedAt: initial.verifiedAt,
+    });
+    expect(confirmed[1]).toEqual(base.people[1]);
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: confirmed });
+    mockDb.guestSplit.update.mockClear();
+
+    // Either a guest or a registered caller still needs the same private payer
+    // token; logging in alone cannot take over another payer's status.
+    await expect(
+      registeredPayer.cancelGuestPaymentReceived({
+        ...payerAuth,
+        personToken: debtorToken,
+        debtorId,
+        requestId: cancelKey,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      registeredPayer.cancelGuestPaymentReceived({
+        ...payerAuth,
+        debtorId,
+        requestId: confirmKey,
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+
+    const cancelled = await registeredPayer.cancelGuestPaymentReceived({
+      ...payerAuth,
+      debtorId,
+      requestId: cancelKey,
+    });
+    const withdrawn = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(withdrawn[0].paymentVerifiedAt).toBeUndefined();
+    expect(withdrawn[0].paymentReceiptStatusRequests).toEqual([
+      { id: confirmKey, action: 'confirm', at: initial.verifiedAt },
+      { id: cancelKey, action: 'cancel', at: cancelled.cancelledAt },
+    ]);
+    expect(withdrawn[0].paymentReceiptCancellationNotifications).toHaveLength(1);
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: withdrawn });
+    mockDb.guestSplit.update.mockClear();
+
+    // A lost response of the ORIGINAL confirmation arrives after its
+    // cancellation. It must not resurrect a cancelled receipt.
+    await expect(
+      guestPayer.confirmGuestPaymentReceived({
+        ...payerAuth,
+        debtorId,
+        requestId: confirmKey,
+      }),
+    ).resolves.toEqual(initial);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    expect((await guestPayer.getMyPayerPaymentReview(payerAuth)).payments[0]).toMatchObject({
+      verifiedAt: null,
+      amount: 459,
+      declaredPaidAt: marked,
+    });
+
+    // A new deliberate user action, with a fresh key, is permitted.
+    const reconfirmed = await guestPayer.confirmGuestPaymentReceived({
+      ...payerAuth,
+      debtorId,
+      requestId: newConfirmKey,
+    });
+    const settled = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(settled[0].paymentVerifiedAt).toBe(reconfirmed.verifiedAt);
+    expect(settled[0].paymentReceiptStatusRequests).toHaveLength(3);
+    expect(settled[0].paymentReceiptCancellationNotifications).toHaveLength(1);
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: settled });
+    mockDb.guestSplit.update.mockClear();
+
+    // A delayed retry of the old cancellation cannot undo the newer
+    // confirmation, and cross-action key reuse is rejected.
+    await expect(
+      registeredPayer.cancelGuestPaymentReceived({
+        ...payerAuth,
+        debtorId,
+        requestId: cancelKey,
+      }),
+    ).resolves.toEqual(cancelled);
+    await expect(
+      registeredPayer.cancelGuestPaymentReceived({
+        ...payerAuth,
+        debtorId,
+        requestId: newConfirmKey,
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(
+      guestPayer.confirmGuestPaymentReceived({
+        ...payerAuth,
+        debtorId,
+        requestId: newConfirmKey,
+      }),
+    ).resolves.toEqual(reconfirmed);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+
+    const sender = await guestPayer.getMyPaymentDeclaration({
+      ...payerAuth,
+      personId: debtorId,
+      personToken: debtorToken,
+    });
+    expect(sender.verifiedAt).toBe(reconfirmed.verifiedAt);
+    expect(sender.cancellationNotifications).toHaveLength(1);
+    expect(sender.notification).toMatchObject({ confirmedAt: reconfirmed.verifiedAt });
+  });
+
   test('5.15: payer cancellation records stable actor identity even without prior sender declaration', async () => {
     const api = await caller();
     const sender = { token: payerAuth.token, personId: anotherId, personToken: anotherToken };

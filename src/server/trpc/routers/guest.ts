@@ -3130,6 +3130,9 @@ export const guestRouter = createTRPCRouter({
       };
     }),
 
+  // Both manual payer actions retain an independent request history on the
+  // DEBTOR (same GuestSplit row). The retry check runs inside guestTransaction,
+  // so a serialization conflict re-reads the winning transaction's event.
   confirmGuestPaymentReceived: publicProcedure
     .input(
       z.object({
@@ -3137,6 +3140,9 @@ export const guestRouter = createTRPCRouter({
         personId: personIdSchema,
         personToken: z.string().uuid(),
         debtorId: personIdSchema,
+        // New UI sends one UUID per intentional button press. Older API
+        // clients can omit it; private server authorization is unchanged.
+        requestId: z.string().uuid().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -3160,6 +3166,11 @@ export const guestRouter = createTRPCRouter({
           throw new AppError('FORBIDDEN', 'invalidPersonToken');
         }
         const debtor = people[debtorIndex]!;
+        const previouslyHandled = debtor.paymentReceiptStatusRequests?.find((record) => record.id === input.requestId);
+        if (previouslyHandled) {
+          if (previouslyHandled.action !== 'confirm') throw new AppError('CONFLICT', 'splitBusy');
+          return { verifiedAt: previouslyHandled.at, delivery: null };
+        }
         // 5.14: the payer attests money received, not the sender's own button.
         // A forgotten declaration never invents a participant action.
         if (debtor.paymentVerifiedAt) return { verifiedAt: debtor.paymentVerifiedAt, delivery: null };
@@ -3185,6 +3196,14 @@ export const guestRouter = createTRPCRouter({
                 paymentVerifiedAt: verifiedAt,
                 paymentVerifiedByPersonId: input.personId,
                 paymentReceiptNotification: notification,
+                ...(input.requestId
+                  ? {
+                      paymentReceiptStatusRequests: [
+                        ...(person.paymentReceiptStatusRequests ?? []),
+                        { id: input.requestId, action: 'confirm' as const, at: verifiedAt },
+                      ].slice(-32),
+                    }
+                  : {}),
               }
             : person,
         );
@@ -3226,6 +3245,9 @@ export const guestRouter = createTRPCRouter({
         personId: personIdSchema,
         personToken: z.string().uuid(),
         debtorId: personIdSchema,
+        // New UI sends one UUID per intentional button press. Older API
+        // clients can omit it; private server authorization is unchanged.
+        requestId: z.string().uuid().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -3249,6 +3271,11 @@ export const guestRouter = createTRPCRouter({
           throw new AppError('FORBIDDEN', 'invalidPersonToken');
         }
         const debtor = people[debtorIndex]!;
+        const previouslyHandled = debtor.paymentReceiptStatusRequests?.find((record) => record.id === input.requestId);
+        if (previouslyHandled) {
+          if (previouslyHandled.action !== 'cancel') throw new AppError('CONFLICT', 'splitBusy');
+          return { cancelledAt: previouslyHandled.at, delivery: null };
+        }
         // Retraction of an already retracted event is idempotent, and does not
         // generate a second notification, including retries from two tabs.
         if (!debtor.paymentVerifiedAt) {
@@ -3284,6 +3311,14 @@ export const guestRouter = createTRPCRouter({
           return {
             ...next,
             paymentReceiptCancellationNotifications: [...prior, event].slice(-20),
+            ...(input.requestId
+              ? {
+                  paymentReceiptStatusRequests: [
+                    ...(next.paymentReceiptStatusRequests ?? []),
+                    { id: input.requestId, action: 'cancel' as const, at: cancelledAt },
+                  ].slice(-32),
+                }
+              : {}),
           };
         });
         await tx.guestSplit.update({
