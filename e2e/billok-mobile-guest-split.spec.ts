@@ -5223,7 +5223,11 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await expect(verify).toHaveText('Подтвердить поступление');
     await verify.click();
     await expect(review.getByTestId('guest-payer-verified-' + wifeId)).toBeDisabled();
-    await expect(review.getByTestId('guest-payer-verified-audit-' + wifeId)).toContainText('Подтвердил:');
+    // 5.19.1: grouped transfers use the same gender-neutral manual bank
+    // confirmation audit label as individual transfers.
+    await expect(review.getByTestId('guest-payer-verified-audit-' + wifeId)).toContainText(
+      'Подтверждено получателем «Плательщик»',
+    );
     await expect(
       review.getByTestId('guest-payer-group-verified').getByTestId('guest-payer-payment-' + wifeId),
     ).toHaveCount(1);
