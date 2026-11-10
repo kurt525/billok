@@ -342,7 +342,13 @@
     "payerPaymentVerifiedAudit": "Confirmed by {payer} · {at}",
     "payerPaymentVerifierFallback": "payer",
     "paymentVerifiedNoticeDetailed": "{payer} confirmed receipt of your {amount} transfer for “{receipt}”",
-    "paymentVerifiedNoticeOpenReceipt": "Open receipt"
+    "paymentVerifiedNoticeOpenReceipt": "Open receipt",
+    "paymentNotificationsTitle": "Notifications",
+    "paymentNotificationUnreadCount": "Unread: {count}",
+    "paymentNotificationUnread": "New notification",
+    "paymentNotificationRead": "Read",
+    "paymentNotificationMarkRead": "Mark as read",
+    "paymentNotificationReadFailed": "Could not mark notification as read"
   },
   "result": {
     "loading": "Loading split...",

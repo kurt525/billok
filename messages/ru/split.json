@@ -347,7 +347,13 @@
     "payerPaymentVerifiedAudit": "Подтвердил: {payer} · {at}",
     "payerPaymentVerifierFallback": "плательщик",
     "paymentVerifiedNoticeDetailed": "{payer} подтвердил получение вашего перевода {amount} по чеку «{receipt}»",
-    "paymentVerifiedNoticeOpenReceipt": "Открыть чек"
+    "paymentVerifiedNoticeOpenReceipt": "Открыть чек",
+    "paymentNotificationsTitle": "Уведомления",
+    "paymentNotificationUnreadCount": "Непрочитано: {count}",
+    "paymentNotificationUnread": "Новое уведомление",
+    "paymentNotificationRead": "Прочитано",
+    "paymentNotificationMarkRead": "Отметить прочитанным",
+    "paymentNotificationReadFailed": "Не удалось отметить уведомление прочитанным"
   },
   "result": {
     "loading": "Загрузка расчёта…",

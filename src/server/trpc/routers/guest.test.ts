@@ -5107,6 +5107,62 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
+  test('5.11: unread server notification survives new reads and only the sender can mark it read', async () => {
+    const api = await caller();
+    const timestamp = '2026-11-10T06:02:00.000Z';
+    const noticeId = '88888888-8888-4888-8888-888888888888';
+    const record = {
+      id: noticeId,
+      payerName: 'Борис',
+      amountCents: 459,
+      receiptName: 'Кафе Уют',
+      confirmedAt: timestamp,
+    };
+    const settled = {
+      ...base,
+      people: [
+        {
+          ...base.people[0],
+          paymentDeclaredAt: '2026-11-10T06:00:00.000Z',
+          paymentVerifiedAt: timestamp,
+          paymentReceiptNotification: record,
+        },
+        base.people[1],
+      ],
+    };
+    mockDb.guestSplit.findUnique.mockResolvedValue(settled);
+    const first = await api.getMyPaymentDeclaration(debtorAuth);
+    const reopened = await api.getMyPaymentDeclaration(debtorAuth);
+    expect(first.notification).toMatchObject({ ...record, readAt: null });
+    expect(reopened.notification).toEqual(first.notification);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    for (const forbidden of [
+      { ...debtorAuth, personId: payerId, personToken: payerToken },
+      { ...debtorAuth, personToken: payerToken },
+    ]) {
+      await expect(api.markMyPaymentNotificationRead({ ...forbidden, notificationId: noticeId })).rejects.toMatchObject(
+        { code: 'FORBIDDEN' },
+      );
+    }
+    await expect(
+      api.markMyPaymentNotificationRead({ ...debtorAuth, notificationId: '99999999-9999-4999-8999-999999999999' }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    const result = await api.markMyPaymentNotificationRead({ ...debtorAuth, notificationId: noticeId });
+    expect(new Date(result.readAt).toISOString()).toBe(result.readAt);
+    const saved = mockDb.guestSplit.update.mock.calls[0]![0].data;
+    expect(saved.people[0].paymentReceiptNotification).toMatchObject({ ...record, readAt: result.readAt });
+    expect(saved.people[1]).toEqual(base.people[1]);
+    expect(saved).not.toHaveProperty('summary');
+    expect(saved).not.toHaveProperty('status');
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...settled, people: saved.people });
+    mockDb.guestSplit.update.mockClear();
+    expect((await api.getMyPaymentDeclaration(debtorAuth)).notification?.readAt).toBe(result.readAt);
+    await expect(api.markMyPaymentNotificationRead({ ...debtorAuth, notificationId: noticeId })).resolves.toEqual(
+      result,
+    );
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
   test('unmarked participant receives null, and another identity cannot read or mark', async () => {
     const api = await caller(signedIn);
     await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({
@@ -5288,12 +5344,33 @@ describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () =
     const update = mockDb.guestSplit.update.mock.calls[0]![0];
     expect(update.data.people[0].paymentVerifiedAt).toBe(result.verifiedAt);
     expect(update.data.people[0].paymentVerifiedByPersonId).toBe(payerId);
+    expect(update.data.people[0].paymentReceiptNotification).toMatchObject({
+      id: expect.stringMatching(UUID),
+      payerName: 'Борис',
+      amountCents: 459,
+      receiptName: 'Чек',
+      confirmedAt: result.verifiedAt,
+    });
+    expect(update.data.people[0].paymentReceiptNotification.readAt).toBeUndefined();
+    expect(update.data.people[1].paymentReceiptNotification).toBeUndefined();
     expect(update.data.people[1].paymentVerifiedAt).toBeUndefined();
     expect(update.data.people[1].paymentVerifiedByPersonId).toBeUndefined();
     expect(update.data.people[2].paymentVerifiedAt).toBeUndefined();
     expect(update.data).not.toHaveProperty('summary');
     expect(update.data).not.toHaveProperty('status');
     mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: update.data.people });
+    const savedNotification = await api.getMyPaymentDeclaration({
+      ...payerAuth,
+      personId: debtorId,
+      personToken: debtorToken,
+    });
+    expect(savedNotification.notification).toMatchObject({
+      id: update.data.people[0].paymentReceiptNotification.id,
+      amountCents: 459,
+      payerName: 'Борис',
+      readAt: null,
+      receiptHref: '/split/guest-payment-review/claim',
+    });
     await expect(api.getMyPayerPaymentReview(payerAuth)).resolves.toMatchObject({
       payments: [
         {
@@ -5754,6 +5831,14 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
     const updated = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
     expect(updated[1].paymentVerifiedAt).toBe(confirmed.verifiedAt);
     expect(updated[1].paymentVerifiedByPersonId).toBe(payerId);
+    expect(updated[1].paymentReceiptNotification).toMatchObject({
+      id: expect.stringMatching(UUID),
+      payerName: 'Плательщик',
+      amountCents: 951,
+      receiptName: 'Чек',
+      confirmedAt: confirmed.verifiedAt,
+    });
+    expect(updated[2].paymentReceiptNotification).toBeUndefined();
     expect(updated[2].paymentVerifiedAt).toBeUndefined();
     expect(updated[2].paymentVerifiedByPersonId).toBeUndefined();
     expect(updated[3].paymentVerifiedAt).toBeUndefined();
@@ -5776,6 +5861,12 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
       receiptName: 'Чек',
       confirmedAt: confirmed.verifiedAt,
       receiptHref: '/split/family-receipt/claim',
+    });
+    expect(wifeConfirmation.notification).toMatchObject({
+      id: updated[1].paymentReceiptNotification.id,
+      payerName: 'Плательщик',
+      amountCents: 951,
+      readAt: null,
     });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
     const review = await api.getMyPayerPaymentReview(payerAuth);

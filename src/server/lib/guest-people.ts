@@ -60,6 +60,17 @@ export type GuestSessionPerson = {
   paymentVerifiedAt?: string;
   // Private audit: stable personId of the actual payer who confirmed this transfer, never a display name.
   paymentVerifiedByPersonId?: string;
+  // 5.11: one receipt-confirmation notification per reimbursed transfer.
+  // Saved atomically with payer verification, exclusively on its actual sender.
+  // Guest identity and read state persist with the receipt even when offline.
+  paymentReceiptNotification?: {
+    id: string;
+    payerName: string;
+    amountCents: number;
+    receiptName: string;
+    confirmedAt: string;
+    readAt?: string;
+  };
   // The join that created (or first claimed) this person: its idempotency key and the normalized
   // name it was made with, replayable until expiresAt (epoch ms). See guest.joinSession.
   join?: { key: string; name: string; expiresAt: number };

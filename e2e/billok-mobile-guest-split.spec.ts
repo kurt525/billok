@@ -1531,7 +1531,9 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await verifyAnna.click();
     // 5.9: a private push invalidation reaches the actual sender's already-open
     // guest page, independently of the payer's confirmation UI, before fallback polling.
-    const debtorNotice = page.getByText('Борис подтвердил получение вашего перевода 4,59 ₽ по чеку «Ужин без налога»');
+    const debtorNotice = page
+      .locator('[data-sonner-toast]')
+      .getByText('Борис подтвердил получение вашего перевода 4,59 ₽ по чеку «Ужин без налога»');
     await expect(debtorNotice).toHaveCount(1, { timeout: 10_000 });
     await expect(debtorNotice).toBeVisible();
     const confirmationTime = page.getByTestId('guest-payment-confirmation-time');
@@ -1540,6 +1542,31 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     const confirmationLink = page.getByTestId('guest-payment-confirmation-link');
     await expect(confirmationLink).toHaveText('Открыть чек');
     await expect(confirmationLink).toHaveAttribute('href', '/split/' + token + '/claim');
+    // 5.11: the confirmed transfer is also an unread server-backed list item.
+    const senderNotificationList = page.getByTestId('guest-payment-notifications');
+    await expect(senderNotificationList).toBeVisible({ timeout: 10_000 });
+    await expect(senderNotificationList.locator('li')).toHaveCount(1);
+    await expect(senderNotificationList.getByTestId('guest-payment-notification-status')).toHaveText(
+      'Новое уведомление',
+    );
+    await expect(senderNotificationList.getByTestId('guest-payment-unread-count')).toHaveText('Непрочитано: 1');
+    await expect(senderNotificationList.getByTestId('guest-payment-notification-text')).toHaveText(
+      'Борис подтвердил получение вашего перевода 4,59 ₽ по чеку «Ужин без налога»',
+    );
+    await expect(senderNotificationList.getByTestId('guest-payment-notification-link')).toHaveAttribute(
+      'href',
+      '/split/' + token + '/claim',
+    );
+    // Notification cards must remain entirely inside the Android viewport.
+    for (const width of [320, 430, 720]) {
+      await page.setViewportSize({ width, height: 560 });
+      await fitsPhone(page);
+      const bounds = await senderNotificationList.boundingBox();
+      expect(bounds, 'notification list missing at ' + width + 'px').not.toBeNull();
+      expect(bounds!.x, 'notification list left at ' + width + 'px').toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width, 'notification list right at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+    }
+    await expect(otherPage.getByTestId('guest-payment-notifications')).toHaveCount(0);
     await expect(
       otherPage.getByText('Борис подтвердил получение вашего перевода 4,59 ₽ по чеку «Ужин без налога»'),
     ).toHaveCount(0);
@@ -1588,6 +1615,26 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     );
     await expect(debtorSecondTab.getByTestId('guest-mark-paid')).toHaveCount(0);
     await expect(debtorSecondTab.getByTestId('guest-unmark-paid')).toHaveCount(0);
+    // A fresh/reopened personal page receives the persisted unread entry,
+    // even though the one-off toast is deliberately not repeated on first load.
+    const restoredNotifications = debtorSecondTab.getByTestId('guest-payment-notifications');
+    await expect(restoredNotifications).toBeVisible({ timeout: 15_000 });
+    await expect(restoredNotifications.getByTestId('guest-payment-notification-status')).toHaveText(
+      'Новое уведомление',
+    );
+    await expect(restoredNotifications.getByTestId('guest-payment-notification-text')).toContainText(
+      'Борис подтвердил получение вашего перевода 4,59 ₽',
+    );
+    const readAction = restoredNotifications.getByTestId('guest-payment-notification-mark-read');
+    await expect(readAction).toBeEnabled();
+    await readAction.click();
+    await expect(restoredNotifications.getByTestId('guest-payment-notification-status')).toHaveText('Прочитано');
+    await debtorSecondTab.reload({ waitUntil: 'domcontentloaded' });
+    await expect(debtorSecondTab.getByTestId('guest-payment-notification-status')).toHaveText('Прочитано', {
+      timeout: 15_000,
+    });
+    await expect(debtorSecondTab.getByTestId('guest-payment-unread-count')).toHaveCount(0);
+    await expect(debtorSecondTab.getByTestId('guest-payment-notification-mark-read')).toHaveCount(0);
     await debtorSecondTab.close();
     await otherPage.reload({ waitUntil: 'domcontentloaded' });
     try {
@@ -1624,6 +1671,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(page.getByTestId('guest-payer-payment-review')).toHaveCount(0);
     const publicStatus = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     expect(JSON.stringify(publicStatus)).not.toContain('paymentVerifiedAt');
+    expect(JSON.stringify(publicStatus)).not.toContain('paymentReceiptNotification');
     await expect(otherPage.getByTestId('guest-payer-sbp-phone')).toHaveValue('+79991234567', { timeout: 15_000 });
     await otherPage.getByTestId('guest-payer-sbp-search').fill('Озон Банк');
     await expect(otherPage.getByTestId('guest-payer-sbp-bank-100000000273').locator('input')).toBeChecked();

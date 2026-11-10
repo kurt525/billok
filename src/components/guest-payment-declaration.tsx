@@ -8,6 +8,16 @@ import { shouldNotifyGuestReceiptConfirmation } from '@/lib/guest-payment-notifi
 import { formatCents } from '@/lib/money';
 import { Button } from '@/components/ui/button';
 
+type ReceiptConfirmationNotification = {
+  id: string;
+  payerName: string;
+  amountCents: number;
+  receiptName: string;
+  confirmedAt: string;
+  receiptHref: string;
+  readAt: string | null;
+};
+
 /** The payer confirms receipt separately. This button records only the debtor's own declaration. */
 export function GuestPaymentDeclaration({
   token,
@@ -28,6 +38,8 @@ export function GuestPaymentDeclaration({
   const read = trpc.guest.getMyPaymentDeclaration.useMutation();
   const mark = trpc.guest.markMyPayment.useMutation();
   const unmark = trpc.guest.unmarkMyPayment.useMutation();
+  const markNotificationRead = trpc.guest.markMyPaymentNotificationRead.useMutation();
+  const [receiptNotification, setReceiptNotification] = useState<ReceiptConfirmationNotification | null>(null);
   const [declaredAt, setDeclaredAt] = useState<string | null>(null);
   const [declaredAmountCents, setDeclaredAmountCents] = useState<number | null>(null);
   const [verifiedAt, setVerifiedAt] = useState<string | null>(null);
@@ -86,6 +98,7 @@ export function GuestPaymentDeclaration({
           setDeclaredAt(data.declaredPaidAt);
           setDeclaredAmountCents(data.declaredAmountCents);
           setVerifiedAt(data.verifiedAt);
+          setReceiptNotification(data.notification ?? null);
           setLoaded(true);
           setFailed(false);
         })
@@ -217,6 +230,22 @@ export function GuestPaymentDeclaration({
       refreshCurrent.current();
     }
   }
+  async function markReceiptNotificationRead() {
+    if (!canDeclare || !receiptNotification || receiptNotification.readAt || markNotificationRead.isPending) return;
+    const notificationId = receiptNotification.id;
+    latestRead.current += 1;
+    try {
+      const result = await markNotificationRead.mutateAsync({ token, personId, personToken, notificationId });
+      setReceiptNotification((current) =>
+        current?.id === notificationId ? { ...current, readAt: result.readAt } : current,
+      );
+    } catch {
+      toast.error(t('paymentNotificationReadFailed'));
+    } finally {
+      refreshCurrent.current();
+    }
+  }
+
   const exactDeclaredAmount =
     declaredAmountCents !== null ? formatCents(declaredAmountCents, 'RUB', locale) : amountLabel;
   if (!loaded)
@@ -227,6 +256,71 @@ export function GuestPaymentDeclaration({
     );
   return (
     <div className="space-y-2" aria-live="polite" data-testid="guest-payment-declaration">
+      {receiptNotification && canDeclare && (
+        <section
+          className="min-w-0 space-y-2 rounded-lg border border-border p-3"
+          aria-label={t('paymentNotificationsTitle')}
+          data-testid="guest-payment-notifications"
+        >
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold">{t('paymentNotificationsTitle')}</h3>
+            {!receiptNotification.readAt && (
+              <span
+                className="rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground"
+                data-testid="guest-payment-unread-count"
+              >
+                {t('paymentNotificationUnreadCount', { count: 1 })}
+              </span>
+            )}
+          </div>
+          <ul className="min-w-0">
+            <li
+              data-testid={'guest-payment-notification-' + receiptNotification.id}
+              className={
+                'min-w-0 space-y-2 rounded-md p-3 [overflow-wrap:anywhere] ' +
+                (receiptNotification.readAt ? 'bg-muted/40' : 'border border-primary/40 bg-primary/5')
+              }
+            >
+              <p className="text-xs font-semibold" data-testid="guest-payment-notification-status">
+                {receiptNotification.readAt ? t('paymentNotificationRead') : t('paymentNotificationUnread')}
+              </p>
+              <p className="text-sm" data-testid="guest-payment-notification-text">
+                {t('paymentVerifiedNoticeDetailed', {
+                  payer: receiptNotification.payerName,
+                  amount: formatCents(receiptNotification.amountCents, 'RUB', locale),
+                  receipt: receiptNotification.receiptName,
+                })}
+              </p>
+              <time
+                className="block text-xs text-muted-foreground"
+                dateTime={receiptNotification.confirmedAt}
+                data-testid="guest-payment-notification-time"
+              >
+                {new Date(receiptNotification.confirmedAt).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US')}
+              </time>
+              <a
+                href={receiptNotification.receiptHref}
+                className="inline-block min-h-11 py-3 text-sm font-semibold underline underline-offset-2"
+                data-testid="guest-payment-notification-link"
+              >
+                {t('paymentVerifiedNoticeOpenReceipt')}
+              </a>
+              {!receiptNotification.readAt && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 w-full whitespace-normal"
+                  disabled={markNotificationRead.isPending}
+                  onClick={markReceiptNotificationRead}
+                  data-testid="guest-payment-notification-mark-read"
+                >
+                  {t('paymentNotificationMarkRead')}
+                </Button>
+              )}
+            </li>
+          </ul>
+        </section>
+      )}
       {verifiedAt ? (
         <>
           <p className="text-sm font-semibold text-green-700 dark:text-green-400" data-testid="guest-payment-verified">

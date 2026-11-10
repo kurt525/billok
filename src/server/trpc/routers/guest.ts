@@ -2768,24 +2768,77 @@ export const guestRouter = createTRPCRouter({
       // sender's personal confirmation notification.
       const receiptName = (split.receiptData as { merchantName?: unknown }).merchantName;
       const payer = people[split.paidByIndex]!;
+      const storedNotice =
+        verifiedAt && personIndex === paymentIndex ? paymentPerson.paymentReceiptNotification : undefined;
+      const notification = storedNotice
+        ? {
+            ...storedNotice,
+            readAt: storedNotice.readAt ?? null,
+            receiptHref: '/split/' + encodeURIComponent(input.token) + '/claim',
+          }
+        : null;
       return {
         declaredPaidAt: paymentPerson.paymentDeclaredAt ?? null,
         declaredAmountCents: paymentPerson.paymentDeclaredAt
           ? (paymentPerson.paymentDeclaredAmountCents ?? amountCents)
           : null,
         verifiedAt,
+        ...(notification ? { notification } : {}),
         ...(verifiedAt && personIndex === paymentIndex
           ? {
               confirmationNotice: {
-                payerName: payer.name,
-                amountCents,
-                receiptName: typeof receiptName === 'string' && receiptName.trim() ? receiptName.trim() : 'Чек',
-                confirmedAt: verifiedAt,
+                payerName: notification?.payerName ?? payer.name,
+                amountCents: notification?.amountCents ?? amountCents,
+                receiptName:
+                  notification?.receiptName ??
+                  (typeof receiptName === 'string' && receiptName.trim() ? receiptName.trim() : 'Чек'),
+                confirmedAt: notification?.confirmedAt ?? verifiedAt,
                 receiptHref: '/split/' + encodeURIComponent(input.token) + '/claim',
               },
             }
           : {}),
       };
+    }),
+
+  markMyPaymentNotificationRead: publicProcedure
+    .input(
+      z.strictObject({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        notificationId: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payment-declaration-write', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const { people, personIndex, paymentIndex, paymentPerson } = requireGuestDebtor(
+          split,
+          input.personId,
+          input.personToken,
+        );
+        if (personIndex !== paymentIndex) throw new AppError('FORBIDDEN', 'notParticipant');
+        const notice = paymentPerson.paymentReceiptNotification;
+        if (!notice || !paymentPerson.paymentVerifiedAt || notice.id !== input.notificationId) {
+          throw new AppError('NOT_FOUND');
+        }
+        if (notice.readAt) return { readAt: notice.readAt };
+        const readAt = new Date().toISOString();
+        await tx.guestSplit.update({
+          where: { id: split.id },
+          data: {
+            people: people.map((person, index) =>
+              index === paymentIndex ? { ...person, paymentReceiptNotification: { ...notice, readAt } } : person,
+            ) as unknown as Prisma.InputJsonValue,
+          },
+        });
+        return { readAt };
+      });
     }),
 
   markMyPayment: publicProcedure
@@ -2957,9 +3010,28 @@ export const guestRouter = createTRPCRouter({
         }
         if (debtor.paymentVerifiedAt) return { verifiedAt: debtor.paymentVerifiedAt };
         const verifiedAt = new Date().toISOString();
+        const receiptName = (split.receiptData as { merchantName?: unknown }).merchantName;
+        const amountCents = validGroup?.totalCents ?? summary.find((entry) => entry.personIndex === debtorIndex)?.total;
+        if (!Number.isSafeInteger(amountCents) || amountCents! <= 0) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        // Persist the addressed notification in the same serialized transaction
+        // as receipt verification. An idempotent repeat never duplicates it.
+        const notification = {
+          id: randomUUID(),
+          payerName: people[split.paidByIndex]!.name,
+          amountCents: amountCents!,
+          receiptName: typeof receiptName === 'string' && receiptName.trim() ? receiptName.trim() : 'Чек',
+          confirmedAt: verifiedAt,
+        };
         const updated = people.map((person, index) =>
           index === debtorIndex
-            ? { ...person, paymentVerifiedAt: verifiedAt, paymentVerifiedByPersonId: input.personId }
+            ? {
+                ...person,
+                paymentVerifiedAt: verifiedAt,
+                paymentVerifiedByPersonId: input.personId,
+                paymentReceiptNotification: notification,
+              }
             : person,
         );
         await tx.guestSplit.update({
