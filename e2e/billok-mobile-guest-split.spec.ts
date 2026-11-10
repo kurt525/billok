@@ -1088,6 +1088,18 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(page.getByTestId('guest-personal-reimbursement')).toContainText('Борис');
     await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('4,59');
 
+    // 5.12: an anonymous Android guest has the opt-in Web Push panel,
+    // but persistent 5.11 on-site notifications do not require browser Push.
+    const pushPanel = page.getByTestId('guest-web-push-controls');
+    await expect(pushPanel).toBeVisible({ timeout: 15_000 });
+    await expect(pushPanel).toContainText('Уведомления сохраняются в BillOK');
+    // QA has no deployment VAPID keys: do not request permission or register
+    // a browser push endpoint before production has been explicitly enabled.
+    await expect(pushPanel.getByTestId('guest-web-push-unavailable')).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(pushPanel.getByTestId('guest-web-push-enable')).toHaveCount(0);
+
     // The public summary must not replace this guest's private settlement.
     // Navigation in both directions preserves their own total and payer.
     await page.getByRole('link', { name: 'Посмотреть итоги' }).click();

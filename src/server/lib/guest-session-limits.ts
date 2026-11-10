@@ -33,6 +33,7 @@ export type ClaimWriteAction =
   | 'payer-sbp-reimbursement'
   | 'payment-declaration-read'
   | 'payment-declaration-write'
+  | 'guest-push-subscription'
   | 'payer-payment-review'
   | 'payer-payment-verify';
 

@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
+import type { GuestWebPushSubscription } from './guest-web-push';
 
 /** A person id as requests send it (personId / targetId), and as stored ids must be */
 export const personIdSchema = z.string().uuid();
@@ -60,6 +61,9 @@ export type GuestSessionPerson = {
   paymentVerifiedAt?: string;
   // Private audit: stable personId of the actual payer who confirmed this transfer, never a display name.
   paymentVerifiedByPersonId?: string;
+  // Private per-person push endpoints; never expose to public getSession/getSplit.
+  // Only the sender of a grouped payment can subscribe for that transfer.
+  guestPushSubscriptions?: GuestWebPushSubscription[];
   // 5.11: one receipt-confirmation notification per reimbursed transfer.
   // Saved atomically with payer verification, exclusively on its actual sender.
   // Guest identity and read state persist with the receipt even when offline.

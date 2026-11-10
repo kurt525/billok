@@ -7,6 +7,7 @@ import { trpc } from '@/lib/trpc';
 import { shouldNotifyGuestReceiptConfirmation } from '@/lib/guest-payment-notifications';
 import { formatCents } from '@/lib/money';
 import { Button } from '@/components/ui/button';
+import { GuestWebPushControls } from '@/components/guest-web-push-controls';
 
 type ReceiptConfirmationNotification = {
   id: string;
@@ -321,6 +322,7 @@ export function GuestPaymentDeclaration({
           </ul>
         </section>
       )}
+      {canDeclare && <GuestWebPushControls token={token} personId={personId} personToken={personToken} />}
       {verifiedAt ? (
         <>
           <p className="text-sm font-semibold text-green-700 dark:text-green-400" data-testid="guest-payment-verified">

@@ -5163,6 +5163,98 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
+  test('5.12: an anonymous sender can save a consented device subscription, never another guest', async () => {
+    const oldPublic = process.env.WEB_PUSH_VAPID_PUBLIC_KEY;
+    const oldPrivate = process.env.WEB_PUSH_VAPID_PRIVATE_KEY;
+    const subscription = {
+      endpoint: 'https://fcm.googleapis.com/fcm/send/test-guest-push',
+      keys: {
+        p256dh: Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 3)]).toString('base64url'),
+        auth: Buffer.alloc(16, 7).toString('base64url'),
+      },
+    };
+    try {
+      process.env.WEB_PUSH_VAPID_PUBLIC_KEY = Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 4)]).toString(
+        'base64url',
+      );
+      process.env.WEB_PUSH_VAPID_PRIVATE_KEY = Buffer.alloc(32, 1).toString('base64url');
+      const api = await caller();
+      expect((await api.getGuestPushConfig()).publicKey).toBe(process.env.WEB_PUSH_VAPID_PUBLIC_KEY);
+      await expect(
+        api.subscribeMyGuestPush({
+          ...debtorAuth,
+          subscription: { ...subscription, endpoint: 'http://127.0.0.1/internal' },
+        }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+      await expect(
+        api.subscribeMyGuestPush({ ...debtorAuth, personToken: payerToken, subscription }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(api.subscribeMyGuestPush({ ...debtorAuth, subscription })).resolves.toEqual({ subscribed: true });
+      const changed = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+      expect(changed[0].guestPushSubscriptions).toEqual([
+        { ...subscription, tokenBinding: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) },
+      ]);
+      expect(changed[1].guestPushSubscriptions).toBeUndefined();
+      mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: changed });
+      mockDb.guestSplit.update.mockClear();
+      await expect(api.subscribeMyGuestPush({ ...debtorAuth, subscription })).resolves.toEqual({ subscribed: true });
+      expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+      await expect(api.getMyGuestPushStatus({ ...debtorAuth, endpoint: subscription.endpoint })).resolves.toEqual({
+        subscribed: true,
+      });
+      await expect(
+        api.getMyGuestPushStatus({ ...debtorAuth, personToken: payerToken, endpoint: subscription.endpoint }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      // A new personal token cannot inherit the previous guest device's
+      // notification endpoint, even when stable personId and shares remain.
+      const rotatedToken = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      mockDb.guestSplit.findUnique.mockResolvedValue({
+        ...base,
+        people: [{ ...changed[0], personToken: rotatedToken }, ...changed.slice(1)],
+      });
+      await expect(
+        api.getMyGuestPushStatus({
+          ...debtorAuth,
+          personToken: rotatedToken,
+          endpoint: subscription.endpoint,
+        }),
+      ).resolves.toEqual({ subscribed: false });
+      mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: changed });
+      await expect(api.unsubscribeMyGuestPush({ ...debtorAuth, endpoint: subscription.endpoint })).resolves.toEqual({
+        subscribed: false,
+      });
+      const cleared = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+      expect(cleared[0].guestPushSubscriptions).toEqual([]);
+      expect(cleared[1]).toEqual(base.people[1]);
+    } finally {
+      if (oldPublic === undefined) delete process.env.WEB_PUSH_VAPID_PUBLIC_KEY;
+      else process.env.WEB_PUSH_VAPID_PUBLIC_KEY = oldPublic;
+      if (oldPrivate === undefined) delete process.env.WEB_PUSH_VAPID_PRIVATE_KEY;
+      else process.env.WEB_PUSH_VAPID_PRIVATE_KEY = oldPrivate;
+    }
+  });
+
+  test('5.12: without configured keys the saved guest inbox remains available', async () => {
+    const oldPublic = process.env.WEB_PUSH_VAPID_PUBLIC_KEY;
+    const oldPrivate = process.env.WEB_PUSH_VAPID_PRIVATE_KEY;
+    try {
+      delete process.env.WEB_PUSH_VAPID_PUBLIC_KEY;
+      delete process.env.WEB_PUSH_VAPID_PRIVATE_KEY;
+      const api = await caller();
+      await expect(api.getGuestPushConfig()).resolves.toEqual({ publicKey: null });
+      await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toMatchObject({
+        declaredPaidAt: null,
+        verifiedAt: null,
+      });
+    } finally {
+      if (oldPublic === undefined) delete process.env.WEB_PUSH_VAPID_PUBLIC_KEY;
+      else process.env.WEB_PUSH_VAPID_PUBLIC_KEY = oldPublic;
+      if (oldPrivate === undefined) delete process.env.WEB_PUSH_VAPID_PRIVATE_KEY;
+      else process.env.WEB_PUSH_VAPID_PRIVATE_KEY = oldPrivate;
+    }
+  });
+
   test('unmarked participant receives null, and another identity cannot read or mark', async () => {
     const api = await caller(signedIn);
     await expect(api.getMyPaymentDeclaration(debtorAuth)).resolves.toEqual({

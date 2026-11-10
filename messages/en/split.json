@@ -348,7 +348,17 @@
     "paymentNotificationUnread": "New notification",
     "paymentNotificationRead": "Read",
     "paymentNotificationMarkRead": "Mark as read",
-    "paymentNotificationReadFailed": "Could not mark notification as read"
+    "paymentNotificationReadFailed": "Could not mark notification as read",
+    "pushTitle": "Device notifications",
+    "pushFallback": "Notifications remain in BillOK and appear when you return, even if Push is disabled or the phone was offline.",
+    "pushServerUnavailable": "Web Push is not yet configured on the server. BillOK inbox notifications still work.",
+    "pushBrowserUnsupported": "This device or browser does not support Web Push. Notifications remain in BillOK.",
+    "pushPermissionDenied": "Device notifications are blocked in your browser settings. Notifications remain in BillOK.",
+    "pushEnable": "Enable notifications on this device",
+    "pushDisable": "Disable notifications for this receipt",
+    "pushEnabled": "Device notifications enabled for this receipt",
+    "pushDisabled": "Device notifications disabled for this receipt",
+    "pushFailed": "Could not update notification settings. Your BillOK inbox remains available."
   },
   "result": {
     "loading": "Loading split...",

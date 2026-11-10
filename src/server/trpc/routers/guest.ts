@@ -13,6 +13,16 @@ import {
 import { checkGuestReceiptCreationLimit } from '../../lib/guest-receipt-create-limit';
 import { guestTransaction } from '../../lib/guest-transaction';
 import {
+  MAX_GUEST_PUSH_SUBSCRIPTIONS,
+  activeGuestPushSubscriptions,
+  guestPushPublicKey,
+  guestPushTokenBinding,
+  sendGuestReceiptPush,
+  validGuestPushEndpoint,
+  validGuestPushSubscription,
+  validStoredGuestPushSubscriptions,
+} from '../../lib/guest-web-push';
+import {
   deleteExpiredSplits,
   deleteUnusedSplitReceipts,
   lockReceiptForSplit,
@@ -2800,6 +2810,130 @@ export const guestRouter = createTRPCRouter({
       };
     }),
 
+  // Optional VAPID public key; absent until deployment supplies both key halves.
+  getGuestPushConfig: publicProcedure.query(() => ({ publicKey: guestPushPublicKey() })),
+
+  getMyGuestPushStatus: publicProcedure
+    .input(
+      z.strictObject({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        endpoint: z.string().max(2048),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payment-declaration-read', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const split = await ctx.db.guestSplit.findUnique({
+        where: { shareToken: input.token },
+        select: { expiresAt: true, status: true, people: true, paidByIndex: true, receiptData: true, summary: true },
+      });
+      if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+      if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+      const { paymentPerson, personIndex, paymentIndex } = requireGuestDebtor(split, input.personId, input.personToken);
+      if (personIndex !== paymentIndex) throw new AppError('FORBIDDEN', 'notParticipant');
+      return {
+        subscribed:
+          !!guestPushPublicKey() &&
+          activeGuestPushSubscriptions(paymentPerson.guestPushSubscriptions, input.personToken).some(
+            (subscription) => subscription.endpoint === input.endpoint,
+          ),
+      };
+    }),
+
+  subscribeMyGuestPush: publicProcedure
+    .input(
+      z.strictObject({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        subscription: z.strictObject({
+          endpoint: z.string().max(2048),
+          keys: z.strictObject({ p256dh: z.string().max(140), auth: z.string().max(80) }),
+        }),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!guestPushPublicKey() || !validGuestPushSubscription(input.subscription)) {
+        throw new AppError('BAD_REQUEST');
+      }
+      if (!checkClaimWriteRateLimit('guest-push-subscription', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const { people, paymentIndex, personIndex, paymentPerson } = requireGuestDebtor(
+          split,
+          input.personId,
+          input.personToken,
+        );
+        if (paymentIndex !== personIndex) throw new AppError('FORBIDDEN', 'notParticipant');
+        const saved = validStoredGuestPushSubscriptions(paymentPerson.guestPushSubscriptions);
+        const updated = [
+          ...saved.filter((entry) => entry.endpoint !== input.subscription.endpoint),
+          { ...input.subscription, tokenBinding: guestPushTokenBinding(input.personToken) },
+        ].slice(-MAX_GUEST_PUSH_SUBSCRIPTIONS);
+        if (
+          saved.length !== updated.length ||
+          saved.some((entry, index) => JSON.stringify(entry) !== JSON.stringify(updated[index]))
+        ) {
+          await tx.guestSplit.update({
+            where: { id: split.id },
+            data: {
+              people: people.map((person, index) =>
+                index === paymentIndex ? { ...person, guestPushSubscriptions: updated } : person,
+              ) as unknown as Prisma.InputJsonValue,
+            },
+          });
+        }
+        return { subscribed: true };
+      });
+    }),
+
+  unsubscribeMyGuestPush: publicProcedure
+    .input(
+      z.strictObject({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        endpoint: z.string().max(2048),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!validGuestPushEndpoint(input.endpoint)) throw new AppError('BAD_REQUEST');
+      if (!checkClaimWriteRateLimit('guest-push-subscription', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const { people, paymentIndex, personIndex, paymentPerson } = requireGuestDebtor(
+          split,
+          input.personId,
+          input.personToken,
+        );
+        if (paymentIndex !== personIndex) throw new AppError('FORBIDDEN', 'notParticipant');
+        const saved = validStoredGuestPushSubscriptions(paymentPerson.guestPushSubscriptions);
+        const updated = saved.filter((entry) => entry.endpoint !== input.endpoint);
+        if (updated.length !== saved.length) {
+          await tx.guestSplit.update({
+            where: { id: split.id },
+            data: {
+              people: people.map((person, index) =>
+                index === paymentIndex ? { ...person, guestPushSubscriptions: updated } : person,
+              ) as unknown as Prisma.InputJsonValue,
+            },
+          });
+        }
+        return { subscribed: false };
+      });
+    }),
+
   markMyPaymentNotificationRead: publicProcedure
     .input(
       z.strictObject({
@@ -2987,7 +3121,7 @@ export const guestRouter = createTRPCRouter({
       if (!checkClaimWriteRateLimit('payer-payment-verify', input.token, input.personToken)) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
-      return guestTransaction(ctx.db, async (tx) => {
+      const outcome = await guestTransaction(ctx.db, async (tx) => {
         const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
         if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
@@ -3008,7 +3142,7 @@ export const guestRouter = createTRPCRouter({
         if (!debtor.paymentDeclaredAt) {
           throw new AppError('BAD_REQUEST', 'paymentNotDeclared');
         }
-        if (debtor.paymentVerifiedAt) return { verifiedAt: debtor.paymentVerifiedAt };
+        if (debtor.paymentVerifiedAt) return { verifiedAt: debtor.paymentVerifiedAt, delivery: null };
         const verifiedAt = new Date().toISOString();
         const receiptName = (split.receiptData as { merchantName?: unknown }).merchantName;
         const amountCents = validGroup?.totalCents ?? summary.find((entry) => entry.personIndex === debtorIndex)?.total;
@@ -3038,8 +3172,28 @@ export const guestRouter = createTRPCRouter({
           where: { id: split.id },
           data: { people: updated as unknown as Prisma.InputJsonValue },
         });
-        return { verifiedAt };
+        return {
+          verifiedAt,
+          delivery: {
+            subscriptions: activeGuestPushSubscriptions(debtor.guestPushSubscriptions, debtor.personToken ?? ''),
+            notificationId: notification.id,
+          },
+        };
       });
+      // Dispatch only after commit. An idempotent repeat has delivery=null,
+      // and a push outage never rolls back the durable unread notification.
+      if (outcome.delivery) {
+        try {
+          await sendGuestReceiptPush(
+            outcome.delivery.subscriptions,
+            '/split/' + encodeURIComponent(input.token) + '/claim',
+            outcome.delivery.notificationId,
+          );
+        } catch {
+          // Push is optional. The 5.11 server-side inbox remains authoritative.
+        }
+      }
+      return { verifiedAt: outcome.verifiedAt };
     }),
 
   // Read payer contact via a personal token only. The share token on its own
