@@ -1415,6 +1415,10 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await declareButton.click();
     await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено');
     await expect(page.getByTestId('guest-payment-declared')).toHaveClass(/text-green-700/);
+    // 5.19: green "Оплачено" is the sender's CLAIM only, not bank clearance.
+    await expect(page.getByTestId('guest-payment-not-bank-confirmed')).toHaveText(
+      'Вы сообщили об отправке денег. Зачисление пока не проверено плательщиком.',
+    );
     await expect(page.getByTestId('guest-payment-declared-amount')).toContainText('Сумма заявленного перевода:');
     await expect(page.getByTestId('guest-payment-declared-amount')).toContainText(
       (await page.getByTestId('guest-personal-reimbursement-amount').textContent())!.trim(),
@@ -1469,15 +1473,23 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(initialSummary.getByTestId('guest-payer-summary-awaiting')).toContainText('4,59');
     await expect(initialSummary.getByTestId('guest-payer-summary-unpaid')).toContainText('4,08');
     await expect(initialSummary.getByTestId('guest-payer-summary-outstanding')).toContainText('8,67');
-    await expect(livePayerReview.getByTestId('guest-payer-payment-status-' + anna.personId)).toContainText(
-      'Участник отметил оплату',
+    // Only the payer's explicit bank check can change this amber status to
+    // "Поступление подтверждено"; BillOK has no automatic bank integration.
+    await expect(livePayerReview.getByTestId('guest-payer-payment-status-' + anna.personId)).toHaveText(
+      'Сообщил об оплате — ожидает проверки',
       { timeout: 10_000 },
     );
+    await expect(livePayerReview.getByTestId('guest-payer-payment-status-' + anna.personId)).toHaveClass(
+      /text-amber-800/,
+    );
+    await expect(livePayerReview).toContainText('BillOK не получает сведений о поступлениях из банков');
+    await expect(livePayerReview.getByTestId('guest-payer-verified-' + anna.personId)).toHaveCount(0);
     await expect(page.getByTestId('guest-payment-awaiting')).toHaveText('Ожидает подтверждения получателем');
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('guest-payment-declared')).toHaveText('Оплачено', { timeout: 15_000 });
     await expect(page.getByTestId('guest-mark-paid')).toHaveCount(0);
     await expect(page.getByTestId('guest-payment-awaiting')).toHaveText('Ожидает подтверждения получателем');
+    await expect(page.getByTestId('guest-payment-not-bank-confirmed')).toBeVisible();
     await expect(page.getByTestId('guest-payer-sbp-form')).toHaveCount(0);
     // A different already-open tab also retains the same persisted state
     // across reload, not merely a local toast.
@@ -1549,7 +1561,9 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(payerReview).toBeVisible();
     const annaPayment = payerReview.getByTestId('guest-payer-payment-' + anna.personId);
     await expect(annaPayment).toContainText('4,59');
-    await expect(annaPayment).toContainText('Участник отметил оплату');
+    await expect(annaPayment.getByTestId('guest-payer-payment-status-' + anna.personId)).toHaveText(
+      'Сообщил об оплате — ожидает проверки',
+    );
     const victorPayment = payerReview.getByTestId('guest-payer-payment-' + victor.personId);
     await expect(victorPayment).toContainText('Ожидается отметка участника');
     // 5.14: the payer can attest an actually received transfer even before
@@ -1571,8 +1585,8 @@ test('mobile guest finalization reconciles personal tips for three dining partic
           String(error),
       );
     }
-    await expect(payerReview.getByTestId('guest-payer-payment-' + anna.personId)).toContainText(
-      'Участник отметил оплату',
+    await expect(payerReview.getByTestId('guest-payer-payment-status-' + anna.personId)).toHaveText(
+      'Сообщил об оплате — ожидает проверки',
     );
 
     // A real payer must be able to verify a declared transfer on a wide
@@ -1648,6 +1662,10 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(annaPayment).toContainText('Поступление подтверждено');
     const verifiedButton = payerReview.getByTestId('guest-payer-verified-' + anna.personId);
     await expect(verifiedButton).toHaveText('Поступление подтверждено');
+    await expect(payerReview.getByTestId('guest-payer-payment-status-' + anna.personId)).toHaveText(
+      'Поступление подтверждено',
+    );
+    await expect(payerReview.getByTestId('guest-payer-payment-status-' + anna.personId)).toHaveClass(/text-green-700/);
     await expect(verifiedButton).toBeDisabled();
     await expect(verifiedButton).toHaveClass(/border-green-600/);
     const confirmedAudit = payerReview.getByTestId('guest-payer-verified-audit-' + anna.personId);
@@ -1679,6 +1697,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       timeout: 25_000,
     });
     await expect(page.getByTestId('guest-payment-verified')).toHaveClass(/text-green-700/);
+    await expect(page.getByTestId('guest-payment-not-bank-confirmed')).toHaveCount(0);
     await expect(debtorSecondTab.getByTestId('guest-payment-verified')).toHaveText(
       'Получатель подтвердил поступление',
       { timeout: 25_000 },

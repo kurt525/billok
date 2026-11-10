@@ -452,6 +452,13 @@ export function GuestPaymentDeclaration({
           <p className="text-xs text-muted-foreground" data-testid="guest-payment-awaiting">
             {t('paymentAwaitingRecipient')}
           </p>
+          <p
+            className="min-w-0 rounded-md border border-amber-600/40 bg-amber-50 p-3 text-xs text-amber-900 [overflow-wrap:anywhere] dark:bg-amber-950/20 dark:text-amber-200"
+            role="status"
+            data-testid="guest-payment-not-bank-confirmed"
+          >
+            {t('paymentAwaitingVerification')}
+          </p>
           {canDeclare && (
             <Button
               type="button"

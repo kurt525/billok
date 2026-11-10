@@ -413,7 +413,14 @@ export function GuestPayerPaymentReview({
                         </p>
                       )}
                       <p
-                        className="text-xs text-muted-foreground"
+                        className={
+                          'text-xs font-medium [overflow-wrap:anywhere] ' +
+                          (payment.verifiedAt
+                            ? 'text-green-700 dark:text-green-400'
+                            : payment.declaredPaidAt
+                              ? 'text-amber-800 dark:text-amber-300'
+                              : 'text-muted-foreground')
+                        }
                         data-testid={'guest-payer-payment-status-' + payment.personId}
                       >
                         {payment.verifiedAt
