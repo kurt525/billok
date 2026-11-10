@@ -75,6 +75,16 @@ export type GuestSessionPerson = {
     confirmedAt: string;
     readAt?: string;
   };
+  // Payer-retracted receipt acknowledgements are separate addressed events,
+  // retained for a guest returning after the phone was offline. Bounded list.
+  paymentReceiptCancellationNotifications?: {
+    id: string;
+    payerName: string;
+    amountCents: number;
+    receiptName: string;
+    cancelledAt: string;
+    readAt?: string;
+  }[];
   // The join that created (or first claimed) this person: its idempotency key and the normalized
   // name it was made with, replayable until expiresAt (epoch ms). See guest.joinSession.
   join?: { key: string; name: string; expiresAt: number };

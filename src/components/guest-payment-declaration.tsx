@@ -9,6 +9,16 @@ import { formatCents } from '@/lib/money';
 import { Button } from '@/components/ui/button';
 import { GuestWebPushControls } from '@/components/guest-web-push-controls';
 
+type ReceiptCancellationNotification = {
+  id: string;
+  payerName: string;
+  amountCents: number;
+  receiptName: string;
+  cancelledAt: string;
+  receiptHref: string;
+  readAt: string | null;
+};
+
 type ReceiptConfirmationNotification = {
   id: string;
   payerName: string;
@@ -41,12 +51,14 @@ export function GuestPaymentDeclaration({
   const unmark = trpc.guest.unmarkMyPayment.useMutation();
   const markNotificationRead = trpc.guest.markMyPaymentNotificationRead.useMutation();
   const [receiptNotification, setReceiptNotification] = useState<ReceiptConfirmationNotification | null>(null);
+  const [cancellationNotifications, setCancellationNotifications] = useState<ReceiptCancellationNotification[]>([]);
   const [declaredAt, setDeclaredAt] = useState<string | null>(null);
   const [declaredAmountCents, setDeclaredAmountCents] = useState<number | null>(null);
   const [verifiedAt, setVerifiedAt] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const lastVerified = useRef<string | null | undefined>(undefined);
+  const lastCancellationId = useRef<string | null | undefined>(undefined);
   const latestRead = useRef(0);
   const writeInFlight = useRef(false);
   const refreshCurrent = useRef<() => void>(() => {});
@@ -94,12 +106,35 @@ export function GuestPaymentDeclaration({
               },
             );
           }
+          // First read establishes a baseline. Only newly committed, personal
+          // cancellation events make a toast; repeated polls and reloads don't.
+          const newestCancellation = data.cancellationNotifications?.at(-1) ?? null;
+          if (
+            canDeclare &&
+            lastCancellationId.current !== undefined &&
+            newestCancellation &&
+            newestCancellation.id !== lastCancellationId.current
+          ) {
+            toast.warning(
+              t('paymentCancelNoticeDetailed', {
+                payer: newestCancellation.payerName,
+                amount: formatCents(newestCancellation.amountCents, 'RUB', locale),
+                receipt: newestCancellation.receiptName,
+              }),
+              {
+                id: 'billok-cancel-' + token + '-' + personId + '-' + newestCancellation.id,
+                duration: 20_000,
+              },
+            );
+          }
+          lastCancellationId.current = newestCancellation?.id ?? null;
           lastVerified.current = data.verifiedAt;
           // A current server snapshot may legitimately clear a declaration; stale reads are ignored above.
           setDeclaredAt(data.declaredPaidAt);
           setDeclaredAmountCents(data.declaredAmountCents);
           setVerifiedAt(data.verifiedAt);
           setReceiptNotification(data.notification ?? null);
+          setCancellationNotifications(data.cancellationNotifications ?? []);
           setLoaded(true);
           setFailed(false);
         })
@@ -231,14 +266,21 @@ export function GuestPaymentDeclaration({
       refreshCurrent.current();
     }
   }
-  async function markReceiptNotificationRead() {
-    if (!canDeclare || !receiptNotification || receiptNotification.readAt || markNotificationRead.isPending) return;
-    const notificationId = receiptNotification.id;
+  async function markReceiptNotificationRead(notificationId: string) {
+    if (!canDeclare || markNotificationRead.isPending) return;
+    const record =
+      receiptNotification?.id === notificationId
+        ? receiptNotification
+        : cancellationNotifications.find((entry) => entry.id === notificationId);
+    if (!record || record.readAt) return;
     latestRead.current += 1;
     try {
       const result = await markNotificationRead.mutateAsync({ token, personId, personToken, notificationId });
       setReceiptNotification((current) =>
         current?.id === notificationId ? { ...current, readAt: result.readAt } : current,
+      );
+      setCancellationNotifications((current) =>
+        current.map((entry) => (entry.id === notificationId ? { ...entry, readAt: result.readAt } : entry)),
       );
     } catch {
       toast.error(t('paymentNotificationReadFailed'));
@@ -247,6 +289,9 @@ export function GuestPaymentDeclaration({
     }
   }
 
+  const unreadCount =
+    (receiptNotification && !receiptNotification.readAt ? 1 : 0) +
+    cancellationNotifications.filter((entry) => !entry.readAt).length;
   const exactDeclaredAmount =
     declaredAmountCents !== null ? formatCents(declaredAmountCents, 'RUB', locale) : amountLabel;
   if (!loaded)
@@ -257,7 +302,7 @@ export function GuestPaymentDeclaration({
     );
   return (
     <div className="space-y-2" aria-live="polite" data-testid="guest-payment-declaration">
-      {receiptNotification && canDeclare && (
+      {(receiptNotification || cancellationNotifications.length > 0) && canDeclare && (
         <section
           className="min-w-0 space-y-2 rounded-lg border border-border p-3"
           aria-label={t('paymentNotificationsTitle')}
@@ -265,60 +310,108 @@ export function GuestPaymentDeclaration({
         >
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">{t('paymentNotificationsTitle')}</h3>
-            {!receiptNotification.readAt && (
+            {unreadCount > 0 && (
               <span
                 className="rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground"
                 data-testid="guest-payment-unread-count"
               >
-                {t('paymentNotificationUnreadCount', { count: 1 })}
+                {t('paymentNotificationUnreadCount', { count: unreadCount })}
               </span>
             )}
           </div>
-          <ul className="min-w-0">
-            <li
-              data-testid={'guest-payment-notification-' + receiptNotification.id}
-              className={
-                'min-w-0 space-y-2 rounded-md p-3 [overflow-wrap:anywhere] ' +
-                (receiptNotification.readAt ? 'bg-muted/40' : 'border border-primary/40 bg-primary/5')
-              }
-            >
-              <p className="text-xs font-semibold" data-testid="guest-payment-notification-status">
-                {receiptNotification.readAt ? t('paymentNotificationRead') : t('paymentNotificationUnread')}
-              </p>
-              <p className="text-sm" data-testid="guest-payment-notification-text">
-                {t('paymentVerifiedNoticeDetailed', {
-                  payer: receiptNotification.payerName,
-                  amount: formatCents(receiptNotification.amountCents, 'RUB', locale),
-                  receipt: receiptNotification.receiptName,
-                })}
-              </p>
-              <time
-                className="block text-xs text-muted-foreground"
-                dateTime={receiptNotification.confirmedAt}
-                data-testid="guest-payment-notification-time"
+          <ul className="min-w-0 space-y-2">
+            {[...cancellationNotifications].reverse().map((entry) => (
+              <li
+                key={entry.id}
+                data-testid={'guest-payment-cancellation-' + entry.id}
+                className={
+                  'min-w-0 space-y-2 rounded-md p-3 [overflow-wrap:anywhere] ' +
+                  (entry.readAt ? 'bg-muted/40' : 'border border-amber-600/40 bg-amber-50 dark:bg-amber-950/20')
+                }
               >
-                {new Date(receiptNotification.confirmedAt).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US')}
-              </time>
-              <a
-                href={receiptNotification.receiptHref}
-                className="inline-block min-h-11 py-3 text-sm font-semibold underline underline-offset-2"
-                data-testid="guest-payment-notification-link"
-              >
-                {t('paymentVerifiedNoticeOpenReceipt')}
-              </a>
-              {!receiptNotification.readAt && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="min-h-11 w-full whitespace-normal"
-                  disabled={markNotificationRead.isPending}
-                  onClick={markReceiptNotificationRead}
-                  data-testid="guest-payment-notification-mark-read"
+                <p className="text-xs font-semibold" data-testid="guest-payment-cancellation-status">
+                  {entry.readAt ? t('paymentNotificationRead') : t('paymentNotificationUnread')}
+                </p>
+                <p className="text-sm" data-testid="guest-payment-cancellation-text">
+                  {t('paymentCancelNoticeDetailed', {
+                    payer: entry.payerName,
+                    amount: formatCents(entry.amountCents, 'RUB', locale),
+                    receipt: entry.receiptName,
+                  })}
+                </p>
+                <time className="block text-xs text-muted-foreground" dateTime={entry.cancelledAt}>
+                  {new Date(entry.cancelledAt).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US')}
+                </time>
+                <a
+                  href={entry.receiptHref}
+                  className="inline-block min-h-11 py-3 text-sm font-semibold underline underline-offset-2"
                 >
-                  {t('paymentNotificationMarkRead')}
-                </Button>
-              )}
-            </li>
+                  {t('paymentVerifiedNoticeOpenReceipt')}
+                </a>
+                {!entry.readAt && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11 w-full whitespace-normal"
+                    disabled={markNotificationRead.isPending}
+                    onClick={() => {
+                      void markReceiptNotificationRead(entry.id);
+                    }}
+                    data-testid="guest-payment-cancellation-mark-read"
+                  >
+                    {t('paymentNotificationMarkRead')}
+                  </Button>
+                )}
+              </li>
+            ))}
+            {receiptNotification && (
+              <li
+                data-testid={'guest-payment-notification-' + receiptNotification.id}
+                className={
+                  'min-w-0 space-y-2 rounded-md p-3 [overflow-wrap:anywhere] ' +
+                  (receiptNotification.readAt ? 'bg-muted/40' : 'border border-primary/40 bg-primary/5')
+                }
+              >
+                <p className="text-xs font-semibold" data-testid="guest-payment-notification-status">
+                  {receiptNotification.readAt ? t('paymentNotificationRead') : t('paymentNotificationUnread')}
+                </p>
+                <p className="text-sm" data-testid="guest-payment-notification-text">
+                  {t('paymentVerifiedNoticeDetailed', {
+                    payer: receiptNotification.payerName,
+                    amount: formatCents(receiptNotification.amountCents, 'RUB', locale),
+                    receipt: receiptNotification.receiptName,
+                  })}
+                </p>
+                <time
+                  className="block text-xs text-muted-foreground"
+                  dateTime={receiptNotification.confirmedAt}
+                  data-testid="guest-payment-notification-time"
+                >
+                  {new Date(receiptNotification.confirmedAt).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US')}
+                </time>
+                <a
+                  href={receiptNotification.receiptHref}
+                  className="inline-block min-h-11 py-3 text-sm font-semibold underline underline-offset-2"
+                  data-testid="guest-payment-notification-link"
+                >
+                  {t('paymentVerifiedNoticeOpenReceipt')}
+                </a>
+                {!receiptNotification.readAt && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11 w-full whitespace-normal"
+                    disabled={markNotificationRead.isPending}
+                    onClick={() => {
+                      void markReceiptNotificationRead(receiptNotification.id);
+                    }}
+                    data-testid="guest-payment-notification-mark-read"
+                  >
+                    {t('paymentNotificationMarkRead')}
+                  </Button>
+                )}
+              </li>
+            )}
           </ul>
         </section>
       )}

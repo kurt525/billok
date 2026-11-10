@@ -358,7 +358,13 @@
     "pushDisable": "Disable notifications for this receipt",
     "pushEnabled": "Device notifications enabled for this receipt",
     "pushDisabled": "Device notifications disabled for this receipt",
-    "pushFailed": "Could not update notification settings. Your BillOK inbox remains available."
+    "pushFailed": "Could not update notification settings. Your BillOK inbox remains available.",
+    "payerPaymentCancelAction": "Revoke receipt confirmation",
+    "payerPaymentCancelConfirm": "Revoke your receipt confirmation? The sender will receive a separate notice and the transfer will await verification again.",
+    "payerPaymentCancelToast": "Receipt confirmation revoked",
+    "payerPaymentCancelFailed": "Could not revoke receipt confirmation",
+    "paymentCancelNoticeDetailed": "{payer} revoked confirmation of your {amount} transfer for “{receipt}”",
+    "paymentCancelNoticeToast": "The recipient revoked confirmation of the transfer."
   },
   "result": {
     "loading": "Loading split...",

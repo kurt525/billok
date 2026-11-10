@@ -11,7 +11,11 @@ self.addEventListener('push', (event) => {
       const path =
         typeof message.url === 'string' && /^\/split\/[A-Za-z0-9_-]+\/claim$/.test(message.url) ? message.url : '/';
       await self.registration.showNotification('BillOK', {
-        body: 'Поступление перевода подтверждено. Откройте чек в BillOK.',
+        // Never trust arbitrary push payload text on the lock screen.
+        body:
+          message.kind === 'cancelled'
+            ? 'Подтверждение поступления отменено. Откройте чек в BillOK.'
+            : 'Поступление перевода подтверждено. Откройте чек в BillOK.',
         icon: '/icons/icon-192.png',
         badge: '/icons/icon-192.png',
         tag:

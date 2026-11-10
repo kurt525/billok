@@ -1696,6 +1696,37 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('guest-sbp-not-configured')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('guest-sbp-reimbursement-phone')).toHaveCount(0);
+    // 5.13: only the payer revokes the manual confirmation, then the guest
+    // sees a NEW private cancellation event and reverted status without reload.
+    const cancelAction = otherPage.getByTestId('guest-payer-cancel-' + anna.personId);
+    await expect(cancelAction).toBeVisible({ timeout: 15_000 });
+    await otherPage.setViewportSize({ width: 320, height: 560 });
+    await fitsPhone(otherPage);
+    await cancelAction.scrollIntoViewIfNeeded();
+    expect((await cancelAction.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    otherPage.once('dialog', async (dialog) => {
+      expect(dialog.type()).toBe('confirm');
+      await dialog.accept();
+    });
+    await cancelAction.click();
+    await expect(
+      payerReview.getByTestId('guest-payer-group-awaiting').getByTestId('guest-payer-payment-' + anna.personId),
+    ).toHaveCount(1, { timeout: 15_000 });
+    await expect(payerReview.getByTestId('guest-payer-verify-' + anna.personId)).toBeVisible();
+    await expect(page.getByTestId('guest-payment-verified')).toHaveCount(0, { timeout: 25_000 });
+    await expect(page.getByTestId('guest-payment-cancellation-text')).toContainText(
+      'Борис отменил подтверждение получения вашего перевода 4,59 ₽',
+      { timeout: 25_000 },
+    );
+    await expect(page.getByTestId('guest-payment-cancellation-status')).toHaveText('Новое уведомление');
+    await expect(otherPage.getByTestId('guest-payment-cancellation-text')).toHaveCount(0);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId('guest-payment-cancellation-text')).toContainText(
+      'Борис отменил подтверждение получения вашего перевода 4,59 ₽',
+      { timeout: 15_000 },
+    );
+    await page.getByTestId('guest-payment-cancellation-mark-read').click();
+    await expect(page.getByTestId('guest-payment-cancellation-status')).toHaveText('Прочитано');
     await fitsPhone(otherPage);
     await otherPage.goto('/split/' + token, { waitUntil: 'networkidle' });
     await expect(otherPage.getByTestId('split-result-total')).toContainText('12,01');

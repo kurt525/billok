@@ -5477,6 +5477,126 @@ describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () =
     // The receipt is still unpaid at the bank level: this is solely the payer's attestation.
   });
 
+  test('5.13: payer cancellation is atomic, addressed only to sender, and repeat is idempotent', async () => {
+    const api = await caller();
+    const confirmed = await api.confirmGuestPaymentReceived({ ...payerAuth, debtorId });
+    const saved = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(saved[0].paymentVerifiedAt).toBe(confirmed.verifiedAt);
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: saved });
+    mockDb.guestSplit.update.mockClear();
+
+    for (const invalid of [
+      { ...payerAuth, personToken: debtorToken },
+      { ...payerAuth, personId: debtorId, personToken: debtorToken },
+    ]) {
+      await expect(api.cancelGuestPaymentReceived({ ...invalid, debtorId })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    const result = await api.cancelGuestPaymentReceived({ ...payerAuth, debtorId });
+    expect(new Date(result.cancelledAt).toISOString()).toBe(result.cancelledAt);
+    const changed = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(changed[0].paymentVerifiedAt).toBeUndefined();
+    expect(changed[0].paymentVerifiedByPersonId).toBeUndefined();
+    expect(changed[0].paymentDeclaredAt).toBe(marked);
+    expect(changed[0].paymentReceiptCancellationNotifications).toEqual([
+      expect.objectContaining({
+        id: expect.stringMatching(UUID),
+        payerName: 'Борис',
+        amountCents: 459,
+        receiptName: 'Чек',
+        cancelledAt: result.cancelledAt,
+      }),
+    ]);
+    expect(changed[1]).toEqual(base.people[1]);
+    expect(changed[2]).toEqual(base.people[2]);
+    expect(mockDb.guestSplit.update).toHaveBeenCalledOnce();
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: changed });
+    mockDb.guestSplit.update.mockClear();
+    await expect(api.cancelGuestPaymentReceived({ ...payerAuth, debtorId })).resolves.toEqual(result);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    const sender = await api.getMyPaymentDeclaration({
+      ...payerAuth,
+      personId: debtorId,
+      personToken: debtorToken,
+    });
+    expect(sender.verifiedAt).toBeNull();
+    expect(sender.cancellationNotifications).toEqual([
+      expect.objectContaining({
+        id: changed[0].paymentReceiptCancellationNotifications[0].id,
+        payerName: 'Борис',
+        amountCents: 459,
+        cancelledAt: result.cancelledAt,
+        readAt: null,
+      }),
+    ]);
+    await expect(
+      api.getMyPaymentDeclaration({ ...payerAuth, personId: anotherId, personToken: anotherToken }),
+    ).resolves.not.toHaveProperty('cancellationNotifications');
+    const eventId = changed[0].paymentReceiptCancellationNotifications[0].id;
+    await expect(
+      api.markMyPaymentNotificationRead({
+        ...payerAuth,
+        personId: anotherId,
+        personToken: anotherToken,
+        notificationId: eventId,
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(
+      api.markMyPaymentNotificationRead({
+        ...payerAuth,
+        personId: debtorId,
+        personToken: debtorToken,
+        notificationId: eventId,
+      }),
+    ).resolves.toMatchObject({ readAt: expect.any(String) });
+    expect(
+      mockDb.guestSplit.update.mock.calls[0]![0].data.people[0].paymentReceiptCancellationNotifications[0].readAt,
+    ).toEqual(expect.any(String));
+  });
+
+  test('5.13: cancelled confirmation may be confirmed again but retry never creates a duplicate event', async () => {
+    const api = await caller();
+    const declared = '2026-11-10T06:00:00.000Z';
+    const oldConfirmedAt = '2026-11-10T06:01:00.000Z';
+    const oldCancellationAt = '2026-11-10T06:02:00.000Z';
+    const previous = {
+      ...base.people[0],
+      paymentDeclaredAt: declared,
+      paymentReceiptCancellationNotifications: [
+        {
+          id: '88888888-8888-4888-8888-888888888888',
+          payerName: 'Борис',
+          amountCents: 459,
+          receiptName: 'Чек',
+          cancelledAt: oldCancellationAt,
+          readAt: oldCancellationAt,
+        },
+      ],
+      paymentReceiptNotification: {
+        id: '77777777-7777-4777-8777-777777777777',
+        payerName: 'Борис',
+        amountCents: 459,
+        receiptName: 'Чек',
+        confirmedAt: oldConfirmedAt,
+      },
+    };
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: [previous, ...base.people.slice(1)] });
+    const confirmed = await api.confirmGuestPaymentReceived({ ...payerAuth, debtorId });
+    expect(new Date(confirmed.verifiedAt).toISOString()).toBe(confirmed.verifiedAt);
+    const updated = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(updated[0].paymentVerifiedAt).toBe(confirmed.verifiedAt);
+    expect(updated[0].paymentReceiptCancellationNotifications).toEqual(
+      previous.paymentReceiptCancellationNotifications,
+    );
+    expect(updated[0].paymentReceiptNotification.id).not.toBe(previous.paymentReceiptNotification.id);
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: updated });
+    mockDb.guestSplit.update.mockClear();
+    await expect(api.confirmGuestPaymentReceived({ ...payerAuth, debtorId })).resolves.toEqual(confirmed);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
   test('repeated verification returns original timestamp without another write', async () => {
     const api = await caller();
     const verifiedAt = '2026-10-28T18:03:00.000Z';

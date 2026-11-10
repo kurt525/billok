@@ -91,6 +91,7 @@ export async function sendGuestReceiptPush(
   subscriptions: readonly GuestWebPushSubscription[],
   receiptHref: string,
   notificationId: string,
+  kind: 'confirmed' | 'cancelled' = 'confirmed',
 ): Promise<void> {
   const credentials = vapidSettings();
   if (!credentials || !/^\/split\/[A-Za-z0-9_-]+\/claim$/.test(receiptHref)) return;
@@ -101,7 +102,12 @@ export async function sendGuestReceiptPush(
   // No payer phone number, person token, amount or name on a locked device.
   const payload = JSON.stringify({
     title: 'BillOK',
-    body: 'Поступление перевода подтверждено. Откройте чек в BillOK.',
+    kind,
+    // Generic text only: no receiver phone, bank, amount, identity or token.
+    body:
+      kind === 'cancelled'
+        ? 'Подтверждение поступления отменено. Откройте чек в BillOK.'
+        : 'Поступление перевода подтверждено. Откройте чек в BillOK.',
     url: receiptHref,
     tag: 'billok-receipt-' + notificationId,
   });

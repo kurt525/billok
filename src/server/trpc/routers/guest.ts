@@ -2787,6 +2787,14 @@ export const guestRouter = createTRPCRouter({
             receiptHref: '/split/' + encodeURIComponent(input.token) + '/claim',
           }
         : null;
+      const cancellationNotifications =
+        personIndex === paymentIndex
+          ? (paymentPerson.paymentReceiptCancellationNotifications ?? []).map((entry) => ({
+              ...entry,
+              readAt: entry.readAt ?? null,
+              receiptHref: '/split/' + encodeURIComponent(input.token) + '/claim',
+            }))
+          : [];
       return {
         declaredPaidAt: paymentPerson.paymentDeclaredAt ?? null,
         declaredAmountCents: paymentPerson.paymentDeclaredAt
@@ -2794,6 +2802,7 @@ export const guestRouter = createTRPCRouter({
           : null,
         verifiedAt,
         ...(notification ? { notification } : {}),
+        ...(cancellationNotifications.length ? { cancellationNotifications } : {}),
         ...(verifiedAt && personIndex === paymentIndex
           ? {
               confirmationNotice: {
@@ -2958,16 +2967,27 @@ export const guestRouter = createTRPCRouter({
         );
         if (personIndex !== paymentIndex) throw new AppError('FORBIDDEN', 'notParticipant');
         const notice = paymentPerson.paymentReceiptNotification;
-        if (!notice || !paymentPerson.paymentVerifiedAt || notice.id !== input.notificationId) {
-          throw new AppError('NOT_FOUND');
-        }
-        if (notice.readAt) return { readAt: notice.readAt };
+        const cancellations = paymentPerson.paymentReceiptCancellationNotifications ?? [];
+        const isConfirmation = notice?.id === input.notificationId;
+        const cancellation = cancellations.find((entry) => entry.id === input.notificationId);
+        if (!isConfirmation && !cancellation) throw new AppError('NOT_FOUND');
+        const saved = isConfirmation ? notice! : cancellation!;
+        if (saved.readAt) return { readAt: saved.readAt };
         const readAt = new Date().toISOString();
         await tx.guestSplit.update({
           where: { id: split.id },
           data: {
             people: people.map((person, index) =>
-              index === paymentIndex ? { ...person, paymentReceiptNotification: { ...notice, readAt } } : person,
+              index !== paymentIndex
+                ? person
+                : isConfirmation
+                  ? { ...person, paymentReceiptNotification: { ...notice!, readAt } }
+                  : {
+                      ...person,
+                      paymentReceiptCancellationNotifications: cancellations.map((entry) =>
+                        entry.id === input.notificationId ? { ...entry, readAt } : entry,
+                      ),
+                    },
             ) as unknown as Prisma.InputJsonValue,
           },
         });
@@ -3194,6 +3214,100 @@ export const guestRouter = createTRPCRouter({
         }
       }
       return { verifiedAt: outcome.verifiedAt };
+    }),
+
+  // 5.13: only the actual payer may retract their OWN manual receipt
+  // attestation. The sender's declaration and finalized debt are unchanged.
+  // A new cancellation is committed with the status, never emitted before it.
+  cancelGuestPaymentReceived: publicProcedure
+    .input(
+      z.strictObject({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        debtorId: personIdSchema,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-payment-verify', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const outcome = await guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const { people, summary, paymentGroups } = requireGuestPayerReview(split, input.personId, input.personToken);
+        const debtorIndex = people.findIndex((person) => person.id === input.debtorId);
+        const validGroup = paymentGroups?.find(
+          (group) => group.representativeId === input.debtorId && group.totalCents > 0,
+        );
+        if (
+          debtorIndex < 0 ||
+          debtorIndex === split.paidByIndex ||
+          (paymentGroups ? !validGroup : !summary.some((entry) => entry.personIndex === debtorIndex && entry.total > 0))
+        ) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        const debtor = people[debtorIndex]!;
+        // Retraction of an already retracted event is idempotent, and does not
+        // generate a second notification, including retries from two tabs.
+        if (!debtor.paymentVerifiedAt) {
+          const last = debtor.paymentReceiptCancellationNotifications?.at(-1);
+          if (!last) throw new AppError('BAD_REQUEST', 'paymentNotDeclared');
+          return { cancelledAt: last.cancelledAt, delivery: null };
+        }
+        if (debtor.paymentVerifiedByPersonId !== input.personId) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        const amountCents = validGroup?.totalCents ?? summary.find((entry) => entry.personIndex === debtorIndex)?.total;
+        if (!Number.isSafeInteger(amountCents) || amountCents! <= 0) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        const cancelledAt = new Date().toISOString();
+        const receiptName = (split.receiptData as { merchantName?: unknown }).merchantName;
+        const event = {
+          id: randomUUID(),
+          payerName: people[split.paidByIndex]!.name,
+          amountCents: amountCents!,
+          receiptName: typeof receiptName === 'string' && receiptName.trim() ? receiptName.trim() : 'Чек',
+          cancelledAt,
+        };
+        const prior = debtor.paymentReceiptCancellationNotifications ?? [];
+        const updated = people.map((person, index) => {
+          if (index !== debtorIndex) return person;
+          const next = { ...person };
+          delete next.paymentVerifiedAt;
+          delete next.paymentVerifiedByPersonId;
+          return {
+            ...next,
+            paymentReceiptCancellationNotifications: [...prior, event].slice(-20),
+          };
+        });
+        await tx.guestSplit.update({
+          where: { id: split.id },
+          data: { people: updated as unknown as Prisma.InputJsonValue },
+        });
+        return {
+          cancelledAt,
+          delivery: {
+            subscriptions: activeGuestPushSubscriptions(debtor.guestPushSubscriptions, debtor.personToken ?? ''),
+            notificationId: event.id,
+          },
+        };
+      });
+      if (outcome.delivery) {
+        try {
+          await sendGuestReceiptPush(
+            outcome.delivery.subscriptions,
+            '/split/' + encodeURIComponent(input.token) + '/claim',
+            outcome.delivery.notificationId,
+            'cancelled',
+          );
+        } catch {
+          // The signed-in / guest private inbox is still authoritative.
+        }
+      }
+      return { cancelledAt: outcome.cancelledAt };
     }),
 
   // Read payer contact via a personal token only. The share token on its own

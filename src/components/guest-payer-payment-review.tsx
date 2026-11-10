@@ -41,6 +41,7 @@ export function GuestPayerPaymentReview({
   const locale = useLocale();
   const read = trpc.guest.getMyPayerPaymentReview.useMutation();
   const verify = trpc.guest.confirmGuestPaymentReceived.useMutation();
+  const cancelVerified = trpc.guest.cancelGuestPaymentReceived.useMutation();
   const [payments, setPayments] = useState<PaymentRow[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
@@ -217,6 +218,35 @@ export function GuestPayerPaymentReview({
     }
   }
 
+  async function cancelReceipt(debtorId: string) {
+    if (
+      verifyingId ||
+      writeInFlight.current ||
+      !payments?.some((payment) => payment.personId === debtorId && payment.verifiedAt) ||
+      !window.confirm(t('payerPaymentCancelConfirm'))
+    )
+      return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
+    setVerifyingId(debtorId);
+    try {
+      await cancelVerified.mutateAsync({ token, personId, personToken, debtorId });
+      const updated =
+        latestPayments.current?.map((entry) =>
+          entry.personId === debtorId ? { ...entry, verifiedAt: null, verifiedByPersonId: null } : entry,
+        ) ?? null;
+      latestPayments.current = updated;
+      setPayments(updated);
+      toast.success(t('payerPaymentCancelToast'));
+    } catch {
+      toast.error(t('payerPaymentCancelFailed'));
+    } finally {
+      writeInFlight.current = false;
+      setVerifyingId(null);
+      refreshCurrent.current();
+    }
+  }
+
   const paymentGroups = groupGuestPayerPayments(payments ?? [], personId);
   const paymentSummary = summarizeGuestPayerPaymentGroups(paymentGroups);
   const groupLabels: Record<GuestPayerPaymentGroup, string> = {
@@ -363,6 +393,18 @@ export function GuestPayerPaymentReview({
                               at: new Date(payment.verifiedAt).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US'),
                             })}
                           </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="min-h-11 w-full min-w-0 whitespace-normal border-amber-600 text-center text-amber-800 [overflow-wrap:anywhere] dark:border-amber-500 dark:text-amber-300"
+                            disabled={verifyingId !== null}
+                            onClick={() => {
+                              void cancelReceipt(payment.personId);
+                            }}
+                            data-testid={'guest-payer-cancel-' + payment.personId}
+                          >
+                            {t('payerPaymentCancelAction')}
+                          </Button>
                         </>
                       )}
                       {payment.declaredPaidAt && !payment.verifiedAt && (
