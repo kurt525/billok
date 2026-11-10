@@ -6695,3 +6695,236 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 });
+
+describe('Issue #1 5.21: server-side guest and payer payment permissions', () => {
+  const payerId = '11111111-1111-4111-8111-111111111111';
+  const payerToken = '22222222-2222-4222-8222-222222222222';
+  const annaId = '33333333-3333-4333-8333-333333333333';
+  const annaToken = '44444444-4444-4444-8444-444444444444';
+  const viktorId = '55555555-5555-4555-8555-555555555555';
+  const viktorToken = '66666666-6666-4666-8666-666666666666';
+  const foreignToken = '77777777-7777-4777-8777-777777777777';
+  const eventId = '88888888-8888-4888-8888-888888888888';
+  const confirmedAt = '2026-11-10T08:00:00.000Z';
+  const declaredAt = '2026-11-10T08:01:00.000Z';
+  const auth = (personId: string, personToken: string) => ({
+    token: 'scope-5-21',
+    personId,
+    personToken,
+  });
+  const payerAuth = auth(payerId, payerToken);
+  const annaAuth = auth(annaId, annaToken);
+  const viktorAuth = auth(viktorId, viktorToken);
+
+  const record = () => ({
+    id: 'receipt-5-21',
+    shareToken: 'scope-5-21',
+    userId: 'receipt-creator',
+    receiptId: null,
+    expiresAt: new Date(Date.now() + 86_400_000),
+    createdAt: new Date('2026-11-10T07:00:00.000Z'),
+    status: 'FINALIZED',
+    paidByIndex: 1,
+    payerVenmoHandle: null,
+    receiptData: { merchantName: 'Ужин', subtotal: 1001, total: 1001, tax: 0, tip: 0, currency: 'RUB' },
+    summary: [
+      { personIndex: 0, name: 'Анна', total: 459, itemTotal: 334, tip: 125, tax: 0 },
+      { personIndex: 1, name: 'Борис', total: 334, itemTotal: 334, tip: 0, tax: 0 },
+      { personIndex: 2, name: 'Виктор', total: 408, itemTotal: 333, tip: 75, tax: 0 },
+    ],
+    assignments: [],
+    items: [{ name: 'Ужин', quantity: 1, unitPrice: 1001, totalPrice: 1001 }],
+    payerSbpPhone: '+79991234567',
+    payerSbpBankId: '100000000273',
+    people: [
+      {
+        id: annaId,
+        name: 'Анна',
+        personToken: annaToken,
+        paymentDeclaredAt: declaredAt,
+        paymentDeclaredAmountCents: 459,
+      },
+      { id: payerId, name: 'Борис', personToken: payerToken },
+      {
+        id: viktorId,
+        name: 'Виктор',
+        personToken: viktorToken,
+        paymentVerifiedAt: confirmedAt,
+        paymentVerifiedByPersonId: payerId,
+        paymentReceiptNotification: {
+          id: eventId,
+          payerName: 'Борис',
+          amountCents: 408,
+          receiptName: 'Ужин',
+          confirmedAt,
+        },
+      },
+    ],
+  });
+
+  beforeEach(() => {
+    mockDb.guestSplit.findUnique.mockResolvedValue(record());
+    mockDb.guestSplit.update.mockResolvedValue({ id: 'receipt-5-21' });
+  });
+
+  test('share-link public views expose receipt sums but never private access credentials, receipt events or bank contacts', async () => {
+    const row = record();
+    row.people[0] = {
+      ...row.people[0],
+      accountUserId: 'registered-user',
+      paymentReceiptCancellationNotifications: [
+        {
+          id: '99999999-9999-4999-8999-999999999999',
+          payerName: 'Борис',
+          amountCents: 459,
+          receiptName: 'Ужин',
+          cancelledAt: confirmedAt,
+        },
+      ],
+      guestPushSubscriptions: [{ endpoint: 'https://push.example.invalid/private' }],
+      paymentDeclarationActionRequests: [{ id: foreignToken, action: 'mark', at: confirmedAt }],
+    } as unknown as (typeof row.people)[number];
+    mockDb.guestSplit.findUnique.mockResolvedValue(row);
+    const api = await caller();
+    const claim = await api.getSession({ token: row.shareToken });
+    const final = await api.getSplit({ token: row.shareToken });
+    expect(claim.summary).toHaveLength(3);
+    expect(final.summary).toHaveLength(3);
+    expect(claim.people).toHaveLength(3);
+    const publicJson = JSON.stringify({ claim, final });
+    for (const secret of [
+      payerToken,
+      annaToken,
+      viktorToken,
+      'registered-user',
+      '+79991234567',
+      'paymentReceiptNotification',
+      'paymentReceiptCancellationNotifications',
+      'guestPushSubscriptions',
+      'paymentDeclarationActionRequests',
+      'paymentVerifiedByPersonId',
+      'paymentDeclaredAmountCents',
+      'paymentVerifiedAt',
+    ]) {
+      expect(publicJson).not.toContain(secret);
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('the sender may change only their own declaration; another guest and a creator login cannot borrow their credentials', async () => {
+    const guest = await caller();
+    const registered = await caller(signedIn);
+    const unauthorized = [
+      { ...annaAuth, personId: viktorId },
+      { ...annaAuth, personToken: viktorToken },
+      { ...annaAuth, personToken: foreignToken },
+      { ...annaAuth, personId: payerId, personToken: payerToken },
+    ];
+    for (const credentials of unauthorized) {
+      for (const api of [guest, registered]) {
+        await expect(api.getMyPaymentDeclaration(credentials)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(api.markMyPayment(credentials)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(api.unmarkMyPayment(credentials)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+    }
+    // The owner login is not a substitute for a personal token.
+    await expect(registered.markMyPayment({ ...annaAuth, personToken: foreignToken })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+
+    const changed = await guest.markMyPayment(annaAuth);
+    expect(changed.declaredPaidAt).toBe(declaredAt);
+    const cancelled = await guest.unmarkMyPayment(annaAuth);
+    expect(cancelled.verifiedAt).toBeNull();
+    const saved = mockDb.guestSplit.update.mock.calls.at(-1)![0].data.people;
+    expect(saved[0].paymentDeclaredAt).toBeUndefined();
+    expect(saved[1]).toEqual(record().people[1]);
+    expect(saved[2]).toEqual(record().people[2]);
+    expect(mockDb.guestSplit.update).toHaveBeenCalledOnce();
+  });
+
+  test('payer-only review and bank-receipt actions deny a signed-in organizer, sender and third participant at the API boundary', async () => {
+    const anonymous = await caller();
+    const registered = await caller(signedIn);
+    const forbidden = [
+      annaAuth,
+      viktorAuth,
+      { ...payerAuth, personToken: annaToken },
+      { ...payerAuth, personId: annaId },
+      { ...payerAuth, personToken: foreignToken },
+    ];
+    for (const credentials of forbidden) {
+      for (const api of [anonymous, registered]) {
+        await expect(api.getMyPayerPaymentReview(credentials)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(api.confirmGuestPaymentReceived({ ...credentials, debtorId: annaId })).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+        });
+        await expect(api.cancelGuestPaymentReceived({ ...credentials, debtorId: viktorId })).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+        });
+        await expect(api.getMyPayerSbpContact(credentials)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+
+    const review = await anonymous.getMyPayerPaymentReview(payerAuth);
+    expect(review.payments).toHaveLength(2);
+    expect(review.payments.find((row) => row.personId === annaId)).toMatchObject({
+      amount: 459,
+      declaredPaidAt: declaredAt,
+      verifiedAt: null,
+    });
+    expect(review.payments.find((row) => row.personId === viktorId)).toMatchObject({
+      amount: 408,
+      declaredPaidAt: null,
+      verifiedAt: confirmedAt,
+    });
+    expect(review).not.toHaveProperty('people');
+    expect(JSON.stringify(review)).not.toContain(annaToken);
+    expect(JSON.stringify(review)).not.toContain(viktorToken);
+    expect(JSON.stringify(review)).not.toContain(eventId);
+  });
+
+  test('receipt-scoped guest token never reaches another receipt; only sender can read and acknowledge their confirmation notice', async () => {
+    const api = await caller(signedIn);
+    for (const credentials of [annaAuth, payerAuth, viktorAuth]) {
+      mockDb.guestSplit.findUnique.mockResolvedValueOnce(null);
+      await expect(api.getMyPaymentDeclaration({ ...credentials, token: 'another-receipt' })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      });
+      mockDb.guestSplit.findUnique.mockResolvedValueOnce(null);
+      await expect(api.getMyPayerPaymentReview({ ...credentials, token: 'another-receipt' })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      });
+    }
+    const senderInbox = await api.getMyPaymentDeclaration(viktorAuth);
+    expect(senderInbox.notification).toMatchObject({ id: eventId, amountCents: 408 });
+    const otherInbox = await api.getMyPaymentDeclaration(annaAuth);
+    expect(otherInbox).not.toHaveProperty('notification');
+    expect(otherInbox).not.toHaveProperty('confirmationNotice');
+    for (const credentials of [annaAuth, payerAuth, { ...viktorAuth, personToken: annaToken }]) {
+      await expect(
+        api.markMyPaymentNotificationRead({
+          ...credentials,
+          notificationId: eventId,
+        }),
+      ).rejects.toMatchObject({
+        code:
+          credentials.personId === viktorId
+            ? 'FORBIDDEN'
+            : credentials.personId === payerId
+              ? 'FORBIDDEN'
+              : 'NOT_FOUND',
+      });
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    await expect(api.markMyPaymentNotificationRead({ ...viktorAuth, notificationId: eventId })).resolves.toMatchObject({
+      readAt: expect.any(String),
+    });
+    const saved = mockDb.guestSplit.update.mock.calls.at(-1)![0].data.people;
+    expect(saved[2].paymentReceiptNotification.readAt).toEqual(expect.any(String));
+    expect(saved[0]).toEqual(record().people[0]);
+    expect(saved[1]).toEqual(record().people[1]);
+  });
+});
