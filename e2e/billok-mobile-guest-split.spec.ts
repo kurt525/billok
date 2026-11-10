@@ -1492,10 +1492,13 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     // 5.18: an independent, already-open payer phone receives the explicit
     // cancellation notice and recalculates the same 8.67 ₽ debt without a
     // duplicate entry or waiting for the 12-second polling fallback.
-    const revokedNotice = otherPage
-      .locator('[data-sonner-toast]')
-      .getByText('Анна отменила отметку об оплате 4,59 ₽. Перевод снова ожидает подтверждения участника.');
-    await expect(revokedNotice).toBeVisible({ timeout: 10_000 });
+    // Sonner toast may expire before a delayed browser assertion; verify the
+    // durable private payer notice instead (also visible after reconnect).
+    const revokedNotice = livePayerReview.getByTestId('guest-payer-unmarked-notice-' + anna.personId);
+    await expect(revokedNotice).toHaveText(
+      'Анна отменила отметку об оплате 4,59 ₽. Перевод снова ожидает подтверждения участника.',
+      { timeout: 10_000 },
+    );
     await expect(initialSummary.getByTestId('guest-payer-summary-awaiting')).toContainText('0,00', {
       timeout: 10_000,
     });
@@ -1525,6 +1528,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     });
     await expect(initialSummary.getByTestId('guest-payer-summary-awaiting')).toContainText('4,59');
     await expect(initialSummary.getByTestId('guest-payer-summary-unpaid')).toContainText('4,08');
+    await expect(revokedNotice).toHaveCount(0);
 
     await otherPage.reload({ waitUntil: 'domcontentloaded' });
     await expect(otherPage.getByTestId('guest-mark-paid')).toHaveCount(0);

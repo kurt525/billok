@@ -399,6 +399,19 @@ export function GuestPayerPaymentReview({
                           ))}
                         </div>
                       )}
+                      {payment.unmarkedAt && !payment.declaredPaidAt && !payment.verifiedAt && (
+                        <p
+                          role="status"
+                          aria-live="polite"
+                          className="min-w-0 rounded-md border border-amber-600/40 bg-amber-50 p-3 text-sm text-amber-900 [overflow-wrap:anywhere] dark:bg-amber-950/20 dark:text-amber-200"
+                          data-testid={'guest-payer-unmarked-notice-' + payment.personId}
+                        >
+                          {t('payerPaymentDeclarationRevokedNotice', {
+                            name: payment.name,
+                            amount: formatCents(payment.amount, 'RUB', locale),
+                          })}
+                        </p>
+                      )}
                       <p
                         className="text-xs text-muted-foreground"
                         data-testid={'guest-payer-payment-status-' + payment.personId}
