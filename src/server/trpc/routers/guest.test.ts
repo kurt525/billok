@@ -5477,6 +5477,52 @@ describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () =
     // The receipt is still unpaid at the bank level: this is solely the payer's attestation.
   });
 
+  test('5.15: payer cancellation records stable actor identity even without prior sender declaration', async () => {
+    const api = await caller();
+    const sender = { token: payerAuth.token, personId: anotherId, personToken: anotherToken };
+    const confirmed = await api.confirmGuestPaymentReceived({ ...payerAuth, debtorId: anotherId });
+    const people = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(people[2].paymentVerifiedAt).toBe(confirmed.verifiedAt);
+    expect(people[2].paymentDeclaredAt).toBeUndefined();
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people });
+    mockDb.guestSplit.update.mockClear();
+
+    await expect(api.unmarkMyPayment(sender)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(api.cancelGuestPaymentReceived({ ...sender, debtorId: anotherId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+
+    const cancelled = await api.cancelGuestPaymentReceived({ ...payerAuth, debtorId: anotherId });
+    const saved = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(saved[2].paymentVerifiedAt).toBeUndefined();
+    expect(saved[2].paymentDeclaredAt).toBeUndefined();
+    expect(saved[2].paymentReceiptCancellationNotifications).toEqual([
+      expect.objectContaining({
+        payerPersonId: payerId,
+        payerName: 'Борис',
+        amountCents: 408,
+        cancelledAt: cancelled.cancelledAt,
+      }),
+    ]);
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...base,
+      people: [saved[0], { ...saved[1], name: 'Новое имя' }, saved[2]],
+    });
+    mockDb.guestSplit.update.mockClear();
+    expect((await api.getMyPaymentDeclaration(sender)).cancellationNotifications).toEqual([
+      expect.objectContaining({
+        payerPersonId: payerId,
+        payerName: 'Борис',
+        cancelledAt: cancelled.cancelledAt,
+        readAt: null,
+      }),
+    ]);
+    await expect(api.unmarkMyPayment(sender)).resolves.toEqual({ declaredPaidAt: null, verifiedAt: null });
+    await expect(api.cancelGuestPaymentReceived({ ...payerAuth, debtorId: anotherId })).resolves.toEqual(cancelled);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
   test('5.13: payer cancellation is atomic, addressed only to sender, and repeat is idempotent', async () => {
     const api = await caller();
     const confirmed = await api.confirmGuestPaymentReceived({ ...payerAuth, debtorId });
@@ -5503,6 +5549,7 @@ describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () =
     expect(changed[0].paymentReceiptCancellationNotifications).toEqual([
       expect.objectContaining({
         id: expect.stringMatching(UUID),
+        payerPersonId: payerId,
         payerName: 'Борис',
         amountCents: 459,
         receiptName: 'Чек',

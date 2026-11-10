@@ -79,6 +79,9 @@ export type GuestSessionPerson = {
   // retained for a guest returning after the phone was offline. Bounded list.
   paymentReceiptCancellationNotifications?: {
     id: string;
+    // Immutable actor identity recorded at the time of the retraction.
+    // Older pre-5.15 receipt events have only a payerName.
+    payerPersonId?: string;
     payerName: string;
     amountCents: number;
     receiptName: string;

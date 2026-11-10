@@ -3267,6 +3267,9 @@ export const guestRouter = createTRPCRouter({
         const receiptName = (split.receiptData as { merchantName?: unknown }).merchantName;
         const event = {
           id: randomUUID(),
+          // Retain the exact verified payer's stable identity: display names
+          // are editable, and an audit needs more than a name and timestamp.
+          payerPersonId: input.personId,
           payerName: people[split.paidByIndex]!.name,
           amountCents: amountCents!,
           receiptName: typeof receiptName === 'string' && receiptName.trim() ? receiptName.trim() : 'Чек',
