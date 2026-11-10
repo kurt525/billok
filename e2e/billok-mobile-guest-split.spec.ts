@@ -1492,7 +1492,10 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(annaPayment).toContainText('Участник отметил оплату');
     const victorPayment = payerReview.getByTestId('guest-payer-payment-' + victor.personId);
     await expect(victorPayment).toContainText('Ожидается отметка участника');
-    await expect(payerReview.getByTestId('guest-payer-verify-' + victor.personId)).toHaveCount(0);
+    // 5.14: the payer can attest an actually received transfer even before
+    // Victor marks it paid; the unpaid status must remain until that click.
+    await expect(payerReview.getByTestId('guest-payer-verify-' + victor.personId)).toBeVisible();
+    await expect(payerReview.getByTestId('guest-payer-verified-' + victor.personId)).toHaveCount(0);
 
     // Stress a second full reload before confirmation: intermittently a new
     // hydrated payer review coexists with an older route's visible card.
@@ -1841,7 +1844,9 @@ test('5.14: payer confirms an undeclared receipt without an invented sender paym
       personToken: anna.personToken,
     });
     expect(status.ok()).toBe(true);
-    const privateStatus = await trpcResult(status);
+    // Mutations return a single tRPC object; trpcResult only decodes batched
+    // GET queries. Decode exactly the mutation envelope here.
+    const privateStatus = (await status.json()).result.data.json;
     expect(privateStatus.declaredPaidAt).toBeNull();
     expect(privateStatus.declaredAmountCents).toBeNull();
     expect(privateStatus.verifiedAt).toBeTruthy();
@@ -1851,7 +1856,10 @@ test('5.14: payer confirms an undeclared receipt without an invented sender paym
       personToken: anna.personToken,
     });
     expect(lateDeclaration.ok()).toBe(true);
-    expect(await trpcResult(lateDeclaration)).toEqual({ declaredPaidAt: null, declaredAmountCents: null });
+    expect((await lateDeclaration.json()).result.data.json).toEqual({
+      declaredPaidAt: null,
+      declaredAmountCents: null,
+    });
     await page.reload({ waitUntil: 'domcontentloaded' });
     await payerPage.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('guest-payment-verified')).toBeVisible({ timeout: 20_000 });
