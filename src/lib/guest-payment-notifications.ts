@@ -5,6 +5,8 @@ export type GuestPaymentNoticeRow = {
   personId: string;
   declaredPaidAt: string | null;
   verifiedAt: string | null;
+  /** Private payer-only timestamp for the latest explicit withdrawal. */
+  unmarkedAt?: string;
 };
 
 export function mergeGuestPaymentStatuses<T extends GuestPaymentNoticeRow>(
@@ -18,6 +20,20 @@ export function mergeGuestPaymentStatuses<T extends GuestPaymentNoticeRow>(
 }
 
 /** First successful poll establishes a baseline; do not notify on page reload. */
+/** A persisted retraction timestamp lets the payer see one private notice
+ * even when quick mark / unmark / mark operations are coalesced by SSE. */
+export function newlyRevokedGuestPayments<T extends GuestPaymentNoticeRow>(
+  previous: readonly T[] | null,
+  incoming: readonly T[],
+): T[] {
+  if (previous === null) return [];
+  return incoming.filter(
+    (row) =>
+      !!row.unmarkedAt &&
+      previous.some((person) => person.personId === row.personId && person.unmarkedAt !== row.unmarkedAt),
+  );
+}
+
 export function newlyDeclaredGuestPayments<T extends GuestPaymentNoticeRow>(
   previous: readonly T[] | null,
   incoming: readonly T[],

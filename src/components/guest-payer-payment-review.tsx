@@ -6,7 +6,11 @@ import { toast } from 'sonner';
 import { formatCents } from '@/lib/money';
 import { groupGuestPayerPayments, type GuestPayerPaymentGroup } from '@/lib/guest-payer-payment-groups';
 import { summarizeGuestPayerPaymentGroups } from '@/lib/guest-payer-payment-summary';
-import { mergeGuestPaymentStatuses, newlyDeclaredGuestPayments } from '@/lib/guest-payment-notifications';
+import {
+  mergeGuestPaymentStatuses,
+  newlyDeclaredGuestPayments,
+  newlyRevokedGuestPayments,
+} from '@/lib/guest-payment-notifications';
 import { getDocumentActiveMountRegistry } from '@/lib/latest-active-mount';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
@@ -17,6 +21,7 @@ type PaymentRow = {
   name: string;
   amount: number;
   declaredPaidAt: string | null;
+  unmarkedAt?: string;
   verifiedAt: string | null;
   verifiedByPersonId: string | null;
   memberIds?: string[];
@@ -83,6 +88,7 @@ export function GuestPayerPaymentReview({
           if (cancelled || writeInFlight.current || readId !== latestRead.current) return;
           const merged = mergeGuestPaymentStatuses(latestPayments.current, result.payments);
           const newlyDeclared = newlyDeclaredGuestPayments(latestPayments.current, merged);
+          const newlyRevoked = newlyRevokedGuestPayments(latestPayments.current, merged);
           latestPayments.current = merged;
           setPayments(merged);
           // One stable Sonner ID per private event: a temporary second route
@@ -108,6 +114,19 @@ export function GuestPayerPaymentReview({
             } else {
               toast.info(t('payerPaymentDeclarationBatchNotice', { count: newlyDeclared.length }), { id: noticeId });
             }
+          }
+          // The cancelled declaration is not a bank reversal. A separate
+          // addressed notice is shown only to this receipt's actual payer.
+          // Compare server event IDs/timestamps, not the current payment
+          // bucket, so a fast re-declaration cannot silently hide a reversal.
+          for (const payment of newlyRevoked) {
+            toast.warning(
+              t('payerPaymentDeclarationRevokedNotice', {
+                name: payment.name,
+                amount: formatCents(payment.amount, 'RUB', locale),
+              }),
+              { id: 'billok-unmarked-' + token + '-' + payment.personId + '-' + payment.unmarkedAt },
+            );
           }
           setLoadFailed(false);
         })

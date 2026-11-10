@@ -57,6 +57,16 @@ export type GuestSessionPerson = {
   // Exact finalized receipt debt/group debt in kopecks, captured by the server at declaration time.
   // Never accept a caller-provided amount; never expose this private record on a public receipt.
   paymentDeclaredAmountCents?: number;
+  // The latest explicit retraction of "I paid". Private to the payer review;
+  // survives reconnects even if the participant later declares again.
+  paymentUnmarkedAt?: string;
+  // 5.18: bounded action-key history prevents a delayed retry from re-marking
+  // a revoked declaration or revoking a later, distinct declaration.
+  paymentDeclarationActionRequests?: {
+    id: string;
+    action: 'mark' | 'unmark';
+    at: string;
+  }[];
   // Payer's independent verification after checking actual incoming funds.
   paymentVerifiedAt?: string;
   // Private audit: stable personId of the actual payer who confirmed this transfer, never a display name.

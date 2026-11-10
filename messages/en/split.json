@@ -364,7 +364,8 @@
     "payerPaymentCancelToast": "Receipt confirmation revoked",
     "payerPaymentCancelFailed": "Could not revoke receipt confirmation",
     "paymentCancelNoticeDetailed": "{payer} revoked confirmation of your {amount} transfer for “{receipt}”",
-    "paymentCancelNoticeToast": "The recipient revoked confirmation of the transfer."
+    "paymentCancelNoticeToast": "The recipient revoked confirmation of the transfer.",
+    "payerPaymentDeclarationRevokedNotice": "{name} withdrew the {amount} payment declaration. The transfer is awaiting the participant again."
   },
   "result": {
     "loading": "Loading split...",

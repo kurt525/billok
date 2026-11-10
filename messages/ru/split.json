@@ -369,7 +369,8 @@
     "payerPaymentCancelToast": "Подтверждение поступления отменено",
     "payerPaymentCancelFailed": "Не удалось отменить подтверждение",
     "paymentCancelNoticeDetailed": "{payer} отменил подтверждение получения вашего перевода {amount} по чеку «{receipt}»",
-    "paymentCancelNoticeToast": "Получатель отменил подтверждение поступления денег."
+    "paymentCancelNoticeToast": "Получатель отменил подтверждение поступления денег.",
+    "payerPaymentDeclarationRevokedNotice": "{name} отменил отметку об оплате {amount}. Перевод снова ожидает подтверждения участника."
   },
   "result": {
     "loading": "Загрузка расчёта…",

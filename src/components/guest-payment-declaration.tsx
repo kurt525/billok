@@ -235,7 +235,12 @@ export function GuestPaymentDeclaration({
     writeInFlight.current = true;
     latestRead.current += 1;
     try {
-      const result = await mark.mutateAsync({ token, personId, personToken });
+      const result = await mark.mutateAsync({
+        token,
+        personId,
+        personToken,
+        requestId: window.crypto.randomUUID(),
+      });
       setDeclaredAt(result.declaredPaidAt);
       setDeclaredAmountCents(result.declaredAmountCents);
       // A concurrent payer verification may commit first. Do not falsely
@@ -254,12 +259,19 @@ export function GuestPaymentDeclaration({
     writeInFlight.current = true;
     latestRead.current += 1;
     try {
-      await unmark.mutateAsync({ token, personId, personToken });
-      setDeclaredAt(null);
-      setDeclaredAmountCents(null);
-      setVerifiedAt(null);
-      lastVerified.current = null;
-      toast.success(t('paymentUnmarked'));
+      const result = await unmark.mutateAsync({
+        token,
+        personId,
+        personToken,
+        requestId: window.crypto.randomUUID(),
+      });
+      // A delayed retry from a previous click must not make the client show
+      // a revoked state after a newer declaration or payer confirmation.
+      setDeclaredAt(result.declaredPaidAt);
+      setVerifiedAt(result.verifiedAt);
+      if (!result.declaredPaidAt) setDeclaredAmountCents(null);
+      if (!result.verifiedAt) lastVerified.current = null;
+      if (!result.declaredPaidAt && !result.verifiedAt) toast.success(t('paymentUnmarked'));
     } catch {
       // A payer may have verified this payment while cancellation was in flight.
       toast.error(t('paymentUnmarkFailed'));

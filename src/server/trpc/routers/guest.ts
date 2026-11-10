@@ -2998,7 +2998,16 @@ export const guestRouter = createTRPCRouter({
     }),
 
   markMyPayment: publicProcedure
-    .input(z.strictObject({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .input(
+      z.strictObject({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        // One UUID per deliberate participant button press; optional for
+        // existing clients with the same strictly verified personal token.
+        requestId: z.string().uuid().optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       if (!checkClaimWriteRateLimit('payment-declaration-write', input.token, input.personToken)) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
@@ -3015,7 +3024,46 @@ export const guestRouter = createTRPCRouter({
         // A group member's personal link can read the group status but can
         // never declare another transfer for the same shared debt.
         if (paymentIndex !== personIndex) throw new AppError('FORBIDDEN', 'notParticipant');
+        const previousRequest = paymentPerson.paymentDeclarationActionRequests?.find(
+          (entry) => entry.id === input.requestId,
+        );
+        if (previousRequest) {
+          if (previousRequest.action !== 'mark') throw new AppError('CONFLICT', 'splitBusy');
+          // Return the CURRENT state, never the original declaration of an
+          // old request that may have been explicitly revoked later.
+          return {
+            declaredPaidAt: paymentPerson.paymentDeclaredAt ?? null,
+            declaredAmountCents: paymentPerson.paymentDeclaredAt
+              ? (paymentPerson.paymentDeclaredAmountCents ?? amountCents)
+              : null,
+          };
+        }
+        const requestRecord = input.requestId
+          ? { id: input.requestId, action: 'mark' as const, at: new Date().toISOString() }
+          : null;
+        const addHistory = (entry: typeof paymentPerson) =>
+          requestRecord
+            ? {
+                ...entry,
+                paymentDeclarationActionRequests: [
+                  ...(entry.paymentDeclarationActionRequests ?? []),
+                  requestRecord,
+                ].slice(-32),
+              }
+            : entry;
         if (paymentPerson.paymentDeclaredAt || paymentPerson.paymentVerifiedAt) {
+          // The status is already settled; retain a newly seen request key to
+          // prevent its retry from re-marking after a subsequent unmark.
+          if (requestRecord) {
+            await tx.guestSplit.update({
+              where: { id: split.id },
+              data: {
+                people: people.map((entry, index) =>
+                  index === paymentIndex ? addHistory(entry) : entry,
+                ) as unknown as Prisma.InputJsonValue,
+              },
+            });
+          }
           // The payer's independent verification already satisfies the debt.
           // A late participant declaration must not create a second payment
           // or fabricate a timestamp for a button they never clicked.
@@ -3029,7 +3077,7 @@ export const guestRouter = createTRPCRouter({
         const timestamp = new Date().toISOString();
         const updated = people.map((entry, index) =>
           index === paymentIndex
-            ? { ...entry, paymentDeclaredAt: timestamp, paymentDeclaredAmountCents: amountCents }
+            ? addHistory({ ...entry, paymentDeclaredAt: timestamp, paymentDeclaredAmountCents: amountCents })
             : entry,
         );
         await tx.guestSplit.update({
@@ -3043,7 +3091,14 @@ export const guestRouter = createTRPCRouter({
   // A debtor may retract their own claim, but never undo the payer's confirmed receipt.
   // The read and write share the same serialized GuestSplit transaction as payer confirmation.
   unmarkMyPayment: publicProcedure
-    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .input(
+      z.strictObject({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: z.string().uuid(),
+        requestId: z.string().uuid().optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       if (!checkClaimWriteRateLimit('payment-declaration-write', input.token, input.personToken)) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
@@ -3058,10 +3113,44 @@ export const guestRouter = createTRPCRouter({
           input.personToken,
         );
         if (paymentIndex !== personIndex) throw new AppError('FORBIDDEN', 'notParticipant');
+        const previousRequest = paymentPerson.paymentDeclarationActionRequests?.find(
+          (entry) => entry.id === input.requestId,
+        );
+        if (previousRequest) {
+          if (previousRequest.action !== 'unmark') throw new AppError('CONFLICT', 'splitBusy');
+          return {
+            declaredPaidAt: paymentPerson.paymentDeclaredAt ?? null,
+            verifiedAt: paymentPerson.paymentVerifiedAt ?? null,
+          };
+        }
         if (paymentPerson.paymentVerifiedAt) {
           throw new AppError('BAD_REQUEST', 'paymentAlreadyVerified');
         }
+        const timestamp = new Date().toISOString();
+        const requestRecord = input.requestId
+          ? { id: input.requestId, action: 'unmark' as const, at: timestamp }
+          : null;
         if (!paymentPerson.paymentDeclaredAt) {
+          // Even a no-op must remember its key: a delayed old unmark must not
+          // cancel a NEW explicit mark in another tab.
+          if (requestRecord) {
+            await tx.guestSplit.update({
+              where: { id: split.id },
+              data: {
+                people: people.map((entry, index) =>
+                  index === paymentIndex
+                    ? {
+                        ...entry,
+                        paymentDeclarationActionRequests: [
+                          ...(entry.paymentDeclarationActionRequests ?? []),
+                          requestRecord,
+                        ].slice(-32),
+                      }
+                    : entry,
+                ) as unknown as Prisma.InputJsonValue,
+              },
+            });
+          }
           return { declaredPaidAt: null, verifiedAt: null };
         }
         const updated = people.map((entry, index) => {
@@ -3071,7 +3160,20 @@ export const guestRouter = createTRPCRouter({
           delete cleared.paymentDeclaredAmountCents;
           delete cleared.paymentVerifiedAt;
           delete cleared.paymentVerifiedByPersonId;
-          return cleared;
+          // A durable, payer-visible revocation event, not just a transient
+          // transition that may be missed during a quick mark/unmark/mark.
+          return {
+            ...cleared,
+            paymentUnmarkedAt: timestamp,
+            ...(requestRecord
+              ? {
+                  paymentDeclarationActionRequests: [
+                    ...(cleared.paymentDeclarationActionRequests ?? []),
+                    requestRecord,
+                  ].slice(-32),
+                }
+              : {}),
+          };
         });
         await tx.guestSplit.update({
           where: { id: split.id },
@@ -3107,6 +3209,7 @@ export const guestRouter = createTRPCRouter({
                   name: representative.name,
                   amount: group.totalCents,
                   declaredPaidAt: representative.paymentDeclaredAt ?? null,
+                  ...(representative.paymentUnmarkedAt ? { unmarkedAt: representative.paymentUnmarkedAt } : {}),
                   verifiedAt: representative.paymentVerifiedAt ?? null,
                   verifiedByPersonId: representative.paymentVerifiedAt
                     ? (representative.paymentVerifiedByPersonId ?? null)
@@ -3123,6 +3226,7 @@ export const guestRouter = createTRPCRouter({
                   name: person.name,
                   amount: entry.total,
                   declaredPaidAt: person.paymentDeclaredAt ?? null,
+                  ...(person.paymentUnmarkedAt ? { unmarkedAt: person.paymentUnmarkedAt } : {}),
                   verifiedAt: person.paymentVerifiedAt ?? null,
                   verifiedByPersonId: person.paymentVerifiedAt ? (person.paymentVerifiedByPersonId ?? null) : null,
                 };

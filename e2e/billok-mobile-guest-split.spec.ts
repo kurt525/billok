@@ -1489,6 +1489,19 @@ test('mobile guest finalization reconciles personal tips for three dining partic
 
     // 5.3: the debtor retracts a mistaken declaration before the payer confirms receipt.
     await page.getByTestId('guest-unmark-paid').click();
+    // 5.18: an independent, already-open payer phone receives the explicit
+    // cancellation notice and recalculates the same 8.67 ₽ debt without a
+    // duplicate entry or waiting for the 12-second polling fallback.
+    const revokedNotice = otherPage
+      .locator('[data-sonner-toast]')
+      .getByText('Анна отменила отметку об оплате 4,59 ₽. Перевод снова ожидает подтверждения участника.');
+    await expect(revokedNotice).toBeVisible({ timeout: 10_000 });
+    await expect(initialSummary.getByTestId('guest-payer-summary-awaiting')).toContainText('0,00', {
+      timeout: 10_000,
+    });
+    await expect(initialSummary.getByTestId('guest-payer-summary-unpaid')).toContainText('8,67');
+    await expect(initialSummary.getByTestId('guest-payer-summary-total')).toContainText('8,67');
+    await expect(livePayerReview.getByTestId('guest-payer-payment-' + anna.personId)).toHaveCount(1);
     await expect(page.getByTestId('guest-mark-paid')).toBeVisible();
     await expect(page.getByTestId('guest-mark-paid')).toHaveClass(/text-red-700/);
     await expect(page.getByTestId('guest-payment-declared')).toHaveCount(0);

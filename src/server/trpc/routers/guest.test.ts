@@ -5033,6 +5033,113 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
     });
   });
 
+  test('5.18: repeated mark and unmark action keys cannot revive an old declaration or inflate the debt', async () => {
+    const api = await caller();
+    const markKey1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const unmarkKey1 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const markKey2 = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const marked1 = await api.markMyPayment({ ...debtorAuth, requestId: markKey1 });
+    const firstPeople = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(firstPeople[0].paymentDeclaredAmountCents).toBe(459);
+    expect(firstPeople[0].paymentDeclarationActionRequests).toEqual([
+      { id: markKey1, action: 'mark', at: expect.any(String) },
+    ]);
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: firstPeople });
+    mockDb.guestSplit.update.mockClear();
+    await expect(api.markMyPayment({ ...debtorAuth, requestId: markKey1 })).resolves.toEqual(marked1);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    expect(
+      (await api.getMyPayerPaymentReview({ token: debtorAuth.token, personId: payerId, personToken: payerToken }))
+        .payments,
+    ).toEqual([expect.objectContaining({ personId: debtorId, amount: 459, declaredPaidAt: marked1.declaredPaidAt })]);
+
+    const undone = await api.unmarkMyPayment({ ...debtorAuth, requestId: unmarkKey1 });
+    expect(undone).toEqual({ declaredPaidAt: null, verifiedAt: null });
+    const clearedPeople = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(clearedPeople[0].paymentDeclaredAt).toBeUndefined();
+    expect(clearedPeople[0].paymentDeclaredAmountCents).toBeUndefined();
+    expect(clearedPeople[0].paymentUnmarkedAt).toEqual(expect.any(String));
+    expect(clearedPeople[0].paymentDeclarationActionRequests).toHaveLength(2);
+    expect(clearedPeople[1]).toEqual(base.people[1]);
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: clearedPeople });
+    mockDb.guestSplit.update.mockClear();
+    await expect(api.markMyPayment({ ...debtorAuth, requestId: markKey1 })).resolves.toEqual({
+      declaredPaidAt: null,
+      declaredAmountCents: null,
+    });
+    await expect(api.unmarkMyPayment({ ...debtorAuth, requestId: unmarkKey1 })).resolves.toEqual(undone);
+    await expect(api.unmarkMyPayment({ ...debtorAuth, requestId: markKey1 })).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    const payerAfterRevocation = await api.getMyPayerPaymentReview({
+      token: debtorAuth.token,
+      personId: payerId,
+      personToken: payerToken,
+    });
+    expect(payerAfterRevocation.payments).toEqual([
+      expect.objectContaining({
+        personId: debtorId,
+        declaredPaidAt: null,
+        amount: 459,
+        unmarkedAt: expect.any(String),
+      }),
+    ]);
+
+    const marked2 = await api.markMyPayment({ ...debtorAuth, requestId: markKey2 });
+    const redeclared = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(marked2.declaredAmountCents).toBe(459);
+    expect(redeclared[0].paymentDeclarationActionRequests).toHaveLength(3);
+    expect(redeclared[0].paymentUnmarkedAt).toBe(clearedPeople[0].paymentUnmarkedAt);
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: redeclared });
+    mockDb.guestSplit.update.mockClear();
+    await expect(api.unmarkMyPayment({ ...debtorAuth, requestId: unmarkKey1 })).resolves.toEqual({
+      declaredPaidAt: marked2.declaredPaidAt,
+      verifiedAt: null,
+    });
+    await expect(api.markMyPayment({ ...debtorAuth, requestId: markKey1 })).resolves.toEqual(marked2);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    const payer = await api.getMyPayerPaymentReview({
+      token: debtorAuth.token,
+      personId: payerId,
+      personToken: payerToken,
+    });
+    expect(payer.payments).toHaveLength(1);
+    expect(payer.payments[0]).toMatchObject({ amount: 459, declaredPaidAt: marked2.declaredPaidAt });
+  });
+
+  test('5.18: a no-op request is remembered before a later state transition, but strangers have no rights', async () => {
+    const api = await caller();
+    const unmarkBeforeMarkId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const markId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    await expect(api.unmarkMyPayment({ ...debtorAuth, requestId: unmarkBeforeMarkId })).resolves.toEqual({
+      declaredPaidAt: null,
+      verifiedAt: null,
+    });
+    const afterNoOp = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(afterNoOp[0].paymentDeclaredAt).toBeUndefined();
+    expect(afterNoOp[0].paymentUnmarkedAt).toBeUndefined();
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: afterNoOp });
+    mockDb.guestSplit.update.mockClear();
+    await expect(
+      api.markMyPayment({ ...debtorAuth, personToken: payerToken, requestId: markId }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const marked = await api.markMyPayment({ ...debtorAuth, requestId: markId });
+    const withMark = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(marked.declaredPaidAt).toBeTruthy();
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...base, people: withMark });
+    mockDb.guestSplit.update.mockClear();
+    await expect(api.unmarkMyPayment({ ...debtorAuth, requestId: unmarkBeforeMarkId })).resolves.toEqual({
+      declaredPaidAt: marked.declaredPaidAt,
+      verifiedAt: null,
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    expect(
+      (await api.getMyPayerPaymentReview({ token: debtorAuth.token, personId: payerId, personToken: payerToken }))
+        .payments[0]!.declaredPaidAt,
+    ).toBe(marked.declaredPaidAt);
+  });
+
   test('a reload can read the own declaration; repeating mark is idempotent', async () => {
     const api = await caller();
     const marked = '2026-10-28T18:00:00.000Z';

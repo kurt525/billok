@@ -3,6 +3,7 @@ import {
   becameVerified,
   mergeGuestPaymentStatuses,
   newlyDeclaredGuestPayments,
+  newlyRevokedGuestPayments,
   shouldNotifyGuestReceiptConfirmation,
   type GuestPaymentNoticeRow,
 } from './guest-payment-notifications';
@@ -30,6 +31,22 @@ describe('guest receipt notification transitions', () => {
     expect(newlyDeclaredGuestPayments([b], [marked, b])).toEqual([]);
     expect(newlyDeclaredGuestPayments([marked, b], [b, verified])).toEqual([]);
   });
+  it('5.18: payer sees one distinct revocation per server event, not one per SSE poll or reload', () => {
+    const cancelled = { ...a, unmarkedAt: '2026-11-10T10:00:00.000Z' };
+    const remark = { ...marked, unmarkedAt: cancelled.unmarkedAt };
+    const cancelledAgain = { ...a, unmarkedAt: '2026-11-10T10:01:00.000Z' };
+    expect(newlyRevokedGuestPayments(null, [cancelled, b])).toEqual([]);
+    expect(newlyRevokedGuestPayments([marked, b], [cancelled, b])).toEqual([cancelled]);
+    expect(newlyRevokedGuestPayments([cancelled, b], [cancelled, b])).toEqual([]);
+    expect(newlyRevokedGuestPayments([cancelled, b], [remark, b])).toEqual([]);
+    expect(newlyRevokedGuestPayments([remark, b], [cancelledAgain, b])).toEqual([cancelledAgain]);
+    expect(newlyRevokedGuestPayments([b], [cancelled, b])).toEqual([]);
+    // A fast mark/unmark/mark sequence still exposes the durable last
+    // cancellation timestamp even if the client did not see the intermediate
+    // declaration state on its 1.5s SSE ticks.
+    expect(newlyRevokedGuestPayments([marked, b], [remark, b])).toEqual([remark]);
+  });
+
   it('accepts an authoritative cancellation or revoked verification after stale reads are filtered by the caller', () => {
     expect(mergeGuestPaymentStatuses([marked, b], [a, b])[0]).toEqual(a);
     expect(mergeGuestPaymentStatuses([verified, b], [marked, b])[0]).toEqual(marked);
