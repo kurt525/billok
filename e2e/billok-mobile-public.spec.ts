@@ -531,3 +531,101 @@ test('six-width final public mobile adaptation audit: login, invite, recovery an
     }
   }
 });
+
+// Issue #1 6.3.3 — these two tests exercise only browser-facing failure UI.
+// Existing isolated SMTP/PostgreSQL tests verify real credential issuance.
+test('Passkey registration explains unsupported WebAuthn without consuming the email link at six widths', async ({
+  page,
+}) => {
+  test.setTimeout(70_000);
+  let starts = 0;
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'PublicKeyCredential', { configurable: true, value: undefined });
+  });
+  await page.route('**/api/webauthn/registration/start', async (route) => {
+    starts++;
+    await route.abort();
+  });
+  await page.goto('/verify-email?token=' + 'A'.repeat(43), { waitUntil: 'networkidle' });
+  await page.getByTestId('verify-create-passkey').click();
+  const alert = page.getByTestId('verify-passkey-error');
+  await expect(alert).toContainText('не поддерживает создание Passkey');
+  await expect(page.getByTestId('verify-create-passkey')).toHaveCount(0);
+  expect(starts).toBe(0);
+
+  await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 320 });
+    await alert.scrollIntoViewIfNeeded();
+    await expect(alert).toBeInViewport();
+    const back = page.getByRole('link', { name: 'Перейти ко входу' });
+    await back.scrollIntoViewIfNeeded();
+    await expect(back).toBeInViewport();
+    const bounds = (await back.boundingBox())!;
+    expect(bounds.height).toBeGreaterThanOrEqual(44);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width + 1);
+    const sizes = await page.evaluate(() => ({ inner: innerWidth, full: document.documentElement.scrollWidth }));
+    expect(sizes.inner).toBe(width);
+    expect(sizes.full).toBeLessThanOrEqual(width + 1);
+  }
+});
+
+test('cancelled Passkey ceremony explains retry and never submits overlapping enrollments at six widths', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  let starts = 0;
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator.credentials, 'create', {
+      configurable: true,
+      value: async () => {
+        throw new DOMException('simulated cancellation', 'NotAllowedError');
+      },
+    });
+  });
+  await page.route('**/api/webauthn/registration/start', async (route) => {
+    starts++;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        options: {
+          rp: { id: 'localhost', name: 'BillOK' },
+          challenge: 'A'.repeat(43),
+          user: { id: 'B'.repeat(43), name: 'qa@mail.ru', displayName: 'QA' },
+          pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+          timeout: 300000,
+          authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+        },
+      }),
+    });
+  });
+  await page.goto('/verify-email?token=' + 'C'.repeat(43), { waitUntil: 'networkidle' });
+  const button = page.getByTestId('verify-create-passkey');
+  await button.click();
+  const alert = page.getByTestId('verify-passkey-error');
+  await expect(alert).toContainText('Создание Passkey отменено');
+  expect(starts).toBe(1);
+  await expect(button).toHaveText('Повторить создание Passkey');
+
+  await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+  for (const width of [320, 360, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 320 });
+    await alert.scrollIntoViewIfNeeded();
+    await expect(alert).toBeInViewport();
+    await button.scrollIntoViewIfNeeded();
+    await expect(button).toBeInViewport();
+    const rect = (await button.boundingBox())!;
+    expect(rect.height).toBeGreaterThanOrEqual(44);
+    expect(rect.x).toBeGreaterThanOrEqual(0);
+    expect(rect.x + rect.width).toBeLessThanOrEqual(width + 1);
+    const sizes = await page.evaluate(() => ({ inner: innerWidth, full: document.documentElement.scrollWidth }));
+    expect(sizes.inner).toBe(width);
+    expect(sizes.full).toBeLessThanOrEqual(width + 1);
+  }
+
+  await button.click();
+  await expect(alert).toContainText('Создание Passkey отменено');
+  expect(starts).toBe(2);
+  await expect(page.getByRole('status')).toHaveCount(0);
+});

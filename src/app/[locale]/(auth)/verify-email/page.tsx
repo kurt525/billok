@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useState } from 'react';
+import { Suspense, useRef, useState } from 'react';
 import { startRegistration } from '@simplewebauthn/browser';
 import type { PublicKeyCredentialCreationOptionsJSON } from '@simplewebauthn/browser';
 import { useTranslations } from 'next-intl';
@@ -10,8 +10,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { RegistrationEmailResendForm } from '@/components/auth/registration-email-resend-form';
 import { Link } from '@/i18n/navigation';
+import { classifyPasskeyRegistrationError, passkeyRegistrationMessages } from '@/lib/passkey-registration-errors';
 
-type ConfirmationStatus = 'idle' | 'submitting' | 'success' | 'invalid' | 'rateLimited' | 'failure';
+type ConfirmationStatus =
+  'idle' | 'submitting' | 'success' | 'invalid' | 'rateLimited' | keyof typeof passkeyRegistrationMessages;
 
 export default function VerifyEmailPage() {
   return (
@@ -27,12 +29,23 @@ function VerificationContent() {
   const token = searchParams.get('token') ?? '';
   const validToken = /^[A-Za-z0-9_-]{43}$/.test(token);
   const [status, setStatus] = useState<ConfirmationStatus>('idle');
+  // A ref, not React state, is the synchronous guard against rapid double taps.
+  const inFlight = useRef(false);
 
   async function confirm() {
-    if (!validToken || status === 'submitting' || status === 'success' || status === 'invalid') return;
+    if (!validToken || inFlight.current || status === 'success' || status === 'invalid') return;
+    inFlight.current = true;
     setStatus('submitting');
     try {
-      if (!window.PublicKeyCredential) throw new Error('Passkey unavailable');
+      // A failed capability check must not consume the verification email link.
+      if (!window.isSecureContext) {
+        setStatus('insecure');
+        return;
+      }
+      if (!window.PublicKeyCredential || !navigator.credentials?.create) {
+        setStatus('unsupported');
+        return;
+      }
       // Atomic email confirmation and bound challenge: no email login session.
       const start = await fetch('/api/webauthn/registration/start', {
         method: 'POST',
@@ -55,15 +68,24 @@ function VerificationContent() {
       if (!finish.ok) throw new Error('Passkey registration rejected');
       setStatus('success');
       window.history.replaceState(window.history.state, '', window.location.pathname);
-    } catch {
-      setStatus('failure');
+    } catch (error) {
+      setStatus(classifyPasskeyRegistrationError(error));
+    } finally {
+      inFlight.current = false;
     }
   }
 
   const expired = !validToken || status === 'invalid';
   const submitting = status === 'submitting';
   const success = status === 'success';
-  const retry = status === 'rateLimited' || status === 'failure';
+  const errorText =
+    status === 'rateLimited'
+      ? t('rateLimited')
+      : status in passkeyRegistrationMessages
+        ? passkeyRegistrationMessages[status as keyof typeof passkeyRegistrationMessages]
+        : null;
+  const retry = Boolean(errorText);
+  const retryOnThisDevice = status !== 'unsupported' && status !== 'insecure';
 
   return (
     <Card className="min-w-0 border-primary/10 shadow-lg shadow-primary/5">
@@ -90,24 +112,34 @@ function VerificationContent() {
           </div>
         ) : (
           <>
-            {retry && (
-              <p role="alert" className="rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
-                {status === 'rateLimited' ? t('rateLimited') : t('failure')}
+            {errorText && (
+              <p
+                role="alert"
+                data-testid="verify-passkey-error"
+                className="min-w-0 rounded-lg bg-destructive/10 p-4 text-sm text-destructive [overflow-wrap:anywhere]"
+              >
+                {errorText}
               </p>
             )}
             <p className="text-sm text-muted-foreground">
               Ключ доступа сохранится на вашем устройстве или в менеджере Passkey.
             </p>
-            <Button
-              type="button"
-              className="min-h-11 w-full whitespace-normal rounded-full px-4 text-base"
-              disabled={submitting}
-              data-testid="verify-create-passkey"
-              onClick={confirm}
-            >
-              <ShieldCheck className="mr-2 size-4" />
-              {submitting ? 'Проверка…' : retry ? 'Повторить создание Passkey' : 'Подтвердить почту и создать Passkey'}
-            </Button>
+            {retryOnThisDevice && (
+              <Button
+                type="button"
+                className="min-h-11 w-full whitespace-normal rounded-full px-4 text-base"
+                disabled={submitting}
+                data-testid="verify-create-passkey"
+                onClick={confirm}
+              >
+                <ShieldCheck className="mr-2 size-4" />
+                {submitting
+                  ? 'Проверка…'
+                  : retry
+                    ? 'Повторить создание Passkey'
+                    : 'Подтвердить почту и создать Passkey'}
+              </Button>
+            )}
           </>
         )}
         <Link
