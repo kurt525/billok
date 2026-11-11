@@ -39,6 +39,54 @@ model Session {
   @@index([userId])
 }
 
+// BillOK WebAuthn foundations. Public keys are never password substitutes
+// that can be used without a signed, verified assertion.
+model PasskeyCredential {
+  id            String   @id @default(cuid())
+  userId        String
+  credentialId  String   @unique @db.VarChar(512)
+  publicKey     Bytes    @db.ByteA
+  signCount     BigInt   @default(0)
+  transports    String[] @default([])
+  deviceType    String   @db.VarChar(32)
+  backedUp      Boolean  @default(false)
+  aaguid        String?  @db.VarChar(36)
+  label         String?  @db.VarChar(80)
+  createdAt     DateTime @default(now())
+  lastUsedAt    DateTime?
+  revokedAt     DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+}
+
+// Login requests have no userId until the credential is successfully verified.
+// Bind each challenge to a browser-held, HttpOnly, random nonce; persist only
+// hashes of both values. Only one conditional write may consume a challenge.
+enum WebAuthnChallengePurpose {
+  REGISTER
+  LOGIN
+  ADD_KEY
+  RECOVER
+}
+
+model WebAuthnChallenge {
+  id            String                   @id @default(cuid())
+  challengeHash String                   @unique @db.VarChar(64)
+  bindingHash   String                   @db.VarChar(64)
+  purpose       WebAuthnChallengePurpose
+  userId        String?
+  expiresAt     DateTime
+  usedAt        DateTime?
+  createdAt     DateTime                 @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([bindingHash, purpose, usedAt, expiresAt])
+  @@index([userId, expiresAt])
+}
+
 model VerificationToken {
   identifier String
   token      String   @unique
@@ -88,6 +136,8 @@ model User {
   // New invited accounts need confirmation; default false preserves legacy sign-ins.
   registrationEmailVerificationRequired Boolean @default(false)
   passwordHash    String?
+  // Separate, stable random handle. Never derive a WebAuthn user ID from email.
+  webAuthnUserHandle String? @unique @db.VarChar(64)
   image           String?
   defaultCurrency String    @default("RUB")
   locale          String    @default("ru")
@@ -101,6 +151,8 @@ model User {
 
   accounts        Account[]
   sessions        Session[]
+  passkeyCredentials PasskeyCredential[]
+  webAuthnChallenges WebAuthnChallenge[]
   emailVerificationRequests EmailVerificationRequest[]
   passwordResetRequests PasswordResetRequest[]
   groupMembers    GroupMember[]
