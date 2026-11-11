@@ -16,8 +16,13 @@ export async function issueRegistrationVerification(input: {
   siteOrigin: string;
   from: string;
   server: SMTPTransportOptions;
+  confirmationPath?: '/verify-email' | '/setup-owner';
 }): Promise<{ expiresAt: Date }> {
-  const { url, tokenHash, expiresAt } = prepareRegistrationVerificationLink(input.siteOrigin);
+  const { url, tokenHash, expiresAt } = prepareRegistrationVerificationLink(
+    input.siteOrigin,
+    new Date(),
+    input.confirmationPath,
+  );
   const request = await input.db.emailVerificationRequest.create({
     data: { userId: input.userId, tokenHash, expiresAt },
     select: { id: true },

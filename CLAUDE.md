@@ -42,6 +42,10 @@ npx prisma db push   # Push schema without migration (dev only)
 - `src/server/db.ts` — Prisma client singleton (uses `@prisma/adapter-pg` with `PrismaPg`)
 - `src/server/auth.ts` — NextAuth v5 with JWT sessions, currently Credentials only while Passkey issuance and login are completed. The final system will use verified WebAuthn exclusively; do not reintroduce an external identity provider.
 - `src/server/lib/auth-config.ts` — SMTP configuration solely for invited registration email confirmation and Passkey recovery; SMTP **never** serves as a sign-in provider.
+- `scripts/bootstrap-owner.ts` — **manual local TTY-only** first-owner setup on a **completely empty** DB. Requires explicit one-shot BILLOK_OWNER_BOOTSTRAP_ACK=CREATE_INITIAL_OWNER, configured ADMIN_EMAIL in .ru/.su, trusted NEXTAUTH_URL/WebAuthn origin, and working registration SMTP. Never a public endpoint, never seeds passwords, and refuses repeat bootstrap. --resend is only for same pending owner after cooldown.
+- `src/server/lib/owner-bootstrap.ts` — serialized singleton owner creation, private 7-day invitation, owner-only email verification, immutable identity and audit log, no fallback password.
+- `src/server/lib/owner-backup-passkey.ts` — second owner Passkey enrollment after verified first-key login; requires distinct credential ID, validates attestation, and marks setup complete with two keys.
+- `src/app/[locale]/(auth)/setup-owner/page.tsx` — Russian mobile first owner flow. Recommend genuinely separate device or FIDO2 hardware; WebAuthn cannot prove physical independence.
 - `src/server/lib/webauthn-registration.ts` — Browser-bound single-use WebAuthn first-key attestation and exact RP/origin checks; never issues a session by itself.
 - `src/server/lib/webauthn-relying-party.ts` — Trusted billok.ru RP ID, exact permitted origins and user verification policy.
 - `src/server/lib/registration-mode.ts` — Registration setting, always restricted by the one-time invitation and .ru/.su email constraints.

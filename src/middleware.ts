@@ -11,6 +11,7 @@ const publicPages = [
   '/register',
   '/verify-request',
   '/verify-email',
+  '/setup-owner',
   '/forgot-password',
   '/reset-password',
   '/invite',

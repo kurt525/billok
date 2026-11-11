@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/server/db';
 import { hashEmailVerificationToken } from '@/server/lib/email-verification-token';
 import { confirmRegistrationEmail } from '@/server/lib/registration-email-confirmation';
+import { canRetryOwnerInitialPasskey } from '@/server/lib/owner-bootstrap';
 import {
   beginFirstPasskeyRegistration,
   newWebAuthnBindingSecret,
@@ -29,7 +30,16 @@ export async function POST(request: Request) {
       where: { tokenHash: hashEmailVerificationToken(data.token) },
       select: { userId: true },
     });
-    if (!confirmation || !(await confirmRegistrationEmail(db, data.token))) return rejected();
+    if (!confirmation) return rejected();
+    const confirmed = await confirmRegistrationEmail(db, data.token);
+    // An interrupted owner setup may retry with the SAME verified email token
+    // within its original TTL only. No other user may replay a consumed link.
+    if (
+      !confirmed &&
+      !(await canRetryOwnerInitialPasskey(db, confirmation.userId, hashEmailVerificationToken(data.token)))
+    ) {
+      return rejected();
+    }
 
     const rp = readBillokWebAuthnRelyingParty(process.env);
     const binding = newWebAuthnBindingSecret();

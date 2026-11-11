@@ -1,7 +1,11 @@
 import { createEmailVerificationToken } from './email-verification-token';
 
 /** Form the link only from a trusted server-side NEXTAUTH_URL, never the request Host header. */
-export function prepareRegistrationVerificationLink(configuredOrigin: string, now: Date = new Date()) {
+export function prepareRegistrationVerificationLink(
+  configuredOrigin: string,
+  now: Date = new Date(),
+  path: '/verify-email' | '/setup-owner' = '/verify-email',
+) {
   let base: URL;
   try {
     base = new URL(configuredOrigin);
@@ -22,7 +26,7 @@ export function prepareRegistrationVerificationLink(configuredOrigin: string, no
   }
 
   const { token, tokenHash, expiresAt } = createEmailVerificationToken(now);
-  const confirmation = new URL('/verify-email', base);
+  const confirmation = new URL(path, base);
   confirmation.searchParams.set('token', token);
   return { url: confirmation.toString(), tokenHash, expiresAt };
 }

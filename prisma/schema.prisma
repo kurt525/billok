@@ -53,6 +53,19 @@ enum WebAuthnChallengePurpose {
 
 // One-time proof bridging a verified WebAuthn assertion to an Auth.js JWT
 // session. Public HTTP endpoints cannot create a session from an email alone.
+// Single-use, LOCAL, operator-initiated account bootstrap. This record
+// survives an email transport error so a second owner cannot be created.
+model OwnerBootstrap {
+  id                 Int      @id
+  userId             String   @unique
+  createdAt          DateTime @default(now())
+  lastEmailAttemptAt DateTime?
+  emailAttempts      Int      @default(0)
+  completedAt        DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+}
+
 model PasskeyLoginTicket {
   id         String    @id @default(cuid())
   tokenHash  String    @unique @db.VarChar(64)
@@ -139,6 +152,7 @@ model User {
   sessions        Session[]
   passkeyCredentials PasskeyCredential[]
   passkeyLoginTickets PasskeyLoginTicket[]
+  ownerBootstrap OwnerBootstrap?
   webAuthnChallenges WebAuthnChallenge[]
   emailVerificationRequests EmailVerificationRequest[]
   passwordResetRequests PasswordResetRequest[]
@@ -433,6 +447,9 @@ enum AdminAction {
   ORPHANS_CLEANED
   IMPERSONATION_STARTED
   IMPERSONATION_ENDED
+  OWNER_BOOTSTRAP_STARTED
+  OWNER_BOOTSTRAP_EMAIL_SENT
+  OWNER_BOOTSTRAP_COMPLETED
   INVITE_CREATED
   INVITE_REVOKED
   ANNOUNCEMENT_SET
