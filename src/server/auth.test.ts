@@ -3,9 +3,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 /** Issue #1 6.9: external provider absence is the security boundary.
  * Password credentials are a TEMPORARY stage until 6.3.2.3.
  */
-const { nextAuth, authMock, db, logger } = vi.hoisted(() => ({
+const { nextAuth, authMock, consumeTicket, db, logger } = vi.hoisted(() => ({
   nextAuth: vi.fn(),
   authMock: vi.fn(),
+  consumeTicket: vi.fn(),
   db: { user: { findUnique: vi.fn() } },
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
@@ -16,6 +17,7 @@ vi.mock('next-auth/providers/credentials', () => ({
 vi.mock('./db', () => ({ db }));
 vi.mock('./lib/logger', () => ({ logger }));
 vi.mock('./lib/password-login', () => ({ authorizePasswordLogin: vi.fn() }));
+vi.mock('./lib/passkey-login', () => ({ consumePasskeyLoginTicket: consumeTicket }));
 
 interface AuthConfig {
   providers: { id: string; [key: string]: unknown }[];
@@ -72,9 +74,10 @@ afterEach(() => {
 describe('Issue #1 6.9: no hidden provider can be enabled by configuration', () => {
   test('SMTP configured for registration never becomes an email sign-in method', async () => {
     const config = await loadAuth(externalEnv);
-    expect(config.providers.map((p) => p.id)).toEqual(['credentials']);
+    expect(config.providers.map((p) => p.id)).toEqual(['credentials', 'passkey']);
     expect(config.adapter).toBeUndefined();
     expect(config.session).toEqual({ strategy: 'jwt' });
+    expect(config.providers.find((p) => p.id === 'passkey')).toBeDefined();
     expect(JSON.stringify(config.providers)).not.toContain('fake-smtp-secret');
     expect(JSON.stringify(config.providers)).not.toContain('fake-client');
     expect(JSON.stringify(config.providers)).not.toContain('fake-secret');
@@ -89,12 +92,32 @@ describe('Issue #1 6.9: no hidden provider can be enabled by configuration', () 
     ]) {
       const config = await loadAuth(env);
       const ids = config.providers.map((provider) => provider.id);
-      expect(ids).toEqual(['credentials']);
+      expect(ids).toEqual(['credentials', 'passkey']);
       expect(ids).not.toContain('google');
       expect(ids).not.toContain('oidc');
       expect(ids).not.toContain('nodemailer');
       expect(config.adapter).toBeUndefined();
     }
+  });
+
+  test('the Passkey provider delegates only a one-time verified ticket to the session consumer', async () => {
+    const config = await loadAuth(externalEnv);
+    const passkey = config.providers.find((provider) => provider.id === 'passkey');
+    expect(passkey).toBeDefined();
+    expect(Object.keys((passkey?.credentials ?? {}) as object)).toEqual(['ticket']);
+    const authorize = passkey?.authorize as (credentials: { ticket?: string; email?: string }) => Promise<unknown>;
+    expect(typeof authorize).toBe('function');
+    consumeTicket.mockResolvedValueOnce({
+      id: 'verified-user',
+      email: 'anna@example.ru',
+      name: 'Анна',
+      locale: 'ru',
+    });
+    expect(await authorize({ ticket: 'signed-and-consumed-proof' })).toMatchObject({ id: 'verified-user' });
+    expect(consumeTicket).toHaveBeenCalledWith({ db, token: 'signed-and-consumed-proof' });
+    consumeTicket.mockResolvedValueOnce(null);
+    expect(await authorize({ email: 'anna@example.ru' })).toBeNull();
+    expect(consumeTicket).toHaveBeenCalledWith({ db, token: undefined });
   });
 
   test('profile refresh remains supported without an external linking callback', async () => {

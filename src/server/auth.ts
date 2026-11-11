@@ -3,6 +3,7 @@ import Credentials from 'next-auth/providers/credentials';
 import { db } from './db';
 import { logger } from './lib/logger';
 import { authorizePasswordLogin } from './lib/password-login';
+import { consumePasskeyLoginTicket } from './lib/passkey-login';
 
 // No external providers, email magic links or OAuth account linking are
 // installed. Credentials is temporary ONLY until Issue #1 6.3.2.3 replaces
@@ -18,6 +19,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         password: { label: 'Password', type: 'password' },
       },
       authorize: (credentials, request) => authorizePasswordLogin(credentials, request.headers),
+    }),
+    // Only a previously VERIFIED WebAuthn assertion can mint this short-lived,
+    // one-time login ticket. No password, email link or OAuth identity accepted.
+    Credentials({
+      id: 'passkey',
+      name: 'BillOK Passkey',
+      credentials: { ticket: { label: 'Passkey proof', type: 'text' } },
+      authorize: (credentials) => consumePasskeyLoginTicket({ db, token: credentials?.ticket }),
     }),
   ],
   callbacks: {

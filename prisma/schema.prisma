@@ -51,6 +51,21 @@ enum WebAuthnChallengePurpose {
   RECOVER
 }
 
+// One-time proof bridging a verified WebAuthn assertion to an Auth.js JWT
+// session. Public HTTP endpoints cannot create a session from an email alone.
+model PasskeyLoginTicket {
+  id         String    @id @default(cuid())
+  tokenHash  String    @unique @db.VarChar(64)
+  userId     String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, consumedAt, expiresAt])
+}
+
 model WebAuthnChallenge {
   id            String                   @id @default(cuid())
   challengeHash String                   @unique @db.VarChar(64)
@@ -123,6 +138,7 @@ model User {
 
   sessions        Session[]
   passkeyCredentials PasskeyCredential[]
+  passkeyLoginTickets PasskeyLoginTicket[]
   webAuthnChallenges WebAuthnChallenge[]
   emailVerificationRequests EmailVerificationRequest[]
   passwordResetRequests PasswordResetRequest[]
