@@ -8,6 +8,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../src/generated/prisma/client';
 import { hashEmailVerificationToken } from '../src/server/lib/email-verification-token';
 import { hashPasswordResetToken } from '../src/server/lib/password-reset-token';
+import { SYSTEM_INVITE_TTL_MS } from '../src/server/lib/system-invite-lifetime';
 
 async function main() {
   if (process.env.BILLOK_QA_FIXTURES !== '1') throw new Error('QA fixture opt-in is required');
@@ -29,7 +30,15 @@ async function main() {
       update: { value: 'invite-only' },
       create: { key: 'registrationMode', value: 'invite-only' },
     });
-    await db.systemInvite.createMany({ data: [{ code: ruCode }, { code: suCode }] });
+    // Invite-only QA accounts must use the same strict seven-day expiry
+    // as administrator-created invitations (Issue #1 6.2).
+    const expiresAt = new Date(Date.now() + SYSTEM_INVITE_TTL_MS);
+    await db.systemInvite.createMany({
+      data: [
+        { code: ruCode, expiresAt },
+        { code: suCode, expiresAt },
+      ],
+    });
     const pending = await db.user.create({
       data: {
         name: 'Истёкшая регистрация QA',
