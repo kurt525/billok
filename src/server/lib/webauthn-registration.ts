@@ -3,6 +3,7 @@ import { generateRegistrationOptions, verifyRegistrationResponse } from '@simple
 import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 import { Prisma, type PrismaClient } from '@/generated/prisma/client';
 import { AppError } from './app-error';
+import { OWNER_BOOTSTRAP_SINGLETON_ID } from './owner-bootstrap';
 import {
   readBillokWebAuthnRelyingParty,
   WEBAUTHN_CHALLENGE_TTL_MS,
@@ -175,6 +176,28 @@ export async function finishFirstPasskeyRegistration(input: {
           aaguid,
         },
       });
+      // Initial owner setup is complete with ONE verified Passkey.
+      // No second device is required; additional owner keys are optional.
+      // This shares the user row lock and transaction with first-key creation.
+      const owner = await tx.ownerBootstrap.findUnique({
+        where: { id: OWNER_BOOTSTRAP_SINGLETON_ID },
+        select: { userId: true, completedAt: true },
+      });
+      if (owner?.userId === request.userId) {
+        if (owner.completedAt) throw new AppError('FORBIDDEN');
+        const completed = await tx.ownerBootstrap.updateMany({
+          where: { id: OWNER_BOOTSTRAP_SINGLETON_ID, userId: request.userId!, completedAt: null },
+          data: { completedAt: now },
+        });
+        if (completed.count !== 1) throw new AppError('FORBIDDEN');
+        await tx.adminAuditLog.create({
+          data: {
+            adminId: request.userId!,
+            action: 'OWNER_BOOTSTRAP_COMPLETED',
+            metadata: { activePasskeys: 1, optionalMaxPasskeys: 3 },
+          },
+        });
+      }
     });
   } catch (error) {
     if (error instanceof AppError) throw error;

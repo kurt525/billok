@@ -629,3 +629,23 @@ test('cancelled Passkey ceremony explains retry and never submits overlapping en
   expect(starts).toBe(2);
   await expect(page.getByRole('status')).toHaveCount(0);
 });
+
+// Owner bootstrap now completes after a single signed first Passkey.
+// A second or third key is optional and belongs to later account management.
+for (const width of [320, 720]) {
+  test(`owner initial Passkey setup at ${width}px never requires a backup key`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 620 });
+    const token = 'q'.repeat(43);
+    const response = await page.goto(`/setup-owner?token=${token}`, { waitUntil: 'domcontentloaded' });
+    expect(response?.status()).toBe(200);
+    await expect(page.getByTestId('owner-passkey-setup')).toBeVisible();
+    await expect(page.getByText('Создайте первый ключ доступа', { exact: true })).toBeVisible();
+    const create = page.getByTestId('owner-create-first-passkey');
+    await expect(create).toBeVisible();
+    const bounds = await create.boundingBox();
+    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+    await expect(page.getByTestId('owner-add-backup-passkey')).toHaveCount(0);
+    const docWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(docWidth).toBeLessThanOrEqual(width + 1);
+  });
+}

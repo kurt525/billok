@@ -16,6 +16,8 @@ export async function GET() {
   });
   return NextResponse.json({
     firstKeyAdded: activeKeys >= 1,
-    completed: Boolean(owner.completedAt && activeKeys >= 2),
+    completed: Boolean(owner.completedAt && activeKeys >= 1),
+    activePasskeys: activeKeys,
+    optionalMaxPasskeys: 3,
   });
 }

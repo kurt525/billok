@@ -69,6 +69,11 @@ function fakeDb() {
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     passkeyCredential: { create: vi.fn().mockResolvedValue({ id: 'credential-1' }) },
+    ownerBootstrap: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+    },
+    adminAuditLog: { create: vi.fn().mockResolvedValue({ id: 'owner-audit-1' }) },
     $queryRawUnsafe: vi.fn().mockResolvedValue([{ id: user.id }]),
     $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(db)),
   };
@@ -207,6 +212,70 @@ describe('Issue #1 6.3.2: first WebAuthn credential requires confirmed email and
       }),
     });
     expect(db.$queryRawUnsafe).toHaveBeenCalledWith('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', user.id);
+  });
+
+  it('completes initial owner bootstrap with ONE verified Passkey in the same transaction', async () => {
+    const { db, entry } = fakeDb();
+    entry.challengeHash = createHash('sha256').update(challenge).digest('hex');
+    db.user.findUnique.mockReset().mockResolvedValue({
+      emailVerified: now,
+      suspendedAt: null,
+      passkeyCredentials: [],
+    });
+    db.ownerBootstrap.findUnique.mockResolvedValue({
+      userId: user.id,
+      completedAt: null,
+    });
+    const result = await finishFirstPasskeyRegistration({
+      db: requireDb(db),
+      bindingSecret: secret,
+      response,
+      env,
+      now,
+    });
+    expect(result).toEqual({ registered: true });
+    expect(db.ownerBootstrap.updateMany).toHaveBeenCalledWith({
+      where: { id: 1, userId: user.id, completedAt: null },
+      data: { completedAt: now },
+    });
+    expect(db.adminAuditLog.create).toHaveBeenCalledWith({
+      data: {
+        adminId: user.id,
+        action: 'OWNER_BOOTSTRAP_COMPLETED',
+        metadata: { activePasskeys: 1, optionalMaxPasskeys: 3 },
+      },
+    });
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('never completes owner bootstrap when registering an ordinary user', async () => {
+    const { db, entry } = fakeDb();
+    entry.challengeHash = createHash('sha256').update(challenge).digest('hex');
+    db.user.findUnique.mockReset().mockResolvedValue({
+      emailVerified: now,
+      suspendedAt: null,
+      passkeyCredentials: [],
+    });
+    db.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'another-user', completedAt: null });
+    await finishFirstPasskeyRegistration({ db: requireDb(db), bindingSecret: secret, response, env, now });
+    expect(db.ownerBootstrap.updateMany).not.toHaveBeenCalled();
+    expect(db.adminAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('does not complete owner bootstrap when marking its singleton row loses a race', async () => {
+    const { db, entry } = fakeDb();
+    entry.challengeHash = createHash('sha256').update(challenge).digest('hex');
+    db.user.findUnique.mockReset().mockResolvedValue({
+      emailVerified: now,
+      suspendedAt: null,
+      passkeyCredentials: [],
+    });
+    db.ownerBootstrap.findUnique.mockResolvedValue({ userId: user.id, completedAt: null });
+    db.ownerBootstrap.updateMany.mockResolvedValue({ count: 0 });
+    await expect(
+      finishFirstPasskeyRegistration({ db: requireDb(db), bindingSecret: secret, response, env, now }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.adminAuditLog.create).not.toHaveBeenCalled();
   });
 
   it('rejects a losing concurrent challenge and rolls back the first-key write', async () => {

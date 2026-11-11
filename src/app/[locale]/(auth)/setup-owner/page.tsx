@@ -13,7 +13,7 @@ import { Link } from '@/i18n/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
-type Phase = 'first' | 'login' | 'backup' | 'done';
+type Phase = 'first' | 'login' | 'done';
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
@@ -29,7 +29,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 
 /** This page never creates the owner account or selects its email. Only the
  * local-only server CLI can do that. A verified email token permits just the
- * FIRST key, and an already signed-in owner must add a SECOND different key.
+ * FIRST key. Additional keys (up to three total) are optional later.
  */
 export default function SetupOwnerPage() {
   return (
@@ -75,7 +75,7 @@ function OwnerSetup() {
       const credential = await startRegistration({ optionsJSON: start.options });
       await postJson('/api/webauthn/registration/finish', credential);
       window.history.replaceState(null, '', window.location.pathname);
-      setNotice('Первый ключ создан. Войдите с ним, чтобы добавить резервный ключ на другом устройстве.');
+      setNotice('Ключ доступа создан. Войдите с ним, чтобы завершить настройку владельца.');
       setPhase('login');
     });
   }
@@ -100,25 +100,11 @@ function OwnerSetup() {
       });
       if (!status.ok) throw new Error('Этот ключ не принадлежит владельцу BillOK.');
       const result = (await status.json()) as { completed: boolean; firstKeyAdded: boolean };
-      setPhase(result.completed ? 'done' : 'backup');
-      setNotice(
-        result.completed
-          ? 'Настройка владельца завершена.'
-          : 'Добавьте резервный Passkey на другом устройстве или аппаратном ключе FIDO2.',
-      );
-    });
-  }
-
-  function addSecond() {
-    void run(async () => {
-      const start = await postJson<{ options: PublicKeyCredentialCreationOptionsJSON }>(
-        '/api/webauthn/owner/backup/start',
-        {},
-      );
-      const credential = await startRegistration({ optionsJSON: start.options });
-      await postJson<{ completed: true }>('/api/webauthn/owner/backup/finish', credential);
+      if (!result.completed || !result.firstKeyAdded) {
+        throw new Error('Первоначальная настройка владельца ещё не завершена.');
+      }
       setPhase('done');
-      setNotice('Два различных ключа Passkey зарегистрированы. Настройка владельца завершена.');
+      setNotice('Настройка владельца завершена. Дополнительные Passkey необязательны.');
     });
   }
 
@@ -127,9 +113,7 @@ function OwnerSetup() {
       ? 'Создайте первый ключ доступа'
       : phase === 'login'
         ? 'Подтвердите первый ключ'
-        : phase === 'backup'
-          ? 'Добавьте резервный ключ'
-          : 'Настройка завершена';
+        : 'Настройка завершена';
   return (
     <Card data-testid="owner-passkey-setup" className="min-w-0 border-primary/10 shadow-lg">
       <CardHeader className="text-center">
@@ -178,23 +162,6 @@ function OwnerSetup() {
           >
             {busy ? 'Проверка…' : 'Войти с первым Passkey'}
           </Button>
-        )}
-        {phase === 'backup' && (
-          <>
-            <p className="text-sm text-muted-foreground">
-              Используйте другое физическое устройство или аппаратный FIDO2-ключ. BillOK проверяет различие ключей, но
-              не может доказать независимость устройств.
-            </p>
-            <Button
-              data-testid="owner-add-backup-passkey"
-              type="button"
-              disabled={busy}
-              onClick={addSecond}
-              className="min-h-11 w-full whitespace-normal"
-            >
-              {busy ? 'Проверка…' : 'Создать резервный Passkey'}
-            </Button>
-          </>
         )}
         {phase === 'done' && (
           <Link

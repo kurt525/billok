@@ -12,20 +12,25 @@ describe('Issue #1 owner bootstrap has no public account creation, password or h
     expect(script).not.toMatch(/passwordHash:\s*['"]/);
     expect(source('src/server/lib/owner-bootstrap.ts')).not.toContain('passwordHash');
   });
-  it('binds initial setup to a confirmation link and two distinct WebAuthn credentials', () => {
+  it('completes setup with exactly one verified initial key and leaves optional keys to account management', () => {
     const start = source('src/app/api/webauthn/registration/start/route.ts');
     expect(start).toContain('confirmRegistrationEmail');
     expect(start).toContain('canRetryOwnerInitialPasskey');
-    const backup = source('src/server/lib/owner-backup-passkey.ts');
-    expect(backup).toContain("purpose: 'ADD_KEY'");
-    expect(backup).toContain('verifyRegistrationResponse');
-    expect(backup).toContain('user.passkeyCredentials.length !== 1');
-    expect(backup).toContain('OWNER_BOOTSTRAP_COMPLETED');
-    expect(source('src/app/api/webauthn/owner/backup/start/route.ts')).toContain('await auth()');
-    expect(source('src/app/api/webauthn/owner/backup/finish/route.ts')).toContain('await auth()');
-    expect(source('src/app/[locale]/(auth)/setup-owner/page.tsx')).not.toContain('type="password"');
+    const enrollment = source('src/server/lib/webauthn-registration.ts');
+    expect(enrollment).toContain('OWNER_BOOTSTRAP_COMPLETED');
+    expect(enrollment).toContain('ownerBootstrap.updateMany');
+    expect(enrollment).toContain('optionalMaxPasskeys: 3');
+    const status = source('src/app/api/webauthn/owner/bootstrap/status/route.ts');
+    expect(status).toContain('activeKeys >= 1');
+    expect(status).not.toContain('activeKeys >= 2');
+    const page = source('src/app/[locale]/(auth)/setup-owner/page.tsx');
+    expect(page).not.toContain('owner-add-backup-passkey');
+    expect(page).not.toContain('type="password"');
+    expect(page).toContain('Дополнительные Passkey необязательны');
+    expect(source('scripts/bootstrap-owner.ts')).not.toContain('двух разных ключей');
     expect(source('src/middleware.ts')).toContain("'/setup-owner'");
   });
+
   it('never restores removed Magic Link Google OIDC providers', () => {
     const auth = source('src/server/auth.ts');
     expect(auth).not.toMatch(/next-auth\/providers\/(?:google|nodemailer)/);

@@ -39,7 +39,7 @@ async function main() {
     await sendOwnerBootstrapConfirmation({ db, env: process.env });
     process.stdout.write(
       'Письмо для настройки владельца отправлено. Пароли не создавались.\n' +
-        'Завершите регистрацию двух разных ключей Passkey на billok.ru.\n',
+        'Для завершения настройки достаточно одного Passkey; всего владельцу можно иметь до трёх.\n',
     );
   } finally {
     await db.$disconnect();
