@@ -17,7 +17,7 @@ describe('atomic single-use invite reservation', () => {
         usedById: null,
         revokedAt: null,
         AND: [
-          { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+          { createdAt: { gt: new Date(now.getTime() - 7 * 86_400_000) }, expiresAt: { gt: now } },
           { OR: [{ reservedUntil: null }, { reservedUntil: { lte: now } }] },
         ],
       },
@@ -43,6 +43,7 @@ describe('atomic single-use invite reservation', () => {
       usedAt: null as Date | null,
       revokedAt: null as Date | null,
       expiresAt: new Date('2026-11-01T00:00:00.000Z'),
+      createdAt: new Date('2026-10-30T09:00:00.000Z'),
       reservedById: null as string | null,
       reservedUntil: null as Date | null,
     };
@@ -52,7 +53,8 @@ describe('atomic single-use invite reservation', () => {
         existing.code === where.code &&
         existing.usedAt === null &&
         existing.revokedAt === null &&
-        (existing.expiresAt === null || existing.expiresAt > now) &&
+        existing.expiresAt > now &&
+        existing.createdAt > where.AND[0].createdAt.gt &&
         (existing.reservedUntil === null || existing.reservedUntil <= now);
       if (!allowed) return { count: 0 };
       existing.reservedById = data.reservedById;
@@ -88,7 +90,8 @@ describe('extension of a pending invitation reservation', () => {
         usedById: null,
         usedAt: null,
         revokedAt: null,
-        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+        createdAt: { gt: new Date(now.getTime() - 7 * 86_400_000) },
+        expiresAt: { gt: now },
       },
       data: { reservedUntil: new Date('2026-10-31T10:30:00.000Z') },
     });

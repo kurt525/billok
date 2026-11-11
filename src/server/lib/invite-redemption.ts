@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@/generated/prisma/client';
+import { activeSystemInviteWindow } from './system-invite-lifetime';
 
 /**
  * Atomically consume a reserved invitation only for its verified account.
@@ -22,7 +23,7 @@ export async function redeemReservedSystemInvite(
       usedById: null,
       usedAt: null,
       revokedAt: null,
-      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      ...activeSystemInviteWindow(now),
     },
     data: {
       usedById: input.userId,

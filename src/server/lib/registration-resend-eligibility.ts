@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@/generated/prisma/client';
+import { activeSystemInviteWindow } from './system-invite-lifetime';
 import { findUsersByEmail } from './user-email';
 import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
 
@@ -40,7 +41,7 @@ export async function findPendingRegistrationForResend(
       usedById: null,
       usedAt: null,
       revokedAt: null,
-      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      ...activeSystemInviteWindow(now),
     },
     select: { code: true },
     take: 2,

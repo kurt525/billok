@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@/generated/prisma/client';
+import { activeSystemInviteWindow } from './system-invite-lifetime';
 import { EMAIL_VERIFICATION_TOKEN_TTL_MS } from './email-verification-token';
 
 /**
@@ -21,10 +22,7 @@ export async function reserveSystemInvite(
       usedAt: null,
       usedById: null,
       revokedAt: null,
-      AND: [
-        { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
-        { OR: [{ reservedUntil: null }, { reservedUntil: { lte: now } }] },
-      ],
+      AND: [{ ...activeSystemInviteWindow(now) }, { OR: [{ reservedUntil: null }, { reservedUntil: { lte: now } }] }],
     },
     data: { reservedById: input.userId, reservedUntil },
   });
@@ -57,7 +55,7 @@ export async function renewOwnedSystemInvite(
       usedById: null,
       usedAt: null,
       revokedAt: null,
-      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      ...activeSystemInviteWindow(now),
     },
     data: { reservedUntil: new Date(now.getTime() + EMAIL_VERIFICATION_TOKEN_TTL_MS) },
   });

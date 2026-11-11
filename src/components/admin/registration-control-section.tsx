@@ -183,23 +183,42 @@ export function RegistrationControlSection() {
                         {inv.label ?? '---'}
                       </td>
                       <td className="px-4 py-3">
-                        {inv.revokedAt ? (
-                          <Badge variant="destructive">{t('registration.statusRevoked')}</Badge>
-                        ) : inv.usedAt ? (
-                          <Badge variant="secondary" className="max-w-48 whitespace-normal [overflow-wrap:anywhere]">
-                            {t('registration.statusUsedBy', { name: inv.usedBy?.name ?? inv.usedBy?.email ?? '' })}
-                          </Badge>
-                        ) : inv.isActive ? (
-                          <Badge variant="default">{t('registration.statusActive')}</Badge>
-                        ) : (
-                          <Badge variant="outline">{t('registration.statusExpired')}</Badge>
-                        )}
+                        <div className="flex min-w-0 flex-col items-start gap-1">
+                          {inv.revokedAt ? (
+                            <Badge variant="destructive">{t('registration.statusRevoked')}</Badge>
+                          ) : inv.usedAt ? (
+                            <Badge variant="secondary" className="max-w-48 whitespace-normal [overflow-wrap:anywhere]">
+                              {inv.usedBy
+                                ? t('registration.statusUsedBy', { name: inv.usedBy.name ?? inv.usedBy.email ?? '' })
+                                : t('registration.statusUsed')}
+                            </Badge>
+                          ) : inv.isReserved ? (
+                            <Badge variant="outline">{t('registration.statusReserved')}</Badge>
+                          ) : inv.isActive ? (
+                            <Badge variant="default">{t('registration.statusActive')}</Badge>
+                          ) : (
+                            <Badge variant="outline">{t('registration.statusExpired')}</Badge>
+                          )}
+                          {inv.usedAt ? (
+                            <span className="text-xs text-muted-foreground" data-testid="admin-invitation-used-at">
+                              {t('registration.usedAt', { date: new Date(inv.usedAt).toLocaleString(locale) })}
+                            </span>
+                          ) : inv.revokedAt ? (
+                            <span className="text-xs text-muted-foreground">
+                              {t('registration.revokedAt', { date: new Date(inv.revokedAt).toLocaleString(locale) })}
+                            </span>
+                          ) : inv.expiresAt ? (
+                            <span className="text-xs text-muted-foreground">
+                              {t('registration.expiresAt', { date: new Date(inv.expiresAt).toLocaleString(locale) })}
+                            </span>
+                          ) : null}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">
                         {new Date(inv.createdAt).toLocaleDateString(locale)}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        {inv.isActive && (
+                        {inv.canRevoke && (
                           <Button
                             variant="ghost"
                             size="icon-sm"
@@ -228,7 +247,10 @@ export function RegistrationControlSection() {
         title={t('registration.revokeTitle')}
         description={t('registration.revokeDescription', { code: revokeTarget?.codePreview ?? '' })}
         confirmLabel={t('registration.revoke')}
-        onConfirm={() => revokeTarget && revokeInvite.mutate({ inviteId: revokeTarget.id })}
+        onConfirm={() => {
+          if (revokeTarget)
+            revokeInvite.mutate({ inviteId: revokeTarget.id }, { onSettled: () => setRevokeTarget(null) });
+        }}
       />
     </section>
   );

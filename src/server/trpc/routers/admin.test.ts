@@ -94,6 +94,7 @@ const mockDb = {
     findMany: vi.fn().mockResolvedValue([]),
     findUnique: vi.fn(),
     update: vi.fn(),
+    updateMany: vi.fn(),
   },
   activityLog: {
     findMany: vi.fn().mockResolvedValue([]),
@@ -581,5 +582,165 @@ describe('unused receipts', () => {
     const api = await callerAs({ user: { id: 'user-1', email: 'user@example.com' } });
     await expect(api.cleanupUnusedReceipts()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(deleteUnusedReceipts).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue #1 6.2: seven-day admin invitations, revocation and usage history', () => {
+  const code = 'invite-secret-to-deliver';
+  const createdAt = new Date('2026-11-10T09:00:00.000Z');
+  const expiresAt = new Date('2026-11-17T09:00:00.000Z');
+  const usedAt = new Date('2026-11-11T09:00:00.000Z');
+  const invite = {
+    id: 'invite-1',
+    code,
+    label: 'Для Анны',
+    createdAt,
+    expiresAt,
+    usedAt: null,
+    usedById: null,
+    revokedAt: null,
+    reservedById: null,
+    reservedUntil: null,
+    usedBy: null,
+  };
+
+  beforeEach(() => {
+    vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
+    vi.clearAllMocks();
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.systemInvite.create.mockResolvedValue(invite);
+    mockDb.systemInvite.findUnique.mockResolvedValue(invite);
+    mockDb.systemInvite.findMany.mockResolvedValue([invite]);
+    mockDb.systemInvite.updateMany.mockResolvedValue({ count: 1 });
+    mockDb.adminAuditLog.create.mockResolvedValue({ id: 'audit-1' });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test('admin creates a code for manual delivery; exactly seven days, transactional audit without the secret', async () => {
+    mockDb.systemInvite.create.mockImplementationOnce(async ({ data }) => ({ ...invite, expiresAt: data.expiresAt }));
+    const api = await callerAs(adminSession);
+    const before = Date.now();
+    const result = await api.createSystemInvite({ label: 'Для Анны' });
+    const after = Date.now();
+    expect(result).toEqual({ id: 'invite-1', code, label: 'Для Анны', expiresAt: expect.any(Date) });
+    expect(mockDb.$transaction).toHaveBeenCalled();
+    const create = mockDb.systemInvite.create.mock.calls.at(-1)![0];
+    expect(create.data.label).toBe('Для Анны');
+    expect(create.data.expiresAt).toBeInstanceOf(Date);
+    expect(create.data.expiresAt.getTime()).toBeGreaterThanOrEqual(before + 7 * 86_400_000);
+    expect(create.data.expiresAt.getTime()).toBeLessThanOrEqual(after + 7 * 86_400_000);
+    expect(mockDb.adminAuditLog.create).toHaveBeenCalledWith({
+      data: {
+        adminId: 'admin-1',
+        action: 'INVITE_CREATED',
+        targetId: invite.id,
+        metadata: { label: 'Для Анны', expiresAt: create.data.expiresAt.toISOString() },
+      },
+    });
+    expect(JSON.stringify(mockDb.adminAuditLog.create.mock.calls)).not.toContain(code);
+    expect(await api.createSystemInvite({ label: 'Другой', expiresInDays: 7 })).toHaveProperty('code', code);
+  });
+
+  test('admin cannot create timeless, 365-day, zero-day or malformed invites', async () => {
+    const api = await callerAs(adminSession);
+    for (const invalid of [
+      { expiresInDays: 365 },
+      { expiresInDays: 0 },
+      { expiresInDays: null },
+      { label: ' ' },
+      { label: 'x'.repeat(101) },
+      { expiresInDays: 7, allowMultiple: true },
+    ]) {
+      await expect(api.createSystemInvite(invalid as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.systemInvite.create).not.toHaveBeenCalled();
+    expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('list is admin-only and distinguishes active, reserved, used, expired and revoked; usage date and recipient persist', async () => {
+    const api = await callerAs(adminSession);
+    const now = new Date();
+    const later = new Date(now.getTime() + 86_400_000);
+    const earlier = new Date(now.getTime() - 86_400_000);
+    mockDb.systemInvite.findMany.mockResolvedValue([
+      { ...invite, id: 'active', expiresAt: later },
+      { ...invite, id: 'reserved', expiresAt: later, reservedById: 'pending-user', reservedUntil: later },
+      {
+        ...invite,
+        id: 'used',
+        usedAt,
+        usedById: 'verified-user',
+        usedBy: { id: 'verified-user', name: 'Анна', email: 'anna@example.ru' },
+      },
+      { ...invite, id: 'expired', expiresAt: earlier },
+      { ...invite, id: 'revoked', revokedAt: earlier },
+    ]);
+    const result = await api.listSystemInvites();
+    expect(result.map(({ id, isActive, isReserved, canRevoke }) => ({ id, isActive, isReserved, canRevoke }))).toEqual([
+      { id: 'active', isActive: true, isReserved: false, canRevoke: true },
+      { id: 'reserved', isActive: false, isReserved: true, canRevoke: true },
+      { id: 'used', isActive: false, isReserved: false, canRevoke: false },
+      { id: 'expired', isActive: false, isReserved: false, canRevoke: false },
+      { id: 'revoked', isActive: false, isReserved: false, canRevoke: false },
+    ]);
+    expect(result[2]).toMatchObject({
+      usedAt,
+      usedBy: { name: 'Анна', email: 'anna@example.ru' },
+    });
+  });
+
+  test('revocation of an unused or reserved code is atomic and audited without leaking the code', async () => {
+    const api = await callerAs(adminSession);
+    const result = await api.revokeSystemInvite({ inviteId: invite.id });
+    expect(result).toEqual({ revoked: true });
+    expect(mockDb.$transaction).toHaveBeenCalled();
+    expect(mockDb.systemInvite.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: invite.id,
+        revokedAt: null,
+        usedAt: null,
+        usedById: null,
+        createdAt: { gt: expect.any(Date) },
+        expiresAt: { gt: expect.any(Date) },
+      },
+      data: { revokedAt: expect.any(Date) },
+    });
+    expect(mockDb.adminAuditLog.create).toHaveBeenCalledWith({
+      data: {
+        adminId: 'admin-1',
+        action: 'INVITE_REVOKED',
+        targetId: invite.id,
+        metadata: { revokedAt: expect.any(String) },
+      },
+    });
+    expect(JSON.stringify(mockDb.adminAuditLog.create.mock.calls)).not.toContain(code);
+  });
+
+  test('used, revoked, expired or concurrently consumed code cannot be revoked again', async () => {
+    const api = await callerAs(adminSession);
+    for (const row of [
+      { ...invite, usedAt, usedById: 'verified-user' },
+      { ...invite, revokedAt: new Date() },
+      { ...invite, expiresAt: new Date(Date.now() - 1000) },
+    ]) {
+      mockDb.systemInvite.findUnique.mockResolvedValueOnce(row);
+      await expect(api.revokeSystemInvite({ inviteId: invite.id })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.systemInvite.updateMany).not.toHaveBeenCalled();
+    mockDb.systemInvite.updateMany.mockResolvedValueOnce({ count: 0 });
+    await expect(api.revokeSystemInvite({ inviteId: invite.id })).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('regular account cannot create, list or revoke a system invite, even knowing an id', async () => {
+    const api = await callerAs({ user: { id: 'ordinary-user', email: 'guest@example.ru' } });
+    await expect(api.createSystemInvite({ label: 'Для Анны' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.listSystemInvites()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.revokeSystemInvite({ inviteId: invite.id })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.systemInvite.create).not.toHaveBeenCalled();
+    expect(mockDb.systemInvite.updateMany).not.toHaveBeenCalled();
   });
 });

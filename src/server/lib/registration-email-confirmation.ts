@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@/generated/prisma/client';
+import { activeSystemInviteWindow } from './system-invite-lifetime';
 import { hashEmailVerificationToken } from './email-verification-token';
 import { redeemReservedSystemInvite } from './invite-redemption';
 import { runRegistrationCleanupIfDue } from './registration-cleanup-trigger';
@@ -37,7 +38,7 @@ export async function confirmRegistrationEmail(
           usedById: null,
           usedAt: null,
           revokedAt: null,
-          OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+          ...activeSystemInviteWindow(now),
         },
         select: { code: true },
       });

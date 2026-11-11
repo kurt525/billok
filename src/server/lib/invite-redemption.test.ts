@@ -20,7 +20,8 @@ describe('invitation redemption after email verification', () => {
         usedById: null,
         usedAt: null,
         revokedAt: null,
-        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+        createdAt: { gt: new Date(now.getTime() - 7 * 86_400_000) },
+        expiresAt: { gt: now },
       },
       data: {
         usedById: input.userId,

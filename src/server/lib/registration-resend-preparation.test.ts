@@ -32,7 +32,8 @@ describe('atomic preparation of a replacement confirmation token', () => {
         usedById: null,
         usedAt: null,
         revokedAt: null,
-        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+        createdAt: { gt: new Date(now.getTime() - 7 * 86_400_000) },
+        expiresAt: { gt: now },
       },
       data: { reservedUntil: new Date('2026-11-01T15:30:00.000Z') },
     });

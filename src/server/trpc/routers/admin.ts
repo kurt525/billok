@@ -17,6 +17,7 @@ import {
 } from '@/server/lib/receipt-cleanup';
 import { getBuildInfo } from '@/server/lib/build-info';
 import { REGISTRATION_MODES, readRegistrationMode } from '@/server/lib/registration-mode';
+import { activeSystemInviteWindow, SYSTEM_INVITE_TTL_MS } from '@/server/lib/system-invite-lifetime';
 import { totalsInGroupCurrency } from '@/server/lib/group-expense-totals';
 
 const serverStartTime = new Date();
@@ -530,22 +531,35 @@ export const adminRouter = createTRPCRouter({
 
   createSystemInvite: adminProcedure
     .input(
-      z.object({
-        label: z.string().max(100).optional(),
-        expiresInDays: z.number().min(1).max(365).optional(),
+      z.strictObject({
+        label: z.string().trim().min(1).max(100).optional(),
+        // Existing clients may still pass 7; other durations and invitations
+        // without an expiry are forbidden for BillOK (Issue #1 6.2).
+        expiresInDays: z.literal(7).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const expiresAt = input.expiresInDays ? new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000) : null;
-
-      const invite = await ctx.db.systemInvite.create({
-        data: {
-          ...(input.label !== undefined ? { label: input.label } : {}),
-          expiresAt,
-        },
+      const expiresAt = new Date(Date.now() + SYSTEM_INVITE_TTL_MS);
+      // The invite and its audit record are committed together. Never log the
+      // bearer code itself: it is returned only to the authenticated admin for
+      // manual delivery and can be viewed later in that admin's invite list.
+      const invite = await ctx.db.$transaction(async (tx) => {
+        const created = await tx.systemInvite.create({
+          data: {
+            ...(input.label !== undefined ? { label: input.label } : {}),
+            expiresAt,
+          },
+        });
+        await tx.adminAuditLog.create({
+          data: {
+            adminId: ctx.user.id,
+            action: 'INVITE_CREATED',
+            targetId: created.id,
+            metadata: { label: created.label, expiresAt: expiresAt.toISOString() },
+          },
+        });
+        return created;
       });
-
-      await logAdminAction(ctx.db, ctx.user.id, 'INVITE_CREATED', invite.id, { code: invite.code, label: input.label });
 
       return {
         id: invite.id,
@@ -564,41 +578,77 @@ export const adminRouter = createTRPCRouter({
       orderBy: { createdAt: 'desc' },
     });
 
-    return invites.map((inv) => ({
-      id: inv.id,
-      code: inv.code,
-      label: inv.label,
-      usedBy: inv.usedBy ? { name: inv.usedBy.name, email: inv.usedBy.email } : null,
-      usedAt: inv.usedAt,
-      expiresAt: inv.expiresAt,
-      revokedAt: inv.revokedAt,
-      isActive: !inv.revokedAt && !inv.usedAt && (!inv.expiresAt || inv.expiresAt > new Date()),
-      createdAt: inv.createdAt,
-    }));
+    const now = new Date();
+    return invites.map((inv) => {
+      const available =
+        !inv.revokedAt &&
+        !inv.usedAt &&
+        !!inv.expiresAt &&
+        inv.expiresAt > now &&
+        inv.createdAt > activeSystemInviteWindow(now).createdAt.gt;
+      const isReserved = available && !!inv.reservedById && !!inv.reservedUntil && inv.reservedUntil > now;
+      return {
+        id: inv.id,
+        code: inv.code,
+        label: inv.label,
+        usedBy: inv.usedBy ? { name: inv.usedBy.name, email: inv.usedBy.email } : null,
+        usedAt: inv.usedAt,
+        expiresAt: inv.expiresAt,
+        revokedAt: inv.revokedAt,
+        isReserved,
+        isActive: available && !isReserved,
+        // Revocation must remain available while registration is still
+        // awaiting email confirmation: reservation is NOT consumption.
+        canRevoke: available,
+        createdAt: inv.createdAt,
+      };
+    });
   }),
 
-  revokeSystemInvite: adminProcedure.input(z.object({ inviteId: z.string() })).mutation(async ({ ctx, input }) => {
-    const invite = await ctx.db.systemInvite.findUnique({
-      where: { id: input.inviteId },
-    });
-
-    if (!invite) {
-      throw new AppError('NOT_FOUND', 'inviteNotFound');
-    }
-
-    if (invite.revokedAt) {
-      throw new AppError('BAD_REQUEST', 'inviteAlreadyRevoked');
-    }
-
-    await ctx.db.systemInvite.update({
-      where: { id: input.inviteId },
-      data: { revokedAt: new Date() },
-    });
-
-    await logAdminAction(ctx.db, ctx.user.id, 'INVITE_REVOKED', input.inviteId, { code: invite.code });
-
-    return { revoked: true };
-  }),
+  revokeSystemInvite: adminProcedure
+    .input(z.strictObject({ inviteId: z.string().min(1).max(128) }))
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.$transaction(async (tx) => {
+        const invite = await tx.systemInvite.findUnique({
+          where: { id: input.inviteId },
+          select: { id: true, usedAt: true, usedById: true, revokedAt: true, createdAt: true, expiresAt: true },
+        });
+        if (!invite) throw new AppError('NOT_FOUND', 'inviteNotFound');
+        if (invite.revokedAt) throw new AppError('BAD_REQUEST', 'inviteAlreadyRevoked');
+        if (invite.usedAt || invite.usedById) throw new AppError('BAD_REQUEST', 'inviteAlreadyUsed');
+        const now = new Date();
+        if (
+          !invite.expiresAt ||
+          invite.expiresAt <= now ||
+          invite.createdAt <= activeSystemInviteWindow(now).createdAt.gt
+        ) {
+          throw new AppError('BAD_REQUEST', 'inviteInvalid');
+        }
+        // Conditional write closes the race with concurrent verification,
+        // cancellation or a second admin revocation. The reservation, if any,
+        // remains invalidated by revokedAt; it cannot be redeemed afterward.
+        const result = await tx.systemInvite.updateMany({
+          where: {
+            id: invite.id,
+            revokedAt: null,
+            usedAt: null,
+            usedById: null,
+            ...activeSystemInviteWindow(now),
+          },
+          data: { revokedAt: now },
+        });
+        if (result.count !== 1) throw new AppError('CONFLICT', 'inviteInvalid');
+        await tx.adminAuditLog.create({
+          data: {
+            adminId: ctx.user.id,
+            action: 'INVITE_REVOKED',
+            targetId: invite.id,
+            metadata: { revokedAt: now.toISOString() },
+          },
+        });
+        return { revoked: true };
+      });
+    }),
 
   // ─── Global Activity Feed ────────────────────────────────
 

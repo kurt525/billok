@@ -92,7 +92,7 @@
     "createInvite": "Create Invite",
     "labelPlaceholder": "Optional label (e.g., 'For John')",
     "create": "Create",
-    "inviteExpiry": "Invite codes expire after 7 days",
+    "inviteExpiry": "Codes are valid for exactly 7 days and one registration. Give the code to the intended person manually, in person, by message or by email.",
     "colCode": "Code",
     "colLabel": "Label",
     "colStatus": "Status",
@@ -101,7 +101,12 @@
     "revoke": "Revoke invite",
     "statusUsedBy": "Used by {name}",
     "statusActive": "Active",
-    "statusExpired": "Expired"
+    "statusExpired": "Expired",
+    "statusReserved": "Awaiting email confirmation",
+    "statusUsed": "Used",
+    "usedAt": "Used: {date}",
+    "revokedAt": "Revoked: {date}",
+    "expiresAt": "Expires: {date}"
   },
   "announcement": {
     "title": "Announcement Banner",
