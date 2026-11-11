@@ -6,7 +6,7 @@
  */
 import { createHash, createPrivateKey, sign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { expect, request, type BrowserContext, type Page } from '@playwright/test';
+import { expect, request, test, type BrowserContext, type Page } from '@playwright/test';
 
 type Entry = { id: string; privateKey: string };
 type UserFixture = { userHandle: string; credentials: Entry[] };
@@ -51,16 +51,44 @@ export async function installSeedPasskey(page: Page, email: string) {
   const user = fixture(email);
   const { cdp, id } = await enableVirtualPasskey(page);
   await cdp.send('WebAuthn.clearCredentials', { authenticatorId: id });
-  const worker = Number(process.env.TEST_WORKER_INDEX || '0') % 2;
-  // 1..N/2 for worker 0 and N/2+1..N for worker 1, never reuse a
-  // credential between concurrent UI ceremonies (monotone sign counters).
-  const serial = nextIndexByEmail.get(email) ?? 1;
-  nextIndexByEmail.set(email, serial + 1);
+  // Each CI spec has its own reserved region of the disposable key fixture.
+  // Playwright executes multiple tests in separate worker *processes*, and
+  // module-level counters alone cannot coordinate distinct processes. The
+  // TEST_WORKER_INDEX env is not a Playwright contract and was never supplied.
+  // test.info().parallelIndex is the supported stable 0/1 worker slot.
+  const info = test.info();
+  const parallelIndex = info.parallelIndex;
+  if (parallelIndex !== 0 && parallelIndex !== 1) {
+    throw new Error('Passkey QA fixture requires exactly the configured two worker slots');
+  }
+  const allocations = [
+    { spec: 'billok-mobile-authenticated.spec.ts', from: 0, to: 0.3 },
+    { spec: 'billok-mobile-guest-split.spec.ts', from: 0.3, to: 0.75 },
+    { spec: 'billok-mobile-receipt-actions.spec.ts', from: 0.75, to: 0.9 },
+    { spec: 'billok-mobile-wide.spec.ts', from: 0.9, to: 0.95 },
+    { spec: 'billok-passkey-smoke.spec.ts', from: 0.95, to: 1 },
+  ] as const;
+  const allocation = allocations.find(({ spec }) => info.file.endsWith('/' + spec));
+  if (!allocation) throw new Error('Unallocated disposable Passkey test file: ' + info.file);
+  // Credential 0 belongs exclusively to signed API assertions, which always
+  // use the standard zero-counter multi-device semantics. Browser CTAP2
+  // authenticators increment counters, so MUST have distinct key IDs.
+  const usable = user.credentials.length - 1;
+  const rangeStart = 1 + Math.floor(usable * allocation.from);
+  const rangeEnd = 1 + Math.floor(usable * allocation.to); // exclusive
+  const half = Math.floor((rangeEnd - rangeStart) / 2);
+  const workerStart = rangeStart + (parallelIndex === 0 ? 0 : half);
+  const workerEnd = parallelIndex === 0 ? rangeStart + half : rangeEnd;
+  const serialKey = allocation.spec + ':' + parallelIndex + ':' + email;
+  const serial = nextIndexByEmail.get(serialKey) ?? 0;
+  nextIndexByEmail.set(serialKey, serial + 1);
   const offset = Number.parseInt(process.env.BILLOK_QA_PASSKEY_OFFSET || '0', 10);
   if (!Number.isInteger(offset) || offset < 0 || offset > 20) throw new Error('Invalid test credential offset');
-  const index = worker * Math.floor((user.credentials.length - 1) / 2) + serial + offset;
-  const credential = user.credentials[index];
-  if (!credential) throw new Error('Insufficient disposable WebAuthn credentials: ' + email + '/' + index);
+  const index = workerStart + serial + offset;
+  if (index >= workerEnd) {
+    throw new Error('Exhausted reserved disposable Passkeys for ' + allocation.spec + '/' + email);
+  }
+  const credential = user.credentials[index]!;
   await cdp.send('WebAuthn.addCredential', {
     authenticatorId: id,
     credential: {

@@ -27,42 +27,51 @@ async function noHorizontalOverflow(page: Page, width: number) {
   expect(measured.clipped).toEqual([]);
 }
 
-test('login and registration keep fields and actions reachable on large Android displays', async ({ page }) => {
+test('Passkey login and registration keep actions and fields reachable on large Android displays', async ({ page }) => {
   test.setTimeout(100_000);
   for (const path of ['/login', '/register'] as const) {
     await page.goto(path, { waitUntil: 'networkidle' });
-    const inputs = page.locator('input:visible');
-    await expect(inputs.first()).toBeVisible();
+    const inputs = page.locator('form input:visible');
     const submit = page.locator('form button[type="submit"]:visible').first();
     await expect(submit).toBeVisible();
+
+    if (path === '/login') {
+      // A Passkey-only login deliberately has no email or password fields.
+      await expect(inputs).toHaveCount(0);
+      await expect(submit).toHaveAttribute('data-testid', 'passkey-login');
+    } else {
+      await expect(inputs.first()).toBeVisible();
+    }
+
     for (const width of widths) {
       await page.setViewportSize({ width, height: 800 });
       await noHorizontalOverflow(page, width);
-      const input = inputs.last();
-      expect((await input.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      const target = path === '/register' ? inputs.last() : submit;
+      expect((await target.boundingBox())!.height).toBeGreaterThanOrEqual(44);
       expect((await submit.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+
       if (width === 480 || width === 720) {
         await page.setViewportSize({ width, height: 380 });
-        await input.focus();
-        await input.scrollIntoViewIfNeeded();
-        await expect(input).toBeInViewport();
+        if (path === '/register') await target.focus();
+        await target.scrollIntoViewIfNeeded();
+        await expect(target).toBeInViewport();
         await submit.scrollIntoViewIfNeeded();
         await expect(submit).toBeInViewport();
         await noHorizontalOverflow(page, width);
       }
     }
 
-    // Galaxy S23-sized portrait viewport with enlarged text and the height
-    // left above an Android keyboard: inputs and submit must remain reachable.
+    // Galaxy S23 portrait and enlarged Android text; only registration uses
+    // a soft keyboard, while the Passkey action has no text input.
     await page.setViewportSize({ width: 360, height: 380 });
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
-    const lastInput = inputs.last();
-    await lastInput.focus();
-    await lastInput.scrollIntoViewIfNeeded();
-    await expect(lastInput).toBeInViewport();
+    const target = path === '/register' ? inputs.last() : submit;
+    if (path === '/register') await target.focus();
+    await target.scrollIntoViewIfNeeded();
+    await expect(target).toBeInViewport();
     await submit.scrollIntoViewIfNeeded();
     await expect(submit).toBeInViewport();
-    for (const control of [lastInput, submit]) {
+    for (const control of [target, submit]) {
       expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     }
     await noHorizontalOverflow(page, 360);
