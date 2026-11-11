@@ -28,6 +28,8 @@ const mockDb = {
   systemSetting: { findUnique: vi.fn() },
   systemInvite: { findUnique: vi.fn() },
   user: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+  ownerBootstrap: { findUnique: vi.fn() },
+  passkeyCredential: { findMany: vi.fn() },
   $transaction: vi.fn(),
   $queryRaw: vi.fn(),
 };
@@ -48,6 +50,8 @@ function stubEnv(env: Record<string, string>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockDb.ownerBootstrap.findUnique.mockResolvedValue(null);
+  mockDb.passkeyCredential.findMany.mockResolvedValue([]);
   cleanupGate.mockResolvedValue(undefined);
   confirmationGate.mockResolvedValue(true);
   signupGate.mockResolvedValue({ email: 'ada@mail.ru', expiresAt: new Date('2026-11-01T12:30:00Z') });
@@ -473,5 +477,75 @@ describe('auth.getProfile', () => {
     expect(mockDb.user.findUnique).toHaveBeenLastCalledWith(
       expect.objectContaining({ where: { id: 'user-1' }, select: expect.objectContaining({ id: true }) }),
     );
+  });
+});
+
+describe('Issue #1 6.10.2.1: isolated account Passkey inventory', () => {
+  const credential = {
+    id: 'credential-row-1',
+    label: 'Мой телефон',
+    deviceType: 'multiDevice',
+    backedUp: true,
+    createdAt: new Date('2026-11-10T12:00:00.000Z'),
+    lastUsedAt: new Date('2026-11-11T12:00:00.000Z'),
+    revokedAt: null,
+  };
+
+  test('owner sees at most three permitted active Passkeys and no secret material', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'owner-1', completedAt: new Date() });
+    mockDb.passkeyCredential.findMany.mockResolvedValue([
+      credential,
+      { ...credential, id: 'retired', revokedAt: new Date() },
+    ]);
+    const api = await caller({ user: { id: 'owner-1' } });
+    const inventory = await api.listPasskeys();
+    expect(inventory).toMatchObject({ isOwner: true, maxActivePasskeys: 3, activeCount: 1 });
+    expect(inventory.credentials).toHaveLength(2);
+    expect(mockDb.passkeyCredential.findMany).toHaveBeenCalledWith({
+      where: { userId: 'owner-1' },
+      select: {
+        id: true,
+        label: true,
+        deviceType: true,
+        backedUp: true,
+        createdAt: true,
+        lastUsedAt: true,
+        revokedAt: true,
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 50,
+    });
+    expect(JSON.stringify(inventory)).not.toMatch(/credentialId|publicKey|signCount|transports|privateKey/);
+  });
+
+  test('non-owner sees only their own Passkeys and a limit of one', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'owner-1', completedAt: new Date() });
+    mockDb.passkeyCredential.findMany.mockResolvedValue([credential]);
+    const api = await caller({ user: { id: 'person-1' } });
+    expect(await api.listPasskeys()).toMatchObject({ isOwner: false, maxActivePasskeys: 1, activeCount: 1 });
+    expect(mockDb.passkeyCredential.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'person-1' } }),
+    );
+  });
+
+  test('no session can read the inventory', async () => {
+    const api = await caller();
+    await expect(api.listPasskeys()).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    expect(mockDb.passkeyCredential.findMany).not.toHaveBeenCalled();
+  });
+
+  test('does not expose Passkeys through impersonation', async () => {
+    const { authRouter } = await import('./auth');
+    const api = authRouter.createCaller({
+      session: { user: { id: 'person-1' } },
+      db: mockDb,
+      headers: new Headers(),
+      impersonating: { adminId: 'owner-1', targetId: 'person-1' },
+    } as unknown as Parameters<typeof authRouter.createCaller>[0]);
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    await expect(api.listPasskeys()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.passkeyCredential.findMany).not.toHaveBeenCalled();
   });
 });

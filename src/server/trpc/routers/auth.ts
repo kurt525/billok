@@ -164,6 +164,39 @@ export const authRouter = createTRPCRouter({
       return acknowledgement;
     }),
 
+  // Issue #1 6.10.2.1: read-only inventory. Never return credential IDs,
+  // public keys, counters or any other authentication material to a client.
+  listPasskeys: protectedProcedure.query(async ({ ctx }) => {
+    // The impersonation feature is never permission to inspect another
+    // account's authentication keys, even if a profile is visible.
+    if (ctx.impersonating) throw new AppError('FORBIDDEN');
+    const owner = await ctx.db.ownerBootstrap.findUnique({
+      where: { id: 1 },
+      select: { userId: true, completedAt: true },
+    });
+    const isOwner = owner?.userId === ctx.user.id && Boolean(owner.completedAt);
+    const credentials = await ctx.db.passkeyCredential.findMany({
+      where: { userId: ctx.user.id },
+      select: {
+        id: true,
+        label: true,
+        deviceType: true,
+        backedUp: true,
+        createdAt: true,
+        lastUsedAt: true,
+        revokedAt: true,
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 50,
+    });
+    return {
+      isOwner,
+      maxActivePasskeys: isOwner ? 3 : 1,
+      activeCount: credentials.filter((credential) => !credential.revokedAt).length,
+      credentials,
+    };
+  }),
+
   getProfile: protectedProcedure.query(async ({ ctx }) => {
     const user = await ctx.db.user.findUnique({
       where: { id: ctx.user.id },

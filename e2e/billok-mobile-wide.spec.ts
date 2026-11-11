@@ -106,6 +106,17 @@ test('mobile app stays centered and scroll-free horizontally at 430–720px with
         expect(right!.x + right!.width).toBeLessThan(670);
       }
     }
+    if (path === '/settings') {
+      // Server-backed inventory belongs only to the signed-in Passkey account.
+      const inventory = page.getByTestId('passkey-inventory');
+      await expect(inventory).toBeVisible();
+      await expect(page.getByTestId('passkey-limit')).toContainText('Активных ключей');
+      await expect(page.getByTestId('passkey-item').first()).toContainText('Создан');
+      // Target the specific card instead of hiding overflow on its container.
+      await page.setViewportSize({ width: 320, height: 620 });
+      await noHorizontalOverflow(page, 320);
+      await expect(inventory).toBeVisible();
+    }
     if (path === '/dashboard') {
       await page.setViewportSize({ width: 600, height: 800 });
       await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });

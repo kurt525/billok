@@ -201,6 +201,63 @@ function ProfileForm({
   );
 }
 
+function PasskeyInventory() {
+  const t = useTranslations('settings.passkeys');
+  const { data, isPending, error } = trpc.auth.listPasskeys.useQuery(undefined, {
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+  });
+  const formatDate = (value: Date | string) =>
+    new Date(value).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
+  const deviceLabel = (value: string) =>
+    value === 'multiDevice' ? t('syncable') : value === 'singleDevice' ? t('singleDevice') : t('typeUnknown');
+
+  return (
+    <Card data-testid="passkey-inventory" className="min-w-0">
+      <CardHeader>
+        <CardTitle>{t('title')}</CardTitle>
+        <p className="text-sm text-muted-foreground">{t('description')}</p>
+      </CardHeader>
+      <CardContent className="min-w-0 space-y-4">
+        {isPending && <p role="status">{t('loading')}</p>}
+        {error && <p role="alert">{t('error')}</p>}
+        {data && (
+          <>
+            <p data-testid="passkey-limit" className="text-sm font-medium">
+              {t('count', { count: data.activeCount, limit: data.maxActivePasskeys })}
+            </p>
+            {data.credentials.length === 0 && <p>{t('empty')}</p>}
+            <ul className="min-w-0 space-y-3" data-testid="passkey-items">
+              {data.credentials.map((key) => (
+                <li key={key.id} data-testid="passkey-item" className="min-w-0 space-y-1 rounded-xl border p-3">
+                  <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+                    <span className="min-w-0 break-words font-medium">{key.label || t('nameFallback')}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {key.revokedAt ? t('revoked') : t('active')}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{deviceLabel(key.deviceType)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {t('backupLabel')}: {key.backedUp ? t('backedUp') : t('notBackedUp')}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {t('created')}: {formatDate(key.createdAt)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {t('lastUsed')}: {key.lastUsedAt ? formatDate(key.lastUsedAt) : t('neverUsed')}
+                  </p>
+                </li>
+              ))}
+            </ul>
+            <p className="text-xs text-muted-foreground">{t('deviceHint')}</p>
+            <p className="text-xs text-muted-foreground">{data.isOwner ? t('pendingOwner') : t('pendingRegular')}</p>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const t = useTranslations('settings');
   const { data: session } = useSession();
@@ -234,6 +291,7 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+      <PasskeyInventory />
     </div>
   );
 }
