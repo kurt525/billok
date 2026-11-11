@@ -183,3 +183,39 @@ export async function finishFirstPasskeyRegistration(input: {
   }
   return { registered: true };
 }
+
+/**
+ * A confirmed invited user with no credential may retry a failed first-key
+ * ceremony using the SAME already-consumed email token within its original
+ * expiry. An existing credential or suspended account always closes this path.
+ * Email proof only opens registration; it never creates an Auth.js session.
+ */
+export async function canRetryInvitedFirstPasskey(
+  db: PrismaClient,
+  userId: string,
+  tokenHash: string,
+  now: Date = new Date(),
+): Promise<boolean> {
+  const request = await db.emailVerificationRequest.findUnique({
+    where: { tokenHash },
+    select: { userId: true, consumedAt: true, expiresAt: true },
+  });
+  if (!request || request.userId !== userId || !request.consumedAt || request.expiresAt <= now) return false;
+  const user = await db.user.findUnique({
+    where: { id: userId },
+    select: {
+      emailVerified: true,
+      registrationEmailVerificationRequired: true,
+      suspendedAt: true,
+      isPlaceholder: true,
+      passkeyCredentials: { where: { revokedAt: null }, select: { id: true }, take: 1 },
+    },
+  });
+  return Boolean(
+    user?.emailVerified &&
+    user.registrationEmailVerificationRequired &&
+    !user.suspendedAt &&
+    !user.isPlaceholder &&
+    user.passkeyCredentials.length === 0,
+  );
+}

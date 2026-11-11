@@ -4,7 +4,7 @@ import { findUsersByEmail } from './user-email';
 import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
 
 /**
- * Locate an unverified invite-only password account with one live invitation
+ * Locate an unverified invite-only account with one live invitation
  * reservation. This helper is internal: never expose the account, invite code,
  * or existence of a matching email to an unauthenticated request.
  *
@@ -25,7 +25,6 @@ export async function findPendingRegistrationForResend(
     !user ||
     !user.registrationEmailVerificationRequired ||
     user.emailVerified !== null ||
-    user.passwordHash === null ||
     !isAllowedRegistrationEmailDomain(user.email)
   ) {
     return null;

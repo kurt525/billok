@@ -10,7 +10,7 @@ describe('Issue #1 owner bootstrap has no public account creation, password or h
     expect(script).toContain('process.stderr.isTTY');
     expect(script).toContain('readOwnerBootstrapConfiguration(process.env)');
     expect(script).not.toMatch(/passwordHash:\s*['"]/);
-    expect(source('src/server/lib/owner-bootstrap.ts')).toContain('passwordHash: null');
+    expect(source('src/server/lib/owner-bootstrap.ts')).not.toContain('passwordHash');
   });
   it('binds initial setup to a confirmation link and two distinct WebAuthn credentials', () => {
     const start = source('src/app/api/webauthn/registration/start/route.ts');

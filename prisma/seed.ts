@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import { PrismaClient } from '../src/generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
-import bcrypt from 'bcryptjs';
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -9,25 +8,23 @@ const prisma = new PrismaClient({ adapter });
 async function main() {
   console.log('Seeding database...');
 
-  const passwordHash = await bcrypt.hash('password123', 12);
-
   // ── Core demo users ─────────────────────────────────────
   const alice = await prisma.user.upsert({
     where: { email: 'alice@example.com' },
     update: {},
-    create: { name: 'Alice Johnson', email: 'alice@example.com', passwordHash },
+    create: { name: 'Alice Johnson', email: 'alice@example.com' },
   });
 
   const bob = await prisma.user.upsert({
     where: { email: 'bob@example.com' },
     update: {},
-    create: { name: 'Bob Smith', email: 'bob@example.com', passwordHash },
+    create: { name: 'Bob Smith', email: 'bob@example.com' },
   });
 
   const charlie = await prisma.user.upsert({
     where: { email: 'charlie@example.com' },
     update: {},
-    create: { name: 'Charlie Brown', email: 'charlie@example.com', passwordHash },
+    create: { name: 'Charlie Brown', email: 'charlie@example.com' },
   });
 
   // ── Dedicated test users (isolated from demo data) ──────
@@ -37,22 +34,16 @@ async function main() {
   const suspendUser = await prisma.user.upsert({
     where: { email: 'suspend-test@example.com' },
     update: {},
-    create: { name: 'Suspend Test User', email: 'suspend-test@example.com', passwordHash },
+    create: { name: 'Suspend Test User', email: 'suspend-test@example.com' },
   });
 
   const deleteUser = await prisma.user.upsert({
     where: { email: 'delete-test@example.com' },
     update: {},
-    create: { name: 'Delete Test User', email: 'delete-test@example.com', passwordHash },
+    create: { name: 'Delete Test User', email: 'delete-test@example.com' },
   });
 
-  await prisma.user.upsert({
-    where: { email: 'pwtest@example.com' },
-    update: {},
-    create: { name: 'Password Test User', email: 'pwtest@example.com', passwordHash },
-  });
-
-  console.log('Created users: Alice, Bob, Charlie + 3 test users (password: password123)');
+  console.log('Created users: Alice, Bob, Charlie + 2 test users (Passkey-only authentication)');
 
   // Check if seed data already exists
   const existingApartment = await prisma.group.findFirst({
@@ -214,7 +205,7 @@ async function main() {
   });
 
   console.log(`Created group: ${testGroup.name} (admin test fixtures)`);
-  console.log('\nSeed complete! Login with any user email and password: password123');
+  console.log('\nSeed complete. Create Passkeys before signing into seeded accounts.');
 }
 
 main()

@@ -42,7 +42,7 @@ export async function issueReservedInviteVerification(input: {
 }
 
 /**
- * Prepare a password account with an invite, then issue its confirmation email.
+ * Prepare an invited account with an invite, then issue its confirmation email.
  * On failed delivery the new unverified account is removed so its email can be
  * used for a fresh registration attempt. Deleting User cascades its email tokens
  * and releases any remaining invite reservation through the schema relations.
@@ -55,7 +55,6 @@ export async function createAndDeliverPendingInviteRegistration(input: {
   db: PrismaClient;
   name: string;
   email: string;
-  passwordHash: string;
   inviteCode: string;
   siteOrigin: string;
   from: string;
@@ -64,7 +63,6 @@ export async function createAndDeliverPendingInviteRegistration(input: {
   const user = await createPendingInviteRegistration(input.db, {
     name: input.name,
     email: input.email,
-    passwordHash: input.passwordHash,
     inviteCode: input.inviteCode,
   });
 

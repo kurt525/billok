@@ -1,11 +1,10 @@
 'use client';
 
 import { Suspense, useState } from 'react';
-import { signIn } from 'next-auth/react';
 import { TRPCClientError } from '@trpc/client';
 import { useLocale, useTranslations } from 'next-intl';
 import { useSearchParams } from 'next/navigation';
-import { Link, useRouter } from '@/i18n/navigation';
+import { Link } from '@/i18n/navigation';
 import type { Locale } from '@/i18n/routing';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -16,7 +15,7 @@ import { RegistrationEmailResendForm } from '@/components/auth/registration-emai
 import { Separator } from '@/components/ui/separator';
 import { Receipt } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
-import { normalizeCallbackPath, stripLocalePrefix } from '@/lib/locale-paths';
+import { normalizeCallbackPath } from '@/lib/locale-paths';
 
 type RegistrationErrorKey =
   'emailTaken' | 'inviteRequired' | 'inviteInvalid' | 'closed' | 'emailDomain' | 'emailUnavailable' | 'generic';
@@ -65,11 +64,9 @@ export default function RegisterPage() {
 function RegisterForm() {
   const t = useTranslations('auth.register');
   const locale = useLocale() as Locale;
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [inviteCode, setInviteCode] = useState('');
   const [error, setError] = useState('');
   const [nameError, setNameError] = useState('');
@@ -81,7 +78,6 @@ function RegisterForm() {
 
   const mode = regMode.data?.mode ?? 'open';
   const callbackPath = normalizeCallbackPath(searchParams.get('callbackUrl'), locale);
-  const callbackHref = stripLocalePrefix(callbackPath);
   const loginHref = `/login?callbackUrl=${encodeURIComponent(callbackPath)}`;
 
   async function handleSubmit(e: React.FormEvent) {
@@ -99,31 +95,11 @@ function RegisterForm() {
       const registration = await registerMutation.mutateAsync({
         name: trimmedName,
         email,
-        password,
         ...(mode === 'invite-only' && inviteCode ? { inviteCode } : {}),
       });
 
-      // New invite-only registrations must verify their email before sign-in.
-      // Keep the legacy successful response working until the API switches.
-      if ('verificationRequired' in registration && registration.verificationRequired === true) {
-        setPassword('');
-        setConfirmationEmail(email);
-        return;
-      }
-
-      const result = await signIn('credentials', {
-        email,
-        password,
-        redirect: false,
-        callbackUrl: callbackPath,
-      });
-
-      if (result?.error) {
-        setError(t('error.generic'));
-      } else {
-        router.push(callbackHref);
-        router.refresh();
-      }
+      // Registration does not sign in: email confirmation and WebAuthn are mandatory.
+      if (registration.verificationRequired) setConfirmationEmail(registration.email);
     } catch (err: unknown) {
       setError(t(`error.${getRegistrationErrorKey(err)}`));
     } finally {
@@ -208,20 +184,6 @@ function RegisterForm() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">{t('password')}</Label>
-              <Input
-                id="password"
-                type="password"
-                autoComplete="new-password"
-                className="h-11 min-w-0 text-base"
-                placeholder={t('passwordPlaceholder')}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={8}
               />
             </div>
             {mode === 'invite-only' && (

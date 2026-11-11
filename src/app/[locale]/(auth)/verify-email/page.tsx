@@ -1,7 +1,8 @@
 'use client';
 
 import { Suspense, useState } from 'react';
-import { TRPCClientError } from '@trpc/client';
+import { startRegistration } from '@simplewebauthn/browser';
+import type { PublicKeyCredentialCreationOptionsJSON } from '@simplewebauthn/browser';
 import { useTranslations } from 'next-intl';
 import { useSearchParams } from 'next/navigation';
 import { CheckCircle2, MailCheck, ShieldCheck } from 'lucide-react';
@@ -9,7 +10,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { RegistrationEmailResendForm } from '@/components/auth/registration-email-resend-form';
 import { Link } from '@/i18n/navigation';
-import { trpc } from '@/lib/trpc';
 
 type ConfirmationStatus = 'idle' | 'submitting' | 'success' | 'invalid' | 'rateLimited' | 'failure';
 
@@ -27,24 +27,36 @@ function VerificationContent() {
   const token = searchParams.get('token') ?? '';
   const validToken = /^[A-Za-z0-9_-]{43}$/.test(token);
   const [status, setStatus] = useState<ConfirmationStatus>('idle');
-  const confirmation = trpc.auth.confirmEmail.useMutation();
 
   async function confirm() {
     if (!validToken || status === 'submitting' || status === 'success' || status === 'invalid') return;
     setStatus('submitting');
     try {
-      await confirmation.mutateAsync({ token });
-      setStatus('success');
-      // Remove the secret from the browser URL after it has been consumed.
-      window.history.replaceState(window.history.state, '', window.location.pathname);
-    } catch (error: unknown) {
-      if (error instanceof TRPCClientError && error.data?.code === 'BAD_REQUEST') {
-        setStatus('invalid');
-      } else if (error instanceof TRPCClientError && error.data?.code === 'TOO_MANY_REQUESTS') {
-        setStatus('rateLimited');
-      } else {
-        setStatus('failure');
+      if (!window.PublicKeyCredential) throw new Error('Passkey unavailable');
+      // Atomic email confirmation and bound challenge: no email login session.
+      const start = await fetch('/api/webauthn/registration/start', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      if (!start.ok) {
+        setStatus(start.status === 429 ? 'rateLimited' : 'invalid');
+        return;
       }
+      const payload = (await start.json()) as { options: PublicKeyCredentialCreationOptionsJSON };
+      const credential = await startRegistration({ optionsJSON: payload.options });
+      const finish = await fetch('/api/webauthn/registration/finish', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(credential),
+      });
+      if (!finish.ok) throw new Error('Passkey registration rejected');
+      setStatus('success');
+      window.history.replaceState(window.history.state, '', window.location.pathname);
+    } catch {
+      setStatus('failure');
     }
   }
 
@@ -60,14 +72,14 @@ function VerificationContent() {
           {success ? <CheckCircle2 className="size-6 text-primary" /> : <MailCheck className="size-6 text-primary" />}
         </div>
         <CardTitle className="text-2xl" role="heading" aria-level={1}>
-          {t('title')}
+          Подтверждение почты и создание Passkey
         </CardTitle>
-        <CardDescription>{t('description')}</CardDescription>
+        <CardDescription>Почта используется только для подтверждения регистрации по приглашению.</CardDescription>
       </CardHeader>
       <CardContent className="min-w-0 space-y-5 text-center">
         {success ? (
           <p role="status" className="rounded-lg bg-primary/10 p-4 text-sm text-foreground">
-            {t('success')}
+            Адрес подтверждён, Passkey создан. Войдите с этим ключом доступа.
           </p>
         ) : expired ? (
           <div className="min-w-0 space-y-4">
@@ -83,15 +95,18 @@ function VerificationContent() {
                 {status === 'rateLimited' ? t('rateLimited') : t('failure')}
               </p>
             )}
-            <p className="text-sm text-muted-foreground">{t('instructions')}</p>
+            <p className="text-sm text-muted-foreground">
+              Ключ доступа сохранится на вашем устройстве или в менеджере Passkey.
+            </p>
             <Button
               type="button"
               className="min-h-11 w-full whitespace-normal rounded-full px-4 text-base"
               disabled={submitting}
+              data-testid="verify-create-passkey"
               onClick={confirm}
             >
               <ShieldCheck className="mr-2 size-4" />
-              {submitting ? t('submitting') : retry ? t('retry') : t('confirm')}
+              {submitting ? 'Проверка…' : retry ? 'Повторить создание Passkey' : 'Подтвердить почту и создать Passkey'}
             </Button>
           </>
         )}

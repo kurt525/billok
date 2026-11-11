@@ -3,12 +3,15 @@ import type { AuthenticationResponseJSON } from '@simplewebauthn/server';
 import { db } from '@/server/db';
 import { getClientIp } from '@/server/lib/client-ip';
 import { checkRateLimit } from '@/server/lib/rate-limit';
+import { isDisposableWebAuthnQa } from '@/server/lib/webauthn-relying-party';
 import { finishPasskeyLogin, WEBAUTHN_LOGIN_BINDING_COOKIE } from '@/server/lib/passkey-login';
 
 export async function POST(request: Request) {
   const rejected = () => NextResponse.json({ error: 'Проверка ключа доступа не прошла.' }, { status: 403 });
   const ip = getClientIp(request.headers);
-  if (!checkRateLimit('passkey-finish:' + ip, 25, 15 * 60 * 1000).allowed) {
+  if (
+    !checkRateLimit('passkey-finish:' + ip, isDisposableWebAuthnQa(process.env) ? 2000 : 25, 15 * 60 * 1000).allowed
+  ) {
     return NextResponse.json({ error: 'Слишком много попыток входа.' }, { status: 429 });
   }
   const header = request.headers.get('cookie') ?? '';

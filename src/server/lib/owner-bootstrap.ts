@@ -60,7 +60,6 @@ export async function createInitialOwner(input: {
       data: {
         email,
         name: 'Владелец',
-        passwordHash: null,
         emailVerified: null,
         registrationEmailVerificationRequired: true,
         locale: 'ru',

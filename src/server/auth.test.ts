@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 /** Issue #1 6.9: external provider absence is the security boundary.
- * Password credentials are a TEMPORARY stage until 6.3.2.3.
+ * Passkey one-time tickets are the only sign-in credentials.
  */
 const { nextAuth, authMock, consumeTicket, db, logger } = vi.hoisted(() => ({
   nextAuth: vi.fn(),
@@ -16,7 +16,6 @@ vi.mock('next-auth/providers/credentials', () => ({
 }));
 vi.mock('./db', () => ({ db }));
 vi.mock('./lib/logger', () => ({ logger }));
-vi.mock('./lib/password-login', () => ({ authorizePasswordLogin: vi.fn() }));
 vi.mock('./lib/passkey-login', () => ({ consumePasskeyLoginTicket: consumeTicket }));
 
 interface AuthConfig {
@@ -74,7 +73,7 @@ afterEach(() => {
 describe('Issue #1 6.9: no hidden provider can be enabled by configuration', () => {
   test('SMTP configured for registration never becomes an email sign-in method', async () => {
     const config = await loadAuth(externalEnv);
-    expect(config.providers.map((p) => p.id)).toEqual(['credentials', 'passkey']);
+    expect(config.providers.map((p) => p.id)).toEqual(['passkey']);
     expect(config.adapter).toBeUndefined();
     expect(config.session).toEqual({ strategy: 'jwt' });
     expect(config.providers.find((p) => p.id === 'passkey')).toBeDefined();
@@ -84,15 +83,10 @@ describe('Issue #1 6.9: no hidden provider can be enabled by configuration', () 
   });
 
   test('Google, OIDC and Magic Link remain absent for any old configuration', async () => {
-    for (const env of [
-      {},
-      externalEnv,
-      { ...externalEnv, DISABLE_PASSWORD_LOGIN: 'true' },
-      { ...externalEnv, EMAIL_SERVER_HOST: '' },
-    ]) {
+    for (const env of [{}, externalEnv, { ...externalEnv, EMAIL_SERVER_HOST: '' }]) {
       const config = await loadAuth(env);
       const ids = config.providers.map((provider) => provider.id);
-      expect(ids).toEqual(['credentials', 'passkey']);
+      expect(ids).toEqual(['passkey']);
       expect(ids).not.toContain('google');
       expect(ids).not.toContain('oidc');
       expect(ids).not.toContain('nodemailer');

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   WEBAUTHN_CHALLENGE_TTL_MS,
   WEBAUTHN_PASSKEY_POLICY,
+  isDisposableWebAuthnQa,
   readBillokWebAuthnRelyingParty,
 } from './webauthn-relying-party';
 
@@ -60,6 +61,28 @@ describe('Issue #1 6.3.1: WebAuthn configuration is pinned to trusted server set
         BILLOK_WEBAUTHN_RP_ID: rpId,
       }),
     ).toThrow();
+  });
+
+  it('never enables QA loopback against a non-disposable database', () => {
+    const qa = {
+      NODE_ENV: 'production',
+      BILLOK_QA_WEBAUTHN_LOOPBACK: '1',
+      BILLOK_QA_FIXTURES: '1',
+      BILLOK_WEBAUTHN_ORIGIN: 'http://localhost:32467',
+      BILLOK_WEBAUTHN_RP_ID: 'localhost',
+      DATABASE_URL: 'postgresql://qa:local@127.0.0.1:33279/billokqa',
+    };
+    expect(isDisposableWebAuthnQa(qa)).toBe(true);
+    expect(readBillokWebAuthnRelyingParty(qa).rpId).toBe('localhost');
+    for (const changed of [
+      { BILLOK_QA_FIXTURES: '0' },
+      { DATABASE_URL: 'postgresql://qa:local@db.example:5432/billokqa' },
+      { DATABASE_URL: 'postgresql://qa:local@127.0.0.1:5432/billok' },
+    ]) {
+      const env = { ...qa, ...changed };
+      expect(isDisposableWebAuthnQa(env)).toBe(false);
+      expect(() => readBillokWebAuthnRelyingParty(env)).toThrow();
+    }
   });
 
   it('does not consume untrusted request headers in origin decisions', () => {

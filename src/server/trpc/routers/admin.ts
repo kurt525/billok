@@ -315,7 +315,6 @@ export const adminRouter = createTRPCRouter({
           name: 'Deleted user',
           placeholderName: 'Deleted user',
           email: `deleted-${input.userId}@placeholder.local`,
-          passwordHash: null,
           image: null,
           venmoUsername: null,
           suspendedAt: new Date(),

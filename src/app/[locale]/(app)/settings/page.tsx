@@ -203,36 +203,9 @@ function ProfileForm({
 
 export default function SettingsPage() {
   const t = useTranslations('settings');
-  const tc = useTranslations('common');
   const { data: session } = useSession();
 
   const profile = trpc.auth.getProfile.useQuery();
-  const loginOptions = trpc.auth.getLoginOptions.useQuery();
-  // Accounts without a local password cannot change a password; with
-  // password login disabled a password would be useless anyway. Hidden while
-  // the options load (no flash); shown if they fail to load, since the server
-  // still enforces the setting.
-  const passwordLoginEnabled = loginOptions.isSuccess ? loginOptions.data.passwordLogin : loginOptions.isError;
-  const showPasswordCard = profile.data?.hasPassword === true && passwordLoginEnabled;
-
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-
-  const changePassword = trpc.auth.changePassword.useMutation({
-    onSuccess: () => {
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-    },
-  });
-
-  function handleChangePassword(e: React.FormEvent) {
-    e.preventDefault();
-    if (newPassword !== confirmPassword) return;
-    changePassword.mutate({ currentPassword, newPassword });
-  }
-
   return (
     <div className="mx-auto min-w-0 max-w-lg space-y-6 pb-[calc(2rem+env(safe-area-inset-bottom))]">
       <h1 className="text-2xl font-bold">{t('title')}</h1>
@@ -261,73 +234,6 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
-
-      {showPasswordCard && (
-        <Card>
-          <CardHeader>
-            <CardTitle>{t('password.title')}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleChangePassword} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="currentPassword">{t('password.current')}</Label>
-                <Input
-                  id="currentPassword"
-                  type="password"
-                  autoComplete="current-password"
-                  className="h-11 min-w-0 text-base"
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  required
-                  minLength={1}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="newPassword">{t('password.new')}</Label>
-                <Input
-                  id="newPassword"
-                  type="password"
-                  autoComplete="new-password"
-                  className="h-11 min-w-0 text-base"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  required
-                  minLength={8}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="confirmPassword">{t('password.confirm')}</Label>
-                <Input
-                  id="confirmPassword"
-                  type="password"
-                  autoComplete="new-password"
-                  className="h-11 min-w-0 text-base"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  required
-                  minLength={8}
-                />
-                {confirmPassword && newPassword !== confirmPassword && (
-                  <p className="text-sm text-red-600">{t('password.mismatch')}</p>
-                )}
-              </div>
-              <Button
-                type="submit"
-                className="min-h-11 w-full"
-                disabled={
-                  changePassword.isPending || newPassword !== confirmPassword || !currentPassword || !newPassword
-                }
-              >
-                {changePassword.isPending ? t('password.submitting') : t('password.submit')}
-              </Button>
-              {changePassword.isSuccess && <p className="text-sm text-green-600">{t('password.success')}</p>}
-              {changePassword.error && (
-                <p className="text-sm text-red-600">{localizedTrpcError(changePassword.error, tc('errors.generic'))}</p>
-              )}
-            </form>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

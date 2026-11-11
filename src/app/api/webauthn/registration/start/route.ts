@@ -5,6 +5,7 @@ import { confirmRegistrationEmail } from '@/server/lib/registration-email-confir
 import { canRetryOwnerInitialPasskey } from '@/server/lib/owner-bootstrap';
 import {
   beginFirstPasskeyRegistration,
+  canRetryInvitedFirstPasskey,
   newWebAuthnBindingSecret,
   WEBAUTHN_BINDING_COOKIE,
 } from '@/server/lib/webauthn-registration';
@@ -33,12 +34,13 @@ export async function POST(request: Request) {
     if (!confirmation) return rejected();
     const confirmed = await confirmRegistrationEmail(db, data.token);
     // An interrupted owner setup may retry with the SAME verified email token
-    // within its original TTL only. No other user may replay a consumed link.
-    if (
-      !confirmed &&
-      !(await canRetryOwnerInitialPasskey(db, confirmation.userId, hashEmailVerificationToken(data.token)))
-    ) {
-      return rejected();
+    // within its original TTL only. Ordinary invited users can likewise retry
+    // a failed first-key ceremony, but never use the token to sign in.
+    if (!confirmed) {
+      const digest = hashEmailVerificationToken(data.token);
+      const ownerRetry = await canRetryOwnerInitialPasskey(db, confirmation.userId, digest);
+      const invitedRetry = await canRetryInvitedFirstPasskey(db, confirmation.userId, digest);
+      if (!ownerRetry && !invitedRetry) return rejected();
     }
 
     const rp = readBillokWebAuthnRelyingParty(process.env);

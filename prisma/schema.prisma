@@ -97,21 +97,6 @@ model WebAuthnChallenge {
 
 // Registration email verification. Never persist the secret from the email link.
 // Used only for invited email verification, never for signing in.
-// Dedicated reset links: neither Auth.js sign-in nor registration verification.
-model PasswordResetRequest {
-  id         String    @id @default(cuid())
-  userId     String
-  tokenHash  String    @unique @db.VarChar(64)
-  expiresAt  DateTime
-  consumedAt DateTime?
-  createdAt  DateTime  @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, expiresAt])
-  @@index([expiresAt])
-}
-
 model EmailVerificationRequest {
   id         String    @id @default(cuid())
   userId     String
@@ -133,9 +118,8 @@ model User {
   name            String?
   email           String    @unique
   emailVerified   DateTime?
-  // New invited accounts need confirmation; default false preserves legacy sign-ins.
+  // New invited accounts require confirmation before registering a Passkey.
   registrationEmailVerificationRequired Boolean @default(false)
-  passwordHash    String?
   // Separate, stable random handle. Never derive a WebAuthn user ID from email.
   webAuthnUserHandle String? @unique @db.VarChar(64)
   image           String?
@@ -155,7 +139,6 @@ model User {
   ownerBootstrap OwnerBootstrap?
   webAuthnChallenges WebAuthnChallenge[]
   emailVerificationRequests EmailVerificationRequest[]
-  passwordResetRequests PasswordResetRequest[]
   groupMembers    GroupMember[]
   expensesPaid    Expense[]          @relation("PaidBy")
   expensesAdded   Expense[]          @relation("AddedBy")

@@ -40,7 +40,7 @@ npx prisma db push   # Push schema without migration (dev only)
 
 - `src/server/` — Backend: auth config, Prisma client, tRPC routers, AI providers, pure calculation libs
 - `src/server/db.ts` — Prisma client singleton (uses `@prisma/adapter-pg` with `PrismaPg`)
-- `src/server/auth.ts` — NextAuth v5 with JWT sessions, currently Credentials only while Passkey issuance and login are completed. The final system will use verified WebAuthn exclusively; do not reintroduce an external identity provider.
+- `src/server/auth.ts` — NextAuth v5 with JWT sessions, Passkey-only Credentials provider backed by a one-time WebAuthn login ticket. Authentication uses verified WebAuthn exclusively; do not reintroduce an external identity provider.
 - `src/server/lib/auth-config.ts` — SMTP configuration solely for invited registration email confirmation and Passkey recovery; SMTP **never** serves as a sign-in provider.
 - `scripts/bootstrap-owner.ts` — **manual local TTY-only** first-owner setup on a **completely empty** DB. Requires explicit one-shot BILLOK_OWNER_BOOTSTRAP_ACK=CREATE_INITIAL_OWNER, configured ADMIN_EMAIL in .ru/.su, trusted NEXTAUTH_URL/WebAuthn origin, and working registration SMTP. Never a public endpoint, never seeds passwords, and refuses repeat bootstrap. --resend is only for same pending owner after cooldown.
 - `src/server/lib/owner-bootstrap.ts` — serialized singleton owner creation, private 7-day invitation, owner-only email verification, immutable identity and audit log, no fallback password.
@@ -49,7 +49,6 @@ npx prisma db push   # Push schema without migration (dev only)
 - `src/server/lib/webauthn-registration.ts` — Browser-bound single-use WebAuthn first-key attestation and exact RP/origin checks; never issues a session by itself.
 - `src/server/lib/webauthn-relying-party.ts` — Trusted billok.ru RP ID, exact permitted origins and user verification policy.
 - `src/server/lib/registration-mode.ts` — Registration setting, always restricted by the one-time invitation and .ru/.su email constraints.
-- `src/server/lib/password-login.ts` — Legacy Credentials authorize, scheduled for deletion in Issue #1 6.3.2.3 (no legacy fallback).
 - `src/server/lib/user-email.ts` — Case-insensitive user lookups for invite-only registration.
 - `src/server/lib/env.ts` — Shared strict boolean env parser for remaining settings.
 
@@ -153,7 +152,7 @@ npx prisma db push   # Push schema without migration (dev only)
 - `BASE_URL=http://localhost:3000 npx playwright test --headed` — visual testing
 - `RUN_AI_TESTS=1` — enable AI-dependent tests (requires configured AI provider)
 - Run `npm run dev:full` to start embedded PostgreSQL + dev server for testing
-- Set `AUTH_RATE_LIMIT_MAX=9999`, `AUTH_IP_RATE_LIMIT_MAX=9999`, `REGISTER_RATE_LIMIT_MAX=9999`, and `GUEST_RATE_LIMIT_MAX=9999` in `.env` to lift the per-email and per-IP limits during test runs; the global guest caps and the fixed guest limits in `guest.ts` / `guest-join-limit.ts` / `guest-session-limits.ts` still apply (every local request shares one IP bucket — Next.js synthesizes `x-forwarded-for` for local requests), as does `groups.getInvite`'s 30 lookups a minute per account (`groups.ts`)
+- Set `REGISTER_RATE_LIMIT_MAX=9999`, and `GUEST_RATE_LIMIT_MAX=9999` in `.env` to lift the per-email and per-IP limits during test runs; the global guest caps and the fixed guest limits in `guest.ts` / `guest-join-limit.ts` / `guest-session-limits.ts` still apply (every local request shares one IP bucket — Next.js synthesizes `x-forwarded-for` for local requests), as does `groups.getInvite`'s 30 lookups a minute per account (`groups.ts`)
 - E2e tests use `navigateToGroup(page, name)` helper for pagination-safe group navigation
 - `createTestGroup()` auto-deletes the group on `dispose()` to avoid test pollution
 - Do NOT rely on Chrome DevTools MCP viewport emulation for visual accuracy — it doesn't account for browser chrome

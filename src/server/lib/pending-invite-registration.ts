@@ -3,7 +3,7 @@ import { AppError } from './app-error';
 import { reserveSystemInvite } from './invite-reservation';
 
 /**
- * Create an unverified password account and reserve its invitation atomically.
+ * Create an unverified invited account and reserve its invitation atomically.
  * Do not consume the invitation or sign the user in.
  *
  * Not yet wired into auth.register: the caller must first enforce the
@@ -12,7 +12,7 @@ import { reserveSystemInvite } from './invite-reservation';
  */
 export async function createPendingInviteRegistration(
   db: PrismaClient,
-  input: { name: string; email: string; passwordHash: string; inviteCode: string; now?: Date },
+  input: { name: string; email: string; inviteCode: string; now?: Date },
 ): Promise<{ id: string; name: string | null; email: string }> {
   const now = input.now ?? new Date();
   return db.$transaction(async (tx) => {
@@ -21,7 +21,6 @@ export async function createPendingInviteRegistration(
         data: {
           name: input.name,
           email: input.email,
-          passwordHash: input.passwordHash,
           emailVerified: null,
           registrationEmailVerificationRequired: true,
         },

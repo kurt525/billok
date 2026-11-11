@@ -31,18 +31,14 @@ describe('Android group actions and account forms', () => {
     expect(invite).toContain('min-h-12 w-full');
   });
 
-  it('keeps profile name manual and password fields touch-size with Android autofill attributes', () => {
+  it('keeps profile name and SBP controls touch-size without password fields', () => {
     const profile = source('src/app/[locale]/(app)/settings/page.tsx');
-    for (const value of [
-      'autoComplete="email"',
-      'autoComplete="off"',
-      'autoComplete="current-password"',
-      'autoComplete="new-password"',
-    ]) {
+    for (const value of ['autoComplete="email"', 'autoComplete="off"']) {
       expect(profile).toContain(value);
     }
     expect(profile).not.toContain('autoComplete="name"');
-    expect(profile.match(/h-11 min-w-0 (?:scroll-mt-20 )?text-base/g)?.length).toBeGreaterThanOrEqual(6);
+    expect(profile).not.toContain('type="password"');
+    expect(profile.match(/h-11 min-w-0 (?:scroll-mt-20 )?text-base/g)?.length).toBeGreaterThanOrEqual(4);
     for (const [id, testId] of [
       ['sbp-phone', 'sbp-phone-input'],
       ['sbp-bank-search', 'sbp-bank-search'],

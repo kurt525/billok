@@ -43,7 +43,6 @@ export async function GET() {
           suspendedAt: true,
           createdAt: true,
           updatedAt: true,
-          // Explicitly exclude passwordHash
         },
       }),
       db.group.findMany(),

@@ -1,3 +1,4 @@
+import { loginWithPasskey } from './passkey-auth';
 import { expect, test, type Page } from '@playwright/test';
 
 // Galaxy S23 normally uses roughly 360 CSS px, covered by the existing smoke.
@@ -70,11 +71,8 @@ test('login and registration keep fields and actions reachable on large Android 
 
 test('mobile app stays centered and scroll-free horizontally at 430–720px with enlarged text', async ({ page }) => {
   test.setTimeout(180_000);
-  await page.goto('/login', { waitUntil: 'networkidle' });
-  await page.locator('input[type=email]').fill('alice@example.com');
-  await page.locator('input[type=password]').fill('password123');
-  await page.getByRole('button', { name: 'Войти', exact: true }).click();
-  await expect(page).toHaveURL(/\/dashboard(?:\?.*)?$/, { timeout: 20_000 });
+
+  await loginWithPasskey(page, 'alice@example.com');
 
   for (const path of ['/dashboard', '/groups', '/splits', '/settings'] as const) {
     await page.goto(path, { waitUntil: 'networkidle' });

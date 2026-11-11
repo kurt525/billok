@@ -1,6 +1,4 @@
 import { z } from 'zod';
-import { createHash } from 'node:crypto';
-import bcrypt from 'bcryptjs';
 import { AppError } from '@/server/lib/app-error';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
 import { checkRateLimit, parsePositiveInt } from '../../lib/rate-limit';
@@ -20,8 +18,6 @@ import {
 } from '../../lib/registration-resend-rate-limit';
 import { findPendingRegistrationForResend } from '../../lib/registration-resend-eligibility';
 import { deliverPendingVerificationResend } from '../../lib/registration-resend-delivery';
-import { issuePasswordReset, redeemPasswordReset } from '../../lib/password-reset-service';
-import { hashPasswordResetToken } from '../../lib/password-reset-token';
 import { isSupportedSbpBankId, normalizeSbpPhone, SBP_BANKS } from '@/lib/sbp-banks';
 
 export const authRouter = createTRPCRouter({
@@ -32,9 +28,8 @@ export const authRouter = createTRPCRouter({
   // Which sign-in methods the login page should offer. Never includes the
   // OIDC issuer, client ids or secrets — only what the UI renders.
   getLoginOptions: publicProcedure.query(() => {
-    // Temporary compatibility for the password-based UI until 6.3.2.3.
-    // No alternative provider can be activated with environment variables.
-    return { passwordLogin: true };
+    // Only an assertion-backed Passkey ticket can authenticate.
+    return { passkeyLogin: true };
   }),
 
   getRegistrationMode: publicProcedure.query(async ({ ctx }) => {
@@ -49,7 +44,6 @@ export const authRouter = createTRPCRouter({
       z.object({
         name: z.string().trim().min(1).max(100),
         email: z.string().email(),
-        password: z.string().min(8).max(100),
         inviteCode: z.string().trim().max(128).optional(),
       }),
     )
@@ -92,20 +86,18 @@ export const authRouter = createTRPCRouter({
         throw new AppError('CONFLICT', 'emailTaken');
       }
 
-      const passwordHash = await bcrypt.hash(input.password, 12);
       let pending: Awaited<ReturnType<typeof createAndDeliverPendingInviteRegistration>>;
       try {
         pending = await createAndDeliverPendingInviteRegistration({
           db: ctx.db,
           name: input.name,
           email: input.email,
-          passwordHash,
           inviteCode: input.inviteCode,
           ...emailConfig,
         });
       } catch (error) {
         if (error instanceof AppError) throw error;
-        // Do not expose SMTP details or passwords in API errors.
+        // Do not expose SMTP details in API errors.
         throw new AppError('SERVICE_UNAVAILABLE', 'registrationEmailUnavailable');
       }
 
@@ -172,74 +164,6 @@ export const authRouter = createTRPCRouter({
       return acknowledgement;
     }),
 
-  requestPasswordReset: publicProcedure
-    .input(z.object({ email: z.string().email().max(254) }))
-    .mutation(async ({ ctx, input }) => {
-      const response = { accepted: true as const };
-      const hour = 60 * 60 * 1000;
-      if (!checkRateLimit('auth:password-reset:global', 600, hour).allowed) return response;
-      const ip = getClientIp(ctx.headers);
-      if (!checkRateLimit('auth:password-reset:ip:' + ip, 5, hour).allowed) return response;
-      const emailHash = createHash('sha256').update(input.email.trim().toLowerCase()).digest('hex');
-      if (!checkRateLimit('auth:password-reset:email:' + emailHash, 3, hour).allowed) return response;
-      if (!isAllowedRegistrationEmailDomain(input.email)) return response;
-      try {
-        const config = readRegistrationEmailConfig(process.env);
-        await issuePasswordReset({ db: ctx.db, email: input.email, ...config });
-      } catch {
-        // Preserve the same public acknowledgement for unknown accounts,
-        // absent SMTP configuration and storage/delivery failures.
-      }
-      return response;
-    }),
-
-  resetPassword: publicProcedure
-    .input(z.object({ token: z.string().length(43), newPassword: z.string().min(8).max(100) }))
-    .mutation(async ({ ctx, input }) => {
-      const hour = 60 * 60 * 1000;
-      const ip = getClientIp(ctx.headers);
-      const digest = hashPasswordResetToken(input.token);
-      if (
-        !checkRateLimit('auth:password-reset-redeem:global', 1000, hour).allowed ||
-        !checkRateLimit('auth:password-reset-redeem:ip:' + ip, 20, hour).allowed ||
-        !checkRateLimit('auth:password-reset-redeem:token:' + digest, 5, hour).allowed
-      ) {
-        throw new AppError('TOO_MANY_REQUESTS', 'passwordResetRateLimited');
-      }
-      const success = await redeemPasswordReset(ctx.db, input.token, input.newPassword);
-      if (!success) throw new AppError('BAD_REQUEST', 'passwordResetLinkInvalid');
-      return { success: true as const };
-    }),
-
-  changePassword: protectedProcedure
-    .input(
-      z.object({
-        currentPassword: z.string().min(1),
-        newPassword: z.string().min(8).max(100),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const user = await ctx.db.user.findUnique({
-        where: { id: ctx.user.id },
-      });
-      if (!user?.passwordHash) {
-        throw new AppError('BAD_REQUEST', 'noPasswordToChange');
-      }
-
-      const valid = await bcrypt.compare(input.currentPassword, user.passwordHash);
-      if (!valid) {
-        throw new AppError('UNAUTHORIZED', 'wrongPassword');
-      }
-
-      const passwordHash = await bcrypt.hash(input.newPassword, 12);
-      await ctx.db.user.update({
-        where: { id: ctx.user.id },
-        data: { passwordHash },
-      });
-
-      return { success: true };
-    }),
-
   getProfile: protectedProcedure.query(async ({ ctx }) => {
     const user = await ctx.db.user.findUnique({
       where: { id: ctx.user.id },
@@ -252,14 +176,12 @@ export const authRouter = createTRPCRouter({
         sbpBankId: true,
         locale: true,
         defaultCurrency: true,
-        passwordHash: true,
       },
     });
     if (!user) {
       throw new AppError('NOT_FOUND', 'userNotFound');
     }
-    const { passwordHash, ...profile } = user;
-    return { ...profile, hasPassword: passwordHash !== null };
+    return user;
   }),
 
   updateProfile: protectedProcedure

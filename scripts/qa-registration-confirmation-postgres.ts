@@ -34,7 +34,6 @@ async function main(): Promise<void> {
     const user = await createPendingInviteRegistration(db, {
       name: 'Проверка подтверждения',
       email: 'ci-confirm-' + suffix + '@billok.ru',
-      passwordHash: 'qa-only-not-a-real-password-hash',
       inviteCode,
       now,
     });

@@ -4,11 +4,15 @@ import { getClientIp } from '@/server/lib/client-ip';
 import { checkRateLimit } from '@/server/lib/rate-limit';
 import { beginPasskeyLogin, WEBAUTHN_LOGIN_BINDING_COOKIE } from '@/server/lib/passkey-login';
 import { newWebAuthnBindingSecret } from '@/server/lib/webauthn-registration';
-import { readBillokWebAuthnRelyingParty, WEBAUTHN_CHALLENGE_TTL_MS } from '@/server/lib/webauthn-relying-party';
+import {
+  isDisposableWebAuthnQa,
+  readBillokWebAuthnRelyingParty,
+  WEBAUTHN_CHALLENGE_TTL_MS,
+} from '@/server/lib/webauthn-relying-party';
 
 export async function POST(request: Request) {
   const ip = getClientIp(request.headers);
-  if (!checkRateLimit('passkey-start:' + ip, 20, 60 * 60 * 1000).allowed) {
+  if (!checkRateLimit('passkey-start:' + ip, isDisposableWebAuthnQa(process.env) ? 2000 : 20, 60 * 60 * 1000).allowed) {
     return NextResponse.json({ error: 'Слишком много попыток входа.' }, { status: 429 });
   }
   try {

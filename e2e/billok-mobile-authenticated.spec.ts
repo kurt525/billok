@@ -1,3 +1,4 @@
+import { loginWithPasskey } from './passkey-auth';
 import { expect, test, type Page } from '@playwright/test';
 import { auditMobileViewport, auditMobileTarget } from './billok-mobile-viewport-audit';
 import { createTestGroup, trpcMutation, users } from './helpers';
@@ -74,12 +75,7 @@ async function checkPhoneLayout(page: Page, width: number, allowInnerTables = fa
 }
 
 async function signInAsSeedAdmin(page: Page) {
-  await page.goto('/login', { waitUntil: 'networkidle' });
-  await expect(page.getByText('С возвращением!', { exact: true })).toBeVisible();
-  await page.locator('input[type=email]').fill('alice@example.com');
-  await page.locator('input[type=password]').fill('password123');
-  await page.getByRole('button', { name: 'Войти', exact: true }).click();
-  await expect(page).toHaveURL(/\/dashboard(?:\?.*)?$/, { timeout: 20_000 });
+  await loginWithPasskey(page, 'alice@example.com');
   await expect(page.getByRole('heading', { name: 'Главная' })).toBeVisible();
 }
 

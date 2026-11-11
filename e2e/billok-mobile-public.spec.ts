@@ -4,7 +4,7 @@ import { auditMobileViewport, auditMobileTarget } from './billok-mobile-viewport
 // Public BillOK journeys, isolated from any authenticated test data.
 const widths = [320, 360, 393, 412] as const;
 const pages = [
-  { path: '/login', heading: 'С возвращением!', hasInput: true },
+  { path: '/login', heading: 'С возвращением!', hasInput: false },
   { path: '/register', heading: 'Создать аккаунт', hasInput: true },
   { path: '/verify-request', heading: 'Проверьте почту', hasInput: false },
   { path: '/split', heading: 'Разделить чек', hasInput: false },
@@ -121,7 +121,6 @@ test('invited mobile signup waits for email confirmation without automatic sign-
   await page.goto('/register', { waitUntil: 'networkidle' });
   await page.getByLabel('Имя').fill('Участник');
   await page.getByLabel('Электронная почта').fill(email);
-  await page.getByLabel('Пароль').fill('testpass123');
   await page.getByLabel('Код приглашения').fill(inviteCode);
   await page.getByRole('button', { name: 'Зарегистрироваться' }).click();
 
@@ -171,7 +170,7 @@ test('invited mobile signup waits for email confirmation without automatic sign-
 test('malformed email confirmation link shows a Russian error without consuming a token', async ({ page }) => {
   test.setTimeout(45_000);
   let confirmations = 0;
-  await page.route('**/api/trpc/auth.confirmEmail*', async (route) => {
+  await page.route('**/api/webauthn/registration/start', async (route) => {
     confirmations++;
     await route.abort();
   });
@@ -179,7 +178,7 @@ test('malformed email confirmation link shows a Russian error without consuming 
   await page.goto('/verify-email?token=invalid', { waitUntil: 'networkidle' });
   const error = page.getByRole('alert').filter({ hasText: 'Ссылка недействительна' });
   await expect(error).toContainText('Ссылка недействительна, уже использована или срок её действия истёк.');
-  await expect(page.getByRole('button', { name: 'Подтвердить адрес' })).toHaveCount(0);
+  await expect(page.getByTestId('verify-create-passkey')).toHaveCount(0);
   expect(confirmations, 'invalid link must not consume or send a token').toBe(0);
 
   await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
@@ -209,30 +208,20 @@ test('expired or used email confirmation link shows a safe Russian error without
   test.setTimeout(45_000);
   const token = 'C'.repeat(43);
   let confirmations = 0;
-  await page.route('**/api/trpc/auth.confirmEmail*', async (route) => {
+  await page.route('**/api/webauthn/registration/start', async (route) => {
     confirmations++;
     expect(route.request().method()).toBe('POST');
     await route.fulfill({
       status: 400,
       contentType: 'application/json',
-      body: JSON.stringify([
-        {
-          error: {
-            json: {
-              message: 'Email confirmation link is invalid',
-              code: -32600,
-              data: { code: 'BAD_REQUEST', httpStatus: 400, path: 'auth.confirmEmail' },
-            },
-          },
-        },
-      ]),
+      body: JSON.stringify({ error: 'Registration link expired or used' }),
     });
   });
 
   await page.setViewportSize({ width: 320, height: 700 });
   await page.goto('/verify-email?token=' + token, { waitUntil: 'networkidle' });
   expect(confirmations, 'opening a used link must not submit it').toBe(0);
-  const confirm = page.getByRole('button', { name: 'Подтвердить адрес' });
+  const confirm = page.getByTestId('verify-create-passkey');
   await expect(confirm).toBeVisible();
   await confirm.click();
 
@@ -240,7 +229,7 @@ test('expired or used email confirmation link shows a safe Russian error without
   await expect(invalid).toContainText(
     'Ссылка недействительна, уже использована или срок её действия истёк. Запросите новую ссылку.',
   );
-  await expect(page.getByRole('button', { name: /Подтвердить адрес|Повторить подтверждение/ })).toHaveCount(0);
+  await expect(page.getByTestId('verify-create-passkey')).toHaveCount(0);
   expect(confirmations, 'an invalid token must be submitted once, never retried').toBe(1);
   await expect(page.getByRole('status')).toHaveCount(0);
 
@@ -260,68 +249,44 @@ test('expired or used email confirmation link shows a safe Russian error without
 
 // Security-relevant UI check: email scanners can render GET links, so only an
 // explicit button click may consume the one-time confirmation token.
-test('registration email link requires a tap before POST confirmation', async ({ page }) => {
+test('registration email link needs a tap and never retries a rejected Passkey start', async ({ page }) => {
   test.setTimeout(60_000);
-  await page.setViewportSize({ width: 320, height: 700 });
   const token = 'A'.repeat(43);
-  let confirmations = 0;
-  let releaseConfirmation: () => void = () => {};
-  const confirmationDelay = new Promise<void>((resolve) => {
-    releaseConfirmation = resolve;
+  let attempts = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
   });
-  await page.route('**/api/trpc/auth.confirmEmail*', async (route) => {
-    confirmations++;
-    expect(route.request().method()).toBe('POST');
-    await confirmationDelay;
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify([{ result: { data: { json: { verified: true } } } }]),
-    });
+  await page.route('**/api/webauthn/registration/start', async (route) => {
+    attempts++;
+    await gate;
+    await route.fulfill({ status: 400, contentType: 'application/json', body: '{"error":"Invalid token"}' });
   });
-
-  await page.goto(`/verify-email?token=${token}`, { waitUntil: 'networkidle' });
-  await expect(page.getByRole('heading', { name: 'Подтверждение почты' })).toBeVisible();
-  expect(confirmations, 'opening a mail link must not consume a token').toBe(0);
-  const button = page.getByRole('button', { name: /^(Подтвердить адрес|Подтверждаем…)$/ });
+  await page.goto('/verify-email?token=' + token, { waitUntil: 'networkidle' });
+  await expect(page.getByRole('heading', { name: 'Подтверждение почты и создание Passkey' })).toBeVisible();
+  expect(attempts).toBe(0);
+  const button = page.getByTestId('verify-create-passkey');
   await expect(button).toBeVisible();
-  expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-
   await button.click();
   await expect(button).toBeDisabled();
-  await expect(button).toHaveText('Подтверждаем…');
-  // React sets the pending state before the POST reaches the route handler.
-  // Keep the exactly-one-request contract, but wait for the network boundary.
-  await expect.poll(() => confirmations, { timeout: 10_000 }).toBe(1);
-  releaseConfirmation();
-
-  await expect(page.getByRole('status')).toContainText(
-    'Адрес электронной почты подтверждён. Теперь можно войти в аккаунт.',
+  await expect.poll(() => attempts).toBe(1);
+  release();
+  await expect(page.getByRole('alert').filter({ hasText: 'Ссылка недействительна' })).toContainText(
+    'Ссылка недействительна',
   );
-  await expect(page).toHaveURL(/\/verify-email$/);
-  expect(confirmations, 'email confirmation must be sent exactly once').toBe(1);
-
-  // One successful confirmation stays readable with a larger Android font and
-  // short viewport at every required mobile width, including 720 CSS px.
+  expect(attempts).toBe(1);
   await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
   const back = page.getByRole('link', { name: 'Перейти ко входу' });
   for (const width of [320, 360, 430, 480, 600, 720]) {
     await page.setViewportSize({ width, height: 320 });
-    await expect(page.getByRole('status')).toBeVisible();
     await back.scrollIntoViewIfNeeded();
     await expect(back).toBeInViewport();
-    const bounds = await back.boundingBox();
-    expect(bounds, 'login link at ' + width + 'px').not.toBeNull();
-    expect(bounds!.height).toBeGreaterThanOrEqual(44);
-    expect(bounds!.x).toBeGreaterThanOrEqual(0);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-    const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
-    expect(documentWidth, 'horizontal overflow at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+    const bounds = (await back.boundingBox())!;
+    expect(bounds.height).toBeGreaterThanOrEqual(44);
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
   }
-
-  await back.click();
-  await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByText('С возвращением!', { exact: true })).toBeVisible();
 });
 
 test.describe('mail waiting screen on wide mobile viewports', () => {
@@ -376,7 +341,7 @@ test('mobile confirmation recovery handles concurrent taps and network errors at
   const deliveryGate = new Promise<void>((resolve) => {
     releaseDelivery = resolve;
   });
-  await page.route('**/api/trpc/auth.confirmEmail*', async (route) => {
+  await page.route('**/api/webauthn/registration/start', async (route) => {
     confirmCount++;
     await route.abort();
   });
@@ -407,7 +372,7 @@ test('mobile confirmation recovery handles concurrent taps and network errors at
   await expect(form.getByRole('status')).toContainText('Если для этого адреса доступно подтверждение');
   expect(requestCount).toBe(1);
   expect(confirmCount).toBe(0);
-  await expect(page.getByRole('button', { name: 'Подтвердить адрес' })).toHaveCount(0);
+  await expect(page.getByTestId('verify-create-passkey')).toHaveCount(0);
 
   // A failed connection is distinct from a generic success acknowledgement,
   // and does not reveal whether the address is registered.
@@ -433,84 +398,21 @@ test('mobile confirmation recovery handles concurrent taps and network errors at
   }
 });
 
-test('password recovery mobile request and one-time reset feedback', async ({ page }) => {
-  test.setTimeout(75_000);
-  let requests = 0;
-  let redeems = 0;
-  await page.route('**/api/trpc/auth.requestPasswordReset*', async (route) => {
-    requests++;
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify([{ result: { data: { json: { accepted: true } } } }]),
-    });
-  });
-  await page.goto('/forgot-password', { waitUntil: 'networkidle' });
-  await expect(page).toHaveURL(/\/forgot-password$/);
-  await expect(page.getByTestId('forgot-password-form')).toBeVisible();
-  await page.getByLabel('Электронная почта').fill('unknown@mail.ru');
-  await page.getByRole('button', { name: 'Получить ссылку' }).click();
-  await expect(page.getByRole('status')).toContainText('Если для этого адреса доступно восстановление');
-  expect(requests).toBe(1);
-
-  await page.goto('/reset-password?token=bad', { waitUntil: 'networkidle' });
-  await expect(page).toHaveURL(/\/reset-password\?token=bad$/);
-  await expect(page.locator('p[role="alert"]')).toContainText('Ссылка недействительна');
-  await expect(page.getByTestId('reset-password-form')).toHaveCount(0);
-  await page.route('**/api/trpc/auth.resetPassword*', async (route) => {
-    redeems++;
-    await route.fulfill(
-      redeems === 1
-        ? {
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify([{ result: { data: { json: { success: true } } } }]),
-          }
-        : {
-            status: 400,
-            contentType: 'application/json',
-            body: JSON.stringify([
-              {
-                error: {
-                  json: {
-                    message: 'Link invalid',
-                    code: -32600,
-                    data: { code: 'BAD_REQUEST', httpStatus: 400, path: 'auth.resetPassword' },
-                  },
-                },
-              },
-            ]),
-          },
-    );
-  });
-  await page.goto('/reset-password?token=' + 'A'.repeat(43), { waitUntil: 'networkidle' });
-  await page.getByLabel('Новый пароль', { exact: true }).fill('example-password-123');
-  await page.getByLabel('Повторите новый пароль').fill('example-password-123');
-  await page.getByRole('button', { name: 'Сменить пароль' }).click();
-  await expect(page.getByRole('status')).toContainText('Пароль изменён');
-  expect(redeems).toBe(1);
-  await expect(page).toHaveURL(/\/reset-password$/);
-  await page.goto('/reset-password?token=' + 'A'.repeat(43), { waitUntil: 'networkidle' });
-  await page.getByLabel('Новый пароль', { exact: true }).fill('example-password-123');
-  await page.getByLabel('Повторите новый пароль').fill('example-password-123');
-  await page.getByRole('button', { name: 'Сменить пароль' }).click();
-  await expect(page.locator('p[role="alert"]')).toContainText('Ссылка недействительна');
-  expect(redeems).toBe(2);
-
-  await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
-  for (const width of [320, 360, 430, 480, 600, 720]) {
-    await page.setViewportSize({ width, height: 340 });
-    const back = page.getByRole('link', { name: 'Вернуться ко входу' });
-    await back.scrollIntoViewIfNeeded();
-    expect((await back.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+test('removed password reset procedures cannot issue sessions', async ({ page }) => {
+  await page.goto('/login', { waitUntil: 'networkidle' });
+  await expect(page.getByTestId('passkey-login')).toBeVisible();
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  await expect(page.locator('a[href*="forgot-password"]')).toHaveCount(0);
+  for (const procedure of ['requestPasswordReset', 'resetPassword', 'changePassword']) {
+    const res = await page.request.post('/api/trpc/auth.' + procedure, { data: { json: {} } });
+    expect(res.status(), procedure).toBeGreaterThanOrEqual(400);
   }
 });
 
 test.describe('Keyboard-sized BillOK login on six mobile widths', () => {
   test.use({ viewport: { width: 320, height: 300 }, isMobile: true, hasTouch: true });
 
-  test('short-viewport login keeps error and credentials reachable without submitting', async ({ page }) => {
+  test('short-viewport login keeps error and Passkey action reachable without submitting', async ({ page }) => {
     test.setTimeout(170_000);
     const height = 300;
     for (const width of [320, 360, 430, 480, 600, 720]) {
@@ -521,15 +423,9 @@ test.describe('Keyboard-sized BillOK login on six mobile widths', () => {
       const form = page.getByTestId('mobile-login-form');
       await expect(alert).toBeVisible();
       await expect(form).toBeVisible();
-      const email = form.locator('input#email');
-      const password = form.locator('input#password');
-      const submit = form.locator('button[type="submit"]');
-      const forgot = form.locator('a[href*="/forgot-password"]');
-      await expect(forgot).toBeVisible();
-
-      await email.fill('example@mail.ru');
-      await password.fill('example-password');
-      for (const target of [email, password, submit, forgot]) {
+      const submit = form.getByTestId('passkey-login');
+      await expect(form.locator('input')).toHaveCount(0);
+      for (const target of [submit]) {
         await target.scrollIntoViewIfNeeded();
         const rect = await target.boundingBox();
         expect(rect).not.toBeNull();
@@ -580,15 +476,13 @@ test('invite-only form fits keyboard-sized viewport at six widths', async ({ pag
     const controls = [
       name,
       form.locator('input#email'),
-      form.locator('input#password'),
       form.locator('input#inviteCode'),
       form.locator('button[type="submit"]'),
     ];
     await name.fill('   ');
     await controls[1]!.fill('participant@mail.ru');
-    await controls[2]!.fill('example-password');
-    await controls[3]!.fill('INVITE-QA-FAKE');
-    await controls[4]!.click();
+    await controls[2]!.fill('INVITE-QA-FAKE');
+    await controls[3]!.click();
     await expect(page.locator('#name-error')).toBeVisible();
     expect(registrations).toBe(0);
     for (const el of controls) {
@@ -621,9 +515,8 @@ test('invite-only form fits keyboard-sized viewport at six widths', async ({ pag
 test('six-width final public mobile adaptation audit: login, invite, recovery and join', async ({ page }) => {
   test.setTimeout(200_000);
   const screens = [
-    { path: '/login', control: '[data-testid="mobile-login-form"] input#email' },
+    { path: '/login', control: '[data-testid="passkey-login"]' },
     { path: '/register', control: '[data-testid="mobile-register-form"] input#name' },
-    { path: '/forgot-password', control: '[data-testid="forgot-password-form"] input#reset-email' },
     { path: '/verify-request', control: 'a[href="/login"]' },
     { path: '/split', control: '[data-testid="manual-split-sign-in-required"] a[href*="/login"]' },
   ] as const;

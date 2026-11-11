@@ -113,7 +113,6 @@ describe('Issue #1 6.3.2.2.2: local-only first owner without a password', () => 
     expect(tx.user.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         email: env.ADMIN_EMAIL,
-        passwordHash: null,
         emailVerified: null,
         registrationEmailVerificationRequired: true,
         locale: 'ru',

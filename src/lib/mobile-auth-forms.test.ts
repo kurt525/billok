@@ -13,13 +13,15 @@ describe('Mobile authentication and verification forms', () => {
     expect(layout).not.toContain('overflow-hidden');
   });
 
-  it('uses touch-size credentials, email autofill and 44px sign-in buttons', () => {
+  it('uses a single 44px WebAuthn sign-in button without password fields', () => {
     const login = source('src/app/[locale]/(auth)/login/page.tsx');
-    expect(login).toContain('autoComplete="username"');
-    expect(login).toContain('autoComplete="current-password"');
+    expect(login).toContain('startAuthentication({ optionsJSON: data.options })');
+    expect(login).toContain("signIn('passkey'");
+    expect(login).toContain('data-testid="passkey-login"');
+    expect(login).not.toContain('type="password"');
     // SMTP email is only for account verification, never for login.
     expect(login).not.toContain('autoComplete="email"');
-    expect(login.match(/className="h-11 min-w-0 text-base"/g)).toHaveLength(2);
+    expect(login).not.toContain('autoComplete="current-password"');
     expect(login).not.toContain('magicLinkForm');
     expect(login).not.toContain('oidc-sign-in');
     expect(login).not.toContain('google-sign-in');
@@ -33,11 +35,11 @@ describe('Mobile authentication and verification forms', () => {
     expect(register).toContain('autoComplete="off"');
     expect(register).not.toContain('autoComplete="name"');
     expect(register).toContain('autoComplete="email"');
-    expect(register).toContain('autoComplete="new-password"');
-    expect(register.match(/className="h-11 min-w-0 text-base"/g)).toHaveLength(4);
+    expect(register).not.toContain('type="password"');
+    expect(register.match(/className="h-11 min-w-0 text-base"/g)).toHaveLength(3);
     expect(register).toContain('min-h-11 w-full');
-    expect(register).toContain("'verificationRequired' in registration");
-    expect(register).toContain('setConfirmationEmail(email)');
+    expect(register).toContain('registration.verificationRequired');
+    expect(register).toContain('setConfirmationEmail(registration.email)');
     expect(register).toContain('confirmationPendingDescription');
   });
 
@@ -66,20 +68,17 @@ describe('Mobile authentication and verification forms', () => {
     expect(verify).toContain('<RegistrationEmailResendForm />');
     expect(verify.indexOf('<RegistrationEmailResendForm />')).toBeLessThan(verify.indexOf("{t('backToLogin')}"));
     expect(register).toContain('<RegistrationEmailResendForm initialEmail={confirmationEmail} />');
-    expect(register).toContain("setPassword('')");
+    expect(verify).toContain('startRegistration({ optionsJSON: payload.options })');
     expect(register).not.toContain('initialEmail={password}');
   });
 
-  it('exposes both password recovery screens without an authenticated session', () => {
-    const middleware = source('src/middleware.ts');
-    const forgot = source('src/app/[locale]/(auth)/forgot-password/page.tsx');
-    const reset = source('src/app/[locale]/(auth)/reset-password/page.tsx');
-    expect(middleware).toContain("'/forgot-password'");
-    expect(middleware).toContain("'/reset-password'");
-    expect(forgot).toContain('requestPasswordReset.useMutation()');
-    expect(reset).toContain('resetPassword.useMutation()');
-    expect(forgot).toContain('min-h-11 w-full');
-    expect(reset).toContain('min-h-11 w-full');
+  it('has no password reset or change endpoints and keeps WebAuthn sign-in', () => {
+    const auth = source('src/server/auth.ts');
+    const router = source('src/server/trpc/routers/auth.ts');
+    expect(auth).not.toContain('authorizePasswordLogin');
+    expect(auth).toContain("id: 'passkey'");
+    expect(router).not.toMatch(/requestPasswordReset|resetPassword|changePassword/);
+    expect(router).not.toContain('passwordHash');
   });
 
   it('keeps the confirmation email page back action tappable', () => {

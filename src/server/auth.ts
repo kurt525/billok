@@ -2,24 +2,14 @@ import NextAuth from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
 import { db } from './db';
 import { logger } from './lib/logger';
-import { authorizePasswordLogin } from './lib/password-login';
 import { consumePasskeyLoginTicket } from './lib/passkey-login';
 
-// No external providers, email magic links or OAuth account linking are
-// installed. Credentials is temporary ONLY until Issue #1 6.3.2.3 replaces
-// it with verified WebAuthn. It cannot be reenabled via environment flags.
+// A verified, short-lived WebAuthn ticket is the ONLY credential accepted.
+// Magic Link, OAuth and OIDC remain outside this password-removal stage.
 export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: 'jwt' },
   pages: { signIn: '/login', error: '/login' },
   providers: [
-    Credentials({
-      name: 'credentials',
-      credentials: {
-        email: { label: 'Email', type: 'email' },
-        password: { label: 'Password', type: 'password' },
-      },
-      authorize: (credentials, request) => authorizePasswordLogin(credentials, request.headers),
-    }),
     // Only a previously VERIFIED WebAuthn assertion can mint this short-lived,
     // one-time login ticket. No password, email link or OAuth identity accepted.
     Credentials({

@@ -45,7 +45,6 @@ async function main() {
     ownerId = owner.userId;
     assert.equal(owner.email, ownerEmail);
     const user = await db.user.findUniqueOrThrow({ where: { id: owner.userId } });
-    assert.equal(user.passwordHash, null);
     assert.equal(user.emailVerified, null);
     assert.equal(user.registrationEmailVerificationRequired, true);
     const invite = await db.systemInvite.findFirstOrThrow({ where: { reservedById: user.id } });

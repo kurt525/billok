@@ -81,7 +81,6 @@ describe('pending registration delivery and SMTP failure compensation', () => {
       ...input,
       db: db as PrismaClient,
       name: 'Тест',
-      passwordHash: 'only-for-test',
     });
 
     expect(result).toEqual({
@@ -91,7 +90,6 @@ describe('pending registration delivery and SMTP failure compensation', () => {
     expect(pendingRegistration).toHaveBeenCalledExactlyOnceWith(db, {
       name: 'Тест',
       email: input.email,
-      passwordHash: 'only-for-test',
       inviteCode: input.inviteCode,
     });
     expect(deliver).toHaveBeenCalledExactlyOnceWith(input);
@@ -108,7 +106,6 @@ describe('pending registration delivery and SMTP failure compensation', () => {
         ...input,
         db: db as PrismaClient,
         name: 'Тест',
-        passwordHash: 'only-for-test',
       }),
     ).rejects.toThrow('SMTP rejected');
 

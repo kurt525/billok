@@ -1,3 +1,4 @@
+import { loginWithPasskey } from './passkey-auth';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { trpcQuery, trpcResult } from './helpers';
 
@@ -30,11 +31,7 @@ test('group receipt: add, edit, cancel, split, assign, save, delete and finalize
   test.skip(!receiptUrl, 'Requires isolated BILLOK_MOBILE_RECEIPT_ID and GROUP_ID fixture');
   test.setTimeout(180_000);
 
-  await page.goto('/login', { waitUntil: 'networkidle' });
-  await page.locator('input[type=email]').fill('bob@example.com');
-  await page.locator('input[type=password]').fill('password123');
-  await page.getByRole('button', { name: 'Войти', exact: true }).click();
-  await expect(page).toHaveURL(/\/dashboard/);
+  await loginWithPasskey(page, 'bob@example.com');
 
   await page.goto(receiptUrl!, { waitUntil: 'networkidle' });
   await expect(page.getByTestId('item-assignment-form')).toBeVisible();
@@ -141,11 +138,7 @@ test('Issue 2.20.3: group known original portions, creator reapproval, exact RUB
   test.skip(!groupId, 'Requires disposable RUB group fixture');
   test.setTimeout(180_000);
 
-  await page.goto('/login', { waitUntil: 'networkidle' });
-  await page.locator('input[type=email]').fill('bob@example.com');
-  await page.locator('input[type=password]').fill('password123');
-  await page.getByRole('button', { name: 'Войти', exact: true }).click();
-  await expect(page).toHaveURL(/\/dashboard/);
+  await loginWithPasskey(page, 'bob@example.com');
   await page.goto('/groups/' + groupId + '/expenses/new', { waitUntil: 'networkidle' });
   await page.getByTestId('create-manual-group-receipt').click();
   await expect(page).toHaveURL(/\/scan\?receiptId=/);
@@ -248,11 +241,8 @@ test('Issue 2.20.3: group known original portions, creator reapproval, exact RUB
   });
   try {
     const alicePage = await aliceContext.newPage();
-    await alicePage.goto('/login', { waitUntil: 'networkidle' });
-    await alicePage.locator('input[type=email]').fill('alice@example.com');
-    await alicePage.locator('input[type=password]').fill('password123');
-    await alicePage.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(alicePage).toHaveURL(/\/dashboard/);
+
+    await loginWithPasskey(alicePage, 'alice@example.com');
     await alicePage.goto(createdUrl, { waitUntil: 'networkidle' });
     await expect(alicePage.getByTestId('item-assignment-form')).toBeVisible();
     await expect(alicePage.locator('[data-testid^="item-total-parts-input-"]')).toHaveCount(0);
@@ -318,11 +308,8 @@ test('Issue 2.16.3: manual group receipt balances two dishes and persists exact 
 }) => {
   test.skip(!groupId, 'Requires disposable RUB group fixture');
   test.setTimeout(180_000);
-  await page.goto('/login', { waitUntil: 'networkidle' });
-  await page.locator('input[type=email]').fill('bob@example.com');
-  await page.locator('input[type=password]').fill('password123');
-  await page.getByRole('button', { name: 'Войти', exact: true }).click();
-  await expect(page).toHaveURL(/\/dashboard/);
+
+  await loginWithPasskey(page, 'bob@example.com');
   await page.goto('/groups/' + groupId + '/expenses/new', { waitUntil: 'networkidle' });
   await page.getByTestId('create-manual-group-receipt').click();
   await expect(page).toHaveURL(/\/scan\?receiptId=/);
@@ -460,11 +447,7 @@ test('two registered group members independently save voluntary RUB tips on a mo
   test.skip(!groupId, 'Requires disposable RUB group fixture');
   test.setTimeout(225_000);
 
-  await page.goto('/login', { waitUntil: 'networkidle' });
-  await page.locator('input[type=email]').fill('bob@example.com');
-  await page.locator('input[type=password]').fill('password123');
-  await page.getByRole('button', { name: 'Войти', exact: true }).click();
-  await expect(page).toHaveURL(/\/dashboard/);
+  await loginWithPasskey(page, 'bob@example.com');
   await page.goto('/groups/' + groupId + '/expenses/new', { waitUntil: 'networkidle' });
   await page.getByTestId('create-manual-group-receipt').click();
   await expect(page).toHaveURL(/\/scan\?receiptId=/);
@@ -495,11 +478,8 @@ test('two registered group members independently save voluntary RUB tips on a mo
   });
   try {
     const alicePage = await aliceContext.newPage();
-    await alicePage.goto('/login', { waitUntil: 'networkidle' });
-    await alicePage.locator('input[type=email]').fill('alice@example.com');
-    await alicePage.locator('input[type=password]').fill('password123');
-    await alicePage.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(alicePage).toHaveURL(/\/dashboard/);
+
+    await loginWithPasskey(alicePage, 'alice@example.com');
     await alicePage.goto(receiptUrl, { waitUntil: 'networkidle' });
     const aliceTip = alicePage.getByTestId('group-personal-tip-input');
     // Alice can see Bob's already saved tip, but cannot edit it.
@@ -655,11 +635,8 @@ test('manual group bill starts without upload and keeps its positions', async ({
   page.on('request', (r) => {
     if (/\/api\/upload|receipts\.processReceipt|api\.openai/.test(r.url())) uploads.push(r.url());
   });
-  await page.goto('/login', { waitUntil: 'networkidle' });
-  await page.locator('input[type=email]').fill('bob@example.com');
-  await page.locator('input[type=password]').fill('password123');
-  await page.getByRole('button', { name: 'Войти', exact: true }).click();
-  await expect(page).toHaveURL(/\/dashboard/);
+
+  await loginWithPasskey(page, 'bob@example.com');
   await page.goto('/groups/' + groupId + '/expenses/new', { waitUntil: 'networkidle' });
   await expect(page.getByTestId('manual-group-receipt-entry')).toBeVisible();
   await page.getByTestId('create-manual-group-receipt').click();
@@ -702,11 +679,7 @@ test('Issue 2.19.3: original portions unknown, organizer re-approves current cla
   test.skip(!groupId, 'Requires isolated disposable RUB group fixture');
   test.setTimeout(180_000);
 
-  await page.goto('/login', { waitUntil: 'networkidle' });
-  await page.locator('input[type=email]').fill('bob@example.com');
-  await page.locator('input[type=password]').fill('password123');
-  await page.getByRole('button', { name: 'Войти', exact: true }).click();
-  await expect(page).toHaveURL(/\/dashboard/);
+  await loginWithPasskey(page, 'bob@example.com');
   await page.goto('/groups/' + groupId + '/expenses/new', { waitUntil: 'networkidle' });
   await page.getByTestId('create-manual-group-receipt').click();
   await expect(page).toHaveURL(/\/scan\?receiptId=/);

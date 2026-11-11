@@ -2,12 +2,11 @@
  * Fixtures only for the disposable PostgreSQL created by BillOK Chromium CI.
  * No secrets or test accounts are written to the normal deployment.
  */
-import { randomBytes } from 'node:crypto';
-import bcrypt from 'bcryptjs';
+import { generateKeyPairSync, randomBytes } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../src/generated/prisma/client';
 import { hashEmailVerificationToken } from '../src/server/lib/email-verification-token';
-import { hashPasswordResetToken } from '../src/server/lib/password-reset-token';
 import { SYSTEM_INVITE_TTL_MS } from '../src/server/lib/system-invite-lifetime';
 
 async function main() {
@@ -22,7 +21,8 @@ async function main() {
   const ruCode = 'qa-ru-' + unique;
   const suCode = 'qa-su-' + unique;
   const expiredToken = 'E'.repeat(43);
-  const expiredResetToken = 'F'.repeat(43);
+  const passkeyFile = process.env.BILLOK_QA_PASSKEY_FILE;
+  if (!passkeyFile) throw new Error('Disposable passkey fixture file is required');
 
   try {
     await db.systemSetting.upsert({
@@ -43,7 +43,6 @@ async function main() {
       data: {
         name: 'Истёкшая регистрация QA',
         email: 'expired-' + unique + '@mail.ru',
-        passwordHash: await bcrypt.hash('expired-password-123', 10),
         emailVerified: null,
         registrationEmailVerificationRequired: true,
       },
@@ -55,27 +54,56 @@ async function main() {
         expiresAt: new Date(Date.now() - 60_000),
       },
     });
-    const existing = await db.user.create({
-      data: {
-        name: 'Истёкший сброс QA',
-        email: 'reset-expired-' + unique + '@mail.su',
-        passwordHash: await bcrypt.hash('old-password-123', 10),
-        emailVerified: new Date(),
-        registrationEmailVerificationRequired: false,
-      },
-    });
-    await db.passwordResetRequest.create({
-      data: {
-        userId: existing.id,
-        tokenHash: hashPasswordResetToken(expiredResetToken),
-        expiresAt: new Date(Date.now() - 60_000),
-      },
-    });
 
+    // Real P-256 keys: the disposable browser tests sign genuine WebAuthn assertions.
+    // Private keys are written ONLY to a short-lived CI fixture file.
+    const passkeys: Record<string, { userHandle: string; credentials: { id: string; privateKey: string }[] }> = {};
+    for (const [alias, email, count] of [
+      ['alice', 'alice@example.com', 150],
+      ['bob', 'bob@example.com', 70],
+      ['charlie', 'charlie@example.com', 40],
+    ] as const) {
+      const user = await db.user.update({
+        where: { email },
+        data: { emailVerified: new Date(), webAuthnUserHandle: randomBytes(32).toString('base64url') },
+        select: { id: true, webAuthnUserHandle: true },
+      });
+      const credentials: { id: string; privateKey: string }[] = [];
+      for (let i = 0; i < count; i++) {
+        const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+        const jwk = publicKey.export({ format: 'jwk' });
+        const x = Buffer.from(jwk.x!, 'base64url');
+        const y = Buffer.from(jwk.y!, 'base64url');
+        // COSE_Key: EC2 / ES256 / P-256 / x / y (RFC 9052, RFC 9053).
+        const cose = Buffer.concat([
+          Buffer.from([0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20]),
+          x,
+          Buffer.from([0x22, 0x58, 0x20]),
+          y,
+        ]);
+        const credentialId = randomBytes(32).toString('base64url');
+        await db.passkeyCredential.create({
+          data: {
+            userId: user.id,
+            credentialId,
+            publicKey: cose,
+            signCount: BigInt(0),
+            deviceType: 'singleDevice',
+            backedUp: false,
+            transports: ['internal'],
+          },
+        });
+        credentials.push({
+          id: credentialId,
+          privateKey: privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64'),
+        });
+      }
+      passkeys[alias] = { userHandle: user.webAuthnUserHandle!, credentials };
+    }
+    writeFileSync(passkeyFile, JSON.stringify(passkeys), { mode: 0o600 });
     process.stdout.write('BILLOK_QA_AUTH_INVITE_RU=' + ruCode + '\n');
     process.stdout.write('BILLOK_QA_AUTH_INVITE_SU=' + suCode + '\n');
     process.stdout.write('BILLOK_QA_EXPIRED_CONFIRM=' + expiredToken + '\n');
-    process.stdout.write('BILLOK_QA_EXPIRED_RESET=' + expiredResetToken + '\n');
   } finally {
     await db.$disconnect();
   }

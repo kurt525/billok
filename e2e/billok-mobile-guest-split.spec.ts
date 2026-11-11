@@ -1,3 +1,4 @@
+import { loginWithPasskey } from './passkey-auth';
 import { expect, test, type Page } from '@playwright/test';
 import {
   authedContext,
@@ -125,11 +126,7 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
     }
   });
 
-  await page.goto('/login', { waitUntil: 'networkidle' });
-  await page.locator('input[type=email]').fill('alice@example.com');
-  await page.locator('input[type=password]').fill('password123');
-  await page.getByRole('button', { name: 'Войти', exact: true }).click();
-  await expect(page).toHaveURL(/\/dashboard(?:\?.*)?$/);
+  await loginWithPasskey(page, 'alice@example.com');
 
   await page.goto('/split', { waitUntil: 'networkidle' });
   await expect(page.getByTestId('manual-split-title')).toContainText('Разделить чек');
@@ -766,11 +763,8 @@ test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobil
     await expect(aliceInput).toHaveValue('3', { timeout: 15_000 });
 
     // 2.20.3: creator enters the original count in the mobile UI.
-    await alicePage.goto('/login', { waitUntil: 'networkidle' });
-    await alicePage.locator('input[type=email]').fill(users.alice.email);
-    await alicePage.locator('input[type=password]').fill(users.alice.password);
-    await alicePage.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(alicePage).toHaveURL(/\/dashboard/);
+
+    await loginWithPasskey(alicePage, users.alice.email);
     await alicePage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     const original = alicePage.getByTestId('guest-known-parts-input-0');
     const saveOriginal = alicePage.getByTestId('guest-known-parts-save-0');
@@ -2701,11 +2695,7 @@ test('Issue 3.9: mobile participant color stays with the person after rename and
     expect(initial.people.map((p: { visualColorId: number }) => p.visualColorId)).toEqual([0, 1, 2]);
     const targetId = initial.people[1].id as string;
 
-    await page.goto('/login');
-    await page.locator('input[type=email]').fill(users.alice.email);
-    await page.locator('input[type=password]').fill(users.alice.password);
-    await page.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(page).toHaveURL(/\/dashboard/);
+    await loginWithPasskey(page, users.alice.email);
     await page.goto('/split/' + token + '/claim');
     const colorOf = async (index: number) =>
       page.getByTestId('guest-color-person-' + index).evaluate((element) => getComputedStyle(element).borderLeftColor);
@@ -2997,11 +2987,8 @@ test('Issue 3.8.2: only a receipt creator can reveal and copy a saved guest link
     expect(JSON.stringify(after)).not.toContain(joined.personToken);
 
     const ownerPage = await creatorBrowser.newPage();
-    await ownerPage.goto('/login');
-    await ownerPage.locator('input[type=email]').fill(users.alice.email);
-    await ownerPage.locator('input[type=password]').fill(users.alice.password);
-    await ownerPage.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(ownerPage).toHaveURL(/\/dashboard/);
+
+    await loginWithPasskey(ownerPage, users.alice.email);
     await ownerPage.goto('/split/' + token + '/claim');
     await expect(ownerPage.getByTestId('creator-guest-link-open-1')).toBeVisible({ timeout: 20_000 });
     await ownerPage.getByTestId('creator-guest-link-open-1').click();
@@ -3038,11 +3025,7 @@ test('Issue 3.7.3: mobile invite flow creates N+1 seats and guests select distin
   });
   let token: string | undefined;
   try {
-    await page.goto('/login');
-    await page.locator('input[type=email]').fill(users.alice.email);
-    await page.locator('input[type=password]').fill(users.alice.password);
-    await page.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(page).toHaveURL(/\/dashboard/);
+    await loginWithPasskey(page, users.alice.email);
     await page.goto('/split');
     await expect(page.getByTestId('guest-count-form')).toBeVisible();
     await expect(page.getByTestId('person-input-0')).toHaveCount(0);
@@ -3266,11 +3249,8 @@ test('Issue 3.6.2: creator renames unjoined guests on mobile; guests can edit on
     const guestId = before.people[1].id as string;
 
     const ownerPage = await ownerBrowser.newPage();
-    await ownerPage.goto('/login', { waitUntil: 'networkidle' });
-    await ownerPage.locator('input[type=email]').fill(users.alice.email);
-    await ownerPage.locator('input[type=password]').fill(users.alice.password);
-    await ownerPage.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(ownerPage).toHaveURL(/\/dashboard/);
+
+    await loginWithPasskey(ownerPage, users.alice.email);
     await ownerPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(ownerPage.getByTestId('claim-join-form')).toBeVisible();
     await expect(ownerPage.getByTestId('creator-edit-person-1')).toBeVisible();
@@ -3458,11 +3438,8 @@ test('Issue 3.12: two guest devices count as one; joins, name changes and roles 
     expect(initial.paidByIndex).toBe(2);
 
     const ownerPage = await creatorDevice.newPage();
-    await ownerPage.goto('/login');
-    await ownerPage.locator('input[type=email]').fill(users.alice.email);
-    await ownerPage.locator('input[type=password]').fill(users.alice.password);
-    await ownerPage.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(ownerPage).toHaveURL(/\/dashboard/);
+
+    await loginWithPasskey(ownerPage, users.alice.email);
     await rememberClaimIdentity(creatorDevice, token, created.creator);
     await ownerPage.goto('/split/' + token + '/claim');
     const counters = ownerPage.getByTestId('organizer-presence-counters');
@@ -3603,11 +3580,8 @@ test('Issue 3.15: receipt corrections recalculate claims and known pieces on thr
     await page.setViewportSize({ width: 393, height: 760 });
     await rememberClaimIdentity(guestDevice, token, boris);
     const creatorPage = await creatorDevice.newPage();
-    await creatorPage.goto('/login');
-    await creatorPage.locator('input[type=email]').fill(users.alice.email);
-    await creatorPage.locator('input[type=password]').fill(users.alice.password);
-    await creatorPage.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(creatorPage).toHaveURL(/\/dashboard/);
+
+    await loginWithPasskey(creatorPage, users.alice.email);
     await rememberClaimIdentity(creatorDevice, token, created.creator);
     await creatorPage.goto('/split/' + token + '/claim');
     await page.goto('/split/' + token + '/claim');
@@ -4101,11 +4075,8 @@ test('Issue 3.17: concurrent guests preserve each others claims and all open scr
     await rememberClaimIdentity(creatorDevice, token, created.creator);
     await page.setViewportSize({ width: 393, height: 760 });
     const creatorPage = await creatorDevice.newPage();
-    await creatorPage.goto('/login');
-    await creatorPage.locator('input[type=email]').fill(users.alice.email);
-    await creatorPage.locator('input[type=password]').fill(users.alice.password);
-    await creatorPage.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(creatorPage).toHaveURL(/\/dashboard/);
+
+    await loginWithPasskey(creatorPage, users.alice.email);
     await creatorPage.goto('/split/' + token + '/claim');
     await page.goto('/split/' + token + '/claim');
     const borisPage = await secondDevice.newPage();
@@ -4470,11 +4441,8 @@ test('Issue 3.14: claims and shared positions reach every open mobile receipt', 
     await page.setViewportSize({ width: 393, height: 740 });
     await rememberClaimIdentity(guestDevice, token, b);
     const creatorPage = await creatorDevice.newPage();
-    await creatorPage.goto('/login');
-    await creatorPage.locator('input[type=email]').fill(users.alice.email);
-    await creatorPage.locator('input[type=password]').fill(users.alice.password);
-    await creatorPage.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(creatorPage).toHaveURL(/\/dashboard/);
+
+    await loginWithPasskey(creatorPage, users.alice.email);
     await rememberClaimIdentity(creatorDevice, token, created.creator);
     await creatorPage.goto('/split/' + token + '/claim');
     await page.goto('/split/' + token + '/claim');
@@ -4596,11 +4564,8 @@ test('Issue 3.5: organizer sees joined, live, lost and reconnected mobile guests
     };
     token = created.shareToken;
     const ownerPage = await organizerBrowser.newPage();
-    await ownerPage.goto('/login', { waitUntil: 'networkidle' });
-    await ownerPage.locator('input[type=email]').fill(users.alice.email);
-    await ownerPage.locator('input[type=password]').fill(users.alice.password);
-    await ownerPage.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(ownerPage).toHaveURL(/\/dashboard/);
+
+    await loginWithPasskey(ownerPage, users.alice.email);
     await rememberClaimIdentity(organizerBrowser, token, created.creator);
     await ownerPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
 
@@ -4738,11 +4703,8 @@ test('Issue 3.4: mobile creator explicitly delegates approval and finalization, 
     expect((await trpcError(rejectedPayer))?.data?.code).toBe('FORBIDDEN');
 
     const ownerPage = await organizerBrowser.newPage();
-    await ownerPage.goto('/login', { waitUntil: 'networkidle' });
-    await ownerPage.locator('input[type=email]').fill(users.alice.email);
-    await ownerPage.locator('input[type=password]').fill(users.alice.password);
-    await ownerPage.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(ownerPage).toHaveURL(/\/dashboard/);
+
+    await loginWithPasskey(ownerPage, users.alice.email);
     await rememberClaimIdentity(organizerBrowser, token, anna);
     await ownerPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     const panel = ownerPage.getByTestId('finalization-organizer-panel');
@@ -4752,11 +4714,8 @@ test('Issue 3.4: mobile creator explicitly delegates approval and finalization, 
     await expect(panel.getByTestId('finalization-organizer-active')).toBeVisible({ timeout: 15_000 });
 
     const delegatePage = await delegateBrowser.newPage();
-    await delegatePage.goto('/login', { waitUntil: 'networkidle' });
-    await delegatePage.locator('input[type=email]').fill(users.charlie.email);
-    await delegatePage.locator('input[type=password]').fill(users.charlie.password);
-    await delegatePage.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(delegatePage).toHaveURL(/\/dashboard/);
+
+    await loginWithPasskey(delegatePage, users.charlie.email);
     await delegatePage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     // The co-organizer did not eat: no fictitious guest or personal token.
     await expect(delegatePage.getByTestId('finalization-organizer-panel')).toHaveCount(0);
@@ -5065,11 +5024,8 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     const childId = id('Ребёнок');
 
     const creatorPage = await organizerDevice.newPage();
-    await creatorPage.goto('/login');
-    await creatorPage.locator('input[type=email]').fill(users.alice.email);
-    await creatorPage.locator('input[type=password]').fill(users.alice.password);
-    await creatorPage.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(creatorPage).toHaveURL(/\/dashboard/);
+
+    await loginWithPasskey(creatorPage, users.alice.email);
     await rememberClaimIdentity(organizerDevice, token, created.creator);
     await creatorPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     const editor = creatorPage.getByTestId('receipt-payment-groups-editor');

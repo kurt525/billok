@@ -60,13 +60,35 @@ export function readBillokWebAuthnRelyingParty(env: Env): WebAuthnRelyingParty {
   }
 
   const isLoopback = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
-  if (parsed.protocol !== 'https:' && !(env.NODE_ENV !== 'production' && parsed.protocol === 'http:' && isLoopback)) {
+  const qaLoopback =
+    env.BILLOK_QA_WEBAUTHN_LOOPBACK === '1' &&
+    env.BILLOK_QA_FIXTURES === '1' &&
+    /^postgres(?:ql)?:\/\/[^/]+@(?:localhost|127\.0\.0\.1):\d+\/billokqa(?:\?.*)?$/u.test(env.DATABASE_URL ?? '') &&
+    rpId === 'localhost' &&
+    parsed.hostname === 'localhost' &&
+    parsed.protocol === 'http:';
+  if (
+    parsed.protocol !== 'https:' &&
+    !(env.NODE_ENV !== 'production' && parsed.protocol === 'http:' && isLoopback) &&
+    !qaLoopback
+  ) {
     throw new Error('BillOK WebAuthn requires HTTPS (except local development)');
   }
   // The public deployment is ONLY billok.ru. Avoid accidental trust in a
   // different RP ID during setup; test loopback works in non-production.
-  if (env.NODE_ENV === 'production' && rpId !== 'billok.ru') {
+  if (env.NODE_ENV === 'production' && rpId !== 'billok.ru' && !qaLoopback) {
     throw new Error('BillOK production WebAuthn RP ID must be billok.ru');
   }
   return { rpId, origin, rpName: 'BillOK' };
+}
+
+/** Raised browser-test limits are permissible ONLY against the disposable QA DB. */
+export function isDisposableWebAuthnQa(env: Env): boolean {
+  return (
+    env.BILLOK_QA_WEBAUTHN_LOOPBACK === '1' &&
+    env.BILLOK_QA_FIXTURES === '1' &&
+    env.BILLOK_WEBAUTHN_RP_ID === 'localhost' &&
+    (env.BILLOK_WEBAUTHN_ORIGIN ?? '').startsWith('http://localhost:') &&
+    /^postgres(?:ql)?:\/\/[^/]+@(?:localhost|127\.0\.0\.1):\d+\/billokqa(?:\?.*)?$/u.test(env.DATABASE_URL ?? '')
+  );
 }

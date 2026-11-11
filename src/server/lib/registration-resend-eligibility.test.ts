@@ -10,7 +10,6 @@ const now = new Date('2026-11-01T12:00:00.000Z');
 const pending = {
   id: 'pending-1',
   email: 'Person@MAIL.RU',
-  passwordHash: 'hash',
   registrationEmailVerificationRequired: true,
   emailVerified: null as Date | null,
 };
@@ -24,7 +23,7 @@ beforeEach(() => {
 });
 
 describe('pending registration eligibility for future resend', () => {
-  it('only returns an invite for one unverified invite-only password account with an active owned reservation', async () => {
+  it('only returns an invite for one unverified invite-only account with an active owned reservation', async () => {
     await expect(findPendingRegistrationForResend(db, 'person@mail.ru', now)).resolves.toEqual({
       userId: 'pending-1',
       email: 'Person@MAIL.RU',
@@ -54,7 +53,6 @@ describe('pending registration eligibility for future resend', () => {
     ['ambiguous email', [pending, { ...pending, id: 'duplicate' }]],
     ['confirmed account', [{ ...pending, emailVerified: now }]],
     ['legacy account', [{ ...pending, registrationEmailVerificationRequired: false }]],
-    ['account without a password', [{ ...pending, passwordHash: null }]],
     ['email outside ru and su', [{ ...pending, email: 'person@example.com' }]],
   ])('fails closed for %s without looking up invitations', async (_scenario, users) => {
     lookup.mockResolvedValueOnce(users);
