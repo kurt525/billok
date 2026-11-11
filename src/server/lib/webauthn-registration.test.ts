@@ -68,7 +68,10 @@ function fakeDb() {
       findUnique: vi.fn().mockImplementation(async () => entry),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
-    passkeyCredential: { create: vi.fn().mockResolvedValue({ id: 'credential-1' }) },
+    passkeyCredential: {
+      create: vi.fn().mockResolvedValue({ id: 'credential-1' }),
+      count: vi.fn().mockResolvedValue(0),
+    },
     ownerBootstrap: {
       findUnique: vi.fn().mockResolvedValue(null),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
@@ -149,6 +152,29 @@ describe('Issue #1 6.3.2: first WebAuthn credential requires confirmed email and
       beginFirstPasskeyRegistration({ db: requireDb(db), userId: user.id, bindingSecret: secret, env }),
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.webAuthnChallenge.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a second active Passkey before starting another first-key challenge', async () => {
+    const { db } = fakeDb();
+    db.user.findUnique.mockReset().mockResolvedValue({
+      ...user,
+      passkeyCredentials: [{ id: 'existing-passkey' }],
+    });
+    await expect(
+      beginFirstPasskeyRegistration({ db: requireDb(db), userId: user.id, bindingSecret: secret, env }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.webAuthnChallenge.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an already filled regular key slot even after the browser signed an earlier challenge', async () => {
+    const { db, entry } = fakeDb();
+    entry.challengeHash = createHash('sha256').update(challenge).digest('hex');
+    db.passkeyCredential.count.mockResolvedValue(1);
+    await expect(
+      finishFirstPasskeyRegistration({ db: requireDb(db), bindingSecret: secret, response, env, now }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.passkeyCredential.create).not.toHaveBeenCalled();
+    expect(db.webAuthnChallenge.updateMany).not.toHaveBeenCalled();
   });
 
   it('refuses wrong browser, expired or previously consumed challenges before verifying attestation', async () => {

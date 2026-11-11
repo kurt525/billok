@@ -4,6 +4,7 @@ import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 import { Prisma, type PrismaClient } from '@/generated/prisma/client';
 import { AppError } from './app-error';
 import { OWNER_BOOTSTRAP_SINGLETON_ID } from './owner-bootstrap';
+import { assertPasskeyEnrollmentCapacity } from './passkey-account-limit';
 import {
   readBillokWebAuthnRelyingParty,
   WEBAUTHN_CHALLENGE_TTL_MS,
@@ -140,8 +141,9 @@ export async function finishFirstPasskeyRegistration(input: {
   const { credential, credentialDeviceType, credentialBackedUp, aaguid } = verified.registrationInfo;
   try {
     await input.db.$transaction(async (tx) => {
-      // Serialize two concurrent first-credential completions for one user.
-      await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', request.userId);
+      // The common account limit also serializes concurrent key registration.
+      // A normal account can never enroll a second key here.
+      await assertPasskeyEnrollmentCapacity(tx, request.userId!, 'FIRST');
       const user = await tx.user.findUnique({
         where: { id: request.userId! },
         select: {
