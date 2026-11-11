@@ -10,6 +10,7 @@ import { PrismaClient } from '../src/generated/prisma/client';
 import { createEmailVerificationToken } from '../src/server/lib/email-verification-token';
 import { confirmRegistrationEmail } from '../src/server/lib/registration-email-confirmation';
 import { createPendingInviteRegistration } from '../src/server/lib/pending-invite-registration';
+import { SYSTEM_INVITE_TTL_MS } from '../src/server/lib/system-invite-lifetime';
 
 async function main(): Promise<void> {
   const url = process.env.DATABASE_URL;
@@ -23,7 +24,13 @@ async function main(): Promise<void> {
   let userId: string | null = null;
 
   try {
-    await db.systemInvite.create({ data: { code: inviteCode } });
+    // 6.2: disposable QA invitations must obey the same strict seven-day
+    // validity window as invitations created by the administrator.
+    const inviteExpiresAt = new Date(now.getTime() + SYSTEM_INVITE_TTL_MS);
+    const testInvite = await db.systemInvite.create({
+      data: { code: inviteCode, expiresAt: inviteExpiresAt },
+    });
+    assert.equal(testInvite.expiresAt?.getTime(), inviteExpiresAt.getTime(), 'QA invitation has a seven-day expiry');
     const user = await createPendingInviteRegistration(db, {
       name: 'Проверка подтверждения',
       email: 'ci-confirm-' + suffix + '@billok.ru',
