@@ -63,7 +63,13 @@ async function loadAuth(overrides: Record<string, string> = {}): Promise<AuthCon
 
 beforeEach(() => {
   vi.clearAllMocks();
-  db.user.findUnique.mockResolvedValue({ name: 'Анна', locale: 'ru' });
+  db.user.findUnique.mockResolvedValue({
+    name: 'Анна',
+    locale: 'ru',
+    emailVerified: new Date('2026-11-01T00:00:00Z'),
+    suspendedAt: null,
+    sessionSecurityVersion: 0,
+  });
   authMock.mockResolvedValue(null);
 });
 afterEach(() => {
@@ -117,12 +123,80 @@ describe('Issue #1 6.9: no hidden provider can be enabled by configuration', () 
   test('profile refresh remains supported without an external linking callback', async () => {
     const config = await loadAuth(externalEnv);
     const token = await config.callbacks.jwt({ token: {}, user: { id: 'user-1', name: 'Анна', locale: 'ru' } });
-    expect(token).toMatchObject({ id: 'user-1', name: 'Анна', locale: 'ru' });
+    expect(token).toMatchObject({
+      id: 'user-1',
+      name: 'Анна',
+      locale: 'ru',
+      sessionSecurityVersion: 0,
+      sessionSecurityValid: true,
+    });
     const session = config.callbacks.session({ session: { user: {} }, token });
     expect(session.user).toMatchObject({ id: 'user-1', name: 'Анна', locale: 'ru' });
     expect(db.user.findUnique).toHaveBeenCalledWith({
       where: { id: 'user-1' },
-      select: { name: true, locale: true },
+      select: {
+        name: true,
+        locale: true,
+        emailVerified: true,
+        suspendedAt: true,
+        sessionSecurityVersion: true,
+      },
     });
+  });
+});
+
+describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
+  test('rejects all prior sessions after the database security version rotates', async () => {
+    const config = await loadAuth();
+    const previous = await config.callbacks.jwt({ token: {}, user: { id: 'user-1', name: 'Анна' } });
+    expect(config.callbacks.session({ session: { user: {} }, token: previous }).user?.id).toBe('user-1');
+    db.user.findUnique.mockResolvedValueOnce({
+      name: 'Анна',
+      locale: 'ru',
+      emailVerified: new Date(),
+      suspendedAt: null,
+      sessionSecurityVersion: 1,
+    });
+    const invalidated = await config.callbacks.jwt({ token: previous });
+    expect(invalidated.sessionSecurityValid).toBe(false);
+    expect(config.callbacks.session({ session: { user: {} }, token: invalidated }).user).toBeUndefined();
+  });
+
+  test('rejects JWTs without an issued security version even if they contain a user id', async () => {
+    const config = await loadAuth();
+    const legacy = await config.callbacks.jwt({ token: { id: 'user-1', name: 'Анна' } });
+    expect(legacy.sessionSecurityValid).toBe(false);
+    expect(config.callbacks.session({ session: { user: {} }, token: legacy }).user).toBeUndefined();
+  });
+
+  test('fails closed during database outage and for suspended or unverified users', async () => {
+    const config = await loadAuth();
+    const token = await config.callbacks.jwt({ token: {}, user: { id: 'user-1' } });
+    for (const state of [
+      { name: 'Анна', locale: 'ru', emailVerified: null, suspendedAt: null, sessionSecurityVersion: 0 },
+      { name: 'Анна', locale: 'ru', emailVerified: new Date(), suspendedAt: new Date(), sessionSecurityVersion: 0 },
+      null,
+    ]) {
+      db.user.findUnique.mockResolvedValueOnce(state);
+      const invalid = await config.callbacks.jwt({ token: { ...token } });
+      expect(config.callbacks.session({ session: { user: {} }, token: invalid }).user).toBeUndefined();
+    }
+    db.user.findUnique.mockRejectedValueOnce(new Error('database unreachable'));
+    const unavailable = await config.callbacks.jwt({ token: { ...token } });
+    expect(config.callbacks.session({ session: { user: {} }, token: unavailable }).user).toBeUndefined();
+  });
+
+  test('a fresh verified Passkey ticket mints a JWT with the new security version', async () => {
+    const config = await loadAuth();
+    db.user.findUnique.mockResolvedValueOnce({
+      name: 'Анна',
+      locale: 'ru',
+      emailVerified: new Date(),
+      suspendedAt: null,
+      sessionSecurityVersion: 3,
+    });
+    const renewed = await config.callbacks.jwt({ token: {}, user: { id: 'user-1' } });
+    expect(renewed.sessionSecurityVersion).toBe(3);
+    expect(config.callbacks.session({ session: { user: {} }, token: renewed }).user?.id).toBe('user-1');
   });
 });

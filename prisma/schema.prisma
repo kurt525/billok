@@ -122,6 +122,8 @@ model User {
   registrationEmailVerificationRequired Boolean @default(false)
   // Separate, stable random handle. Never derive a WebAuthn user ID from email.
   webAuthnUserHandle String? @unique @db.VarChar(64)
+  // Rotate to terminate all JWTs issued before an account recovery.
+  sessionSecurityVersion Int @default(0)
   image           String?
   defaultCurrency String    @default("RUB")
   locale          String    @default("ru")
