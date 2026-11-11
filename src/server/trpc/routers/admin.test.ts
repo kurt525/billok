@@ -10,12 +10,6 @@ vi.mock('@auth/prisma-adapter', () => ({
 vi.mock('next-auth/providers/credentials', () => ({
   default: vi.fn(),
 }));
-vi.mock('next-auth/providers/google', () => ({
-  default: vi.fn(),
-}));
-vi.mock('next-auth/providers/nodemailer', () => ({
-  default: vi.fn(),
-}));
 vi.mock('bcryptjs', () => ({
   default: { compare: vi.fn() },
 }));

@@ -53,13 +53,6 @@ vi.mock('@/server/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-const OIDC_ENV = {
-  OIDC_ISSUER: 'https://auth.example.com/application/o/sharetab/',
-  OIDC_CLIENT_ID: 'sharetab',
-  OIDC_CLIENT_SECRET: 's3cret',
-  OIDC_DISPLAY_NAME: 'Authentik',
-};
-
 async function caller(session: { user: { id: string } } | null = null, headers = new Headers()) {
   const { authRouter } = await import('./auth');
   const ctx = { session, db: mockDb, headers, impersonating: null };
@@ -83,7 +76,6 @@ beforeEach(() => {
   vi.stubEnv('REGISTER_RATE_LIMIT_MAX', '9999');
   // Start from a clean auth env regardless of the developer's .env
   for (const key of [
-    ...Object.keys(OIDC_ENV),
     'DISABLE_PASSWORD_LOGIN',
     'EMAIL_SERVER_HOST',
     'EMAIL_SERVER_PORT',
@@ -102,34 +94,20 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe('auth.getLoginOptions', () => {
-  test('defaults to password login only', async () => {
-    const api = await caller();
-    expect(await api.getLoginOptions()).toEqual({ passwordLogin: true, magicLink: false, oidc: null, google: false });
-  });
-
-  test('exposes the OIDC button name but never the issuer or secret', async () => {
-    stubEnv({ ...OIDC_ENV, EMAIL_SERVER_HOST: 'smtp.example.com', DISABLE_PASSWORD_LOGIN: 'true' });
-    const api = await caller();
-    const options = await api.getLoginOptions();
-    expect(options).toEqual({ passwordLogin: false, magicLink: true, oidc: { name: 'Authentik' }, google: false });
-    expect(JSON.stringify(options)).not.toContain('s3cret');
-    expect(JSON.stringify(options)).not.toContain('auth.example.com');
-  });
-
-  test('reports Google when configured, without its client id or secret', async () => {
-    stubEnv({ GOOGLE_CLIENT_ID: 'id.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'g-secret' });
+describe('auth.getLoginOptions without Magic Link, OIDC or Google', () => {
+  test('SMTP and old OAuth env values cannot activate another sign-in provider', async () => {
+    stubEnv({
+      EMAIL_SERVER_HOST: 'smtp.example.invalid',
+      GOOGLE_CLIENT_ID: 'fake-client',
+      GOOGLE_CLIENT_SECRET: 'fake-secret',
+      OIDC_ISSUER: 'https://sso.example.invalid',
+      OIDC_CLIENT_ID: 'fake-client',
+      OIDC_CLIENT_SECRET: 'fake-secret',
+    });
     const api = await caller();
     const options = await api.getLoginOptions();
-    expect(options).toEqual({ passwordLogin: true, magicLink: false, oidc: null, google: true });
-    expect(JSON.stringify(options)).not.toContain('g-secret');
-    expect(JSON.stringify(options)).not.toContain('googleusercontent');
-  });
-
-  test('a partial Google config shows no Google button', async () => {
-    stubEnv({ GOOGLE_CLIENT_ID: 'id.apps.googleusercontent.com' });
-    const api = await caller();
-    expect((await api.getLoginOptions()).google).toBe(false);
+    expect(options).toEqual({ passwordLogin: true });
+    expect(JSON.stringify(options)).not.toMatch(/google|oidc|magicLink|sso/i);
   });
 });
 
@@ -305,29 +283,6 @@ describe('auth.resendRegistrationVerification', () => {
     expect(resendDelivery).toHaveBeenCalledOnce();
     expect(mockDb.user.create).not.toHaveBeenCalled();
     expect(mockDb.user.update).not.toHaveBeenCalled();
-  });
-});
-
-describe('password login disabled', () => {
-  beforeEach(() => {
-    stubEnv({ ...OIDC_ENV, DISABLE_PASSWORD_LOGIN: 'true' });
-  });
-
-  test('register is refused before touching the database', async () => {
-    const api = await caller();
-    await expect(
-      api.register({ name: 'Alice', email: 'alice@example.com', password: 'password123' }),
-    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Registration is currently closed.' });
-    expect(mockDb.systemSetting.findUnique).not.toHaveBeenCalled();
-    expect(mockDb.user.findUnique).not.toHaveBeenCalled();
-    expect(mockDb.$transaction).not.toHaveBeenCalled();
-    expect(cleanupGate).not.toHaveBeenCalled();
-  });
-
-  test('getRegistrationMode reports closed regardless of the admin setting', async () => {
-    mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'registrationMode', value: 'open' });
-    const api = await caller();
-    expect(await api.getRegistrationMode()).toEqual({ mode: 'closed' });
   });
 });
 
@@ -572,7 +527,7 @@ describe('auth.getProfile', () => {
     );
   });
 
-  test('hasPassword is false for OIDC-only users', async () => {
+  test('hasPassword is false for accounts without a password', async () => {
     mockDb.user.findUnique.mockResolvedValue({
       name: 'Alice',
       email: 'alice@example.com',

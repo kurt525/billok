@@ -22,7 +22,8 @@ describe('isolated one-time password reset request storage', () => {
     expect(model).toContain('@@index([expiresAt])');
     expect(schema).toMatch(/passwordResetRequests\s+PasswordResetRequest\[\]/);
     expect(schema).toMatch(/model EmailVerificationRequest \{/);
-    expect(schema).toMatch(/model VerificationToken \{/);
+    // Auth.js Magic Link storage is removed; this is a dedicated confirmation flow.
+    expect(schema).not.toMatch(/model VerificationToken \{/);
     expect(model).not.toMatch(/\bidentifier\s+String\b/);
   });
 });

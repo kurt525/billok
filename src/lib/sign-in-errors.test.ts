@@ -1,32 +1,24 @@
 import { describe, expect, test } from 'vitest';
 import { getSignInErrorKey } from './sign-in-errors';
 
-describe('getSignInErrorKey', () => {
-  test('no code means no error', () => {
+describe('sign-in errors without external identity providers', () => {
+  test('missing code is not an error', () => {
     expect(getSignInErrorKey(null)).toBeNull();
     expect(getSignInErrorKey('')).toBeNull();
   });
-
-  test.each([
-    ['OidcSessionActive', 'sessionActive'],
-    ['GoogleSessionActive', 'sessionActive'],
-    ['GoogleAccountExists', 'accountExists'],
-    ['GoogleRegistrationDisabled', 'registrationDisabled'],
-    ['GoogleEmailUnverified', 'emailUnverified'],
-    ['GoogleAdminEmailNotHosted', 'adminEmailNotHosted'],
-    ['OidcEmailMissing', 'emailMissing'],
-    ['OidcAccountNotLinked', 'accountNotLinked'],
-    ['OAuthAccountNotLinked', 'accountNotLinked'],
-    ['OidcRegistrationDisabled', 'registrationDisabled'],
-    ['Verification', 'linkExpired'],
-  ])('%s maps to %s', (code, key) => {
-    expect(getSignInErrorKey(code)).toBe(key);
+  test('only local statuses use explicit UI messages', () => {
+    expect(getSignInErrorKey('SessionActive')).toBe('sessionActive');
+    expect(getSignInErrorKey('RegistrationEmailUnverified')).toBe('pendingEmailConfirmation');
   });
-
-  test.each(['Configuration', 'AccessDenied', 'OAuthCallbackError', 'something-else', 'constructor', '__proto__'])(
-    'other codes (%s) map to generic',
-    (code) => {
-      expect(getSignInErrorKey(code)).toBe('generic');
-    },
-  );
+  test.each([
+    'GoogleSessionActive',
+    'OidcAccountNotLinked',
+    'Verification',
+    'OAuthAccountNotLinked',
+    'AccessDenied',
+    'constructor',
+    '__proto__',
+  ])('does not map removed provider error %s', (code) => {
+    expect(getSignInErrorKey(code)).toBe('generic');
+  });
 });

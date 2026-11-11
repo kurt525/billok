@@ -7,7 +7,7 @@ import { checkRateLimit, parsePositiveInt } from '../../lib/rate-limit';
 import { getClientIp } from '../../lib/client-ip';
 import { locales } from '@/i18n/routing';
 import { stripUndefined } from '../../lib/strip-undefined';
-import { parseAuthConfig, readRegistrationEmailConfig } from '../../lib/auth-config';
+import { readRegistrationEmailConfig } from '../../lib/auth-config';
 import { readRegistrationMode } from '../../lib/registration-mode';
 import { runRegistrationCleanupIfDue } from '../../lib/registration-cleanup-trigger';
 import { confirmRegistrationEmail } from '../../lib/registration-email-confirmation';
@@ -32,21 +32,12 @@ export const authRouter = createTRPCRouter({
   // Which sign-in methods the login page should offer. Never includes the
   // OIDC issuer, client ids or secrets — only what the UI renders.
   getLoginOptions: publicProcedure.query(() => {
-    const config = parseAuthConfig(process.env);
-    return {
-      passwordLogin: config.passwordLogin,
-      magicLink: config.magicLink,
-      oidc: config.oidc ? { name: config.oidc.displayName } : null,
-      google: config.google !== null,
-    };
+    // Temporary compatibility for the password-based UI until 6.3.2.3.
+    // No alternative provider can be activated with environment variables.
+    return { passwordLogin: true };
   }),
 
   getRegistrationMode: publicProcedure.query(async ({ ctx }) => {
-    // The register form creates password accounts; with password login
-    // disabled it is closed whatever the admin setting says.
-    if (!parseAuthConfig(process.env).passwordLogin) {
-      return { mode: 'closed' as const };
-    }
     const mode = await readRegistrationMode(ctx.db);
     // BillOK accepts new registrations by invitation only. A legacy "open"
     // setting is not permission to bypass the code; show the code field.
@@ -63,10 +54,6 @@ export const authRouter = createTRPCRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      if (!parseAuthConfig(process.env).passwordLogin) {
-        throw new AppError('FORBIDDEN', 'registrationClosed');
-      }
-
       // Rate limit: 10 registrations per hour per IP (fall back to global key)
       const ip = getClientIp(ctx.headers);
       const maxRegAttempts = parsePositiveInt(process.env.REGISTER_RATE_LIMIT_MAX, 10);
@@ -153,7 +140,7 @@ export const authRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const acknowledgement = { accepted: true as const };
       if (!allowRegistrationVerificationResend(ctx.headers, input.email)) return acknowledgement;
-      if (!isAllowedRegistrationEmailDomain(input.email) || !parseAuthConfig(process.env).passwordLogin) {
+      if (!isAllowedRegistrationEmailDomain(input.email)) {
         return acknowledgement;
       }
 

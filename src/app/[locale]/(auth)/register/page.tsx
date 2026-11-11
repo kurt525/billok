@@ -156,7 +156,7 @@ function RegisterForm() {
         ) : regMode.isPending ? (
           <LoadingSpinner className="py-8" />
         ) : mode === 'closed' ? (
-          // Also the state when DISABLE_PASSWORD_LOGIN is set: don't show a
+          // The invited registration form is disabled by the administrator: do not show a
           // form that can never be submitted.
           <div className="rounded-md bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
             {t('error.closed')}

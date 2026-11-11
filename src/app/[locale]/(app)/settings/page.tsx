@@ -208,7 +208,7 @@ export default function SettingsPage() {
 
   const profile = trpc.auth.getProfile.useQuery();
   const loginOptions = trpc.auth.getLoginOptions.useQuery();
-  // SSO, Google and magic-link-only accounts have no password to change, and with
+  // Accounts without a local password cannot change a password; with
   // password login disabled a password would be useless anyway. Hidden while
   // the options load (no flash); shown if they fail to load, since the server
   // still enforces the setting.

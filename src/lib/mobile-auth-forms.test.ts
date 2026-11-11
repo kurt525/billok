@@ -17,8 +17,12 @@ describe('Mobile authentication and verification forms', () => {
     const login = source('src/app/[locale]/(auth)/login/page.tsx');
     expect(login).toContain('autoComplete="username"');
     expect(login).toContain('autoComplete="current-password"');
-    expect(login).toContain('autoComplete="email"');
-    expect(login.match(/className="h-11 min-w-0 text-base"/g)).toHaveLength(3);
+    // SMTP email is only for account verification, never for login.
+    expect(login).not.toContain('autoComplete="email"');
+    expect(login.match(/className="h-11 min-w-0 text-base"/g)).toHaveLength(2);
+    expect(login).not.toContain('magicLinkForm');
+    expect(login).not.toContain('oidc-sign-in');
+    expect(login).not.toContain('google-sign-in');
     expect(login).not.toContain('h-10 text-sm');
     expect(login).toContain('min-h-11');
   });

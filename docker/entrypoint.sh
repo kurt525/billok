@@ -117,27 +117,13 @@ echo "  Upload Dir:     ${UPLOAD_DIR:-/app/uploads}"
 echo "  Auth RL Max:    ${AUTH_RATE_LIMIT_MAX:-5}"
 echo "  Register RL:    ${REGISTER_RATE_LIMIT_MAX:-10}"
 if [ -n "$EMAIL_SERVER_HOST" ]; then
-  echo "  Magic Link:     enabled"
+  echo "  Registration Mail: configured"
   echo "  Email Host:     ${EMAIL_SERVER_HOST}"
-  echo "  Email Port:     ${EMAIL_SERVER_PORT:-587}"
+  echo "  Email Port:     ${EMAIL_SERVER_PORT:-465}"
   echo "  Email From:     ${EMAIL_FROM:-not set}"
 else
-  echo "  Magic Link:     disabled"
+  echo "  Registration Mail: not configured"
 fi
-if [ -n "$GOOGLE_CLIENT_ID" ] && [ -n "$GOOGLE_CLIENT_SECRET" ]; then
-  echo "  Google OAuth:   enabled"
-else
-  echo "  Google OAuth:   disabled"
-fi
-if [ -n "$OIDC_ISSUER" ] && [ -n "$OIDC_CLIENT_ID" ] && [ -n "$OIDC_CLIENT_SECRET" ]; then
-  echo "  OIDC SSO:       configured (${OIDC_ISSUER})"
-else
-  echo "  OIDC SSO:       disabled"
-fi
-case "$(echo "${DISABLE_PASSWORD_LOGIN:-false}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')" in
-  true|1|yes|on) echo "  Password Login: disabled (ignored if no OIDC/magic link — see app log)" ;;
-  *)             echo "  Password Login: enabled" ;;
-esac
 echo "  Log Level:      ${LOG_LEVEL:-info}"
 echo "============================================"
 echo ""

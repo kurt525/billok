@@ -46,8 +46,8 @@ describe('BillOK Russian-only error and notification audit', () => {
       expect(source('messages/ru/' + filename), filename).not.toMatch(/ShareTab/i);
     }
 
-    const email = source('src/server/lib/magic-link-email.ts');
-    expect(email).toContain('Ссылка для входа в BillOK');
+    const email = source('src/server/lib/email-verification-email.ts');
+    expect(email).toContain('BillOK');
     expect(email).not.toMatch(/Sign in to ShareTab|Click here to sign in/i);
     const adminEmail = source('src/server/trpc/routers/admin.ts');
     expect(adminEmail).toContain("subject: 'Проверка электронной почты BillOK'");

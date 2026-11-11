@@ -321,9 +321,11 @@ export const adminRouter = createTRPCRouter({
           suspendedAt: new Date(),
         },
       });
-      // Remove auth records (sessions, accounts)
-      await tx.account.deleteMany({ where: { userId: input.userId } });
+      // Remove sessions and WebAuthn credentials: deleted accounts must not
+      // authenticate with a previously enrolled passkey.
       await tx.session.deleteMany({ where: { userId: input.userId } });
+      await tx.webAuthnChallenge.deleteMany({ where: { userId: input.userId } });
+      await tx.passkeyCredential.deleteMany({ where: { userId: input.userId } });
       // Transfer ownership before removing memberships
       const ownedGroups = await tx.groupMember.findMany({
         where: { userId: input.userId, role: 'OWNER' },
