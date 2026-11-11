@@ -1,7 +1,6 @@
 // Parse only loopback QA links from Nodemailer's MIME message.
-// The real password reset template encodes BOTH MIME alternatives as Base64;
-// registration confirmation typically uses Base64 text and quoted-printable HTML.
-const qaLink = /https?:\/\/(?:127\.0\.0\.1|localhost):\d+\/(?:verify-email|reset-password)\?token=[A-Za-z0-9_-]{43}/g;
+// Registration confirmation uses Base64 text and quoted-printable HTML.
+const qaLink = /https?:\/\/(?:127\.0\.0\.1|localhost):\d+\/verify-email\?token=[A-Za-z0-9_-]{43}/g;
 
 export function linksInMessage(raw) {
   const alternatives = [
