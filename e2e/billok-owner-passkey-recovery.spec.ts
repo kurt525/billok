@@ -64,6 +64,8 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
     await expect(page.getByTestId('passkey-limit')).toContainText('3 из 3');
     await expect(page.getByTestId('passkey-items').getByTestId('passkey-item')).toHaveCount(3);
     await expect(page.getByTestId('owner-passkey-full')).toBeVisible();
+    await expect(page.getByTestId('owner-key-security-state')).toContainText('Три действующих Passkey');
+    await expect(page.getByTestId('owner-security-status')).toContainText('Ссылка из письма не выполняет вход');
     await expect(page.getByTestId('owner-add-passkey')).toHaveCount(0);
     const cannotAddFourth = await oldSession.post('/api/webauthn/owner/approval/start', {
       data: { action: 'ADD' },
@@ -268,6 +270,7 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
       await expect(replacement.getByRole('heading', { name: 'Главная' })).toBeVisible();
       await replacement.goto('/settings');
       await expect(replacement.getByTestId('passkey-limit')).toContainText('1 из 3');
+      await expect(replacement.getByTestId('owner-key-security-state')).toContainText('Один Passkey достаточен');
 
       // List retains historical revoked rows by design; only items with
       // an enabled owner rename control represent ACTIVE credentials.
@@ -295,6 +298,9 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
         await replacement.getByTestId('owner-add-passkey').click();
         await expect(replacement.getByTestId('owner-add-success')).toBeVisible({ timeout: 30_000 });
         await expect(replacement.getByTestId('passkey-limit')).toContainText(count + ' из 3');
+        await expect(replacement.getByTestId('owner-key-security-state')).toContainText(
+          count === 2 ? 'Два действующих Passkey' : 'Три действующих Passkey',
+        );
         await expect(activeItems).toHaveCount(count);
         // Historical revoked records stay visible for auditing.
         expect(

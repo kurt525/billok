@@ -387,6 +387,19 @@ function PasskeyInventory() {
             <p data-testid="passkey-limit" className="text-sm font-medium">
               {t('count', { count: data.activeCount, limit: data.maxActivePasskeys })}
             </p>
+            {data.isOwner && (
+              <section className="min-w-0 space-y-1 rounded-xl border p-3" data-testid="owner-security-status">
+                <p className="break-words text-sm font-medium">{t('ownerProtectionTitle')}</p>
+                <p className="break-words text-sm text-muted-foreground" data-testid="owner-key-security-state">
+                  {data.activeCount === 1
+                    ? t('ownerSingleKey')
+                    : data.activeCount === 2
+                      ? t('ownerTwoKeys')
+                      : t('ownerThreeKeys')}
+                </p>
+                <p className="break-words text-xs text-muted-foreground">{t('ownerRecoveryRule')}</p>
+              </section>
+            )}
             {data.isOwner && data.activeCount > 0 && data.activeCount < data.maxActivePasskeys && (
               <div className="min-w-0 space-y-2" data-testid="owner-add-passkey-section">
                 <Button

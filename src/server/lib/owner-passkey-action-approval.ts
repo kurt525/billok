@@ -296,6 +296,21 @@ export async function finishOwnerPasskeyActionApproval(input: {
         expiresAt: new Date(now.getTime() + OWNER_APPROVAL_TICKET_TTL_MS),
       },
     });
+    // Only an ACTUALLY verified owner WebAuthn assertion is audited.
+    // This entry is part of the same transaction as consuming the challenge;
+    // a rollback must leave neither a usable proof nor a success record.
+    await tx.adminAuditLog.create({
+      data: {
+        adminId: input.userId,
+        action: 'OWNER_PASSKEY_APPROVAL_VERIFIED',
+        metadata: {
+          action: challenge.ownerActionType!,
+          signerCredentialRowId: signer.id,
+          ...(challenge.targetCredentialRowId ? { targetCredentialRowId: challenge.targetCredentialRowId } : {}),
+          expiresInSeconds: OWNER_APPROVAL_TICKET_TTL_MS / 1000,
+        },
+      },
+    });
   });
   return { approvalToken, expiresInSeconds: OWNER_APPROVAL_TICKET_TTL_MS / 1000 };
 }

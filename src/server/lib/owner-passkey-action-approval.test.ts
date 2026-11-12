@@ -142,6 +142,7 @@ function fixture(n = 2, action: 'ADD' | 'RENAME' | 'REVOKE' = 'REVOKE') {
         return { count: 1 };
       }),
     },
+    adminAuditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-owner-approval' }) },
     $queryRawUnsafe: vi.fn().mockResolvedValue([{ id: 'owner' }]),
     $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(db)),
   };
@@ -344,6 +345,53 @@ describe('Issue #1 6.10.2.2: fresh owner WebAuthn approval', () => {
     });
     expect(proof.tokenHash).toBe(hash(result.approvalToken));
     expect(JSON.stringify(db.ownerPasskeyActionProof.create.mock.calls)).not.toContain(result.approvalToken);
+    expect(db.adminAuditLog.create).toHaveBeenCalledWith({
+      data: {
+        adminId: 'owner',
+        action: 'OWNER_PASSKEY_APPROVAL_VERIFIED',
+        metadata: {
+          action: 'REVOKE',
+          signerCredentialRowId: 'key-keep',
+          targetCredentialRowId: 'key-lost',
+          expiresInSeconds: 120,
+        },
+      },
+    });
+    // An audit may identify the action and signer, but NEVER contain secret
+    // approval ticket bytes, session-binding hash or signed attestation.
+    expect(JSON.stringify(db.adminAuditLog.create.mock.calls)).not.toContain(result.approvalToken);
+    expect(JSON.stringify(db.adminAuditLog.create.mock.calls)).not.toContain(sessionHash);
+  });
+
+  it('audits signed ADD approvals without leaking token or registering a second key', async () => {
+    const { db } = fixture(1, 'ADD');
+    const only = { ...signed, id: 'credential-lost', rawId: 'credential-lost' };
+    vi.mocked(verifyAuthenticationResponse).mockResolvedValueOnce({
+      verified: true,
+      authenticationInfo: {
+        credentialID: 'credential-lost',
+        userVerified: true,
+        newCounter: 4,
+        credentialDeviceType: 'singleDevice',
+        credentialBackedUp: false,
+        origin: 'https://billok.ru',
+        rpID: 'billok.ru',
+      },
+    });
+    const result = await finish(db, sessionHash, only);
+    expect(result.approvalToken).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    expect(db.adminAuditLog.create).toHaveBeenCalledWith({
+      data: {
+        adminId: 'owner',
+        action: 'OWNER_PASSKEY_APPROVAL_VERIFIED',
+        metadata: {
+          action: 'ADD',
+          signerCredentialRowId: 'key-lost',
+          expiresInSeconds: 120,
+        },
+      },
+    });
+    expect(db.adminAuditLog.create.mock.calls[0]).not.toContain(result.approvalToken);
   });
 
   it('prevents signing with the key being revoked or a foreign/revoked signer', async () => {
@@ -381,6 +429,7 @@ describe('Issue #1 6.10.2.2: fresh owner WebAuthn approval', () => {
     await expect(finish(db)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.ownerPasskeyActionProof.create).not.toHaveBeenCalled();
     expect(db.passkeyCredential.updateMany).not.toHaveBeenCalled();
+    expect(db.adminAuditLog.create).not.toHaveBeenCalled();
   });
 
   it('consumes a proof once for exactly its action, target, session and owner', async () => {

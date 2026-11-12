@@ -16,6 +16,7 @@ test('ordinary user: one-key inventory only, all owner key-management routes for
     await page.goto('/settings', { waitUntil: 'networkidle' });
 
     await expect(page.getByTestId('passkey-limit')).toContainText('1 из 1');
+    await expect(page.getByTestId('owner-security-status')).toHaveCount(0);
     await expect(page.getByTestId('passkey-items').getByTestId('passkey-item')).toHaveCount(1);
 
     for (const width of widths) {
