@@ -111,11 +111,16 @@ test('real email recovery rotates one Passkey and old session; replay and expire
 
     // Email and WebAuthn registration must NEVER silently create an Auth.js session.
     const noLogin = await page.request.get('/api/auth/session');
-    expect((await noLogin.json()) as { user?: unknown }).not.toHaveProperty('user');
+    expect(noLogin.ok()).toBe(true);
+    const unauthenticated = (await noLogin.json()) as { user?: unknown } | null;
+    // Auth.js returns JSON null (not an empty object) when no session exists.
+    expect(unauthenticated?.user ?? null).toBeNull();
 
     // Previously minted JWTs immediately become unusable.
     const prior = await oldSession.get('/api/auth/session');
-    expect((await prior.json()) as { user?: unknown }).not.toHaveProperty('user');
+    expect(prior.ok()).toBe(true);
+    const expiredSession = (await prior.json()) as { user?: unknown } | null;
+    expect(expiredSession?.user ?? null).toBeNull();
 
     // Old credential is revoked, even with a valid P-256 signature.
     await expect(authedPasskeyContext(email)).rejects.toThrow(/WebAuthn signature rejected: 403/u);
