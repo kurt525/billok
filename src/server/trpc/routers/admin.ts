@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isCompletedOwner } from '@/server/lib/owner-identity';
 import { AppError } from '@/server/lib/app-error';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
 import { type AdminAction, type PrismaClient, GuestSplitStatus, Prisma } from '@/generated/prisma/client';
@@ -28,32 +29,17 @@ import {
 const serverStartTime = new Date();
 const { version: cachedVersion, commitSha: cachedCommitSha } = getBuildInfo();
 
-const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
-  const adminEmail = process.env.ADMIN_EMAIL;
-  // When impersonating, use the real admin email for the check
-  const effectiveEmail = ctx.impersonating ? ctx.impersonating.adminEmail : ctx.user.email;
-  if (!adminEmail || effectiveEmail !== adminEmail) {
+// 6.12.1: never grant admin authority because an email matches ADMIN_EMAIL.
+// The authenticated session's real User.id must equal the completed owner
+// singleton's User.id. No impersonation cookie can restore owner privileges.
+const adminProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  if (ctx.impersonating || !(await isCompletedOwner(ctx.db, ctx.user.id))) {
     throw new AppError('FORBIDDEN', 'adminRequired');
-  }
-  // For admin procedures, restore the real admin user context
-  if (ctx.impersonating) {
-    return next({
-      ctx: {
-        ...ctx,
-        user: {
-          ...ctx.user,
-          id: ctx.impersonating.adminId,
-          email: ctx.impersonating.adminEmail,
-        },
-      },
-    });
   }
   return next({ ctx });
 });
 
-// Issue #1 6.11: the separate registered-user page is bound to the
-// immutable, completed owner bootstrap ID, not ADMIN_EMAIL or a JWT role.
-// The legacy adminProcedure is left for the separately scoped 6.12 audit.
+// 6.11's specialized registered-user authorization remains independent.
 const ownerUsersProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   if (ctx.impersonating) throw new AppError('FORBIDDEN', 'adminRequired');
   await requireRegisteredOwner(ctx.db, ctx.user.id);

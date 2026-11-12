@@ -6,6 +6,7 @@ vi.mock('next/headers', () => ({
 vi.mock('@/server/auth', () => ({ auth: vi.fn() }));
 
 const mockDb = {
+  ownerBootstrap: { findUnique: vi.fn().mockResolvedValue(null) },
   systemSetting: { findUnique: vi.fn() },
   user: { findUnique: vi.fn() },
   receipt: { findUnique: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },
@@ -67,6 +68,7 @@ const signedIn: Session = { user: { id: 'user-1' } };
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  mockDb.ownerBootstrap.findUnique.mockResolvedValue(null);
   checkRateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
   peekRateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
   mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
@@ -1173,6 +1175,10 @@ describe('Issue 3.6.1: reserved owner name Илья, verified by account, not gu
 
   beforeEach(() => {
     vi.stubEnv('ADMIN_EMAIL', 'owner@example.com');
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({
+      userId: 'billok-owner',
+      completedAt: new Date('2026-11-12T00:00:00Z'),
+    });
     mockDb.user.findUnique.mockImplementation(async (args: { where: { id: string } }) =>
       args.where.id === 'billok-owner' ? ownerUser : nonOwner,
     );
@@ -2227,6 +2233,7 @@ describe('Issue 3.7.2: atomic fixed guest slot reservation with a shared link', 
   });
 
   test('owner comes after another Илья: the same guest row and all other fields survive', async () => {
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'billok-owner', completedAt: new Date() });
     vi.stubEnv('ADMIN_EMAIL', 'owner@example.com');
     try {
       mockDb.user.findUnique.mockImplementation(async (args: { where: { id: string } }) =>
@@ -2562,6 +2569,7 @@ describe('Issue 3.7.1: creator plus exactly N additional unclaimed guest slots',
   });
 
   test('verified owner creates one reserved Илья row plus guests and distinct payer', async () => {
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'user-1', completedAt: new Date() });
     vi.stubEnv('ADMIN_EMAIL', 'owner@example.com');
     try {
       mockDb.user.findUnique.mockResolvedValue({ name: 'Илья', email: 'owner@example.com', suspendedAt: null });

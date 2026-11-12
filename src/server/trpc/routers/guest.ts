@@ -70,8 +70,8 @@ import {
 } from '../../lib/guest-people';
 
 /** 3.6.1: the owner's verified server account, never the supplied display name
- * or an impersonated session. ADMIN_EMAIL is the existing trusted owner account
- * configuration; checking the fetched user id prevents spoofing with a guest name.
+ * or an impersonated session. OwnerBootstrap is the single source of owner
+ * identity; matching ADMIN_EMAIL or choosing the same name never grants it.
  * Activation is restricted to the configured owner's profile name «Илья».
  */
 const RESERVED_OWNER_NAME = 'Илья';
@@ -83,15 +83,17 @@ async function billokOwnerUserId(ctx: {
   db: typeof import('@/server/db').db;
 }): Promise<string | null> {
   const userId = ctx.session?.user?.id;
-  const ownerEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
-  if (!userId || !ownerEmail || ctx.impersonating) return null;
+  if (!userId || ctx.impersonating) return null;
+  const owner = await ctx.db.ownerBootstrap.findUnique({
+    where: { id: 1 },
+    select: { userId: true, completedAt: true },
+  });
+  if (!owner?.completedAt || owner.userId !== userId) return null;
   const account = await ctx.db.user.findUnique({
     where: { id: userId },
-    select: { email: true, name: true, suspendedAt: true },
+    select: { name: true, suspendedAt: true },
   });
-  return account?.email?.trim().toLowerCase() === ownerEmail &&
-    normalizeGuestName(account.name ?? '') === RESERVED_OWNER_KEY &&
-    !account.suspendedAt
+  return account && normalizeGuestName(account.name ?? '') === RESERVED_OWNER_KEY && !account.suspendedAt
     ? userId
     : null;
 }

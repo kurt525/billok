@@ -36,6 +36,9 @@ vi.mock('@/server/auth', () => ({
 // Mock Prisma client
 const mockDb = {
   $queryRaw: vi.fn(),
+  ownerBootstrap: {
+    findUnique: vi.fn().mockResolvedValue({ userId: 'admin-1', completedAt: new Date() }),
+  },
   // Interactive transactions run their callback against the same mocks
   $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(mockDb)),
   user: {
@@ -337,6 +340,70 @@ async function callerAs(session: { user: { id: string; email: string } }) {
   const ctx = { session, db: mockDb, headers: new Headers(), impersonating: null };
   return adminRouter.createCaller(ctx as unknown as Parameters<typeof adminRouter.createCaller>[0]);
 }
+
+describe('Issue #1 6.12.1: immutable owner ID, never ADMIN_EMAIL authorization', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({
+      userId: 'admin-1',
+      completedAt: new Date('2026-11-13T00:00:00Z'),
+    });
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  test('real owner is authorized even if ADMIN_EMAIL is unset or points elsewhere', async () => {
+    vi.stubEnv('ADMIN_EMAIL', 'ordinary@example.com');
+    const api = await callerAs(adminSession);
+    mockDb.adminAuditLog.findMany.mockResolvedValue([]);
+    await expect(api.getAuditLog({ limit: 1 })).resolves.toMatchObject({ items: [] });
+    expect(mockDb.ownerBootstrap.findUnique).toHaveBeenCalledWith({
+      where: { id: 1 },
+      select: { userId: true, completedAt: true },
+    });
+    vi.stubEnv('ADMIN_EMAIL', '');
+    await expect(api.getAuditLog({ limit: 1 })).resolves.toMatchObject({ items: [] });
+  });
+
+  test('ordinary registered user with matching ADMIN_EMAIL is never an owner', async () => {
+    vi.stubEnv('ADMIN_EMAIL', 'ordinary@example.com');
+    const api = await callerAs({ user: { id: 'ordinary-1', email: 'ordinary@example.com' } });
+    await expect(api.getAuditLog({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.listUsers({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.user.findMany).not.toHaveBeenCalled();
+    expect(mockDb.adminAuditLog.findMany).not.toHaveBeenCalled();
+  });
+
+  test('unfinished, missing or replaced bootstrap ID fails closed for all admin requests', async () => {
+    const api = await callerAs(adminSession);
+    for (const bootstrap of [
+      null,
+      { userId: 'admin-1', completedAt: null },
+      { userId: 'new-owner-id', completedAt: new Date() },
+    ]) {
+      mockDb.ownerBootstrap.findUnique.mockResolvedValueOnce(bootstrap);
+      await expect(api.getAuditLog({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+  });
+
+  test('signed impersonation context cannot restore owner access through adminId or adminEmail', async () => {
+    const { adminRouter } = await import('./admin');
+    const ctx = {
+      session: adminSession,
+      db: mockDb,
+      headers: new Headers(),
+      impersonating: {
+        adminId: 'admin-1',
+        adminEmail: 'admin@example.com',
+        targetId: 'ordinary-1',
+        targetEmail: 'ordinary@example.com',
+      },
+    };
+    const api = adminRouter.createCaller(ctx as unknown as Parameters<typeof adminRouter.createCaller>[0]);
+    await expect(api.getAuditLog({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.adminAuditLog.findMany).not.toHaveBeenCalled();
+  });
+});
 
 describe('admin group totals in group currency', () => {
   beforeEach(() => {

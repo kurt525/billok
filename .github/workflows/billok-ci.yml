@@ -118,6 +118,11 @@ jobs:
             sleep 1
           done
           npx prisma db push
+          # Production applies this same idempotent guard after Prisma push.
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < prisma/after-push/owner_bootstrap_identity_guard.sql
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < prisma/after-push/owner_bootstrap_identity_guard.sql
           # One real-PostgreSQL race check for single-use email confirmation.
           npx tsx scripts/qa-registration-confirmation-postgres.ts
           # Create only disposable fixtures for authenticated mobile flows.
@@ -180,6 +185,15 @@ jobs:
           fi
           BILLOK_QA_FIXTURES=1 BILLOK_QA_PASSKEY_FILE="$RUNNER_TEMP/billok-qa-passkeys.json" \
             npx tsx e2e/seed-mobile-auth-journey.ts >> "$GITHUB_ENV"
+
+      - name: Reject takeover or deletion of sole owner in disposable PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$BILLOK_QA_DB_CONTAINER" = "billok-mobile-qa-$(printf '%s' "$GITHUB_RUN_ID")-$(printf '%s' "$GITHUB_RUN_ATTEMPT")"
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < scripts/qa-owner-identity-postgres.sql
+          echo 'OWNER_IDENTITY_POSTGRES_GUARD=PASS'
 
       # The browser suite checks exactly the same optimized React/Next.js
       # rendering mode used by the released website, not dev/Turbopack route
@@ -265,21 +279,29 @@ jobs:
             -e "BILLOK_MOBILE_RECEIPT_ID=$BILLOK_MOBILE_RECEIPT_ID" \
             -e "BILLOK_MOBILE_GROUP_ID=$BILLOK_MOBILE_GROUP_ID" \
             -v "$GITHUB_WORKSPACE:/work:ro" -w /work \
-            mcr.microsoft.com/playwright:v1.64.1-noble \
-            node /work/node_modules/@playwright/test/cli.js test \
-              e2e/billok-passkey-smoke.spec.ts \
-              e2e/billok-passkey-login-security.spec.ts \
-              e2e/billok-passkey-recovery.spec.ts \
-              e2e/billok-owner-passkey-recovery.spec.ts \
-              e2e/billok-passkey-management-regular.spec.ts \
-              e2e/billok-mobile-public.spec.ts \
-              e2e/billok-mobile-auth-journey.spec.ts \
-              e2e/billok-mobile-authenticated.spec.ts \
-              e2e/billok-mobile-wide.spec.ts \
-              e2e/billok-mobile-receipt-actions.spec.ts \
-              e2e/billok-mobile-guest-split.spec.ts \
-              --project=parallel --no-deps --workers=2 --retries=0 \
-              --reporter=line --output=/tmp/billok-mobile-playwright-results
+            mcr.microsoft.com/playwright:v1.64.1-noble sh -ec '
+              # The QA DB has only one owner. First run admin scenarios while
+              # all three real owner Passkeys remain active, then run their
+              # destructive recovery lifecycle. Never race the two suites.
+              node /work/node_modules/@playwright/test/cli.js test \
+                e2e/billok-mobile-authenticated.spec.ts \
+                --project=parallel --no-deps --workers=2 --retries=0 \
+                --reporter=line --output=/tmp/billok-mobile-playwright-admin
+
+              node /work/node_modules/@playwright/test/cli.js test \
+                e2e/billok-passkey-smoke.spec.ts \
+                e2e/billok-passkey-login-security.spec.ts \
+                e2e/billok-passkey-recovery.spec.ts \
+                e2e/billok-owner-passkey-recovery.spec.ts \
+                e2e/billok-passkey-management-regular.spec.ts \
+                e2e/billok-mobile-public.spec.ts \
+                e2e/billok-mobile-auth-journey.spec.ts \
+                e2e/billok-mobile-wide.spec.ts \
+                e2e/billok-mobile-receipt-actions.spec.ts \
+                e2e/billok-mobile-guest-split.spec.ts \
+                --project=parallel --no-deps --workers=2 --retries=0 \
+                --reporter=line --output=/tmp/billok-mobile-playwright-results
+            '
       - name: Clean up isolated browser test resources
         if: always()
         shell: bash

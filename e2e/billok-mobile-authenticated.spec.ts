@@ -1,4 +1,4 @@
-import { loginWithPasskey } from './passkey-auth';
+import { authedPasskeyContext, loginWithPasskey } from './passkey-auth';
 import { expect, test, type Page } from '@playwright/test';
 import { auditMobileViewport, auditMobileTarget } from './billok-mobile-viewport-audit';
 import { createTestGroup, trpcMutation, users } from './helpers';
@@ -79,6 +79,20 @@ async function signInAsSeedAdmin(page: Page) {
   await expect(page.getByRole('heading', { name: 'Главная' })).toBeVisible();
 }
 
+// Issue #1 6.12.1: the disposable QA singleton belongs to owner-qa, NOT
+// alice@example.com (which the old ADMIN_EMAIL setting happens to name).
+// Use a real, signed P-256 WebAuthn challenge; never impersonate or forge JWTs.
+async function signInAsOwnerAdmin(page: Page) {
+  const owner = await authedPasskeyContext('owner-qa@mail.ru', 0);
+  try {
+    await page.context().addCookies((await owner.storageState()).cookies);
+  } finally {
+    await owner.dispose();
+  }
+  await page.goto('/dashboard', { waitUntil: 'networkidle' });
+  await expect(page.getByRole('heading', { name: 'Главная' })).toBeVisible();
+}
+
 // One authenticated session across four viewports avoids tripping BillOK's
 // login rate limiter when Chromium runs several mobile tests in parallel.
 test.use({
@@ -87,7 +101,39 @@ test.use({
   hasTouch: true,
 });
 
-test('Russian mobile dashboard, groups, expenses and admin at all 4 phone widths', async ({ page }) => {
+test('ADMIN_EMAIL-matched account cannot impersonate or export without sole owner User.id', async ({ page }) => {
+  test.setTimeout(60_000);
+  // On disposable CI ADMIN_EMAIL intentionally equals Alice; the finished
+  // OwnerBootstrap row instead references owner-qa@mail.ru.
+  const ordinary = await authedPasskeyContext('alice@example.com', 0);
+  try {
+    await page.context().addCookies((await ordinary.storageState()).cookies);
+    await page.goto('/dashboard', { waitUntil: 'networkidle' });
+    const exportResponse = await ordinary.get('/api/admin/export');
+    expect(exportResponse.status()).toBe(403);
+    const impersonation = await ordinary.post('/api/admin/impersonate', {
+      data: { userId: 'billok-owner' },
+    });
+    expect(impersonation.status()).toBe(403);
+    const adminQuery = await ordinary.get(
+      '/api/trpc/admin.getAuditLog?input=' + encodeURIComponent(JSON.stringify({ json: { limit: 1 } })),
+    );
+    expect(adminQuery.status()).toBe(403);
+    await page.goto('/admin/users', { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('owner-users-page')).toHaveCount(0);
+    expect(
+      (
+        (await (await ordinary.get('/api/auth/session')).json()) as {
+          user?: { email?: string };
+        }
+      ).user?.email,
+    ).toBe('alice@example.com');
+  } finally {
+    await ordinary.dispose();
+  }
+});
+
+test('Russian mobile dashboard, groups and expenses at all 4 phone widths', async ({ page }) => {
   test.setTimeout(180_000);
   await signInAsSeedAdmin(page);
 
@@ -232,9 +278,8 @@ test('Russian mobile dashboard, groups, expenses and admin at all 4 phone widths
       await page.setViewportSize({ width, height: 800 });
     }
 
-    await page.goto('/admin', { waitUntil: 'networkidle' });
-    await expect(page.getByRole('heading', { name: 'Панель администратора' })).toBeVisible();
-    await checkPhoneLayout(page, width, true);
+    // Owner-only admin is exercised independently below; this flow uses
+    // Alice's ordinary account for her own dashboard and group history.
     await expect(page.locator('aside')).not.toBeVisible();
   }
 });
@@ -534,72 +579,49 @@ test('long expense history stays readable and opens at six mobile widths', async
   }
 });
 
-test('mobile admin user controls remain touch-friendly with delete confirmation', async ({ page }) => {
+test('real owner mobile user page keeps filters and confirmed suspension safe', async ({ page }) => {
   test.setTimeout(170_000);
-  await signInAsSeedAdmin(page);
-
+  await signInAsOwnerAdmin(page);
   for (const width of [320, 360, 430, 480, 600, 720]) {
     await page.setViewportSize({ width, height: 380 });
     await page.goto('/admin', { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('admin-user-management')).toHaveCount(0);
+    await page.getByTestId('owner-users-nav').click();
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
-    const section = page.getByTestId('admin-user-management');
-    await expect(section).toBeVisible({ timeout: 15_000 });
-    const search = section.getByRole('textbox', { name: 'Поиск пользователей' });
+    const section = page.getByTestId('owner-users-page');
+    await expect(section).toBeVisible();
+    const search = section.getByTestId('owner-users-search');
     await expect(search).toBeVisible();
-    await expect(search).toHaveAttribute('placeholder', /Поиск/);
-
-    for (const filter of ['all', 'active', 'suspended', 'placeholder']) {
-      const button = section.getByTestId('admin-users-filter-' + filter);
+    for (const filter of ['all', 'active', 'suspended', 'pending']) {
+      const button = section.getByTestId('owner-users-filter-' + filter);
       await expect(button).toBeVisible();
       const bounds = await button.boundingBox();
-      expect(bounds).not.toBeNull();
-      expect(bounds!.height, 'Admin status filter at ' + width + 'px').toBeGreaterThanOrEqual(44);
-      expect(bounds!.width, 'Admin status filter at ' + width + 'px').toBeGreaterThanOrEqual(44);
+      expect(bounds?.height).toBeGreaterThanOrEqual(44);
+      expect(bounds?.width).toBeGreaterThanOrEqual(44);
     }
-    const searchBounds = await search.boundingBox();
-    expect(searchBounds!.height, 'Admin search at ' + width + 'px').toBeGreaterThanOrEqual(44);
-
     await search.fill('bob@example.com');
-    const row = section.locator('tbody tr').filter({ hasText: 'bob@example.com' });
+    const row = section.locator('[data-testid^="owner-user-"]').filter({ hasText: 'bob@example.com' });
     await expect(row).toHaveCount(1, { timeout: 15_000 });
-    const deleteButton = row.getByRole('button', { name: /Удалить пользователя/ });
-    await deleteButton.scrollIntoViewIfNeeded();
-    await expect(deleteButton).toBeVisible();
-    const delBounds = await deleteButton.boundingBox();
-    expect(delBounds!.width, 'Admin delete action width at ' + width + 'px').toBeGreaterThanOrEqual(44);
-    expect(delBounds!.height, 'Admin delete action height at ' + width + 'px').toBeGreaterThanOrEqual(44);
-    await deleteButton.click();
-
-    const dialog = page.getByTestId('admin-user-delete-dialog');
+    const block = row.getByRole('button', { name: 'Заблокировать' });
+    await expect(block).toBeVisible();
+    expect((await block.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    await block.click();
+    const dialog = page.getByTestId('owner-users-confirm');
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText('Bob');
-    const cancel = dialog.getByRole('button', { name: 'Отмена' });
-    const confirm = dialog.getByRole('button', { name: 'Удалить', exact: true });
-    for (const button of [cancel, confirm]) {
-      const bounds = await button.boundingBox();
-      expect(bounds).not.toBeNull();
-      expect(bounds!.height, 'Admin confirm action at ' + width + 'px').toBeGreaterThanOrEqual(44);
-    }
-    const dialogRect = await dialog.boundingBox();
-    expect(dialogRect).not.toBeNull();
-    expect(dialogRect!.x, 'Admin dialog left at ' + width + 'px').toBeGreaterThanOrEqual(0);
-    expect(dialogRect!.x + dialogRect!.width, 'Admin dialog right at ' + width + 'px').toBeLessThanOrEqual(width);
-    expect(dialogRect!.height, 'Admin dialog height at ' + width + 'px').toBeLessThanOrEqual(380);
-    await cancel.click();
-    await expect(dialog).toBeHidden();
-
-    const layout = await page.evaluate(() => ({
-      viewport: innerWidth,
-      documentWidth: document.documentElement.scrollWidth,
-    }));
-    expect(layout.viewport, 'Admin viewport width at ' + width + 'px').toBe(width);
-    expect(layout.documentWidth, 'Admin document overflow at ' + width + 'px').toBeLessThanOrEqual(width + 1);
+    await expect(dialog).toContainText('bob@example.com');
+    const bounds = await dialog.boundingBox();
+    expect(bounds?.x).toBeGreaterThanOrEqual(-1);
+    expect(bounds!.x + bounds!.width, 'Confirmation outside ' + width).toBeLessThanOrEqual(width + 1);
+    await dialog.getByTestId('owner-users-cancel').click();
+    await expect(dialog).toHaveCount(0);
+    await expect(row).toHaveCount(1);
+    await checkPhoneLayout(page, width, true);
   }
 });
 
 test('mobile invitation management keeps registration controls accessible at six widths', async ({ page }) => {
   test.setTimeout(170_000);
-  await signInAsSeedAdmin(page);
+  await signInAsOwnerAdmin(page);
   const label = 'МобильноеПриглашение'.repeat(2);
   await page.goto('/admin', { waitUntil: 'networkidle' });
   const section = page.getByTestId('admin-registration-control');
@@ -675,7 +697,7 @@ test('mobile invitation management keeps registration controls accessible at six
 
 test('mobile server log filters and search remain reachable at six widths', async ({ page }) => {
   test.setTimeout(170_000);
-  await signInAsSeedAdmin(page);
+  await signInAsOwnerAdmin(page);
 
   for (const width of [320, 360, 430, 480, 600, 720]) {
     await page.setViewportSize({ width, height: 380 });
@@ -720,7 +742,7 @@ test('mobile server log filters and search remain reachable at six widths', asyn
 
 test('mobile admin tools confirm cleanup safely at six widths', async ({ page }) => {
   test.setTimeout(170_000);
-  await signInAsSeedAdmin(page);
+  await signInAsOwnerAdmin(page);
   let cleanupCalls = 0;
   // Queries can be part of a tRPC batch: preserve the other procedures.
   let countMocked = 0;
@@ -794,7 +816,7 @@ test('mobile admin tools confirm cleanup safely at six widths', async ({ page })
 
 test('mobile admin announcement controls remain accessible at six widths', async ({ page }) => {
   test.setTimeout(170_000);
-  await signInAsSeedAdmin(page);
+  await signInAsOwnerAdmin(page);
   let writes = 0;
   await page.route('**/api/trpc/**', async (route) => {
     const procedures = new URL(route.request().url()).pathname.split('/api/trpc/')[1]?.split(',') ?? [];
@@ -847,7 +869,7 @@ test('mobile admin announcement controls remain accessible at six widths', async
 
 test('mobile admin activity and audit tables scroll inside cards at six widths', async ({ page }) => {
   test.setTimeout(170_000);
-  await signInAsSeedAdmin(page);
+  await signInAsOwnerAdmin(page);
   let mockedQueries = 0;
   let writes = 0;
   const longName = 'МобильныйЖурналОченьДлинноеНазваниеБезПробелов'.repeat(6);
@@ -949,7 +971,7 @@ test('mobile admin activity and audit tables scroll inside cards at six widths',
 
 test('mobile admin group search and status filters are touch-friendly at six widths', async ({ page }) => {
   test.setTimeout(170_000);
-  await signInAsSeedAdmin(page);
+  await signInAsOwnerAdmin(page);
 
   for (const width of [320, 360, 430, 480, 600, 720]) {
     await page.setViewportSize({ width, height: 380 });
@@ -991,7 +1013,7 @@ test('mobile admin group search and status filters are touch-friendly at six wid
 
 test('mobile group table sort and local scroll at six widths', async ({ page }) => {
   test.setTimeout(170_000);
-  await signInAsSeedAdmin(page);
+  await signInAsOwnerAdmin(page);
   const groupName = 'ОченьДлинноеИмяГруппыБезПробелов'.repeat(3);
   let reads = 0;
   await page.route('**/api/trpc/**', async (route) => {
@@ -1062,7 +1084,7 @@ test('mobile group table sort and local scroll at six widths', async ({ page }) 
 
 test('mobile admin group deletion dialog is safe at six widths', async ({ page }) => {
   test.setTimeout(170_000);
-  await signInAsSeedAdmin(page);
+  await signInAsOwnerAdmin(page);
   let deletions = 0;
   const name = 'ДлинноеИмяГруппыБезПробелов'.repeat(5);
   await page.route('**/api/trpc/**', async (route) => {
@@ -1136,7 +1158,7 @@ test('mobile admin group deletion dialog is safe at six widths', async ({ page }
 
 test('mobile read-only admin health and storage cards fit six widths', async ({ page }) => {
   test.setTimeout(170_000);
-  await signInAsSeedAdmin(page);
+  await signInAsOwnerAdmin(page);
   const longValue = 'АдаптивнаяПроверкаОченьДлинногоЗначенияБезПробелов'.repeat(3);
   let healthReads = 0;
   let storageReads = 0;
@@ -1216,7 +1238,7 @@ test('mobile read-only admin health and storage cards fit six widths', async ({ 
 
 test('mobile storage cleanup confirmation cancels both actions at six widths', async ({ page }) => {
   test.setTimeout(170_000);
-  await signInAsSeedAdmin(page);
+  await signInAsOwnerAdmin(page);
   let cleanupMutations = 0;
   await page.route('**/api/trpc/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -1292,7 +1314,7 @@ test('mobile storage cleanup confirmation cancels both actions at six widths', a
 
 test('mobile BillOK hides legacy Venmo controls while preserving SBP at six widths', async ({ page }) => {
   test.setTimeout(170_000);
-  await signInAsSeedAdmin(page);
+  await signInAsOwnerAdmin(page);
   for (const width of [320, 360, 430, 480, 600, 720]) {
     await page.setViewportSize({ width, height: 380 });
     await page.goto('/admin', { waitUntil: 'networkidle' });
@@ -1850,7 +1872,7 @@ test('mobile group and expense dialogs remain reachable without mutations', asyn
 
 test('admin forms remain keyboard-accessible at 300 CSS px on six mobile widths', async ({ page }) => {
   test.setTimeout(220_000);
-  await signInAsSeedAdmin(page);
+  await signInAsOwnerAdmin(page);
   let blockedWrites = 0;
   const adminMutations = new Set([
     'admin.deleteUser',
@@ -1877,8 +1899,19 @@ test('admin forms remain keyboard-accessible at 300 CSS px on six mobile widths'
     await page.goto('/admin', { waitUntil: 'networkidle' });
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
 
+    await page.getByTestId('owner-users-nav').click();
+    await page.getByTestId('owner-users-search').fill('bob@example.com');
+    await expect(page.getByTestId('owner-users-list')).toContainText('bob@example.com');
+    const ownerSearch = page.getByTestId('owner-users-search');
+    await ownerSearch.focus();
+    await ownerSearch.scrollIntoViewIfNeeded();
+    await expect(ownerSearch).toBeInViewport({ ratio: 1 });
+    const ownerSearchRect = await ownerSearch.boundingBox();
+    expect(ownerSearchRect?.x).toBeGreaterThanOrEqual(-1);
+    expect(ownerSearchRect!.x + ownerSearchRect!.width).toBeLessThanOrEqual(width + 1);
+    await page.goto('/admin', { waitUntil: 'networkidle' });
+
     for (const [testId, value] of [
-      ['admin-users-search', 'bob@example.com'],
       ['admin-groups-search', 'ОченьДлинноеИмяГруппыБезПробелов'],
       ['admin-registration-invite-label', 'МобильныйЧерновикПриглашения'],
       ['admin-announcement-input', 'ЧерновикОбъявленияБезСохранения'],
@@ -1889,9 +1922,6 @@ test('admin forms remain keyboard-accessible at 300 CSS px on six mobile widths'
       // Both filters debounce network-backed results. Wait for their layout to
       // settle before measuring: otherwise a late list shrink moves the focused
       // input out of the 300px visual viewport after scrollIntoViewIfNeeded.
-      if (testId === 'admin-users-search') {
-        await expect(page.getByTestId('admin-user-management').locator('tbody tr')).toHaveCount(1);
-      }
       if (testId === 'admin-groups-search') {
         await expect(page.getByTestId('admin-groups-section').getByText('Группы не найдены.')).toBeVisible();
       }
@@ -1927,24 +1957,24 @@ test('admin forms remain keyboard-accessible at 300 CSS px on six mobile widths'
     await expect(groupsActive).toHaveAttribute('aria-pressed', 'true');
     await page.getByTestId('admin-groups-filter-all').click();
 
-    // Administrative destructive confirmation: inspect and cancel, never delete.
-    const bobRow = page.getByTestId('admin-user-management').locator('tbody tr').filter({
-      hasText: 'bob@example.com',
-    });
-    await expect(bobRow).toHaveCount(1, { timeout: 15_000 });
-    await bobRow.getByRole('button', { name: /Удалить пользователя/ }).click();
-    const dialog = page.getByTestId('admin-user-delete-dialog');
+    // The sole owner now manages registered users on /admin/users.
+    // Check the replacement mobile confirmation and cancel without a write.
+    await page.getByTestId('owner-users-nav').click();
+    await page.getByTestId('owner-users-search').fill('bob@example.com');
+    const bobCard = page.locator('[data-testid^="owner-user-"]').filter({ hasText: 'bob@example.com' });
+    await expect(bobCard).toHaveCount(1);
+    await bobCard.getByRole('button', { name: 'Заблокировать' }).click();
+    const dialog = page.getByTestId('owner-users-confirm');
     await expect(dialog).toBeVisible();
     const dialogGeometry = await dialog.evaluate((element) => {
       const rect = element.getBoundingClientRect();
       return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
     });
-    expect(dialogGeometry.left, 'Delete dialog left at ' + width).toBeGreaterThanOrEqual(-1);
-    expect(dialogGeometry.right, 'Delete dialog right at ' + width).toBeLessThanOrEqual(width + 1);
-    expect(dialogGeometry.top, 'Delete dialog top at ' + width).toBeGreaterThanOrEqual(-1);
-    expect(dialogGeometry.bottom, 'Delete dialog bottom at ' + width).toBeLessThanOrEqual(301);
-
-    for (const label of ['Отмена', 'Удалить']) {
+    expect(dialogGeometry.left, 'Owner action left at ' + width).toBeGreaterThanOrEqual(-1);
+    expect(dialogGeometry.right, 'Owner action right at ' + width).toBeLessThanOrEqual(width + 1);
+    expect(dialogGeometry.top, 'Owner action top at ' + width).toBeGreaterThanOrEqual(-1);
+    expect(dialogGeometry.bottom, 'Owner action bottom at ' + width).toBeLessThanOrEqual(301);
+    for (const label of ['Отмена', 'Заблокировать']) {
       const button = dialog.getByRole('button', { name: label, exact: true });
       await button.scrollIntoViewIfNeeded();
       const bounds = await button.boundingBox();
@@ -1954,8 +1984,8 @@ test('admin forms remain keyboard-accessible at 300 CSS px on six mobile widths'
       expect(bounds!.y + bounds!.height, label + ' bottom at ' + width).toBeLessThanOrEqual(301);
     }
     await dialog.getByRole('button', { name: 'Отмена', exact: true }).click();
-    await expect(dialog).toBeHidden();
-    await expect(bobRow).toHaveCount(1);
+    await expect(dialog).toHaveCount(0);
+    await expect(bobCard).toHaveCount(1);
     expect(blockedWrites, 'No administrative mutations at ' + width).toBe(0);
     await checkPhoneLayout(page, width, true);
   }

@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { auth } from '@/server/auth';
 import { db } from '@/server/db';
+import { isCompletedOwner } from '@/server/lib/owner-identity';
 import { logAdminAction } from '@/server/trpc/routers/admin';
 import { signPayload, verifyAndParse } from '@/server/lib/signed-cookie';
 
@@ -13,9 +14,7 @@ const COOKIE_NAME = 'sharetab-impersonate';
  */
 export async function POST(req: Request) {
   const session = await auth();
-  const adminEmail = process.env.ADMIN_EMAIL;
-
-  if (!session?.user?.id || !adminEmail || session.user.email !== adminEmail) {
+  if (!session?.user?.id || !(await isCompletedOwner(db, session.user.id))) {
     return Response.json({ error: 'Доступ запрещён' }, { status: 403 });
   }
 
@@ -78,9 +77,7 @@ export async function POST(req: Request) {
  */
 export async function DELETE() {
   const session = await auth();
-  const adminEmail = process.env.ADMIN_EMAIL;
-
-  if (!session?.user?.id || !adminEmail || session.user.email !== adminEmail) {
+  if (!session?.user?.id || !(await isCompletedOwner(db, session.user.id))) {
     return Response.json({ error: 'Доступ запрещён' }, { status: 403 });
   }
 

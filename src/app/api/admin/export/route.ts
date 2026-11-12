@@ -1,13 +1,12 @@
 import { auth } from '@/server/auth';
 import { db } from '@/server/db';
+import { isCompletedOwner } from '@/server/lib/owner-identity';
 import { logAdminAction } from '@/server/trpc/routers/admin';
 
 export async function GET() {
-  // Auth check: admin only
+  // Owner privileges are bound to the immutable DB user ID, not email.
   const session = await auth();
-  const adminEmail = process.env.ADMIN_EMAIL;
-
-  if (!session?.user?.email || !adminEmail || session.user.email !== adminEmail) {
+  if (!session?.user?.id || !(await isCompletedOwner(db, session.user.id))) {
     return new Response('Forbidden', { status: 403 });
   }
 
