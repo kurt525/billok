@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import type { AuthenticationResponseJSON } from '@simplewebauthn/server';
 import { auth } from '@/server/auth';
 import { db } from '@/server/db';
+import { requireOwner } from '@/server/lib/owner-access';
 import { finishOwnerPasskeyRevocation, OWNER_REVOKE_BINDING_COOKIE } from '@/server/lib/owner-passkey-revocation';
 import { readBillokWebAuthnRelyingParty } from '@/server/lib/webauthn-relying-party';
 import { checkRateLimit } from '@/server/lib/rate-limit';
@@ -11,6 +12,13 @@ export async function POST(request: Request) {
   const denied = () => NextResponse.json({ error: 'Подтверждение отзыва Passkey не прошло.' }, { status: 403 });
   const session = await auth();
   if (!session?.user?.id || (request.headers.get('cookie') ?? '').includes('sharetab-impersonate=')) return denied();
+  // A valid server session is necessary, but not sufficient, for owner
+  // operations: recheck the sole owner and current DB account state.
+  try {
+    await requireOwner(db, session.user.id);
+  } catch {
+    return denied();
+  }
   if (
     !checkRateLimit('owner-key-revoke-finish:' + session.user.id, 16, 60 * 60 * 1000).allowed ||
     !checkRateLimit('owner-key-revoke-finish-ip:' + getClientIp(request.headers), 40, 60 * 60 * 1000).allowed

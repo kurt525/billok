@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from '@/generated/prisma/client';
 import { AppError } from './app-error';
+import { requireOwner } from './owner-access';
 import { revokeAccountAuthenticationStateInTransaction } from './revoke-account-auth';
 
 export const OWNER_USERS_PAGE_LIMIT = 20;
@@ -7,23 +8,9 @@ export type OwnerUserStatus = 'all' | 'active' | 'suspended' | 'pending';
 export type OwnerUserSort = 'name' | 'email' | 'createdAt';
 export type OwnerUserSortDirection = 'asc' | 'desc';
 
+// Shared with every other administrative operation.
 export async function requireRegisteredOwner(db: PrismaClient, userId: string): Promise<void> {
-  if (!userId) throw new AppError('FORBIDDEN');
-  const [bootstrap, actor] = await Promise.all([
-    db.ownerBootstrap.findUnique({ where: { id: 1 }, select: { userId: true, completedAt: true } }),
-    db.user.findUnique({
-      where: { id: userId },
-      select: { emailVerified: true, suspendedAt: true, isPlaceholder: true },
-    }),
-  ]);
-  if (
-    !bootstrap?.completedAt ||
-    bootstrap.userId !== userId ||
-    !actor?.emailVerified ||
-    actor.suspendedAt ||
-    actor.isPlaceholder
-  )
-    throw new AppError('FORBIDDEN');
+  await requireOwner(db, userId);
 }
 
 export async function listOwnerRegisteredUsers(

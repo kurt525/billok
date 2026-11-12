@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/server/auth';
 import { db } from '@/server/db';
+import { requireOwner } from '@/server/lib/owner-access';
 import { beginOwnerPasskeyRevocation, OWNER_REVOKE_BINDING_COOKIE } from '@/server/lib/owner-passkey-revocation';
 import { newWebAuthnBindingSecret } from '@/server/lib/webauthn-registration';
 import { readBillokWebAuthnRelyingParty, WEBAUTHN_CHALLENGE_TTL_MS } from '@/server/lib/webauthn-relying-party';
@@ -11,6 +12,13 @@ export async function POST(request: Request) {
   const denied = () => NextResponse.json({ error: 'Доступ к отзыву ключа запрещён.' }, { status: 403 });
   const session = await auth();
   if (!session?.user?.id || (request.headers.get('cookie') ?? '').includes('sharetab-impersonate=')) return denied();
+  // A valid server session is necessary, but not sufficient, for owner
+  // operations: recheck the sole owner and current DB account state.
+  try {
+    await requireOwner(db, session.user.id);
+  } catch {
+    return denied();
+  }
   if (
     !checkRateLimit('owner-key-revoke-start:' + session.user.id, 8, 60 * 60 * 1000).allowed ||
     !checkRateLimit('owner-key-revoke-ip:' + getClientIp(request.headers), 25, 60 * 60 * 1000).allowed

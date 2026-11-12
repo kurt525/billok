@@ -344,7 +344,12 @@ async function callerAs(session: { user: { id: string; email: string } }) {
 describe('Issue #1 6.12.1: immutable owner ID, never ADMIN_EMAIL authorization', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
     mockDb.ownerBootstrap.findUnique.mockResolvedValue({
       userId: 'admin-1',
       completedAt: new Date('2026-11-13T00:00:00Z'),
@@ -386,6 +391,23 @@ describe('Issue #1 6.12.1: immutable owner ID, never ADMIN_EMAIL authorization',
     }
   });
 
+  test('all sensitive tRPC actions reject an owner whose email is unverified or whose account is suspended', async () => {
+    const api = await callerAs(adminSession);
+    for (const state of [
+      { emailVerified: null, suspendedAt: null, isPlaceholder: false, sessionSecurityVersion: 0 },
+      { emailVerified: new Date(), suspendedAt: new Date(), isPlaceholder: false, sessionSecurityVersion: 0 },
+      { emailVerified: new Date(), suspendedAt: null, isPlaceholder: true, sessionSecurityVersion: 0 },
+      { emailVerified: new Date(), suspendedAt: null, isPlaceholder: false, sessionSecurityVersion: -1 },
+    ]) {
+      mockDb.user.findUnique.mockResolvedValue(state);
+      await expect(api.getAuditLog({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(api.createSystemInvite({ expiresInDays: 7 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(api.ownerRegisteredUsers({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    expect(mockDb.adminAuditLog.findMany).not.toHaveBeenCalled();
+    expect(mockDb.systemInvite.create).not.toHaveBeenCalled();
+  });
+
   test('signed impersonation context cannot restore owner access through adminId or adminEmail', async () => {
     const { adminRouter } = await import('./admin');
     const ctx = {
@@ -409,7 +431,12 @@ describe('admin group totals in group currency', () => {
   beforeEach(() => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.clearAllMocks();
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
     mockDb.group.findMany.mockResolvedValue([
       {
         id: 'g-rub',
@@ -475,7 +502,12 @@ describe('registration mode', () => {
   beforeEach(() => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.clearAllMocks();
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
   });
 
   afterEach(() => {
@@ -527,7 +559,12 @@ describe('deleteGroup', () => {
   beforeEach(() => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.clearAllMocks();
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
     mockDb.group.findUnique.mockResolvedValue({ id: 'g1', name: 'Trip' });
     mockDb.$queryRaw.mockResolvedValue([]);
     mockDb.receipt.findMany.mockResolvedValue([{ id: 'r1', imagePath: 'receipts/r1.jpg' }]);
@@ -562,7 +599,12 @@ describe('cleanupExpiredSplits', () => {
   beforeEach(() => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.clearAllMocks();
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
   });
 
   afterEach(() => {
@@ -595,7 +637,12 @@ describe('unused receipts', () => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.stubEnv('UPLOAD_DIR', '/nonexistent-sharetab-uploads');
     vi.clearAllMocks();
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
   });
 
   afterEach(() => {
@@ -665,7 +712,12 @@ describe('Issue #1 6.2: seven-day admin invitations, revocation and usage histor
   beforeEach(() => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.clearAllMocks();
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
     mockDb.systemInvite.create.mockResolvedValue(invite);
     mockDb.systemInvite.findUnique.mockResolvedValue(invite);
     mockDb.systemInvite.findMany.mockResolvedValue([invite]);

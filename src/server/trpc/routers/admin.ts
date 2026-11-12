@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { isCompletedOwner } from '@/server/lib/owner-identity';
+import { requireOwner } from '@/server/lib/owner-access';
 import { AppError } from '@/server/lib/app-error';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
 import { type AdminAction, type PrismaClient, GuestSplitStatus, Prisma } from '@/generated/prisma/client';
@@ -20,31 +20,19 @@ import { getBuildInfo } from '@/server/lib/build-info';
 import { REGISTRATION_MODES, readRegistrationMode } from '@/server/lib/registration-mode';
 import { activeSystemInviteWindow, SYSTEM_INVITE_TTL_MS } from '@/server/lib/system-invite-lifetime';
 import { totalsInGroupCurrency } from '@/server/lib/group-expense-totals';
-import {
-  requireRegisteredOwner,
-  listOwnerRegisteredUsers,
-  changeRegisteredUserSuspension,
-} from '@/server/lib/owner-user-admin';
+import { listOwnerRegisteredUsers, changeRegisteredUserSuspension } from '@/server/lib/owner-user-admin';
 
 const serverStartTime = new Date();
 const { version: cachedVersion, commitSha: cachedCommitSha } = getBuildInfo();
 
-// 6.12.1: never grant admin authority because an email matches ADMIN_EMAIL.
-// The authenticated session's real User.id must equal the completed owner
-// singleton's User.id. No impersonation cookie can restore owner privileges.
+// All admin procedures, including the 6.11 registered-user page,
+// share one owner policy. Impersonation never grants owner authority.
 const adminProcedure = protectedProcedure.use(async ({ ctx, next }) => {
-  if (ctx.impersonating || !(await isCompletedOwner(ctx.db, ctx.user.id))) {
-    throw new AppError('FORBIDDEN', 'adminRequired');
-  }
-  return next({ ctx });
-});
-
-// 6.11's specialized registered-user authorization remains independent.
-const ownerUsersProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   if (ctx.impersonating) throw new AppError('FORBIDDEN', 'adminRequired');
-  await requireRegisteredOwner(ctx.db, ctx.user.id);
+  await requireOwner(ctx.db, ctx.user.id);
   return next({ ctx });
 });
+const ownerUsersProcedure = adminProcedure;
 
 export { adminProcedure };
 

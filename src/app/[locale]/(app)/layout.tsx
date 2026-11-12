@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import { auth } from '@/server/auth';
 import { db } from '@/server/db';
-import { isCompletedOwner } from '@/server/lib/owner-identity';
+import { requireOwner } from '@/server/lib/owner-access';
 import { MobileHeader } from '@/components/layout/mobile-header';
 import { AnnouncementBanner } from '@/components/layout/announcement-banner';
 import { ImpersonationBanner } from '@/components/layout/impersonation-banner';
@@ -20,7 +20,11 @@ export default async function AppLayout({
   }
 
   // ADMIN_EMAIL is only an initial bootstrap value; never an admin grant.
-  const isAdmin = await isCompletedOwner(db, session.user.id);
+  // UI visibility follows the exact same server policy as admin APIs.
+  const isAdmin = await requireOwner(db, session.user.id).then(
+    () => true,
+    () => false,
+  );
 
   return (
     <div className="min-h-dvh min-w-0">

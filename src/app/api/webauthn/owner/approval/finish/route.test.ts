@@ -8,6 +8,7 @@ const { authMock, finishMock, rateMock, sessionFingerprintMock } = vi.hoisted(()
 }));
 vi.mock('@/server/auth', () => ({ auth: authMock }));
 vi.mock('@/server/db', () => ({ db: {} }));
+vi.mock('@/server/lib/owner-access', () => ({ requireOwner: vi.fn().mockResolvedValue('owner') }));
 vi.mock('@/server/lib/owner-passkey-action-approval', () => ({
   finishOwnerPasskeyActionApproval: finishMock,
   ownerSessionFingerprint: sessionFingerprintMock,

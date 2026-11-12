@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 import { auth } from '@/server/auth';
 import { db } from '@/server/db';
+import { requireOwner } from '@/server/lib/owner-access';
 import { getClientIp } from '@/server/lib/client-ip';
 import { checkRateLimit } from '@/server/lib/rate-limit';
 import { ownerSessionFingerprint } from '@/server/lib/owner-passkey-action-approval';
@@ -12,6 +13,13 @@ export async function POST(request: Request) {
   const denied = () => NextResponse.json({ error: 'Новый Passkey не подтверждён.' }, { status: 403 });
   const session = await auth();
   if (!session?.user?.id || (request.headers.get('cookie') ?? '').includes('sharetab-impersonate=')) return denied();
+  // A valid server session is necessary, but not sufficient, for owner
+  // operations: recheck the sole owner and current DB account state.
+  try {
+    await requireOwner(db, session.user.id);
+  } catch {
+    return denied();
+  }
   if (
     !checkRateLimit('owner-add-key-finish:' + session.user.id, 15, 60 * 60 * 1000).allowed ||
     !checkRateLimit('owner-add-key-finish-ip:' + getClientIp(request.headers), 35, 60 * 60 * 1000).allowed

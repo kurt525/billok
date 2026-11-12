@@ -32,7 +32,12 @@ beforeEach(() => {
   authMock.mockResolvedValue({ user: { id: 'owner' } });
   cookieMock.mockResolvedValue({ get: vi.fn(() => undefined) });
   bootstrapMock.mockResolvedValue({ userId: 'owner', completedAt: new Date() });
-  userMock.mockResolvedValue({ emailVerified: new Date(), suspendedAt: null, isPlaceholder: false });
+  userMock.mockResolvedValue({
+    emailVerified: new Date(),
+    suspendedAt: null,
+    isPlaceholder: false,
+    sessionSecurityVersion: 0,
+  });
 });
 describe('Issue #1 6.11: separate admin/users is owner-only before rendering data', () => {
   it('renders only for a real signed-in owner with completed bootstrap', async () => {
@@ -44,7 +49,7 @@ describe('Issue #1 6.11: separate admin/users is owner-only before rendering dat
     });
     expect(userMock).toHaveBeenCalledWith({
       where: { id: 'owner' },
-      select: { emailVerified: true, suspendedAt: true, isPlaceholder: true },
+      select: { emailVerified: true, suspendedAt: true, isPlaceholder: true, sessionSecurityVersion: true },
     });
   });
   it('redirects anonymous visitors before any owner information is loaded', async () => {

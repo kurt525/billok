@@ -8,6 +8,7 @@ const { authMock, beginMock, rateMock, sessionFingerprintMock } = vi.hoisted(() 
 }));
 vi.mock('@/server/auth', () => ({ auth: authMock }));
 vi.mock('@/server/db', () => ({ db: {} }));
+vi.mock('@/server/lib/owner-access', () => ({ requireOwner: vi.fn().mockResolvedValue('owner') }));
 vi.mock('@/server/lib/owner-passkey-action-approval', () => ({
   beginOwnerPasskeyActionApproval: beginMock,
   ownerSessionFingerprint: sessionFingerprintMock,
@@ -21,6 +22,7 @@ vi.mock('@/server/lib/webauthn-relying-party', () => ({
   WEBAUTHN_CHALLENGE_TTL_MS: 300_000,
 }));
 vi.mock('@/server/lib/rate-limit', () => ({ checkRateLimit: rateMock }));
+import { requireOwner } from '@/server/lib/owner-access';
 import { POST } from './route';
 
 const createRequest = (body: unknown, cookie = 'authjs.session-token=owner-session') =>
@@ -68,6 +70,14 @@ describe('Issue #1 6.10.2.2: approval/start requires logged-in owner', () => {
     }
     expect(beginMock).not.toHaveBeenCalled();
   });
+  it('refuses account authorization failure before any privileged WebAuthn action', async () => {
+    vi.mocked(requireOwner).mockRejectedValueOnce(new Error('suspended/placeholder owner'));
+    const response = await POST(createRequest({ action: 'REVOKE', targetId: 'target-1' }));
+    expect(response.status).toBe(403);
+    expect(beginMock).not.toHaveBeenCalled();
+    expect(rateMock).not.toHaveBeenCalled();
+  });
+
   it('rejects unauthenticated cookie and a rate-limited account', async () => {
     sessionFingerprintMock.mockImplementationOnce(() => {
       throw Error('no session');

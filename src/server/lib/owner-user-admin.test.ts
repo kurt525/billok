@@ -10,6 +10,7 @@ function fixture() {
     emailVerified: now as Date | null,
     suspendedAt: null as Date | null,
     isPlaceholder: false,
+    sessionSecurityVersion: 0,
   };
   const target = {
     id: 'member-id',
