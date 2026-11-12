@@ -212,12 +212,70 @@ function PasskeyInventory() {
   const [selectedLostKey, setSelectedLostKey] = useState<string | null>(null);
   const [revoking, setRevoking] = useState(false);
   const [revokeError, setRevokeError] = useState('');
+  const [selectedRenameKey, setSelectedRenameKey] = useState<string | null>(null);
+  const [renameLabel, setRenameLabel] = useState('');
+  const [renaming, setRenaming] = useState(false);
+  const [renameError, setRenameError] = useState('');
+  const [renameSuccess, setRenameSuccess] = useState(false);
+  const renameInFlight = useRef(false);
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState('');
   const [addSuccess, setAddSuccess] = useState(false);
   const addInFlight = useRef(false);
   const utils = trpc.useUtils();
   const inFlight = useRef(false);
+
+  async function requestSignedOwnerApproval(action: 'RENAME' | 'REVOKE', targetId: string) {
+    if (!window.PublicKeyCredential) throw new Error('unsupported');
+    const started = await fetch('/api/webauthn/owner/approval/start', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, targetId }),
+    });
+    if (!started.ok) throw new Error('approval start rejected');
+    const { options } = (await started.json()) as { options: PublicKeyCredentialRequestOptionsJSON };
+    const assertion = await startAuthentication({ optionsJSON: options });
+    const finished = await fetch('/api/webauthn/owner/approval/finish', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(assertion),
+    });
+    if (!finished.ok) throw new Error('approval finish rejected');
+    const result = (await finished.json()) as { approvalToken: string };
+    return result.approvalToken;
+  }
+
+  async function savePasskeyLabel() {
+    if (!selectedRenameKey || renameInFlight.current || adding || revoking) return;
+    if (!renameLabel.trim() || Array.from(renameLabel.trim()).length > 40) {
+      setRenameError(t('renameInvalid'));
+      return;
+    }
+    renameInFlight.current = true;
+    setRenaming(true);
+    setRenameError('');
+    setRenameSuccess(false);
+    try {
+      const approvalToken = await requestSignedOwnerApproval('RENAME', selectedRenameKey);
+      const response = await fetch('/api/webauthn/owner/manage/rename', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetId: selectedRenameKey, approvalToken, label: renameLabel }),
+      });
+      if (!response.ok) throw new Error('rename rejected');
+      await utils.auth.listPasskeys.invalidate();
+      setSelectedRenameKey(null);
+      setRenameSuccess(true);
+    } catch {
+      setRenameError(t('renameFailed'));
+    } finally {
+      renameInFlight.current = false;
+      setRenaming(false);
+    }
+  }
 
   async function addAdditionalPasskey() {
     if (addInFlight.current) return;
@@ -281,25 +339,14 @@ function PasskeyInventory() {
     setRevoking(true);
     setRevokeError('');
     try {
-      if (!window.PublicKeyCredential) throw new Error('unsupported');
-      const started = await fetch('/api/webauthn/owner/revoke/start', {
+      const approvalToken = await requestSignedOwnerApproval('REVOKE', selectedLostKey);
+      const finished = await fetch('/api/webauthn/owner/manage/revoke', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetId: selectedLostKey }),
+        body: JSON.stringify({ targetId: selectedLostKey, approvalToken }),
       });
-      if (!started.ok) throw new Error('start refused');
-      const { options } = (await started.json()) as {
-        options: PublicKeyCredentialRequestOptionsJSON;
-      };
-      const assertion = await startAuthentication({ optionsJSON: options });
-      const finished = await fetch('/api/webauthn/owner/revoke/finish', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(assertion),
-      });
-      if (!finished.ok) throw new Error('finish refused');
+      if (!finished.ok) throw new Error('revoke rejected');
       // The server invalidated ALL JWTs to protect sessions on the lost
       // device. Clear this browser cookie and require a fresh Passkey login.
       try {
@@ -346,7 +393,7 @@ function PasskeyInventory() {
                   type="button"
                   className="min-h-11 max-w-full whitespace-normal"
                   data-testid="owner-add-passkey"
-                  disabled={adding || revoking}
+                  disabled={adding || revoking || renaming}
                   onClick={() => void addAdditionalPasskey()}
                 >
                   {adding ? t('adding') : t('addPasskey')}
@@ -389,14 +436,33 @@ function PasskeyInventory() {
                   <p className="text-xs text-muted-foreground">
                     {t('lastUsed')}: {key.lastUsedAt ? formatDate(key.lastUsedAt) : t('neverUsed')}
                   </p>
+                  {data.isOwner && !key.revokedAt && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="min-h-11 max-w-full whitespace-normal"
+                      data-testid={'owner-rename-key-' + key.id}
+                      disabled={revoking || renaming || adding}
+                      onClick={() => {
+                        setSelectedRenameKey(key.id);
+                        setRenameLabel(key.label || '');
+                        setRenameError('');
+                        setRenameSuccess(false);
+                        setSelectedLostKey(null);
+                      }}
+                    >
+                      {t('renameKey')}
+                    </Button>
+                  )}
                   {data.isOwner && !key.revokedAt && data.activeCount > 1 && (
                     <Button
                       type="button"
                       variant="outline"
                       className="min-h-11 max-w-full whitespace-normal"
                       data-testid={'owner-revoke-key-' + key.id}
-                      disabled={revoking}
+                      disabled={revoking || renaming || adding}
                       onClick={() => {
+                        setSelectedRenameKey(null);
                         setSelectedLostKey(key.id);
                         setRevokeError('');
                       }}
@@ -407,6 +473,58 @@ function PasskeyInventory() {
                 </li>
               ))}
             </ul>
+            {data.isOwner && selectedRenameKey && (
+              <div className="min-w-0 space-y-3 rounded-xl border p-3" data-testid="owner-rename-confirmation">
+                <label htmlFor="owner-rename-label" className="text-sm font-medium">
+                  {t('renamePrompt')}
+                </label>
+                <Input
+                  id="owner-rename-label"
+                  data-testid="owner-rename-label"
+                  className="min-h-11 w-full min-w-0"
+                  value={renameLabel}
+                  maxLength={80}
+                  disabled={renaming}
+                  onChange={(event) => setRenameLabel(event.target.value)}
+                  placeholder={t('renamePlaceholder')}
+                />
+                <p className="text-xs text-muted-foreground">{t('renameHint')}</p>
+                <div className="flex min-w-0 flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    className="min-h-11"
+                    disabled={renaming || adding || revoking}
+                    data-testid="owner-rename-save"
+                    onClick={() => void savePasskeyLabel()}
+                  >
+                    {renaming ? t('renaming') : t('renameSave')}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11"
+                    disabled={renaming}
+                    data-testid="owner-rename-cancel"
+                    onClick={() => {
+                      setSelectedRenameKey(null);
+                      setRenameError('');
+                    }}
+                  >
+                    {t('cancelRevoke')}
+                  </Button>
+                </div>
+              </div>
+            )}
+            {renameSuccess && (
+              <p role="status" data-testid="owner-rename-success">
+                {t('renameSuccess')}
+              </p>
+            )}
+            {renameError && (
+              <p role="alert" className="break-words text-sm text-destructive">
+                {renameError}
+              </p>
+            )}
             {data.isOwner && data.activeCount <= 1 && (
               <p className="text-sm text-muted-foreground">{t('lastKeyProtected')}</p>
             )}
@@ -417,7 +535,7 @@ function PasskeyInventory() {
                 <div className="flex min-w-0 flex-wrap gap-2">
                   <Button
                     type="button"
-                    disabled={revoking}
+                    disabled={revoking || adding || renaming}
                     variant="destructive"
                     className="min-h-11 max-w-full whitespace-normal"
                     data-testid="owner-revoke-confirm"
