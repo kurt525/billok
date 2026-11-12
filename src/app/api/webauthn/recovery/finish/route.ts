@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 import { db } from '@/server/db';
-import { finishRegularPasskeyRecovery, PASSKEY_RECOVERY_BINDING_COOKIE } from '@/server/lib/passkey-email-recovery';
+import { finishPasskeyRecovery, PASSKEY_RECOVERY_BINDING_COOKIE } from '@/server/lib/passkey-email-recovery';
 import { getClientIp } from '@/server/lib/client-ip';
 import { checkRateLimit } from '@/server/lib/rate-limit';
 import { readBillokWebAuthnRelyingParty } from '@/server/lib/webauthn-relying-party';
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
       credential?: RegistrationResponseJSON;
     };
     if (typeof token !== 'string' || !credential || typeof credential !== 'object') return denied();
-    const result = await finishRegularPasskeyRecovery({
+    const result = await finishPasskeyRecovery({
       db,
       token,
       bindingSecret,

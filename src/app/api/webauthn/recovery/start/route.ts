@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/server/db';
-import { beginRegularPasskeyRecovery, PASSKEY_RECOVERY_BINDING_COOKIE } from '@/server/lib/passkey-email-recovery';
+import { beginPasskeyRecovery, PASSKEY_RECOVERY_BINDING_COOKIE } from '@/server/lib/passkey-email-recovery';
 import { newWebAuthnBindingSecret } from '@/server/lib/webauthn-registration';
 import { readBillokWebAuthnRelyingParty, WEBAUTHN_CHALLENGE_TTL_MS } from '@/server/lib/webauthn-relying-party';
 import { getClientIp } from '@/server/lib/client-ip';
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     const { token } = JSON.parse(raw) as { token?: unknown };
     if (typeof token !== 'string') return denied();
     const binding = newWebAuthnBindingSecret();
-    const options = await beginRegularPasskeyRecovery({ db, token, bindingSecret: binding, env: process.env });
+    const options = await beginPasskeyRecovery({ db, token, bindingSecret: binding, env: process.env });
     const rp = readBillokWebAuthnRelyingParty(process.env);
     const result = NextResponse.json({ options });
     result.cookies.set(PASSKEY_RECOVERY_BINDING_COOKIE, binding, {

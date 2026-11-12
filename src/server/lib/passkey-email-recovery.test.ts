@@ -7,9 +7,9 @@ import { sendRussianPasskeyRecoveryEmail } from './passkey-recovery-email';
 import { hashEmailVerificationToken } from './email-verification-token';
 import { hashWebAuthnBinding } from './webauthn-registration';
 import {
-  beginRegularPasskeyRecovery,
-  finishRegularPasskeyRecovery,
-  requestRegularPasskeyRecovery,
+  beginPasskeyRecovery,
+  finishPasskeyRecovery,
+  requestPasskeyRecovery,
   RECOVERY_EMAIL_LIMIT_PER_HOUR,
   RECOVERY_TOKEN_TTL_MS,
 } from './passkey-email-recovery';
@@ -154,33 +154,98 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
   it('never reveals missing accounts or sends email to unknown addresses', async () => {
     const { db } = fixture();
     db.user.findUnique.mockResolvedValue(null);
-    expect(await requestRegularPasskeyRecovery({ db: client(db), email: 'unknown@mail.ru', env, now })).toEqual({
+    expect(await requestPasskeyRecovery({ db: client(db), email: 'unknown@mail.ru', env, now })).toEqual({
       requested: true,
     });
     expect(sendRussianPasskeyRecoveryEmail).not.toHaveBeenCalled();
     expect(db.passkeyRecoveryRequest.create).not.toHaveBeenCalled();
   });
 
-  it('refuses pending/blocked users and keeps the owner recovery in 6.8.2', async () => {
+  it('refuses pending and blocked users as well as an owner whose bootstrap is incomplete', async () => {
     for (const patch of [{ emailVerified: null }, { suspendedAt: now }, { isPlaceholder: true }]) {
       const { db } = fixture();
       db.user.findUnique.mockResolvedValue({ ...account, ...patch });
-      expect(await requestRegularPasskeyRecovery({ db: client(db), email: account.email, env, now })).toEqual({
+      expect(await requestPasskeyRecovery({ db: client(db), email: account.email, env, now })).toEqual({
         requested: true,
       });
       expect(db.passkeyRecoveryRequest.create).not.toHaveBeenCalled();
     }
     const { db } = fixture();
-    db.ownerBootstrap.findUnique.mockResolvedValue({ userId: account.id });
-    expect(await requestRegularPasskeyRecovery({ db: client(db), email: account.email, env, now })).toEqual({
+    db.ownerBootstrap.findUnique.mockResolvedValue({ userId: account.id, completedAt: null });
+    expect(await requestPasskeyRecovery({ db: client(db), email: account.email, env, now })).toEqual({
       requested: true,
     });
     expect(sendRussianPasskeyRecoveryEmail).not.toHaveBeenCalled();
   });
 
+  it('allows a completed owner with any 1–3 keys to request one email replacement link', async () => {
+    for (const count of [1, 2, 3]) {
+      const { db } = fixture();
+      db.ownerBootstrap.findUnique.mockResolvedValue({
+        userId: account.id,
+        completedAt: now,
+      });
+      db.user.findUnique.mockResolvedValue({
+        ...account,
+        passkeyCredentials: Array.from({ length: count }, (_, i) => ({ id: 'key-' + i })),
+      });
+      expect(
+        await requestPasskeyRecovery({
+          db: client(db),
+          email: account.email,
+          env,
+          now,
+        }),
+      ).toEqual({ requested: true });
+      expect(db.passkeyRecoveryRequest.create).toHaveBeenCalledTimes(1);
+      expect(sendRussianPasskeyRecoveryEmail).toHaveBeenCalledTimes(1);
+      expect(db.passkeyLoginTicket.deleteMany).not.toHaveBeenCalled();
+      vi.clearAllMocks();
+    }
+  });
+
+  it('never lets a missing owner key or a fourth active key use email recovery', async () => {
+    for (const count of [0, 4]) {
+      const { db } = fixture();
+      db.ownerBootstrap.findUnique.mockResolvedValue({ userId: account.id, completedAt: now });
+      db.user.findUnique.mockResolvedValue({
+        ...account,
+        passkeyCredentials: Array.from({ length: count }, (_, i) => ({ id: 'key-' + i })),
+      });
+      expect(
+        await requestPasskeyRecovery({
+          db: client(db),
+          email: account.email,
+          env,
+          now,
+        }),
+      ).toEqual({ requested: true });
+      expect(db.passkeyRecoveryRequest.create).not.toHaveBeenCalled();
+      expect(sendRussianPasskeyRecoveryEmail).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refuses an incomplete bootstrap even if several legacy keys exist', async () => {
+    const { db } = fixture();
+    db.ownerBootstrap.findUnique.mockResolvedValue({ userId: account.id, completedAt: null });
+    db.user.findUnique.mockResolvedValue({
+      ...account,
+      passkeyCredentials: [{ id: 'key-1' }, { id: 'key-2' }],
+    });
+    expect(
+      await requestPasskeyRecovery({
+        db: client(db),
+        email: account.email,
+        env,
+        now,
+      }),
+    ).toEqual({ requested: true });
+    expect(db.passkeyRecoveryRequest.create).not.toHaveBeenCalled();
+  });
+
   it('stores only SHA-256 of recovery token, delivers to registered email and no session', async () => {
     const { db } = fixture();
-    const result = await requestRegularPasskeyRecovery({ db: client(db), email: 'PERSON@MAIL.RU', env, now });
+    const result = await requestPasskeyRecovery({ db: client(db), email: 'PERSON@MAIL.RU', env, now });
     expect(result).toEqual({ requested: true });
     expect(db.passkeyRecoveryRequest.create).toHaveBeenCalledWith({
       data: {
@@ -203,7 +268,7 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
   it('does not allow an unregistered first Passkey to be created through recovery email', async () => {
     const { db } = fixture();
     db.user.findUnique.mockResolvedValue({ ...account, passkeyCredentials: [] });
-    expect(await requestRegularPasskeyRecovery({ db: client(db), email: account.email, env, now })).toEqual({
+    expect(await requestPasskeyRecovery({ db: client(db), email: account.email, env, now })).toEqual({
       requested: true,
     });
     expect(sendRussianPasskeyRecoveryEmail).not.toHaveBeenCalled();
@@ -214,7 +279,7 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
     const { db } = fixture();
     db.passkeyCredential.count.mockResolvedValue(0);
     await expect(
-      finishRegularPasskeyRecovery({
+      finishPasskeyRecovery({
         db: client(db),
         token: validToken,
         bindingSecret: secret,
@@ -229,7 +294,7 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
   it('server-side rate limit persists across requests; count never caps total lifetime recoveries', async () => {
     const { db } = fixture();
     db.passkeyRecoveryRequest.count.mockResolvedValue(RECOVERY_EMAIL_LIMIT_PER_HOUR);
-    expect(await requestRegularPasskeyRecovery({ db: client(db), email: account.email, env, now })).toEqual({
+    expect(await requestPasskeyRecovery({ db: client(db), email: account.email, env, now })).toEqual({
       requested: true,
     });
     expect(db.passkeyRecoveryRequest.create).not.toHaveBeenCalled();
@@ -241,7 +306,7 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
   it('invalidates unsent links on SMTP failure', async () => {
     const { db } = fixture();
     vi.mocked(sendRussianPasskeyRecoveryEmail).mockRejectedValueOnce(new Error('smtp down'));
-    expect(await requestRegularPasskeyRecovery({ db: client(db), email: account.email, env, now })).toEqual({
+    expect(await requestPasskeyRecovery({ db: client(db), email: account.email, env, now })).toEqual({
       requested: true,
     });
     expect(db.passkeyRecoveryRequest.updateMany).toHaveBeenCalledWith({
@@ -253,7 +318,7 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
   it('opens a five-minute WebAuthn registration challenge for a valid email token, not a session', async () => {
     const { db, recovery } = fixture();
     recovery.challengeHash = null;
-    const result = await beginRegularPasskeyRecovery({
+    const result = await beginPasskeyRecovery({
       db: client(db),
       token: validToken,
       bindingSecret: secret,
@@ -281,11 +346,51 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
     expect(db.passkeyLoginTicket.deleteMany).not.toHaveBeenCalled();
   });
 
+  it('owner 1–3 active keys: email link opens only a signed WebAuthn enrollment, not a session', async () => {
+    for (const count of [1, 2, 3]) {
+      const { db, recovery } = fixture();
+      recovery.user.passkeyCredentials = Array.from({ length: count }, (_, i) => ({ id: 'key-' + i }));
+      db.ownerBootstrap.findUnique.mockResolvedValue({ userId: account.id, completedAt: now });
+      await expect(
+        beginPasskeyRecovery({
+          db: client(db),
+          token: validToken,
+          bindingSecret: secret,
+          env,
+          now,
+        }),
+      ).resolves.toMatchObject({ challenge: challengeValue });
+      expect(db.webAuthnChallenge.create).toHaveBeenCalledTimes(1);
+      expect(db.passkeyLoginTicket).not.toHaveProperty('create');
+    }
+  });
+
+  it('expired, suspended or incomplete owner cannot use an old recovery link', async () => {
+    for (const owner of [
+      { userId: account.id, completedAt: null },
+      { userId: account.id, completedAt: now },
+    ]) {
+      const { db, recovery } = fixture();
+      db.ownerBootstrap.findUnique.mockResolvedValue(owner);
+      if (owner.completedAt) Object.assign(recovery.user, { suspendedAt: now });
+      await expect(
+        beginPasskeyRecovery({
+          db: client(db),
+          token: validToken,
+          bindingSecret: secret,
+          env,
+          now,
+        }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.webAuthnChallenge.create).not.toHaveBeenCalled();
+    }
+  });
+
   it('does not accept an older email link after an email-address change', async () => {
     const { db, recovery } = fixture();
     recovery.user.email = 'updated@mail.ru';
     await expect(
-      beginRegularPasskeyRecovery({
+      beginPasskeyRecovery({
         db: client(db),
         token: validToken,
         bindingSecret: secret,
@@ -299,7 +404,7 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
   it('rejects malformed, used and expired links before issuing a challenge', async () => {
     const invalid = fixture();
     await expect(
-      beginRegularPasskeyRecovery({
+      beginPasskeyRecovery({
         db: client(invalid.db),
         token: 'x',
         bindingSecret: secret,
@@ -312,7 +417,7 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
       const { db, recovery } = fixture();
       Object.assign(recovery, patch);
       await expect(
-        beginRegularPasskeyRecovery({
+        beginPasskeyRecovery({
           db: client(db),
           token: validToken,
           bindingSecret: secret,
@@ -335,7 +440,7 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
       const { db, webauthn } = fixture();
       Object.assign(webauthn, patch);
       await expect(
-        finishRegularPasskeyRecovery({
+        finishPasskeyRecovery({
           db: client(db),
           token: validToken,
           bindingSecret: secret,
@@ -353,7 +458,7 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
     const { db } = fixture();
     vi.mocked(verifyRegistrationResponse).mockRejectedValueOnce(new Error('wrong origin'));
     await expect(
-      finishRegularPasskeyRecovery({
+      finishPasskeyRecovery({
         db: client(db),
         token: validToken,
         bindingSecret: secret,
@@ -369,7 +474,7 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
       registrationInfo: { userVerified: false },
     } as Awaited<ReturnType<typeof verifyRegistrationResponse>>);
     await expect(
-      finishRegularPasskeyRecovery({
+      finishPasskeyRecovery({
         db: client(other.db),
         token: validToken,
         bindingSecret: secret,
@@ -383,7 +488,7 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
 
   it('atomically creates new Passkey, revokes old key, rotates JWTs, tickets and all prior links', async () => {
     const { db, recovery } = fixture();
-    const result = await finishRegularPasskeyRecovery({
+    const result = await finishPasskeyRecovery({
       db: client(db),
       token: validToken,
       bindingSecret: secret,
@@ -420,7 +525,11 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
       data: {
         adminId: account.id,
         action: 'PASSKEY_RECOVERY_COMPLETED',
-        metadata: { revokedPasskeys: 1, method: 'verified-email-plus-webauthn' },
+        metadata: {
+          revokedPasskeys: 1,
+          method: 'verified-email-plus-webauthn',
+          accountType: 'regular',
+        },
       },
     });
     expect(vi.mocked(verifyRegistrationResponse).mock.calls[0]![0]).toMatchObject({
@@ -432,9 +541,77 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
     expect(db.passkeyLoginTicket).not.toHaveProperty('create');
   });
 
-  it('refuses replay of the consumed email token after a successful replacement', async () => {
-    const { db } = fixture();
-    await finishRegularPasskeyRecovery({
+  it('atomically revokes ALL 1–3 owner keys, previous tickets and sessions, and audits the count', async () => {
+    for (const count of [1, 2, 3]) {
+      const { db, recovery } = fixture();
+      recovery.user.passkeyCredentials = Array.from({ length: count }, (_, i) => ({ id: 'key-' + i }));
+      db.ownerBootstrap.findUnique.mockResolvedValue({ userId: account.id, completedAt: now });
+      db.passkeyCredential.count.mockResolvedValue(count);
+      db.passkeyCredential.updateMany.mockResolvedValue({ count });
+      expect(
+        await finishPasskeyRecovery({
+          db: client(db),
+          token: validToken,
+          bindingSecret: secret,
+          response: browserResponse,
+          env,
+          now,
+        }),
+      ).toEqual({ recovered: true });
+      expect(db.passkeyCredential.updateMany).toHaveBeenCalledWith({
+        where: { userId: account.id, revokedAt: null },
+        data: { revokedAt: now },
+      });
+      expect(db.passkeyCredential.create).toHaveBeenCalledTimes(1);
+      expect(db.user.updateMany).toHaveBeenCalledWith({
+        where: { id: account.id },
+        data: { sessionSecurityVersion: { increment: 1 } },
+      });
+      expect(db.passkeyLoginTicket.deleteMany).toHaveBeenCalledWith({ where: { userId: account.id } });
+      expect(db.session.deleteMany).toHaveBeenCalledWith({ where: { userId: account.id } });
+      expect(db.adminAuditLog.create).toHaveBeenCalledWith({
+        data: {
+          adminId: account.id,
+          action: 'PASSKEY_RECOVERY_COMPLETED',
+          metadata: {
+            revokedPasskeys: count,
+            method: 'verified-email-plus-webauthn',
+            accountType: 'owner',
+          },
+        },
+      });
+      expect(db.passkeyLoginTicket).not.toHaveProperty('create');
+      vi.clearAllMocks();
+    }
+  });
+
+  it('owner recovery rejects a fourth active key and leaves existing credentials intact', async () => {
+    const { db, recovery } = fixture();
+    recovery.user.passkeyCredentials = Array.from({ length: 4 }, (_, i) => ({ id: 'key-' + i }));
+    db.ownerBootstrap.findUnique.mockResolvedValue({ userId: account.id, completedAt: now });
+    db.passkeyCredential.count.mockResolvedValue(4);
+    await expect(
+      finishPasskeyRecovery({
+        db: client(db),
+        token: validToken,
+        bindingSecret: secret,
+        response: browserResponse,
+        env,
+        now,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.passkeyCredential.updateMany).not.toHaveBeenCalled();
+    expect(db.passkeyCredential.create).not.toHaveBeenCalled();
+    expect(db.user.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('owner recovery replay is blocked after the first one-time token is consumed', async () => {
+    const { db, recovery } = fixture();
+    recovery.user.passkeyCredentials = [{ id: 'old-1' }, { id: 'old-2' }];
+    db.ownerBootstrap.findUnique.mockResolvedValue({ userId: account.id, completedAt: now });
+    db.passkeyCredential.count.mockResolvedValue(2);
+    db.passkeyCredential.updateMany.mockResolvedValue({ count: 2 });
+    await finishPasskeyRecovery({
       db: client(db),
       token: validToken,
       bindingSecret: secret,
@@ -443,7 +620,30 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
       now,
     });
     await expect(
-      finishRegularPasskeyRecovery({
+      finishPasskeyRecovery({
+        db: client(db),
+        token: validToken,
+        bindingSecret: secret,
+        response: browserResponse,
+        env,
+        now,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.passkeyCredential.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses replay of the consumed email token after a successful replacement', async () => {
+    const { db } = fixture();
+    await finishPasskeyRecovery({
+      db: client(db),
+      token: validToken,
+      bindingSecret: secret,
+      response: browserResponse,
+      env,
+      now,
+    });
+    await expect(
+      finishPasskeyRecovery({
         db: client(db),
         token: validToken,
         bindingSecret: secret,
@@ -459,7 +659,7 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
     const { db } = fixture();
     db.passkeyRecoveryRequest.updateMany.mockResolvedValueOnce({ count: 0 });
     await expect(
-      finishRegularPasskeyRecovery({
+      finishPasskeyRecovery({
         db: client(db),
         token: validToken,
         bindingSecret: secret,
@@ -477,7 +677,7 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
     const { db } = fixture();
     db.webAuthnChallenge.updateMany.mockResolvedValueOnce({ count: 0 });
     await expect(
-      finishRegularPasskeyRecovery({
+      finishPasskeyRecovery({
         db: client(db),
         token: validToken,
         bindingSecret: secret,

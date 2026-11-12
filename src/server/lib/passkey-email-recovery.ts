@@ -44,9 +44,10 @@ function attestationChallenge(response: RegistrationResponseJSON): string {
  * Requesting email never starts a session and never reveals account existence.
  * DB throttling is per-account (survives process restarts), while the public
  * route also limits bursts per IP/email before this function is called.
- * Only ordinary accounts in Issue 6.8.1.3; owner rules are Issue 6.8.2.
+ * One verified existing key for regular users, 1–3 for a completed owner
+ * bootstrap. Recovery is never the initial registration or a login.
  */
-export async function requestRegularPasskeyRecovery(input: {
+export async function requestPasskeyRecovery(input: {
   db: PrismaClient;
   email: string;
   env: Env;
@@ -63,17 +64,19 @@ export async function requestRegularPasskeyRecovery(input: {
       emailVerified: true,
       suspendedAt: true,
       isPlaceholder: true,
-      passkeyCredentials: { where: { revokedAt: null }, select: { id: true }, take: 2 },
+      passkeyCredentials: { where: { revokedAt: null }, select: { id: true }, take: 4 },
     },
   });
-  // Recovery is not an alternate way to complete initial invited registration.
-  if (!user?.emailVerified || user.suspendedAt || user.isPlaceholder || user.passkeyCredentials.length !== 1)
-    return { requested: true };
+  // Recovery must not substitute for the initial invited registration.
+  if (!user?.emailVerified || user.suspendedAt || user.isPlaceholder) return { requested: true };
   const owner = await input.db.ownerBootstrap.findUnique({
     where: { id: 1 },
-    select: { userId: true },
+    select: { userId: true, completedAt: true },
   });
-  if (owner?.userId === user.id) return { requested: true };
+  const isOwner = owner?.userId === user.id;
+  const active = user.passkeyCredentials.length;
+  if ((isOwner && (!owner.completedAt || active < 1 || active > 3)) || (!isOwner && active !== 1))
+    return { requested: true };
 
   const windowStart = new Date(now.getTime() - 60 * 60 * 1000);
   // Don't generate an unlimited number of valid recovery links from retries.
@@ -119,7 +122,7 @@ export async function requestRegularPasskeyRecovery(input: {
   return { requested: true };
 }
 
-async function loadRegularRecovery(db: PrismaClient, token: string, now: Date) {
+async function loadPasskeyRecovery(db: PrismaClient, token: string, now: Date) {
   if (!isValidToken(token)) throw new AppError('FORBIDDEN');
   const request = await db.passkeyRecoveryRequest.findUnique({
     where: { tokenHash: hashEmailVerificationToken(token) },
@@ -132,7 +135,7 @@ async function loadRegularRecovery(db: PrismaClient, token: string, now: Date) {
           suspendedAt: true,
           isPlaceholder: true,
           webAuthnUserHandle: true,
-          passkeyCredentials: { where: { revokedAt: null }, select: { id: true }, take: 2 },
+          passkeyCredentials: { where: { revokedAt: null }, select: { id: true }, take: 4 },
         },
       },
     },
@@ -145,18 +148,23 @@ async function loadRegularRecovery(db: PrismaClient, token: string, now: Date) {
     !request.user.emailVerified ||
     request.user.suspendedAt ||
     request.user.isPlaceholder ||
-    !request.user.webAuthnUserHandle ||
-    request.user.passkeyCredentials.length !== 1
+    !request.user.webAuthnUserHandle
   ) {
     throw new AppError('FORBIDDEN');
   }
-  const owner = await db.ownerBootstrap.findUnique({ where: { id: 1 }, select: { userId: true } });
-  if (owner?.userId === request.userId) throw new AppError('FORBIDDEN');
+  const owner = await db.ownerBootstrap.findUnique({
+    where: { id: 1 },
+    select: { userId: true, completedAt: true },
+  });
+  const isOwner = owner?.userId === request.userId;
+  const active = request.user.passkeyCredentials.length;
+  if ((isOwner && (!owner.completedAt || active < 1 || active > 3)) || (!isOwner && active !== 1))
+    throw new AppError('FORBIDDEN');
   return request;
 }
 
 /** Email token authorizes ONLY a browser-bound registration challenge. */
-export async function beginRegularPasskeyRecovery(input: {
+export async function beginPasskeyRecovery(input: {
   db: PrismaClient;
   token: string;
   bindingSecret: string;
@@ -164,7 +172,7 @@ export async function beginRegularPasskeyRecovery(input: {
   now?: Date;
 }) {
   const now = input.now ?? new Date();
-  const request = await loadRegularRecovery(input.db, input.token, now);
+  const request = await loadPasskeyRecovery(input.db, input.token, now);
   const rp = readBillokWebAuthnRelyingParty(input.env);
   const options = await generateRegistrationOptions({
     rpName: rp.rpName,
@@ -211,7 +219,7 @@ export async function beginRegularPasskeyRecovery(input: {
 
 /** Every mutation (including token consumption and session revocation) commits
  * atomically AFTER real attestation verification. Never mint a login ticket. */
-export async function finishRegularPasskeyRecovery(input: {
+export async function finishPasskeyRecovery(input: {
   db: PrismaClient;
   token: string;
   bindingSecret: string;
@@ -220,7 +228,7 @@ export async function finishRegularPasskeyRecovery(input: {
   now?: Date;
 }): Promise<{ recovered: true }> {
   const now = input.now ?? new Date();
-  const request = await loadRegularRecovery(input.db, input.token, now);
+  const request = await loadPasskeyRecovery(input.db, input.token, now);
   const challengeHash = digest(attestationChallenge(input.response));
   const bindingHash = hashWebAuthnBinding(input.bindingSecret);
   if (!request.challengeHash || request.challengeHash !== challengeHash) throw new AppError('FORBIDDEN');
@@ -274,13 +282,14 @@ export async function finishRegularPasskeyRecovery(input: {
         throw new AppError('FORBIDDEN');
       const owner = await tx.ownerBootstrap.findUnique({
         where: { id: 1 },
-        select: { userId: true },
+        select: { userId: true, completedAt: true },
       });
-      if (owner?.userId === request.userId) throw new AppError('FORBIDDEN');
+      const isOwner = owner?.userId === request.userId;
       const active = await tx.passkeyCredential.count({
         where: { userId: request.userId, revokedAt: null },
       });
-      if (active !== 1) throw new AppError('FORBIDDEN');
+      if ((isOwner && (!owner.completedAt || active < 1 || active > 3)) || (!isOwner && active !== 1))
+        throw new AppError('FORBIDDEN');
       const consumed = await tx.passkeyRecoveryRequest.updateMany({
         where: {
           id: request.id,
@@ -331,7 +340,11 @@ export async function finishRegularPasskeyRecovery(input: {
         data: {
           adminId: request.userId,
           action: 'PASSKEY_RECOVERY_COMPLETED',
-          metadata: { revokedPasskeys: previous.count, method: 'verified-email-plus-webauthn' },
+          metadata: {
+            revokedPasskeys: previous.count,
+            method: 'verified-email-plus-webauthn',
+            accountType: isOwner ? 'owner' : 'regular',
+          },
         },
       });
     });
