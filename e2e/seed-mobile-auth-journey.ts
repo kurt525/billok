@@ -57,15 +57,22 @@ async function main() {
 
     // Real P-256 keys: the disposable browser tests sign genuine WebAuthn assertions.
     // Private keys are written ONLY to a short-lived CI fixture file.
-    const passkeys: Record<string, { userHandle: string; credentials: { id: string; privateKey: string }[] }> = {};
+    const passkeys: Record<
+      string,
+      {
+        userHandle: string;
+        credentials: { id: string; privateKey: string; rowId: string }[];
+      }
+    > = {};
     for (const [alias, email, count] of [
       ['alice', 'alice@example.com', 150],
       ['bob', 'bob@example.com', 70],
       ['charlie', 'charlie@example.com', 40],
       ['recovery', 'recovery@mail.ru', 1],
+      ['owner-qa', 'owner-qa@mail.ru', 3],
     ] as const) {
       const user =
-        alias === 'recovery'
+        alias === 'recovery' || alias === 'owner-qa'
           ? await db.user.create({
               data: {
                 name: 'Восстановление QA',
@@ -94,7 +101,7 @@ async function main() {
           },
         });
       }
-      const credentials: { id: string; privateKey: string }[] = [];
+      const credentials: { id: string; privateKey: string; rowId: string }[] = [];
       for (let i = 0; i < count; i++) {
         const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
         const jwk = publicKey.export({ format: 'jwk' });
@@ -108,7 +115,7 @@ async function main() {
           y,
         ]);
         const credentialId = randomBytes(32).toString('base64url');
-        await db.passkeyCredential.create({
+        const stored = await db.passkeyCredential.create({
           data: {
             userId: user.id,
             credentialId,
@@ -122,6 +129,23 @@ async function main() {
         credentials.push({
           id: credentialId,
           privateKey: privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64'),
+          rowId: stored.id,
+        });
+      }
+      if (alias === 'owner-qa') {
+        // Only this isolated QA database has a completed owner singleton.
+        // Auth.js does not have a bootstrap or impersonation test bypass.
+        await db.ownerBootstrap.create({
+          data: { id: 1, userId: user.id, completedAt: new Date() },
+        });
+        await db.passkeyRecoveryRequest.create({
+          data: {
+            userId: user.id,
+            tokenHash: hashEmailVerificationToken('O'.repeat(43)),
+            emailHash: createHash('sha256').update(email).digest('hex'),
+            expiresAt: new Date(Date.now() - 60_000),
+            createdAt: new Date(Date.now() - 2 * 60 * 60_000),
+          },
         });
       }
       passkeys[alias] = { userHandle: user.webAuthnUserHandle!, credentials };

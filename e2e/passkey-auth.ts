@@ -8,7 +8,7 @@ import { createHash, createPrivateKey, sign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, request, test, type BrowserContext, type Page } from '@playwright/test';
 
-type Entry = { id: string; privateKey: string };
+type Entry = { id: string; privateKey: string; rowId?: string };
 type UserFixture = { userHandle: string; credentials: Entry[] };
 type Fixtures = Record<string, UserFixture>;
 
@@ -25,6 +25,32 @@ function fixture(email: string): UserFixture {
   const value = cached[key];
   if (!value) throw new Error('Unknown disposable Passkey account: ' + key);
   return value;
+}
+
+/** Test-only key metadata from disposable CI PostgreSQL. */
+export function qaPasskey(email: string, index: number): Entry {
+  const entry = fixture(email).credentials[index];
+  if (!entry) throw new Error('Missing disposable Passkey #' + index + ' for ' + email);
+  return entry;
+}
+
+/** Installs one explicit key for the isolated owner multi-key recovery suite. */
+export async function installSelectedQaPasskey(page: Page, email: string, index: number) {
+  const user = fixture(email);
+  const credential = qaPasskey(email, index);
+  const { cdp, id } = await enableVirtualPasskey(page);
+  await cdp.send('WebAuthn.clearCredentials', { authenticatorId: id });
+  await cdp.send('WebAuthn.addCredential', {
+    authenticatorId: id,
+    credential: {
+      credentialId: Buffer.from(credential.id, 'base64url').toString('base64'),
+      isResidentCredential: true,
+      rpId: 'localhost',
+      privateKey: credential.privateKey,
+      signCount: 0,
+      userHandle: Buffer.from(user.userHandle, 'base64url').toString('base64'),
+    },
+  });
 }
 
 export async function enableVirtualPasskey(page: Page) {
@@ -111,49 +137,60 @@ export async function loginWithPasskey(page: Page, email?: string) {
 }
 
 /** Real challenge signature; only for the loopback CI PostgreSQL key fixture. */
-export async function authedPasskeyContext(email: string) {
+export function signedQaAssertion(input: { email: string; credentialIndex: number; challenge: string; rpId: string }) {
+  const { email, credentialIndex, challenge, rpId } = input;
   const user = fixture(email);
-  const credential = user.credentials[0]!;
+  const credential = qaPasskey(email, credentialIndex);
+  const clientDataJSON = Buffer.from(
+    JSON.stringify({
+      type: 'webauthn.get',
+      challenge,
+      origin: BASE,
+      crossOrigin: false,
+    }),
+  );
+  const rpIdHash = createHash('sha256').update(rpId).digest();
+  const authenticatorData = Buffer.concat([rpIdHash, Buffer.from([0x05]), Buffer.alloc(4)]);
+  const signedBytes = Buffer.concat([authenticatorData, createHash('sha256').update(clientDataJSON).digest()]);
+  const signature = sign(
+    'sha256',
+    signedBytes,
+    createPrivateKey({
+      key: Buffer.from(credential.privateKey, 'base64'),
+      format: 'der',
+      type: 'pkcs8',
+    }),
+  );
+  return {
+    id: credential.id,
+    rawId: credential.id,
+    type: 'public-key',
+    response: {
+      clientDataJSON: clientDataJSON.toString('base64url'),
+      authenticatorData: authenticatorData.toString('base64url'),
+      signature: signature.toString('base64url'),
+      userHandle: user.userHandle,
+    },
+    clientExtensionResults: {},
+    authenticatorAttachment: 'platform',
+  };
+}
+
+export async function authedPasskeyContext(email: string, credentialIndex = 0) {
+  fixture(email);
   const ctx = await request.newContext({ baseURL: BASE });
   try {
     const start = await ctx.post('/api/webauthn/authentication/start', { data: {} });
     if (!start.ok()) throw new Error('WebAuthn start denied: ' + start.status());
     const { options } = (await start.json()) as { options: { challenge: string; rpId: string } };
-    const clientDataJSON = Buffer.from(
-      JSON.stringify({
-        type: 'webauthn.get',
-        challenge: options.challenge,
-        origin: BASE,
-        crossOrigin: false,
-      }),
-    );
-    const rpIdHash = createHash('sha256').update(options.rpId).digest();
-    const counter = Buffer.alloc(4); // legitimate zero-counter multi-device authenticator
-    const authenticatorData = Buffer.concat([rpIdHash, Buffer.from([0x05]), counter]);
-    const signedBytes = Buffer.concat([authenticatorData, createHash('sha256').update(clientDataJSON).digest()]);
-    const signature = sign(
-      'sha256',
-      signedBytes,
-      createPrivateKey({
-        key: Buffer.from(credential.privateKey, 'base64'),
-        format: 'der',
-        type: 'pkcs8',
-      }),
-    );
+    const assertion = signedQaAssertion({
+      email,
+      credentialIndex,
+      challenge: options.challenge,
+      rpId: options.rpId,
+    });
     const finish = await ctx.post('/api/webauthn/authentication/finish', {
-      data: {
-        id: credential.id,
-        rawId: credential.id,
-        type: 'public-key',
-        response: {
-          clientDataJSON: clientDataJSON.toString('base64url'),
-          authenticatorData: authenticatorData.toString('base64url'),
-          signature: signature.toString('base64url'),
-          userHandle: user.userHandle,
-        },
-        clientExtensionResults: {},
-        authenticatorAttachment: 'platform',
-      },
+      data: assertion,
     });
     if (!finish.ok()) throw new Error('WebAuthn signature rejected: ' + finish.status() + ' ' + (await finish.text()));
     const { loginTicket } = (await finish.json()) as { loginTicket: string };
