@@ -99,6 +99,8 @@ model WebAuthnChallenge {
   // Only for the authenticated owner's one-operation approval ceremony.
   ownerActionType OwnerPasskeyActionType?
   sessionBindingHash String? @db.VarChar(64)
+  // One specific, signed and unconsumed owner ADD proof. Never raw token.
+  approvalProofTokenHash String? @db.VarChar(64)
   expiresAt     DateTime
   usedAt        DateTime?
   createdAt     DateTime                 @default(now())
@@ -491,6 +493,7 @@ enum AdminAction {
   OWNER_BOOTSTRAP_COMPLETED
   PASSKEY_RECOVERY_COMPLETED
   OWNER_PASSKEY_REVOKED
+  OWNER_PASSKEY_ADDED
   INVITE_CREATED
   INVITE_REVOKED
   ANNOUNCEMENT_SET

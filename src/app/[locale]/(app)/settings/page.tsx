@@ -2,7 +2,12 @@
 
 import { useRef, useState } from 'react';
 import { Check } from 'lucide-react';
-import { startAuthentication, type PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/browser';
+import {
+  startAuthentication,
+  startRegistration,
+  type PublicKeyCredentialCreationOptionsJSON,
+  type PublicKeyCredentialRequestOptionsJSON,
+} from '@simplewebauthn/browser';
 import { cn } from '@/lib/utils';
 import { signOut, useSession } from 'next-auth/react';
 import { useTranslations } from 'next-intl';
@@ -207,7 +212,69 @@ function PasskeyInventory() {
   const [selectedLostKey, setSelectedLostKey] = useState<string | null>(null);
   const [revoking, setRevoking] = useState(false);
   const [revokeError, setRevokeError] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState('');
+  const [addSuccess, setAddSuccess] = useState(false);
+  const addInFlight = useRef(false);
+  const utils = trpc.useUtils();
   const inFlight = useRef(false);
+
+  async function addAdditionalPasskey() {
+    if (addInFlight.current) return;
+    addInFlight.current = true;
+    setAdding(true);
+    setAddSuccess(false);
+    setAddError('');
+    try {
+      if (!window.PublicKeyCredential) throw new Error('unsupported');
+      // Fresh assertion with a CURRENT, owner-owned credential.
+      const approvalStarted = await fetch('/api/webauthn/owner/approval/start', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'ADD' }),
+      });
+      if (!approvalStarted.ok) throw new Error('approval start rejected');
+      const approvalOptions = (await approvalStarted.json()) as {
+        options: PublicKeyCredentialRequestOptionsJSON;
+      };
+      const assertion = await startAuthentication({ optionsJSON: approvalOptions.options });
+      const approvalFinished = await fetch('/api/webauthn/owner/approval/finish', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(assertion),
+      });
+      if (!approvalFinished.ok) throw new Error('approval finish rejected');
+      const { approvalToken } = (await approvalFinished.json()) as { approvalToken: string };
+      // New, independent signed registration, NOT the earlier assertion.
+      const started = await fetch('/api/webauthn/owner/add/start', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approvalToken }),
+      });
+      if (!started.ok) throw new Error('additional registration rejected');
+      const { options } = (await started.json()) as {
+        options: PublicKeyCredentialCreationOptionsJSON;
+      };
+      const registration = await startRegistration({ optionsJSON: options });
+      const finished = await fetch('/api/webauthn/owner/add/finish', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approvalToken, response: registration }),
+      });
+      if (!finished.ok) throw new Error('passkey registration rejected');
+      await utils.auth.listPasskeys.invalidate();
+      setAddSuccess(true);
+    } catch {
+      setAddError(t('addFailed'));
+    } finally {
+      addInFlight.current = false;
+      setAdding(false);
+    }
+  }
   async function confirmLostKeyRevocation() {
     if (!selectedLostKey || inFlight.current) return;
     inFlight.current = true;
@@ -273,6 +340,35 @@ function PasskeyInventory() {
             <p data-testid="passkey-limit" className="text-sm font-medium">
               {t('count', { count: data.activeCount, limit: data.maxActivePasskeys })}
             </p>
+            {data.isOwner && data.activeCount > 0 && data.activeCount < data.maxActivePasskeys && (
+              <div className="min-w-0 space-y-2" data-testid="owner-add-passkey-section">
+                <Button
+                  type="button"
+                  className="min-h-11 max-w-full whitespace-normal"
+                  data-testid="owner-add-passkey"
+                  disabled={adding || revoking}
+                  onClick={() => void addAdditionalPasskey()}
+                >
+                  {adding ? t('adding') : t('addPasskey')}
+                </Button>
+                <p className="break-words text-xs text-muted-foreground">{t('addHint')}</p>
+              </div>
+            )}
+            {data.isOwner && data.activeCount === data.maxActivePasskeys && (
+              <p className="break-words text-sm text-muted-foreground" data-testid="owner-passkey-full">
+                {t('limitReached')}
+              </p>
+            )}
+            {addSuccess && (
+              <p role="status" className="text-sm" data-testid="owner-add-success">
+                {t('added')}
+              </p>
+            )}
+            {addError && (
+              <p role="alert" className="break-words text-sm text-destructive">
+                {addError}
+              </p>
+            )}
             {data.credentials.length === 0 && <p>{t('empty')}</p>}
             <ul className="min-w-0 space-y-3" data-testid="passkey-items">
               {data.credentials.map((key) => (
