@@ -2,7 +2,7 @@
  * Fixtures only for the disposable PostgreSQL created by BillOK Chromium CI.
  * No secrets or test accounts are written to the normal deployment.
  */
-import { generateKeyPairSync, randomBytes } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../src/generated/prisma/client';
@@ -62,12 +62,38 @@ async function main() {
       ['alice', 'alice@example.com', 150],
       ['bob', 'bob@example.com', 70],
       ['charlie', 'charlie@example.com', 40],
+      ['recovery', 'recovery@mail.ru', 1],
     ] as const) {
-      const user = await db.user.update({
-        where: { email },
-        data: { emailVerified: new Date(), webAuthnUserHandle: randomBytes(32).toString('base64url') },
-        select: { id: true, webAuthnUserHandle: true },
-      });
+      const user =
+        alias === 'recovery'
+          ? await db.user.create({
+              data: {
+                name: 'Восстановление QA',
+                email,
+                emailVerified: new Date(),
+                registrationEmailVerificationRequired: true,
+                webAuthnUserHandle: randomBytes(32).toString('base64url'),
+              },
+              select: { id: true, webAuthnUserHandle: true },
+            })
+          : await db.user.update({
+              where: { email },
+              data: { emailVerified: new Date(), webAuthnUserHandle: randomBytes(32).toString('base64url') },
+              select: { id: true, webAuthnUserHandle: true },
+            });
+      if (alias === 'recovery') {
+        // A real expired recovery token, separate from invitation confirmation.
+        // Never used on production or by other test accounts.
+        await db.passkeyRecoveryRequest.create({
+          data: {
+            userId: user.id,
+            tokenHash: hashEmailVerificationToken('R'.repeat(43)),
+            emailHash: createHash('sha256').update(email).digest('hex'),
+            expiresAt: new Date(Date.now() - 60_000),
+            createdAt: new Date(Date.now() - 2 * 60 * 60_000),
+          },
+        });
+      }
       const credentials: { id: string; privateKey: string }[] = [];
       for (let i = 0; i < count; i++) {
         const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });

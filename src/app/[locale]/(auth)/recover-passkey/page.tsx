@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useState } from 'react';
+import { Suspense, useRef, useState } from 'react';
 import { startRegistration } from '@simplewebauthn/browser';
 import type { PublicKeyCredentialCreationOptionsJSON } from '@simplewebauthn/browser';
 import { useSearchParams } from 'next/navigation';
@@ -12,6 +12,31 @@ import { KeyRound } from 'lucide-react';
 
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 
+class RecoveryHttpError extends Error {
+  constructor(readonly status: number) {
+    super('Recovery HTTP request failed');
+  }
+}
+
+function recoveryFailure(error: unknown): string {
+  if (error instanceof RecoveryHttpError && error.status === 403) {
+    return 'Ссылка восстановления недействительна или истекла. Запросите новое письмо.';
+  }
+  const candidate =
+    typeof error === 'object' && error !== null ? (error as { name?: unknown; code?: unknown; cause?: unknown }) : null;
+  const cause =
+    typeof candidate?.cause === 'object' && candidate.cause !== null ? (candidate.cause as { name?: unknown }) : null;
+  if (
+    candidate?.name === 'NotAllowedError' ||
+    candidate?.code === 'ERROR_CEREMONY_ABORTED' ||
+    cause?.name === 'NotAllowedError'
+  ) {
+    // @simplewebauthn/browser wraps a native NotAllowedError in WebAuthnError.
+    return 'Создание Passkey отменено или не подтверждено на устройстве. Повторите попытку.';
+  }
+  return 'Не удалось создать Passkey. Проверьте соединение и повторите попытку.';
+}
+
 async function postJson<T>(url: string, payload: unknown): Promise<T> {
   const response = await fetch(url, {
     method: 'POST',
@@ -19,7 +44,7 @@ async function postJson<T>(url: string, payload: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error('Операция не выполнена');
+  if (!response.ok) throw new RecoveryHttpError(response.status);
   return response.json() as Promise<T>;
 }
 
@@ -37,13 +62,16 @@ function RecoveryForm() {
   const validToken = TOKEN_PATTERN.test(token);
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
+  const [requestAgain, setRequestAgain] = useState(false);
   const [done, setDone] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
 
   async function requestEmail(event: React.FormEvent) {
     event.preventDefault();
-    if (busy || !email.trim()) return;
+    if (inFlight.current || !email.trim()) return;
+    inFlight.current = true;
     setBusy(true);
     setError('');
     try {
@@ -52,17 +80,20 @@ function RecoveryForm() {
     } catch {
       setError('Не удалось отправить запрос. Проверьте соединение и повторите попытку.');
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
 
   async function createReplacementKey() {
-    if (busy || !validToken) return;
+    if (inFlight.current || !validToken || requestAgain) return;
+    inFlight.current = true;
     setBusy(true);
     setError('');
     try {
       if (typeof window === 'undefined' || !window.PublicKeyCredential) {
-        throw new Error('Passkey не поддерживается');
+        setError('Это устройство или браузер не поддерживает Passkey. Используйте другое устройство.');
+        return;
       }
       const { options } = await postJson<{ options: PublicKeyCredentialCreationOptionsJSON }>(
         '/api/webauthn/recovery/start',
@@ -73,9 +104,10 @@ function RecoveryForm() {
       window.history.replaceState(null, '', window.location.pathname);
       setDone(true);
       setNotice('Новый Passkey создан. Старый ключ и прежние сеансы отозваны. Теперь войдите с новым ключом.');
-    } catch {
-      setError('Не удалось заменить Passkey. Проверьте ссылку, поддержку устройства и повторите попытку.');
+    } catch (failure) {
+      setError(recoveryFailure(failure));
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
@@ -109,16 +141,31 @@ function RecoveryForm() {
           >
             Войти с новым Passkey
           </Link>
-        ) : validToken ? (
-          <Button
-            type="button"
-            data-testid="create-recovered-passkey"
-            disabled={busy}
-            onClick={() => void createReplacementKey()}
-            className="min-h-11 w-full whitespace-normal"
-          >
-            {busy ? 'Проверка…' : 'Создать новый Passkey'}
-          </Button>
+        ) : validToken && !requestAgain ? (
+          <div className="min-w-0 space-y-3">
+            <Button
+              type="button"
+              data-testid="create-recovered-passkey"
+              disabled={busy}
+              onClick={() => void createReplacementKey()}
+              className="min-h-11 w-full whitespace-normal"
+            >
+              {busy ? 'Проверка…' : 'Создать новый Passkey'}
+            </Button>
+            <Button
+              variant="link"
+              type="button"
+              data-testid="request-new-recovery-link"
+              disabled={busy}
+              className="min-h-11 w-full whitespace-normal"
+              onClick={() => {
+                setRequestAgain(true);
+                setError('');
+              }}
+            >
+              Запросить новую ссылку
+            </Button>
+          </div>
         ) : (
           <form onSubmit={(event) => void requestEmail(event)} className="space-y-4">
             <label htmlFor="recover-email" className="block text-sm font-medium">
