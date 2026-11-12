@@ -269,6 +269,13 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
       await replacement.goto('/settings');
       await expect(replacement.getByTestId('passkey-limit')).toContainText('1 из 3');
 
+      // List retains historical revoked rows by design; only items with
+      // an enabled owner rename control represent ACTIVE credentials.
+      const activeItems = replacement
+        .getByTestId('passkey-items')
+        .getByTestId('passkey-item')
+        .filter({ has: replacement.locator('[data-testid^="owner-rename-key-"]') });
+
       // After one-time email recovery, owner can register an independent
       // second AND third real CTAP2 credential. A new device starts empty,
       // so remove the existing virtual authenticator credentials only AFTER
@@ -288,7 +295,11 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
         await replacement.getByTestId('owner-add-passkey').click();
         await expect(replacement.getByTestId('owner-add-success')).toBeVisible({ timeout: 30_000 });
         await expect(replacement.getByTestId('passkey-limit')).toContainText(count + ' из 3');
-        await expect(replacement.getByTestId('passkey-items').getByTestId('passkey-item')).toHaveCount(count);
+        await expect(activeItems).toHaveCount(count);
+        // Historical revoked records stay visible for auditing.
+        expect(
+          await replacement.getByTestId('passkey-items').getByTestId('passkey-item').count(),
+        ).toBeGreaterThanOrEqual(count);
       }
       expect(cleared).toBe(2);
       await expect(replacement.getByTestId('owner-passkey-full')).toBeVisible();
@@ -300,7 +311,7 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
 
       // 320–720 px with enlarged text and a long label: report the precise
       // overflowing element rather than hiding page-wide horizontal scroll.
-      const newKeys = replacement.getByTestId('passkey-items').getByTestId('passkey-item');
+      const newKeys = activeItems;
       await expect(newKeys).toHaveCount(3);
       const newKeyId = await newKeys.first().locator('[data-testid^="owner-rename-key-"]').getAttribute('data-testid');
       if (!newKeyId) throw new Error('New owner Passkey lacks rename control');
