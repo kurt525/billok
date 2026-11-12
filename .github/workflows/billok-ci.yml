@@ -248,6 +248,7 @@ jobs:
               e2e/billok-passkey-login-security.spec.ts \
               e2e/billok-passkey-recovery.spec.ts \
               e2e/billok-owner-passkey-recovery.spec.ts \
+              e2e/billok-passkey-management-regular.spec.ts \
               e2e/billok-mobile-public.spec.ts \
               e2e/billok-mobile-auth-journey.spec.ts \
               e2e/billok-mobile-authenticated.spec.ts \

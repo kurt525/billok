@@ -41,8 +41,11 @@ async function expectNoSession(page: Page) {
   expect(state?.user ?? null).toBeNull();
 }
 
-test('owner 3 → 2 → 1 keys, signed revocation, race, email reset, no Magic Link login', async ({ page, browser }) => {
-  test.setTimeout(230_000);
+test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/3, no bypass', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(300_000);
   if (!mailbox) throw new Error('Disposable QA SMTP mailbox is required');
   const lost = qaPasskey(email, 0);
   const signer = qaPasskey(email, 1);
@@ -60,13 +63,23 @@ test('owner 3 → 2 → 1 keys, signed revocation, race, email reset, no Magic L
     await page.goto('/settings', { waitUntil: 'networkidle' });
     await expect(page.getByTestId('passkey-limit')).toContainText('3 из 3');
     await expect(page.getByTestId('passkey-items').getByTestId('passkey-item')).toHaveCount(3);
+    await expect(page.getByTestId('owner-passkey-full')).toBeVisible();
+    await expect(page.getByTestId('owner-add-passkey')).toHaveCount(0);
+    const cannotAddFourth = await oldSession.post('/api/webauthn/owner/approval/start', {
+      data: { action: 'ADD' },
+    });
+    expect(cannotAddFourth.status()).toBe(403);
 
     // Real mobile widths, enlarged Russian text, short viewport:
     // inspect exactly the card/control that might cross a screen boundary.
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
     for (const width of widths) {
       await page.setViewportSize({ width, height: 375 });
-      const controls = [page.getByTestId('passkey-inventory'), page.getByTestId('owner-revoke-key-' + lost.rowId)];
+      const controls = [
+        page.getByTestId('passkey-inventory'),
+        page.getByTestId('owner-rename-key-' + lost.rowId),
+        page.getByTestId('owner-revoke-key-' + lost.rowId),
+      ];
       for (const target of controls) {
         await target.scrollIntoViewIfNeeded();
         const box = (await target.boundingBox())!;
@@ -76,6 +89,81 @@ test('owner 3 → 2 → 1 keys, signed revocation, race, email reset, no Magic L
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
     }
 
+    // An ordinary owner cannot mutate a key using only a JWT or a guessed
+    // token, even when the selected row ID is legitimate.
+    for (const endpoint of ['/api/webauthn/owner/manage/rename', '/api/webauthn/owner/manage/revoke']) {
+      const unauthenticated = await oldSession.post(endpoint, {
+        data: { targetId: lost.rowId, approvalToken: 'p'.repeat(43), label: 'Взлом' },
+      });
+      expect(unauthenticated.status(), endpoint).toBe(403);
+    }
+
+    // Fresh, signed approval is scoped to RENAME of the exact selected key.
+    // A wrong action or another key must not consume the approval.
+    const renameStart = await oldSession.post('/api/webauthn/owner/approval/start', {
+      data: { action: 'RENAME', targetId: lost.rowId },
+    });
+    expect(renameStart.status()).toBe(200);
+    const { options: renameOptions } = (await renameStart.json()) as {
+      options: { challenge: string; rpId: string };
+    };
+    const renameApproval = await oldSession.post('/api/webauthn/owner/approval/finish', {
+      data: signedQaAssertion({
+        email,
+        credentialIndex: 2,
+        challenge: renameOptions.challenge,
+        rpId: renameOptions.rpId,
+      }),
+    });
+    expect(renameApproval.status()).toBe(200);
+    const { approvalToken: renameToken } = (await renameApproval.json()) as { approvalToken: string };
+    for (const [endpoint, targetId] of [
+      ['/api/webauthn/owner/manage/revoke', lost.rowId],
+      ['/api/webauthn/owner/manage/rename', signer.rowId],
+    ] as const) {
+      const wrong = await oldSession.post(endpoint, {
+        data: { targetId, approvalToken: renameToken, label: 'Не должно измениться' },
+      });
+      expect(wrong.status()).toBe(403);
+    }
+    const renameData = { targetId: lost.rowId, approvalToken: renameToken, label: 'Защищённый Passkey' };
+    const [renameA, renameB] = await Promise.all([
+      oldSession.post('/api/webauthn/owner/manage/rename', { data: renameData }),
+      oldSession.post('/api/webauthn/owner/manage/rename', { data: renameData }),
+    ]);
+    expect([renameA.status(), renameB.status()].sort((a, b) => a - b)).toEqual([200, 403]);
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.getByText('Защищённый Passkey')).toBeVisible();
+
+    // Rename may be cancelled before verification, and a native WebAuthn
+    // NotAllowedError must not write any label. Retry stays available.
+    await page.getByTestId('owner-rename-key-' + lost.rowId).click();
+    await expect(page.getByTestId('owner-rename-confirmation')).toBeVisible();
+    await page.getByTestId('owner-rename-label').fill('Отменённое имя');
+    await page.getByTestId('owner-rename-cancel').click();
+    await expect(page.getByTestId('owner-rename-confirmation')).toHaveCount(0);
+    await page.getByTestId('owner-rename-key-' + lost.rowId).click();
+    await page.getByTestId('owner-rename-label').fill('Телефон владельца');
+    await installSelectedQaPasskey(page, email, 1);
+    await page.evaluate(() => {
+      Object.defineProperty(navigator.credentials, 'get', {
+        configurable: true,
+        value: async () => {
+          throw new DOMException('cancelled', 'NotAllowedError');
+        },
+      });
+    });
+    await page.getByTestId('owner-rename-save').click();
+    await expect(page.getByRole('alert')).toContainText('Не удалось изменить название');
+    await page.evaluate(() => {
+      delete (navigator.credentials as { get?: unknown }).get;
+    });
+    await page.getByTestId('owner-rename-save').click();
+    await expect(page.getByTestId('owner-rename-success')).toBeVisible();
+    await expect(page.getByText('Телефон владельца')).toBeVisible();
+    const remainsLoggedIn = await oldSession.get('/api/auth/session');
+    expect((await remainsLoggedIn.json()) as { user?: { email?: string } }).toMatchObject({ user: { email } });
+
     // UI cancellation has no security consequence; lost-key confirmation
     // must be explicitly renewed before a signed assertion is requested.
     await page.getByTestId('owner-revoke-key-' + lost.rowId).click();
@@ -84,9 +172,9 @@ test('owner 3 → 2 → 1 keys, signed revocation, race, email reset, no Magic L
     await expect(page.getByTestId('owner-revoke-confirmation')).toHaveCount(0);
     await page.getByTestId('owner-revoke-key-' + lost.rowId).click();
 
-    // Browser FIDO2 assertion with the surviving second key. The lost
-    // first key is NOT installed on this virtual authenticator.
-    await installSelectedQaPasskey(page, email, 1);
+    // Reuse the surviving second key already present in this authenticator.
+    // Never reinstall it with counter=0 after the successful rename assertion:
+    // the real server validates monotonically increasing hardware counters.
     await page.getByTestId('owner-revoke-confirm').click();
     await expect(page).toHaveURL(/\/login(?:\?.*)?$/u, { timeout: 30_000 });
     await expect(authedPasskeyContext(email, 0)).rejects.toThrow(/WebAuthn signature rejected: 403/u);
@@ -100,29 +188,31 @@ test('owner 3 → 2 → 1 keys, signed revocation, race, email reset, no Magic L
     await page.goto('/settings', { waitUntil: 'networkidle' });
     await expect(page.getByTestId('passkey-limit')).toContainText('2 из 3');
 
-    // Two identical, genuinely signed owner-revoke requests racing on real
-    // PostgreSQL: precisely one target deletion; the other must get 403.
-    const started = await twoKeySession.post('/api/webauthn/owner/revoke/start', {
-      data: { targetId: signer.rowId },
+    // Competing approved REVOKE actions: one session-bound, signed proof
+    // is consumed in the SAME transaction as the selected key deletion.
+    const started = await twoKeySession.post('/api/webauthn/owner/approval/start', {
+      data: { action: 'REVOKE', targetId: signer.rowId },
     });
     expect(started.status()).toBe(200);
     const { options } = (await started.json()) as {
-      options: {
-        challenge: string;
-        rpId: string;
-        allowCredentials?: Array<{ id: string }>;
-      };
+      options: { challenge: string; rpId: string; allowCredentials?: Array<{ id: string }> };
     };
     expect(options.allowCredentials?.map((entry) => entry.id)).toEqual([survivor.id]);
-    const assertion = signedQaAssertion({
+    const signedApproval = signedQaAssertion({
       email,
       credentialIndex: 2,
       challenge: options.challenge,
       rpId: options.rpId,
     });
+    const approved = await twoKeySession.post('/api/webauthn/owner/approval/finish', {
+      data: signedApproval,
+    });
+    expect(approved.status()).toBe(200);
+    const { approvalToken } = (await approved.json()) as { approvalToken: string };
+    const revokeData = { targetId: signer.rowId, approvalToken };
     const [one, two] = await Promise.all([
-      twoKeySession.post('/api/webauthn/owner/revoke/finish', { data: assertion }),
-      twoKeySession.post('/api/webauthn/owner/revoke/finish', { data: assertion }),
+      twoKeySession.post('/api/webauthn/owner/manage/revoke', { data: revokeData }),
+      twoKeySession.post('/api/webauthn/owner/manage/revoke', { data: revokeData }),
     ]);
     expect([one.status(), two.status()].sort((a, b) => a - b)).toEqual([200, 403]);
     expect(await (one.ok() ? one : two).json()).toEqual({ revoked: true, activeRemaining: 1 });
@@ -176,6 +266,68 @@ test('owner 3 → 2 → 1 keys, signed revocation, race, email reset, no Magic L
       await expect(replacement.getByRole('heading', { name: 'Главная' })).toBeVisible();
       await replacement.goto('/settings');
       await expect(replacement.getByTestId('passkey-limit')).toContainText('1 из 3');
+
+      // After one-time email recovery, owner can register an independent
+      // second AND third real CTAP2 credential. A new device starts empty,
+      // so remove the existing virtual authenticator credentials only AFTER
+      // each signed owner approval and BEFORE navigator.credentials.create().
+      const virtual = await enableVirtualPasskey(replacement);
+      let cleared = 0;
+      await replacement.route('**/api/webauthn/owner/add/start', async (route) => {
+        const response = await route.fetch();
+        if (response.ok()) {
+          await virtual.cdp.send('WebAuthn.clearCredentials', { authenticatorId: virtual.id });
+          cleared++;
+        }
+        await route.fulfill({ response });
+      });
+      for (const count of [2, 3]) {
+        await expect(replacement.getByTestId('owner-add-passkey')).toBeVisible();
+        await replacement.getByTestId('owner-add-passkey').click();
+        await expect(replacement.getByTestId('owner-add-success')).toBeVisible({ timeout: 30_000 });
+        await expect(replacement.getByTestId('passkey-limit')).toContainText(count + ' из 3');
+        await expect(replacement.getByTestId('passkey-items').getByTestId('passkey-item')).toHaveCount(count);
+      }
+      expect(cleared).toBe(2);
+      await expect(replacement.getByTestId('owner-passkey-full')).toBeVisible();
+      await expect(replacement.getByTestId('owner-add-passkey')).toHaveCount(0);
+      const fourth = await replacement.request.post('/api/webauthn/owner/approval/start', {
+        data: { action: 'ADD' },
+      });
+      expect(fourth.status()).toBe(403);
+
+      // 320–720 px with enlarged text and a long label: report the precise
+      // overflowing element rather than hiding page-wide horizontal scroll.
+      const newKeys = replacement.getByTestId('passkey-items').getByTestId('passkey-item');
+      await expect(newKeys).toHaveCount(3);
+      const newKeyId = await newKeys.first().locator('[data-testid^="owner-rename-key-"]').getAttribute('data-testid');
+      if (!newKeyId) throw new Error('New owner Passkey lacks rename control');
+      await newKeys.first().locator('[data-testid^="owner-rename-key-"]').click();
+      await replacement.getByTestId('owner-rename-label').fill('Очень длинное имя ключа владельца на смартфоне');
+      for (const width of widths) {
+        await replacement.setViewportSize({ width, height: 375 });
+        await replacement.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+        const elements = [
+          replacement.getByTestId('passkey-inventory'),
+          replacement.getByTestId('owner-rename-confirmation'),
+          replacement.getByTestId('owner-rename-label'),
+          replacement.getByTestId('owner-rename-save'),
+          replacement.getByTestId('owner-rename-cancel'),
+        ];
+        for (const element of elements) {
+          await element.scrollIntoViewIfNeeded();
+          const rect = await element.boundingBox();
+          if (!rect) throw new Error('Missing owner management control at ' + width);
+          expect(rect.x, 'left overflow: ' + (await element.getAttribute('data-testid'))).toBeGreaterThanOrEqual(-1);
+          expect(
+            rect.x + rect.width,
+            'right overflow: ' + (await element.getAttribute('data-testid')),
+          ).toBeLessThanOrEqual(width + 1);
+        }
+        expect(await replacement.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
+      }
+      await replacement.getByTestId('owner-rename-cancel').click();
+      await expect(replacement.getByTestId('owner-rename-confirmation')).toHaveCount(0);
     } finally {
       await replacement.close();
     }

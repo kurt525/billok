@@ -71,9 +71,10 @@ async function main() {
       ['recovery', 'recovery@mail.ru', 1],
       ['owner-qa', 'owner-qa@mail.ru', 3],
       ['login-probe', 'login-probe@mail.ru', 1],
+      ['member-manage', 'member-manage@mail.ru', 1],
     ] as const) {
       const user =
-        alias === 'recovery' || alias === 'owner-qa' || alias === 'login-probe'
+        alias === 'recovery' || alias === 'owner-qa' || alias === 'login-probe' || alias === 'member-manage'
           ? await db.user.create({
               data: {
                 name: 'Восстановление QA',
