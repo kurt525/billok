@@ -137,20 +137,30 @@ export async function loginWithPasskey(page: Page, email?: string) {
 }
 
 /** Real challenge signature; only for the loopback CI PostgreSQL key fixture. */
-export function signedQaAssertion(input: { email: string; credentialIndex: number; challenge: string; rpId: string }) {
-  const { email, credentialIndex, challenge, rpId } = input;
+export function signedQaAssertion(input: {
+  email: string;
+  credentialIndex: number;
+  challenge: string;
+  rpId: string;
+  // Negative tests MUST re-sign altered assertions, not just tamper the bytes.
+  origin?: string;
+  rpIdForHash?: string;
+  userVerified?: boolean;
+}) {
+  const { email, credentialIndex, challenge, rpId, origin = BASE, rpIdForHash = rpId, userVerified = true } = input;
   const user = fixture(email);
   const credential = qaPasskey(email, credentialIndex);
   const clientDataJSON = Buffer.from(
     JSON.stringify({
       type: 'webauthn.get',
       challenge,
-      origin: BASE,
+      origin,
       crossOrigin: false,
     }),
   );
-  const rpIdHash = createHash('sha256').update(rpId).digest();
-  const authenticatorData = Buffer.concat([rpIdHash, Buffer.from([0x05]), Buffer.alloc(4)]);
+  const rpIdHash = createHash('sha256').update(rpIdForHash).digest();
+  // UP=bit0, UV=bit2. Negative test can assert UP only.
+  const authenticatorData = Buffer.concat([rpIdHash, Buffer.from([userVerified ? 0x05 : 0x01]), Buffer.alloc(4)]);
   const signedBytes = Buffer.concat([authenticatorData, createHash('sha256').update(clientDataJSON).digest()]);
   const signature = sign(
     'sha256',

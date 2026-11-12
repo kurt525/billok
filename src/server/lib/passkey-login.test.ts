@@ -42,6 +42,7 @@ function fixture() {
     email: 'anna@example.ru',
     emailVerified: now,
     suspendedAt: null,
+    isPlaceholder: false,
     image: null,
     locale: 'ru',
     passkeyCredentials: [{ id: 'credential-row' }],
@@ -168,6 +169,7 @@ describe('Issue #1 6.3.2.2: browser-bound passkey authentication', () => {
       { revokedAt: now },
       { user: { emailVerified: null, suspendedAt: null } },
       { user: { emailVerified: now, suspendedAt: now } },
+      { user: { emailVerified: now, suspendedAt: null, isPlaceholder: true } },
     ]) {
       const { db, passkey } = fixture();
       Object.assign(passkey, patch);
@@ -233,10 +235,10 @@ describe('Issue #1 6.3.2.2: browser-bound passkey authentication', () => {
       },
     });
     expect(JSON.stringify(db.passkeyLoginTicket.create.mock.calls)).not.toContain(result.loginTicket);
-    expect(db.$queryRawUnsafe).toHaveBeenCalledWith(
-      'SELECT id FROM "PasskeyCredential" WHERE id = $1 FOR UPDATE',
-      passkey.id,
-    );
+    expect(db.$queryRawUnsafe.mock.calls).toEqual([
+      ['SELECT id FROM "User" WHERE id = $1 FOR UPDATE', passkey.user.id],
+      ['SELECT id FROM "PasskeyCredential" WHERE id = $1 FOR UPDATE', passkey.id],
+    ]);
   });
 
   it('fails a non-increasing signature counter, invalid UV, and any failed verification', async () => {
@@ -288,6 +290,7 @@ describe('Issue #1 6.3.2.2: browser-bound passkey authentication', () => {
       email: user.email,
       locale: 'ru',
     });
+    expect(db.$queryRawUnsafe).toHaveBeenCalledWith('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', proof.userId);
     expect(db.passkeyLoginTicket.updateMany).toHaveBeenCalledWith({
       where: {
         id: proof.id,
@@ -307,6 +310,48 @@ describe('Issue #1 6.3.2.2: browser-bound passkey authentication', () => {
     proof.expiresAt = new Date(now.getTime() + 60_000);
     db.user.findUnique.mockResolvedValueOnce({ ...user, suspendedAt: now });
     expect(await consumePasskeyLoginTicket({ db: asDb(db), token: validTicket, now })).toBeNull();
+  });
+
+  it('blocks placeholder accounts at ticket redemption even when one key exists', async () => {
+    const { db, proof, user } = fixture();
+    const token = 'x'.repeat(43);
+    proof.tokenHash = hash(token);
+    user.isPlaceholder = true;
+    expect(await consumePasskeyLoginTicket({ db: asDb(db), token, now })).toBeNull();
+    expect(db.passkeyLoginTicket.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the account after taking the User lock before credential lock', async () => {
+    const { db, passkey, user } = fixture();
+    db.$queryRawUnsafe.mockImplementationOnce(async () => {
+      Object.assign(user, { suspendedAt: now });
+      return [{ id: user.id }];
+    });
+    await expect(
+      finishPasskeyLogin({
+        db: asDb(db),
+        bindingSecret: browserSecret,
+        response,
+        now,
+        env,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.$queryRawUnsafe.mock.calls[0]).toEqual(['SELECT id FROM "User" WHERE id = $1 FOR UPDATE', user.id]);
+    expect(db.passkeyLoginTicket.create).not.toHaveBeenCalled();
+    expect(db.webAuthnChallenge.updateMany).not.toHaveBeenCalled();
+    expect(passkey.revokedAt).toBeNull();
+  });
+
+  it('does not redeem a ticket if account is suspended while acquiring the User lock', async () => {
+    const { db, user, proof } = fixture();
+    const token = 'y'.repeat(43);
+    proof.tokenHash = hash(token);
+    db.$queryRawUnsafe.mockImplementationOnce(async () => {
+      Object.assign(user, { suspendedAt: now });
+      return [{ id: user.id }];
+    });
+    expect(await consumePasskeyLoginTicket({ db: asDb(db), token, now })).toBeNull();
+    expect(db.passkeyLoginTicket.updateMany).not.toHaveBeenCalled();
   });
 
   it('supports zero-only multi-device counters, but only with a unique challenge', async () => {

@@ -81,7 +81,7 @@ export async function finishPasskeyLogin(input: {
   const passkey = await input.db.passkeyCredential.findUnique({
     where: { credentialId: input.response.id },
     include: {
-      user: { select: { id: true, emailVerified: true, suspendedAt: true } },
+      user: { select: { id: true, emailVerified: true, suspendedAt: true, isPlaceholder: true } },
     },
   });
   if (
@@ -89,6 +89,7 @@ export async function finishPasskeyLogin(input: {
     passkey.revokedAt ||
     !passkey.user.emailVerified ||
     passkey.user.suspendedAt ||
+    passkey.user.isPlaceholder ||
     passkey.signCount < 0 ||
     passkey.signCount > BigInt(Number.MAX_SAFE_INTEGER)
   ) {
@@ -131,13 +132,15 @@ export async function finishPasskeyLogin(input: {
   }
   const ticket = randomBytes(32).toString('base64url');
   await input.db.$transaction(async (tx) => {
-    // Account and credential locks serialize multiple signed responses for
-    // one key, and status is checked again within the same transaction.
+    // The User row is locked FIRST, before the credential. Recovery and
+    // targeted revocation also lock User first, so the operations serialize
+    // without a lock-order inversion and stale session tickets cannot win.
+    await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', passkey.user.id);
     await tx.$queryRawUnsafe('SELECT id FROM "PasskeyCredential" WHERE id = $1 FOR UPDATE', passkey.id);
     const current = await tx.passkeyCredential.findUnique({
       where: { id: passkey.id },
       include: {
-        user: { select: { id: true, emailVerified: true, suspendedAt: true } },
+        user: { select: { id: true, emailVerified: true, suspendedAt: true, isPlaceholder: true } },
       },
     });
     if (
@@ -145,6 +148,7 @@ export async function finishPasskeyLogin(input: {
       current.revokedAt ||
       !current.user.emailVerified ||
       current.user.suspendedAt ||
+      current.user.isPlaceholder ||
       current.credentialId !== passkey.credentialId ||
       current.signCount !== passkey.signCount
     ) {
@@ -191,6 +195,9 @@ export async function consumePasskeyLoginTicket(input: { db: PrismaClient; token
   return input.db.$transaction(async (tx) => {
     const proof = await tx.passkeyLoginTicket.findUnique({ where: { tokenHash: digest } });
     if (!proof || proof.consumedAt || proof.expiresAt <= now) return null;
+    // A concurrent key revoke/recovery must not invalidate the account
+    // between ticket redemption and Auth.js JWT creation.
+    await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', proof.userId);
     const user = await tx.user.findUnique({
       where: { id: proof.userId },
       select: {
@@ -201,10 +208,11 @@ export async function consumePasskeyLoginTicket(input: { db: PrismaClient; token
         locale: true,
         emailVerified: true,
         suspendedAt: true,
+        isPlaceholder: true,
         passkeyCredentials: { where: { revokedAt: null }, select: { id: true }, take: 1 },
       },
     });
-    if (!user || !user.emailVerified || user.suspendedAt || !user.passkeyCredentials.length) {
+    if (!user || !user.emailVerified || user.suspendedAt || user.isPlaceholder || !user.passkeyCredentials.length) {
       return null;
     }
     const result = await tx.passkeyLoginTicket.updateMany({

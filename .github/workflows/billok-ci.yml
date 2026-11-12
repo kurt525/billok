@@ -245,6 +245,7 @@ jobs:
             mcr.microsoft.com/playwright:v1.64.1-noble \
             node /work/node_modules/@playwright/test/cli.js test \
               e2e/billok-passkey-smoke.spec.ts \
+              e2e/billok-passkey-login-security.spec.ts \
               e2e/billok-passkey-recovery.spec.ts \
               e2e/billok-owner-passkey-recovery.spec.ts \
               e2e/billok-mobile-public.spec.ts \
