@@ -649,3 +649,41 @@ for (const width of [320, 720]) {
     expect(docWidth).toBeLessThanOrEqual(width + 1);
   });
 }
+
+// Issue #1 6.8.1.3: recovery link never signs the user into BillOK.
+// Full cancellation/replay/race acceptance belongs to the next 6.8.1.4.
+for (const width of [320, 720]) {
+  test(`Passkey recovery request and email-only replacement entry at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 660 });
+    let loginRequests = 0;
+    page.on('request', (request) => {
+      if (request.url().includes('/api/auth/callback')) loginRequests++;
+    });
+    await page.route('**/api/webauthn/recovery/request', (route) =>
+      route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: '{"requested":true}',
+      }),
+    );
+    const response = await page.goto('/recover-passkey');
+    expect(response?.status()).toBe(200);
+    const screen = page.getByTestId('passkey-recovery-page');
+    await expect(screen).toBeVisible();
+    await page.getByTestId('recover-email').fill('person@mail.ru');
+    await page.getByTestId('request-passkey-recovery').click();
+    await expect(page.getByRole('status')).toContainText('Если такой аккаунт существует');
+    expect(loginRequests).toBe(0);
+
+    const token = 'q'.repeat(43);
+    const replacement = await page.goto('/recover-passkey?token=' + token);
+    expect(replacement?.status()).toBe(200);
+    await expect(page.getByTestId('create-recovered-passkey')).toBeVisible();
+    await expect(page.getByTestId('recover-email')).toHaveCount(0);
+    await expect(
+      page.getByText('Электронная почта разрешает создать новый Passkey, но не выполняет вход в BillOK.'),
+    ).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
+    expect(loginRequests).toBe(0);
+  });
+}

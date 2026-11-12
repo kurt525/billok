@@ -136,6 +136,11 @@ function LoginForm() {
             {loading ? 'Проверка ключа…' : 'Войти с Passkey'}
           </Button>
         </form>
+        <div className="mt-4 text-center">
+          <Link href="/recover-passkey" className="inline-flex min-h-11 items-center text-sm underline">
+            Потеряли Passkey? Восстановить доступ
+          </Link>
+        </div>
         <p className="mt-7 text-center text-sm text-muted-foreground">
           {t('noAccount')}{' '}
           <Link href={registerHref} className="font-medium text-primary hover:underline">
