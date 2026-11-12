@@ -49,6 +49,7 @@ enum WebAuthnChallengePurpose {
   LOGIN
   ADD_KEY
   RECOVER
+  OWNER_REVOKE
 }
 
 // One-time proof bridging a verified WebAuthn assertion to an Auth.js JWT
@@ -85,6 +86,8 @@ model WebAuthnChallenge {
   bindingHash   String                   @db.VarChar(64)
   purpose       WebAuthnChallengePurpose
   userId        String?
+  // Bind owner signed revocation to one selected credential row.
+  targetCredentialRowId String?
   expiresAt     DateTime
   usedAt        DateTime?
   createdAt     DateTime                 @default(now())
@@ -454,6 +457,7 @@ enum AdminAction {
   OWNER_BOOTSTRAP_EMAIL_SENT
   OWNER_BOOTSTRAP_COMPLETED
   PASSKEY_RECOVERY_COMPLETED
+  OWNER_PASSKEY_REVOKED
   INVITE_CREATED
   INVITE_REVOKED
   ANNOUNCEMENT_SET

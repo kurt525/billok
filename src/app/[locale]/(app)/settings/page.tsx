@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Check } from 'lucide-react';
+import { startAuthentication, type PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/browser';
 import { cn } from '@/lib/utils';
-import { useSession } from 'next-auth/react';
+import { signOut, useSession } from 'next-auth/react';
 import { useTranslations } from 'next-intl';
 import { useRouter } from '@/i18n/navigation';
 import { trpc } from '@/lib/trpc';
@@ -203,6 +204,52 @@ function ProfileForm({
 
 function PasskeyInventory() {
   const t = useTranslations('settings.passkeys');
+  const [selectedLostKey, setSelectedLostKey] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState(false);
+  const [revokeError, setRevokeError] = useState('');
+  const inFlight = useRef(false);
+  async function confirmLostKeyRevocation() {
+    if (!selectedLostKey || inFlight.current) return;
+    inFlight.current = true;
+    setRevoking(true);
+    setRevokeError('');
+    try {
+      if (!window.PublicKeyCredential) throw new Error('unsupported');
+      const started = await fetch('/api/webauthn/owner/revoke/start', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetId: selectedLostKey }),
+      });
+      if (!started.ok) throw new Error('start refused');
+      const { options } = (await started.json()) as {
+        options: PublicKeyCredentialRequestOptionsJSON;
+      };
+      const assertion = await startAuthentication({ optionsJSON: options });
+      const finished = await fetch('/api/webauthn/owner/revoke/finish', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(assertion),
+      });
+      if (!finished.ok) throw new Error('finish refused');
+      // The server invalidated ALL JWTs to protect sessions on the lost
+      // device. Clear this browser cookie and require a fresh Passkey login.
+      try {
+        await signOut({ callbackUrl: '/login' });
+      } catch {
+        // Revocation already committed: a failed client-side cookie cleanup
+        // must not falsely tell the owner that the lost key is still active.
+        window.location.replace('/login');
+      }
+    } catch {
+      setRevokeError(t('revokeFailed'));
+    } finally {
+      inFlight.current = false;
+      setRevoking(false);
+    }
+  }
+
   const { data, isPending, error } = trpc.auth.listPasskeys.useQuery(undefined, {
     staleTime: 30_000,
     refetchOnWindowFocus: true,
@@ -246,9 +293,63 @@ function PasskeyInventory() {
                   <p className="text-xs text-muted-foreground">
                     {t('lastUsed')}: {key.lastUsedAt ? formatDate(key.lastUsedAt) : t('neverUsed')}
                   </p>
+                  {data.isOwner && !key.revokedAt && data.activeCount > 1 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="min-h-11 max-w-full whitespace-normal"
+                      data-testid={'owner-revoke-key-' + key.id}
+                      disabled={revoking}
+                      onClick={() => {
+                        setSelectedLostKey(key.id);
+                        setRevokeError('');
+                      }}
+                    >
+                      {t('markLost')}
+                    </Button>
+                  )}
                 </li>
               ))}
             </ul>
+            {data.isOwner && data.activeCount <= 1 && (
+              <p className="text-sm text-muted-foreground">{t('lastKeyProtected')}</p>
+            )}
+            {data.isOwner && selectedLostKey && data.activeCount > 1 && (
+              <div className="min-w-0 space-y-3 rounded-xl border p-3" data-testid="owner-revoke-confirmation">
+                <p className="break-words text-sm font-medium">{t('revokeConfirm')}</p>
+                <p className="break-words text-sm text-muted-foreground">{t('revokeWarning')}</p>
+                <div className="flex min-w-0 flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    disabled={revoking}
+                    variant="destructive"
+                    className="min-h-11 max-w-full whitespace-normal"
+                    data-testid="owner-revoke-confirm"
+                    onClick={() => void confirmLostKeyRevocation()}
+                  >
+                    {revoking ? t('revoking') : t('revokeNow')}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={revoking}
+                    data-testid="owner-revoke-cancel"
+                    className="min-h-11"
+                    onClick={() => {
+                      setSelectedLostKey(null);
+                      setRevokeError('');
+                    }}
+                  >
+                    {t('cancelRevoke')}
+                  </Button>
+                </div>
+              </div>
+            )}
+            {revokeError && (
+              <p role="alert" className="break-words text-sm text-destructive">
+                {revokeError}
+              </p>
+            )}
             <p className="text-xs text-muted-foreground">{t('deviceHint')}</p>
             <p className="text-xs text-muted-foreground">{data.isOwner ? t('pendingOwner') : t('pendingRegular')}</p>
           </>
