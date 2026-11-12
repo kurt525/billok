@@ -154,7 +154,9 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
       });
     });
     await page.getByTestId('owner-rename-save').click();
-    await expect(page.getByRole('alert')).toContainText('Не удалось изменить название');
+    await expect(
+      page.getByTestId('passkey-inventory').getByRole('alert').filter({ hasText: 'Не удалось изменить название' }),
+    ).toContainText('Не удалось изменить название');
     await page.evaluate(() => {
       delete (navigator.credentials as { get?: unknown }).get;
     });
