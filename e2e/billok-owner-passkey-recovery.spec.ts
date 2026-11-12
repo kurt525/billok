@@ -64,6 +64,81 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
     await expect(page.getByTestId('passkey-limit')).toContainText('3 из 3');
     await expect(page.getByTestId('passkey-items').getByTestId('passkey-item')).toHaveCount(3);
     await expect(page.getByTestId('owner-passkey-full')).toBeVisible();
+    // Issue #1 6.11: inspect the separate owner-only registered-user page
+    // WITHOUT spawning a second test with this singleton owner (avoids races
+    // with the destructive Passkey recovery lifecycle below).
+    const managedEmail = 'owner-users-target@mail.ru';
+    const managedSession = await authedPasskeyContext(managedEmail, 0);
+    try {
+      await page.goto('/admin', { waitUntil: 'networkidle' });
+      await expect(page.getByTestId('owner-users-nav')).toBeVisible();
+      await page.getByTestId('owner-users-nav').click();
+      await expect(page.getByTestId('owner-users-page')).toBeVisible();
+      await expect(page.getByTestId('owner-users-list')).toBeVisible();
+      await page.getByTestId('owner-users-search').fill(managedEmail);
+      const targetCard = page.locator('[data-testid^="owner-user-"]').filter({ hasText: managedEmail });
+      await expect(targetCard).toHaveCount(1);
+      await expect(page.getByTestId('owner-users-count')).toContainText('1');
+      for (const width of widths) {
+        await page.setViewportSize({ width, height: 410 });
+        await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+        for (const element of [
+          page.getByTestId('owner-users-page'),
+          page.getByTestId('owner-users-search'),
+          page.getByTestId('owner-users-sort'),
+          targetCard,
+        ]) {
+          await element.scrollIntoViewIfNeeded();
+          const rect = await element.boundingBox();
+          if (!rect) throw new Error('Missing owner users control at ' + width);
+          expect(rect.x, 'left overflow: ' + width).toBeGreaterThanOrEqual(-1);
+          expect(rect.x + rect.width, 'right overflow: ' + width).toBeLessThanOrEqual(width + 1);
+        }
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
+      }
+
+      await targetCard.getByRole('button', { name: 'Заблокировать' }).click();
+      await expect(page.getByTestId('owner-users-confirm')).toBeVisible();
+      for (const width of widths) {
+        await page.setViewportSize({ width, height: 410 });
+        const dialog = page.getByTestId('owner-users-confirm');
+        const rect = await dialog.boundingBox();
+        if (!rect) throw new Error('Missing owner confirmation dialog at ' + width);
+        expect(rect.x, 'dialog left overflow at ' + width).toBeGreaterThanOrEqual(-1);
+        expect(rect.x + rect.width, 'dialog right overflow at ' + width).toBeLessThanOrEqual(width + 1);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
+      }
+      await page.getByTestId('owner-users-cancel').click();
+      await expect(page.getByTestId('owner-users-confirm')).toHaveCount(0);
+      await targetCard.getByRole('button', { name: 'Заблокировать' }).click();
+      await page.getByTestId('owner-users-confirm-submit').click();
+      await expect(targetCard.getByRole('button', { name: 'Разблокировать' })).toBeVisible();
+      const oldTargetSession = await managedSession.get('/api/auth/session');
+      expect(((await oldTargetSession.json()) as { user?: unknown } | null)?.user ?? null).toBeNull();
+
+      await page.getByTestId('owner-users-filter-suspended').click();
+      await expect(page.getByTestId('owner-users-list')).toContainText(managedEmail);
+      await targetCard.getByRole('button', { name: 'Разблокировать' }).click();
+      await page.getByTestId('owner-users-confirm-submit').click();
+      await expect(page.getByTestId('owner-users-list')).toHaveCount(0);
+      // Unblocking cannot restore the old session which was invalidated.
+      const invalidatedSession = await managedSession.get('/api/auth/session');
+      expect(((await invalidatedSession.json()) as { user?: unknown } | null)?.user ?? null).toBeNull();
+
+      await page.getByTestId('owner-users-filter-all').click();
+      await page.getByTestId('owner-users-search').fill('');
+      await page.getByTestId('owner-users-sort').selectOption('email');
+      await page.getByTestId('owner-users-direction').click();
+      await expect(page.getByTestId('owner-users-list')).toBeVisible();
+      const ownerCard = page.locator('[data-testid^="owner-user-"]').filter({ hasText: email });
+      await expect(ownerCard.getByText('Владелец')).toBeVisible();
+      await expect(ownerCard.getByRole('button', { name: 'Заблокировать' })).toHaveCount(0);
+    } finally {
+      await managedSession.dispose();
+    }
+    // Continue the original Passkey lifecycle on the same authenticated owner.
+    await page.goto('/settings', { waitUntil: 'networkidle' });
+
     await expect(page.getByTestId('owner-key-security-state')).toContainText('Три действующих Passkey');
     await expect(page.getByTestId('owner-security-status')).toContainText('Ссылка из письма не выполняет вход');
     await expect(page.getByTestId('owner-add-passkey')).toHaveCount(0);

@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
+import { Link } from '@/i18n/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -27,6 +28,7 @@ import {
   Loader2,
   RefreshCw,
   ReceiptText,
+  Users,
 } from 'lucide-react';
 
 import { AuditLogSection } from '@/components/admin/audit-log-section';
@@ -53,8 +55,7 @@ export default function AdminPage() {
 
       <div className="grid gap-6 [&>*]:min-w-0">
         <SystemHealthSection />
-        <Separator />
-        <UserManagementSection {...(currentUserEmail !== undefined ? { currentUserEmail } : {})} />
+        <UserManagementEntry {...(currentUserEmail !== undefined ? { currentUserEmail } : {})} />
         <Separator />
         <GroupOverviewSection />
         <Separator />
@@ -73,6 +74,36 @@ export default function AdminPage() {
         <AuditLogSection />
       </div>
     </div>
+  );
+}
+
+// The additional owner-only page checks OwnerBootstrap both at render and
+// in its tRPC routes. Never decide ownership from the email in this link.
+function UserManagementEntry({ currentUserEmail }: { currentUserEmail?: string | null }) {
+  const t = useTranslations('admin.ownerUsers');
+  const access = trpc.admin.ownerRegisteredUsers.useQuery(
+    {
+      limit: 1,
+      status: 'all',
+      sortBy: 'createdAt',
+      sortDirection: 'desc',
+    },
+    { retry: false, staleTime: 60_000 },
+  );
+  // New owner panel remains separate. Preserve the legacy administrator
+  // section until security hardening in 6.12, without duplicating it for owner.
+  if (access.isPending) return null;
+  if (!access.isSuccess)
+    return <UserManagementSection {...(currentUserEmail !== undefined ? { currentUserEmail } : {})} />;
+  return (
+    <Link
+      href="/admin/users"
+      data-testid="owner-users-nav"
+      className="flex min-h-11 min-w-0 items-center gap-2 rounded-xl border p-3 text-sm font-medium text-primary"
+    >
+      <Users className="size-5 shrink-0" />
+      <span className="min-w-0 break-words">{t('navTitle')}</span>
+    </Link>
   );
 }
 

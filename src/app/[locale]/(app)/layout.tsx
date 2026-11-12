@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { auth } from '@/server/auth';
+import { db } from '@/server/db';
 import { MobileHeader } from '@/components/layout/mobile-header';
 import { AnnouncementBanner } from '@/components/layout/announcement-banner';
 import { ImpersonationBanner } from '@/components/layout/impersonation-banner';
@@ -17,7 +18,14 @@ export default async function AppLayout({
     redirect(`/${locale}/login`);
   }
 
-  const isAdmin = !!process.env.ADMIN_EMAIL && session.user.email === process.env.ADMIN_EMAIL;
+  const owner = await db.ownerBootstrap.findUnique({
+    where: { id: 1 },
+    select: { userId: true, completedAt: true },
+  });
+  const isOwner = Boolean(owner?.completedAt && owner.userId === session.user.id);
+  // Keep the existing admin navigation for already-tested legacy admins;
+  // the separate /admin/users page and API use owner ID exclusively.
+  const isAdmin = isOwner || (!!process.env.ADMIN_EMAIL && session.user.email === process.env.ADMIN_EMAIL);
 
   return (
     <div className="min-h-dvh min-w-0">

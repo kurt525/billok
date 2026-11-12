@@ -52,6 +52,16 @@ test('ordinary user: one-key inventory only, all owner key-management routes for
       const result = await session.post(endpoint, { data: body });
       expect(result.status(), 'Owner-only route: ' + endpoint).toBe(403);
     }
+    await page.goto('/admin/users', { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('owner-users-page')).toHaveCount(0);
+    const ownerQuery = await session.get(
+      '/api/trpc/admin.ownerRegisteredUsers?input=' + encodeURIComponent(JSON.stringify({ json: { limit: 1 } })),
+    );
+    expect(ownerQuery.status()).toBe(403);
+    const ownerMutation = await session.post('/api/trpc/admin.ownerSetUserSuspended', {
+      data: { json: { userId: key.rowId, suspend: true } },
+    });
+    expect(ownerMutation.status()).toBe(403);
     expect((await (await session.get('/api/auth/session')).json()) as { user?: { email?: string } }).toMatchObject({
       user: { email },
     });

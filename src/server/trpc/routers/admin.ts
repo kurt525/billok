@@ -19,6 +19,11 @@ import { getBuildInfo } from '@/server/lib/build-info';
 import { REGISTRATION_MODES, readRegistrationMode } from '@/server/lib/registration-mode';
 import { activeSystemInviteWindow, SYSTEM_INVITE_TTL_MS } from '@/server/lib/system-invite-lifetime';
 import { totalsInGroupCurrency } from '@/server/lib/group-expense-totals';
+import {
+  requireRegisteredOwner,
+  listOwnerRegisteredUsers,
+  changeRegisteredUserSuspension,
+} from '@/server/lib/owner-user-admin';
 
 const serverStartTime = new Date();
 const { version: cachedVersion, commitSha: cachedCommitSha } = getBuildInfo();
@@ -46,6 +51,15 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   return next({ ctx });
 });
 
+// Issue #1 6.11: the separate registered-user page is bound to the
+// immutable, completed owner bootstrap ID, not ADMIN_EMAIL or a JWT role.
+// The legacy adminProcedure is left for the separately scoped 6.12 audit.
+const ownerUsersProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  if (ctx.impersonating) throw new AppError('FORBIDDEN', 'adminRequired');
+  await requireRegisteredOwner(ctx.db, ctx.user.id);
+  return next({ ctx });
+});
+
 export { adminProcedure };
 
 /** Reusable helper to log an admin action to the audit log. */
@@ -67,6 +81,30 @@ export async function logAdminAction(
 }
 
 export const adminRouter = createTRPCRouter({
+  ownerRegisteredUsers: ownerUsersProcedure
+    .input(
+      z.object({
+        cursor: z.string().max(128).optional(),
+        limit: z.number().int().min(1).max(30).default(20),
+        search: z.string().max(100).optional(),
+        status: z.enum(['all', 'active', 'suspended', 'pending']).default('all'),
+        sortBy: z.enum(['name', 'email', 'createdAt']).default('createdAt'),
+        sortDirection: z.enum(['asc', 'desc']).default('desc'),
+      }),
+    )
+    .query(({ ctx, input }) => listOwnerRegisteredUsers(ctx.db, ctx.user.id, input)),
+
+  ownerSetUserSuspended: ownerUsersProcedure
+    .input(z.object({ userId: z.string().min(1).max(128), suspend: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      changeRegisteredUserSuspension({
+        db: ctx.db,
+        ownerId: ctx.user.id,
+        userId: input.userId,
+        suspend: input.suspend,
+      }),
+    ),
+
   getImpersonationStatus: publicProcedure.query(({ ctx }) => {
     return {
       isImpersonating: !!ctx.impersonating,
