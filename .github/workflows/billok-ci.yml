@@ -124,6 +124,29 @@ jobs:
           npm run db:seed
           BILLOK_QA_FIXTURES=1 npx tsx e2e/seed-mobile-receipt.ts > "$RUNNER_TEMP/billok-mobile-receipt.env"
           cat "$RUNNER_TEMP/billok-mobile-receipt.env" >> "$GITHUB_ENV"
+      - name: Verify legacy password database purge on disposable QA PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Test the REAL upgrade migration, not only the fresh Prisma schema.
+          # The fixed QA name and empty generated database ensure we can never
+          # touch a production connection or persistent data.
+          test "$BILLOK_QA_DB_CONTAINER" = "billok-mobile-qa-$(printf '%s' "$GITHUB_RUN_ID")-$(printf '%s' "$GITHUB_RUN_ATTEMPT")"
+          docker exec "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 -c 'ALTER TABLE "User" ADD COLUMN "passwordHash" TEXT'
+          docker exec "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 -c 'CREATE TABLE "PasswordResetRequest" ("id" TEXT PRIMARY KEY)'
+          # Must safely delete the obsolete column and table and remain
+          # idempotent on subsequent restarts/upgrade attempts.
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < prisma/migrations/password_auth_drop.sql
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < prisma/migrations/password_auth_drop.sql
+          remaining="$(docker exec "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa -At \
+            -v ON_ERROR_STOP=1 -c "SELECT (CASE WHEN to_regclass('public.\"PasswordResetRequest\"') IS NULL THEN 0 ELSE 1 END) + (SELECT count(*)::int FROM information_schema.columns WHERE table_schema='public' AND table_name='User' AND column_name='passwordHash')")"
+          test "$remaining" = 0
+          echo 'PASSWORDLESS_DATABASE_CUTOVER=PASS'
+
       - name: Start isolated QA SMTP and seed invited auth fixtures
         shell: bash
         run: |
