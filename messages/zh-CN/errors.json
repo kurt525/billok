@@ -16,7 +16,6 @@
   "inviteCodeRequired": "注册需要邀请码。",
   "inviteCodeInvalid": "邀请码无效或已过期。",
   "emailTaken": "无法创建账户。请换一个邮箱，或直接登录。",
-  "noPasswordToChange": "此账户使用 OAuth 或邮件链接登录，没有可更改的密码",
   "wrongPassword": "当前密码不正确",
   "userNotFound": "未找到用户",
   "groupNotFound": "未找到群组",

@@ -16,7 +16,6 @@
   "inviteCodeRequired": "En inbjudningskod krävs för att registrera dig.",
   "inviteCodeInvalid": "Ogiltig eller utgången inbjudningskod.",
   "emailTaken": "Det gick inte att skapa kontot. Prova en annan e-postadress eller logga in.",
-  "noPasswordToChange": "Kontot använder OAuth eller magisk länk – det finns inget lösenord att ändra",
   "wrongPassword": "Nuvarande lösenord är fel",
   "userNotFound": "Användaren hittades inte",
   "groupNotFound": "Gruppen hittades inte",

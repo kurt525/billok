@@ -16,7 +16,6 @@
   "inviteCodeRequired": "登録には招待コードが必要です。",
   "inviteCodeInvalid": "招待コードが無効または期限切れです。",
   "emailTaken": "アカウントを作成できません。別のメールアドレスを使用するか、ログインしてください。",
-  "noPasswordToChange": "このアカウントはOAuthまたはマジックリンクでログインするため、変更するパスワードがありません",
   "wrongPassword": "現在のパスワードが正しくありません",
   "userNotFound": "ユーザーが見つかりません",
   "groupNotFound": "グループが見つかりません",

@@ -16,7 +16,6 @@
   "inviteCodeRequired": "Für die Registrierung ist ein Einladungscode erforderlich.",
   "inviteCodeInvalid": "Ungültiger oder abgelaufener Einladungscode.",
   "emailTaken": "Das Konto konnte nicht erstellt werden. Verwenden Sie eine andere E-Mail-Adresse oder melden Sie sich an.",
-  "noPasswordToChange": "Das Konto verwendet OAuth oder einen E-Mail-Link – es gibt kein Passwort zum Ändern",
   "wrongPassword": "Das aktuelle Passwort ist falsch",
   "userNotFound": "Benutzer nicht gefunden",
   "groupNotFound": "Gruppe nicht gefunden",

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -81,8 +81,8 @@ describe('Mobile authentication and verification forms', () => {
     expect(router).not.toContain('passwordHash');
   });
 
-  it('keeps the confirmation email page back action tappable', () => {
-    const verify = source('src/app/[locale]/(auth)/verify-request/page.tsx');
-    expect(verify).toContain('inline-flex min-h-11 items-center justify-center');
+  it('has no old email-as-login waiting page', () => {
+    expect(existsSync(resolve(process.cwd(), 'src/app/[locale]/(auth)/verify-request/page.tsx'))).toBe(false);
+    expect(source('src/middleware.ts')).not.toContain("'/verify-request'");
   });
 });

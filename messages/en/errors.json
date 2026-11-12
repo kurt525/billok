@@ -22,7 +22,6 @@
   "passwordResetRateLimited": "Too many password reset attempts. Please try again later.",
   "passwordResetLinkInvalid": "The password reset link has expired, has already been used, or is invalid.",
   "emailTaken": "Unable to create account. Please try a different email or sign in.",
-  "noPasswordToChange": "Account uses OAuth or magic link — no password to change",
   "wrongPassword": "Current password is incorrect",
   "userNotFound": "User not found",
   "groupNotFound": "Group not found",

@@ -20,6 +20,8 @@ describe('Issue #1 6.9: no undeclared alternate authentication code', () => {
       'src/server/lib/google-sign-in.ts',
       'src/server/lib/oidc-sign-in.ts',
       'src/server/lib/magic-link-email.ts',
+      'src/app/[locale]/(auth)/verify-request/page.tsx',
+      'scripts/mock-smtp.mjs',
       'src/server/lib/sign-in-identity.ts',
       'e2e/google-login.spec.ts',
       'e2e/oidc-login.spec.ts',
@@ -36,6 +38,8 @@ describe('Issue #1 6.9: no undeclared alternate authentication code', () => {
     expect(prisma).not.toMatch(/accounts\s+Account\[\]/);
     expect(prisma).toMatch(/model EmailVerificationRequest \{/);
     expect(prisma).toMatch(/model PasskeyCredential \{/);
+    expect(prisma).toMatch(/model PasskeyLoginTicket \{/);
+    expect(prisma).not.toMatch(/accounts\s+Account\[\]/);
   });
 
   it('cannot restore an external provider by changing Docker or environment variables', () => {
@@ -48,6 +52,9 @@ describe('Issue #1 6.9: no undeclared alternate authentication code', () => {
       expect(file).not.toContain('DISABLE_PASSWORD_LOGIN');
       expect(file).not.toMatch(/Sign in with Google|Magic Link:\s*enabled/);
     }
+    expect(source('src/middleware.ts')).not.toContain("'/verify-request'");
+    expect(source('CONTRIBUTING.md')).not.toMatch(/mock-smtp\.mjs|magic-link tests/i);
+    expect(source('.github/workflows/test.yml')).not.toContain('mock-smtp.mjs');
     expect(config).toContain('readRegistrationEmailConfig');
     expect(source('src/server/lib/email-verification-email.ts')).toContain('sendRussianRegistrationVerificationEmail');
     expect(source('src/server/lib/webauthn-registration.ts')).toContain('verifyRegistrationResponse');
@@ -64,5 +71,12 @@ describe('Issue #1 6.9: no undeclared alternate authentication code', () => {
     const errors = source('src/lib/sign-in-errors.ts');
     expect(errors).not.toContain('GOOGLE_ERROR_KEYS');
     expect(errors).not.toContain('OIDC_ERROR_KEYS');
+    const russianAuth = JSON.parse(source('messages/ru/auth.json')) as { verifyRequest?: unknown };
+    expect(russianAuth.verifyRequest).toBeUndefined();
+    expect(source('messages/ru/admin.json')).not.toMatch(/через Google|через OIDC/);
+    const russianErrors = JSON.parse(source('messages/ru/errors.json')) as {
+      noPasswordToChange?: unknown;
+    };
+    expect(russianErrors.noPasswordToChange).toBeUndefined();
   });
 });

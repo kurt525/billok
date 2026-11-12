@@ -5,7 +5,7 @@ import { logger } from './lib/logger';
 import { consumePasskeyLoginTicket } from './lib/passkey-login';
 
 // A verified, short-lived WebAuthn ticket is the ONLY credential accepted.
-// Magic Link, OAuth and OIDC remain outside this password-removal stage.
+// No additional identity provider, adapter or external account linking exists.
 export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: 'jwt' },
   pages: { signIn: '/login', error: '/login' },

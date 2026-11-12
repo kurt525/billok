@@ -6,7 +6,6 @@ const widths = [320, 360, 393, 412] as const;
 const pages = [
   { path: '/login', heading: 'С возвращением!', hasInput: false },
   { path: '/register', heading: 'Создать аккаунт', hasInput: true },
-  { path: '/verify-request', heading: 'Проверьте почту', hasInput: false },
   { path: '/split', heading: 'Разделить чек', hasInput: false },
 ] as const;
 
@@ -77,9 +76,6 @@ for (const width of widths) {
           await submit.scrollIntoViewIfNeeded();
           await expect(submit).toBeInViewport();
           await checkWidth();
-        } else if (item.path === '/verify-request') {
-          const back = page.getByRole('link', { name: 'Вернуться ко входу' });
-          expect((await back.boundingBox())!.height).toBeGreaterThanOrEqual(44);
         }
       });
     }
@@ -289,35 +285,6 @@ test('registration email link needs a tap and never retries a rejected Passkey s
   }
 });
 
-test.describe('mail waiting screen on wide mobile viewports', () => {
-  test.use({ viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
-
-  test('stays usable with large Android text and a short viewport, and returns to login', async ({ page }) => {
-    await page.goto('/verify-request', { waitUntil: 'networkidle' });
-    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
-    const backToLogin = page.getByRole('link', { name: 'Вернуться ко входу' });
-
-    for (const width of [320, 360, 430, 480, 600, 720]) {
-      await page.setViewportSize({ width, height: 320 });
-      await expect(page.getByText('Проверьте почту', { exact: true })).toBeVisible();
-      await backToLogin.scrollIntoViewIfNeeded();
-      await expect(backToLogin).toBeInViewport();
-
-      const bounds = await backToLogin.boundingBox();
-      expect(bounds, 'return to login at ' + width + 'px').not.toBeNull();
-      expect(bounds!.height).toBeGreaterThanOrEqual(44);
-      expect(bounds!.x).toBeGreaterThanOrEqual(0);
-      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-      const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
-      expect(documentWidth, 'horizontal overflow at ' + width + 'px').toBeLessThanOrEqual(width + 1);
-    }
-
-    await backToLogin.click();
-    await expect(page).toHaveURL(/\/login$/);
-    await expect(page.getByText('С возвращением!', { exact: true })).toBeVisible();
-  });
-});
-
 test('root and legacy language links reach canonical Russian pages without redirect loops', async ({ page }) => {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page).toHaveURL(/\/login$/);
@@ -398,6 +365,40 @@ test('mobile confirmation recovery handles concurrent taps and network errors at
   }
 });
 
+test('deleted Google, OIDC and Magic Link endpoints cannot issue Auth.js sessions', async ({ page }) => {
+  const providersResponse = await page.request.get('/api/auth/providers');
+  expect(providersResponse.status()).toBe(200);
+  const providers = (await providersResponse.json()) as Record<string, { id: string }>;
+  expect(Object.keys(providers)).toEqual(['passkey']);
+  expect(providers.passkey?.id).toBe('passkey');
+
+  const csrf = await page.request.get('/api/auth/csrf');
+  expect(csrf.status()).toBe(200);
+  const { csrfToken } = (await csrf.json()) as { csrfToken: string };
+
+  for (const old of ['google', 'oidc', 'nodemailer', 'email']) {
+    await page.request.get('/api/auth/signin/' + old, { maxRedirects: 0 });
+    await page.request.get('/api/auth/callback/' + old + '?code=fake&state=fake', { maxRedirects: 0 });
+    await page.request.post('/api/auth/signin/' + old, {
+      form: { csrfToken, email: 'fake@mail.ru', callbackUrl: '/dashboard' },
+      maxRedirects: 0,
+    });
+    await page.request.post('/api/auth/callback/' + old, {
+      form: { csrfToken, code: 'fake', state: 'fake', email: 'fake@mail.ru' },
+      maxRedirects: 0,
+    });
+    const session = await page.request.get('/api/auth/session');
+    expect(session.status()).toBe(200);
+    const current = (await session.json()) as { user?: unknown } | null;
+    expect(current?.user ?? null, 'no session from ' + old).toBeNull();
+  }
+  await page.goto('/login');
+  for (const source of ['google', 'oidc', 'nodemailer', 'email']) {
+    await expect(page.locator('a[href*="/api/auth/signin/' + source + '"]')).toHaveCount(0);
+  }
+  await expect(page.getByTestId('passkey-login')).toBeVisible();
+});
+
 test('removed password reset procedures cannot issue sessions', async ({ page }) => {
   await page.goto('/login', { waitUntil: 'networkidle' });
   await expect(page.getByTestId('passkey-login')).toBeVisible();
@@ -417,7 +418,7 @@ test.describe('Keyboard-sized BillOK login on six mobile widths', () => {
     const height = 300;
     for (const width of [320, 360, 430, 480, 600, 720]) {
       await page.setViewportSize({ width, height });
-      await page.goto('/login?error=OAuthAccountNotLinked', { waitUntil: 'networkidle' });
+      await page.goto('/login?error=UnrecognizedLegacyProvider', { waitUntil: 'networkidle' });
       await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
       const alert = page.getByTestId('login-error');
       const form = page.getByTestId('mobile-login-form');
@@ -517,7 +518,6 @@ test('six-width final public mobile adaptation audit: login, invite, recovery an
   const screens = [
     { path: '/login', control: '[data-testid="passkey-login"]' },
     { path: '/register', control: '[data-testid="mobile-register-form"] input#name' },
-    { path: '/verify-request', control: 'a[href="/login"]' },
     { path: '/split', control: '[data-testid="manual-split-sign-in-required"] a[href*="/login"]' },
   ] as const;
   for (const width of [320, 360, 430, 480, 600, 720]) {

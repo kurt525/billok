@@ -11,7 +11,7 @@ ShareTab — open-source, self-hosted Splitwise alternative with AI receipt scan
 - **Framework:** Next.js 16 (App Router) + TypeScript
 - **API:** tRPC v11 (end-to-end type-safe)
 - **ORM:** Prisma 7 + PostgreSQL 16 (via `@prisma/adapter-pg`); `npm run dev:full` runs embedded PostgreSQL 18 (`embedded-postgres`), so local dev is two majors ahead of Docker and CI
-- **Auth:** BillOK migration to WebAuthn/Passkeys (Issue #1 section 6). External Magic Link, Google and OIDC providers and their config are entirely removed. Credentials is an interim development-only provider until 6.3.2.3; it MUST NOT be offered in the completed project.
+- **Auth:** BillOK migration to WebAuthn/Passkeys (Issue #1 section 6). External Magic Link, Google and OIDC providers are absent from user authentication. Auth.js has exactly one Credentials transport named `passkey`, which consumes a one-time ticket minted ONLY after a real signed WebAuthn verification. It never accepts email/password credentials, and removing this transport would break the WebAuthn session bridge.
 - **UI:** TailwindCSS 4 + shadcn/ui (v4, uses `@base-ui/react` — use `render` prop instead of `asChild`) + next-themes (dark mode)
 - **AI:** Pluggable providers (OpenAI, OpenAI-Codex, Claude, Meridian, Ollama) via `src/server/ai/`
 - **i18n:** next-intl (9 locales: en, es, sv, fr, de, pt-BR, ja, zh-CN, ko)
