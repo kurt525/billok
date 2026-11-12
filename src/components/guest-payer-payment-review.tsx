@@ -455,7 +455,7 @@ export function GuestPayerPaymentReview({
                                 ? (people?.find((person) => person.id === payment.verifiedByPersonId)?.name ??
                                   t('payerPaymentVerifierFallback'))
                                 : t('payerPaymentVerifierFallback'),
-                              at: new Date(payment.verifiedAt).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US'),
+                              at: new Date(payment.verifiedAt).toLocaleString('ru-RU'),
                             })}
                           </p>
                           <Button

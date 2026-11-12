@@ -90,7 +90,7 @@ export function GuestPaymentDeclaration({
                       description: (
                         <div className="flex min-w-0 flex-col gap-1 break-words">
                           <time dateTime={notice.confirmedAt} data-testid="guest-payment-confirmation-time">
-                            {new Date(notice.confirmedAt).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US')}
+                            {new Date(notice.confirmedAt).toLocaleString('ru-RU')}
                           </time>
                           <a
                             href={notice.receiptHref}
@@ -360,7 +360,7 @@ export function GuestPaymentDeclaration({
                   })}
                 </p>
                 <time className="block text-xs text-muted-foreground" dateTime={entry.cancelledAt}>
-                  {new Date(entry.cancelledAt).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US')}
+                  {new Date(entry.cancelledAt).toLocaleString('ru-RU')}
                 </time>
                 <a
                   href={entry.receiptHref}
@@ -407,7 +407,7 @@ export function GuestPaymentDeclaration({
                   dateTime={receiptNotification.confirmedAt}
                   data-testid="guest-payment-notification-time"
                 >
-                  {new Date(receiptNotification.confirmedAt).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US')}
+                  {new Date(receiptNotification.confirmedAt).toLocaleString('ru-RU')}
                 </time>
                 <a
                   href={receiptNotification.receiptHref}

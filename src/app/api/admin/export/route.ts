@@ -6,11 +6,11 @@ import { logAdminAction } from '@/server/trpc/routers/admin';
 export async function GET() {
   // Owner privileges are bound to the immutable DB user ID, not email.
   const session = await auth();
-  if (!session?.user?.id) return new Response('Forbidden', { status: 403 });
+  if (!session?.user?.id) return new Response('Доступ запрещён', { status: 403 });
   try {
     await requireOwner(db, session.user.id);
   } catch {
-    return new Response('Forbidden', { status: 403 });
+    return new Response('Доступ запрещён', { status: 403 });
   }
 
   try {
@@ -114,6 +114,6 @@ export async function GET() {
     });
   } catch (error) {
     console.error('Export failed:', error);
-    return new Response('Internal Server Error', { status: 500 });
+    return new Response('Внутренняя ошибка сервера', { status: 500 });
   }
 }

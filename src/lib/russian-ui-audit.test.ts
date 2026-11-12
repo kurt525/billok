@@ -102,6 +102,46 @@ describe('BillOK Russian-only user-facing fallbacks', () => {
   });
 });
 
+describe('Issue #1 1.2.12: Russian-only web/PWA and API error contracts', () => {
+  it('offers only Russian with no browser-language negotiation or visible switcher', () => {
+    const routes = source('src/i18n/routing.ts');
+    expect(routes).toContain("locales = ['ru'] as const");
+    expect(routes).toContain("defaultLocale: Locale = 'ru'");
+    expect(routes).toContain('localeDetection: false');
+    expect(routes).toContain("localePrefix: 'never'");
+    const messages = source('src/i18n/request.ts');
+    expect(messages).toContain('locale = routing.defaultLocale');
+    expect(messages).not.toContain("defaultLocale: 'en'");
+    const manifest = JSON.parse(source('public/manifest.json')) as { lang: string };
+    expect(manifest.lang).toBe('ru-RU');
+  });
+
+  it('never formats payments and guest notifications with an English-locale fallback', () => {
+    for (const name of [
+      'src/components/guest-payment-declaration.tsx',
+      'src/components/guest-payer-payment-review.tsx',
+    ]) {
+      const ui = source(name);
+      expect(ui).not.toContain("'en-US'");
+      expect(ui).not.toMatch(/toLocaleString\(locale === 'ru'/u);
+      expect(ui).toContain("toLocaleString('ru-RU')");
+    }
+  });
+
+  it('returns Russian through tRPC and avoids English HTTP response bodies', () => {
+    const errors = source('src/server/lib/app-error.ts');
+    // Raw internal AppError diagnostic messages are not displayed to users.
+    // The tRPC error formatter must translate them to the only supported locale.
+    expect(errors).toContain('const catalogs: Record<Locale, AbstractIntlMessages> = { ru }');
+    expect(errors).toContain('message: userErrorMessage(error, locale)');
+    expect(errors).toContain('return genericMessage(error.code, locale)');
+    for (const file of ['src/app/api/admin/export/route.ts', 'src/app/api/uploads/[...path]/route.ts']) {
+      const route = source(file);
+      expect(route).not.toMatch(/new Response\('(Forbidden|Unauthorized|Not found|Internal Server Error)'/u);
+    }
+  });
+});
+
 describe('BillOK small Android viewport static contracts', () => {
   it('uses device viewport with keyboard resizing and safe-area support', () => {
     const layout = source('src/app/[locale]/layout.tsx');
