@@ -1,6 +1,6 @@
 // Parse only loopback QA links from Nodemailer's MIME message.
 // Registration confirmation uses Base64 text and quoted-printable HTML.
-const qaLink = /https?:\/\/(?:127\.0\.0\.1|localhost):\d+\/verify-email\?token=[A-Za-z0-9_-]{43}/g;
+const qaLink = /https?:\/\/(?:127\.0\.0\.1|localhost):\d+\/(?:verify-email|recover-passkey)\?token=[A-Za-z0-9_-]{43}/g;
 
 export function linksInMessage(raw) {
   const alternatives = [
