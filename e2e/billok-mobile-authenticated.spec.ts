@@ -1,5 +1,5 @@
-import { authedPasskeyContext, loginWithPasskey } from './passkey-auth';
-import { expect, test, type Page } from '@playwright/test';
+import { authedPasskeyContext } from './passkey-auth';
+import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { auditMobileViewport, auditMobileTarget } from './billok-mobile-viewport-audit';
 import { createTestGroup, trpcMutation, users } from './helpers';
 
@@ -74,21 +74,45 @@ async function checkPhoneLayout(page: Page, width: number, allowInnerTables = fa
   if (!allowInnerTables) expect(result.clipped).toEqual([]);
 }
 
+// Real WebAuthn assertions produce these Auth.js cookies. Cache a signed
+// session per Playwright worker instead of initiating 25 browser login
+// ceremonies against the same disposable QA account in one short run.
+// This is NOT a mock session or a bypass: the session is issued only after
+// a valid WebAuthn challenge is verified by the real QA server.
+type SignedQaCookies = Awaited<ReturnType<BrowserContext['storageState']>>['cookies'];
+const signedQaSessions = new Map<string, Promise<SignedQaCookies>>();
+
+async function signedQaCookies(email: string): Promise<SignedQaCookies> {
+  let pending = signedQaSessions.get(email);
+  if (!pending) {
+    pending = (async () => {
+      const session = await authedPasskeyContext(email, 0);
+      try {
+        return (await session.storageState()).cookies;
+      } finally {
+        await session.dispose();
+      }
+    })();
+    signedQaSessions.set(email, pending);
+  }
+  try {
+    return await pending;
+  } catch (error) {
+    signedQaSessions.delete(email);
+    throw error;
+  }
+}
+
 async function signInAsSeedAdmin(page: Page) {
-  await loginWithPasskey(page, 'alice@example.com');
+  // "alice@example.com" is an ordinary QA account despite ADMIN_EMAIL.
+  await page.context().addCookies(await signedQaCookies('alice@example.com'));
+  await page.goto('/dashboard', { waitUntil: 'networkidle' });
   await expect(page.getByRole('heading', { name: 'Главная' })).toBeVisible();
 }
 
-// Issue #1 6.12.1: the disposable QA singleton belongs to owner-qa, NOT
-// alice@example.com (which the old ADMIN_EMAIL setting happens to name).
-// Use a real, signed P-256 WebAuthn challenge; never impersonate or forge JWTs.
+// The single completed OwnerBootstrap record references this distinct account.
 async function signInAsOwnerAdmin(page: Page) {
-  const owner = await authedPasskeyContext('owner-qa@mail.ru', 0);
-  try {
-    await page.context().addCookies((await owner.storageState()).cookies);
-  } finally {
-    await owner.dispose();
-  }
+  await page.context().addCookies(await signedQaCookies('owner-qa@mail.ru'));
   await page.goto('/dashboard', { waitUntil: 'networkidle' });
   await expect(page.getByRole('heading', { name: 'Главная' })).toBeVisible();
 }
@@ -152,7 +176,9 @@ test('Russian mobile dashboard, groups and expenses at all 4 phone widths', asyn
 
     const menu = page.getByRole('dialog');
     await expect(menu).toContainText('Группы');
-    for (const name of ['Главная', 'Группы', 'Разделить чек', 'Мои чеки', 'Настройки', 'Администрирование']) {
+    // Alice is NOT the owner: matching ADMIN_EMAIL must not show the admin link.
+    await expect(menu.getByRole('link', { name: 'Администрирование', exact: true })).toHaveCount(0);
+    for (const name of ['Главная', 'Группы', 'Разделить чек', 'Мои чеки', 'Настройки']) {
       const link = menu.getByRole('link', { name, exact: true });
       await expect(link).toBeVisible();
       const box = await link.boundingBox();
@@ -608,7 +634,7 @@ test('real owner mobile user page keeps filters and confirmed suspension safe', 
     await block.click();
     const dialog = page.getByTestId('owner-users-confirm');
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText('bob@example.com');
+    await expect(dialog).toContainText('Bob Smith');
     const bounds = await dialog.boundingBox();
     expect(bounds?.x).toBeGreaterThanOrEqual(-1);
     expect(bounds!.x + bounds!.width, 'Confirmation outside ' + width).toBeLessThanOrEqual(width + 1);
