@@ -50,6 +50,14 @@ enum WebAuthnChallengePurpose {
   ADD_KEY
   RECOVER
   OWNER_REVOKE
+  OWNER_APPROVAL
+}
+
+// What a signed owner approval is allowed to authorize; never a login.
+enum OwnerPasskeyActionType {
+  ADD
+  RENAME
+  REVOKE
 }
 
 // One-time proof bridging a verified WebAuthn assertion to an Auth.js JWT
@@ -88,6 +96,9 @@ model WebAuthnChallenge {
   userId        String?
   // Bind owner signed revocation to one selected credential row.
   targetCredentialRowId String?
+  // Only for the authenticated owner's one-operation approval ceremony.
+  ownerActionType OwnerPasskeyActionType?
+  sessionBindingHash String? @db.VarChar(64)
   expiresAt     DateTime
   usedAt        DateTime?
   createdAt     DateTime                 @default(now())
@@ -96,6 +107,27 @@ model WebAuthnChallenge {
 
   @@index([bindingHash, purpose, usedAt, expiresAt])
   @@index([userId, expiresAt])
+}
+
+// One-time, short-lived approval for exactly one owner Passkey management action.
+// The owner must be signed in and provide a NEW signed WebAuthn assertion.
+// The token is never an Auth.js ticket or an email-based sign-in.
+model OwnerPasskeyActionProof {
+  id                    String @id @default(cuid())
+  userId                String
+  tokenHash             String @unique @db.VarChar(64)
+  action                OwnerPasskeyActionType
+  targetCredentialRowId String?
+  signerCredentialRowId String
+  sessionBindingHash    String @db.VarChar(64)
+  sessionSecurityVersion Int
+  expiresAt             DateTime
+  consumedAt            DateTime?
+  createdAt             DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, consumedAt, expiresAt])
 }
 
 // Registration email verification. Never persist the secret from the email link.
@@ -158,6 +190,7 @@ model User {
   sessions        Session[]
   passkeyCredentials PasskeyCredential[]
   passkeyLoginTickets PasskeyLoginTicket[]
+  ownerPasskeyActionProofs OwnerPasskeyActionProof[]
   ownerBootstrap OwnerBootstrap?
   webAuthnChallenges WebAuthnChallenge[]
   emailVerificationRequests EmailVerificationRequest[]
