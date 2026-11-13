@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { sealGuestPeopleTokens } from '@/server/lib/guest-person-secret';
 
 const { queryRaw, authMock } = vi.hoisted(() => ({
   queryRaw: vi.fn(),
@@ -11,8 +12,8 @@ vi.mock('@/server/auth', () => ({ auth: authMock }));
 vi.mock('@/server/lib/guest-share-link', () => ({ shareLookupHash: (token: string) => token }));
 
 const PERSON_ID = '11111111-1111-4111-8111-111111111111';
-const PERSON_TOKEN = '22222222-2222-4222-8222-222222222222';
-const OTHER_TOKEN = '33333333-3333-4333-8333-333333333333';
+const PERSON_TOKEN = 'A'.repeat(43);
+const OTHER_TOKEN = 'B'.repeat(42) + 'A';
 const ownerId = 'owner-1';
 
 function revision(
@@ -29,7 +30,8 @@ function revision(
       version,
       expiresAt: options?.expiresAt ?? new Date(Date.now() + 86_400_000),
       userId: options?.userId === undefined ? ownerId : options.userId,
-      people: options?.people ?? [{ id: PERSON_ID, personToken: options?.personToken ?? PERSON_TOKEN }],
+      // Simulate PostgreSQL JSON, not the already-decrypted Prisma view.
+      people: sealGuestPeopleTokens(options?.people ?? [{ id: PERSON_ID, personToken: options?.personToken ?? PERSON_TOKEN }]),
     },
   ];
 }
@@ -89,6 +91,15 @@ afterEach(() => {
 });
 
 describe('3.21: server-signed per-receipt authorization for SSE invalidations', () => {
+  test('3.25.2.3: encrypted raw SQL row authorizes the correct guest; corrupted ciphertext fails closed', async () => {
+    const stored = revision('100')[0]!;
+    expect(JSON.stringify(stored.people)).toContain('v1.');
+    expect(JSON.stringify(stored.people)).not.toContain(PERSON_TOKEN);
+    expect((await post('share-encrypted')).status).toBe(200);
+    queryRaw.mockResolvedValueOnce([{ ...stored, people: [{ id: PERSON_ID, personToken: 'invalid-ciphertext' }] }]);
+    expect((await post('share-corrupted')).status).toBe(404);
+  });
+
   test('denies missing, guessed, expired and malformed credentials without revealing receipt existence', async () => {
     expect((await get('share-test')).status).toBe(404);
     expect((await get('x'.repeat(65))).status).toBe(404);

@@ -3157,7 +3157,8 @@ test('Issue 3.7.2: parallel devices reserve one fixed guest slot once; others ke
     };
     expect(winnerJoined.personId).toBe(slot1);
     expect(winnerJoined.name).toBe(proposals[winner]!.name);
-    expect(winnerJoined.personToken).toMatch(/^[0-9a-f-]{36}$/);
+    expect(winnerJoined.personToken).toMatch(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/);
+    expect(Buffer.from(winnerJoined.personToken, 'base64url')).toHaveLength(32);
 
     // Losing the competition for Guest 1 does not block Guest 2.
     const loserRes = await trpcMutation(proposals[loser]!.ctx, 'guest.joinGuestSlot', {

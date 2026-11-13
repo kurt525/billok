@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/server/auth';
 import { db } from '@/server/db';
 import { shareLookupHash } from '@/server/lib/guest-share-link';
+import { revealGuestPeopleTokens } from '@/server/lib/guest-person-secret';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -102,7 +103,15 @@ async function sessionRevision(token: string): Promise<Snapshot | null> {
     'SELECT xmin::text AS "version", "expiresAt", "userId", "people" FROM "GuestSplit" WHERE "shareToken" = $1 LIMIT 1',
     shareLookupHash(token),
   );
-  return rows[0] ?? null;
+  const row = rows[0];
+  if (!row || !Array.isArray(row.people)) return null;
+  // Raw SQL is needed for xmin but bypasses Prisma's GuestSplit decryption.
+  // Reject damaged/swapped ciphertext without leaking personal credentials.
+  try {
+    return { ...row, people: revealGuestPeopleTokens(row.people) as Person[] };
+  } catch {
+    return null;
+  }
 }
 
 function validShareToken(token: string): boolean {
