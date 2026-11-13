@@ -132,6 +132,14 @@ jobs:
           docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
             -v ON_ERROR_STOP=1 < scripts/qa-guest-share-link-postgres.sql
           echo 'GUEST_SHARE_LINK_POSTGRES_GUARD=PASS'
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < prisma/after-push/guest_person_link_storage_guard.sql
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < prisma/after-push/guest_person_link_storage_guard.sql
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < scripts/qa-guest-person-link-postgres.sql
+          echo 'GUEST_PERSON_LINK_POSTGRES_GUARD=PASS'
+          AUTH_SECRET="$(openssl rand -hex 48)" BILLOK_QA_FIXTURES=1 npx tsx scripts/qa-guest-person-secret-roundtrip.ts
           # One real-PostgreSQL race check for single-use email confirmation.
           npx tsx scripts/qa-registration-confirmation-postgres.ts
           # Create only disposable fixtures for authenticated mobile flows.

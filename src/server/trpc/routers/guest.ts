@@ -13,6 +13,8 @@ import {
 import { checkGuestReceiptCreationLimit } from '../../lib/guest-receipt-create-limit';
 import { guestTransaction } from '../../lib/guest-transaction';
 import { issueGuestShareLink, revealGuestShareLink, shareLookupHash } from '../../lib/guest-share-link';
+import { issueGuestPersonToken } from '../../lib/guest-person-secret';
+import { guestLinkSecretSchema } from '../../lib/guest-link-secret';
 import {
   MAX_GUEST_PUSH_SUBSCRIPTIONS,
   activeGuestPushSubscriptions,
@@ -1026,7 +1028,7 @@ export const guestRouter = createTRPCRouter({
       // is blocked; a shared invitation alone cannot take their row by name.
       let creator: { personId: string; personToken: string; name: string } | null = null;
       if (input.joinCreator) {
-        const person = { ...people[creatorIndex]!, personToken: randomUUID() };
+        const person = { ...people[creatorIndex]!, personToken: issueGuestPersonToken() };
         people[creatorIndex] = person;
         creator = { personId: person.id, personToken: person.personToken, name: person.name };
       }
@@ -1113,7 +1115,7 @@ export const guestRouter = createTRPCRouter({
         token: shareTokenSchema,
         slotId: personIdSchema,
         name: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
-        personToken: z.string().uuid().optional(),
+        personToken: guestLinkSecretSchema.optional(),
         joinKey: z.string().uuid().optional(),
       }),
     )
@@ -1187,7 +1189,7 @@ export const guestRouter = createTRPCRouter({
           if (own.accountUserId && own.accountUserId !== accountUserId) {
             throw new AppError('FORBIDDEN', 'notParticipant');
           }
-          const token = own.personToken ?? randomUUID();
+          const token = own.personToken ?? issueGuestPersonToken();
           const changed = own.personToken !== token;
           if (changed) {
             people[existingIndex] = { ...own, personToken: token };
@@ -1234,7 +1236,7 @@ export const guestRouter = createTRPCRouter({
         const wanted = normalizeGuestName(displayName);
         if (people.some((p, i) => i !== targetIndex && normalizeGuestName(p.name) === wanted))
           throw new AppError('CONFLICT', 'nameTaken');
-        const token = randomUUID();
+        const token = issueGuestPersonToken();
         const newJoin = input.joinKey
           ? {
               join: {
@@ -1266,7 +1268,7 @@ export const guestRouter = createTRPCRouter({
         // The token this device stored when it joined: whoever holds it is the caller. Only ever
         // used to find its holder, never given to anyone, so a removed person's old token
         // can't be attached to someone new.
-        personToken: z.string().uuid().optional(),
+        personToken: guestLinkSecretSchema.optional(),
         // An idempotency key the device made for this join. Replayable like Stripe's
         // Idempotency-Key: saved (with the normalized name) on the person the join creates or
         // first claims, a replay with the same key and name within JOIN_REPLAY_WINDOW_MS returns
@@ -1333,7 +1335,7 @@ export const guestRouter = createTRPCRouter({
           }
           const renamedAnother = freeOwnerName(people, ownIndex);
           const previous = ownIndex >= 0 ? people[ownIndex]! : null;
-          const personToken = previous?.personToken ?? randomUUID();
+          const personToken = previous?.personToken ?? issueGuestPersonToken();
           const finalIndex = ownIndex >= 0 ? ownIndex : people.length;
           const desiredGroupSize = input.groupSize ?? previous?.groupSize;
           if (previous) {
@@ -1411,7 +1413,7 @@ export const guestRouter = createTRPCRouter({
           };
         }
 
-        const personToken = randomUUID();
+        const personToken = issueGuestPersonToken();
         const joinRecord = input.joinKey
           ? { join: { key: input.joinKey, name: normalizedName, expiresAt: now + JOIN_REPLAY_WINDOW_MS } }
           : {};
@@ -1462,7 +1464,7 @@ export const guestRouter = createTRPCRouter({
   // already shows, and the claim page also calls it on finalized splits (personal links work
   // there). Like getSession, it saves ids for people who have none yet (savePersonIds).
   resumeSession: publicProcedure
-    .input(z.object({ token: shareTokenSchema, personToken: z.string().uuid() }))
+    .input(z.object({ token: shareTokenSchema, personToken: guestLinkSecretSchema }))
     .mutation(async ({ ctx, input }) => {
       // A claim page load resumes a few times at most (a personal link, accepting it, the stored
       // identity), plus retries on server errors, plus one membership check per session load
@@ -1497,7 +1499,7 @@ export const guestRouter = createTRPCRouter({
         token: shareTokenSchema,
         // Optional only for the signed-in receipt creator: their own account
         // grants permission, no guest token belonging to somebody else needed.
-        personToken: z.string().uuid().optional(),
+        personToken: guestLinkSecretSchema.optional(),
         // Who to rename, by id (see targetIndexOrThrow)
         targetId: personIdSchema,
         newName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
@@ -1584,7 +1586,7 @@ export const guestRouter = createTRPCRouter({
     .input(
       z.object({
         token: shareTokenSchema,
-        personToken: z.string().uuid(),
+        personToken: guestLinkSecretSchema,
         // Who to remove, by id (see targetIndexOrThrow)
         targetId: personIdSchema,
       }),
@@ -1663,7 +1665,7 @@ export const guestRouter = createTRPCRouter({
     .input(
       z.object({
         token: shareTokenSchema,
-        personToken: z.string().uuid(),
+        personToken: guestLinkSecretSchema,
         itemIndex: z.number().int().min(0),
         splitQuantity: z.number().int().min(1),
       }),
@@ -1744,7 +1746,7 @@ export const guestRouter = createTRPCRouter({
       z.object({
         token: shareTokenSchema,
         personId: personIdSchema,
-        personToken: z.string().uuid(),
+        personToken: guestLinkSecretSchema,
         tipCents: z.number().int().min(0).max(MAX_MONEY_CENTS),
       }),
     )
@@ -1794,7 +1796,7 @@ export const guestRouter = createTRPCRouter({
       z.object({
         token: shareTokenSchema,
         personId: personIdSchema,
-        personToken: z.string().uuid(),
+        personToken: guestLinkSecretSchema,
         itemIndex: z.number().int().min(0),
         parts: z.number().int().min(1).max(10000),
         // The same key identifies the same absolute SET across lost answers,
@@ -1944,7 +1946,7 @@ export const guestRouter = createTRPCRouter({
           token: shareTokenSchema,
           // Whose claims these are, by id (see targetIndexOrThrow)
           personId: personIdSchema,
-          personToken: z.string().uuid(),
+          personToken: guestLinkSecretSchema,
           // The person's whole claim set, replacing what is stored (older clients) ...
           claimedItemIndices: z.array(z.number().int().min(0)).max(1000).optional(),
           // ... or the items added to and removed from it (the claim page), applied to whatever is
@@ -2122,7 +2124,7 @@ export const guestRouter = createTRPCRouter({
       z.object({
         token: shareTokenSchema,
         personId: personIdSchema,
-        personToken: z.string().uuid(),
+        personToken: guestLinkSecretSchema,
         deviceId: z.string().uuid(),
       }),
     )
@@ -2215,7 +2217,7 @@ export const guestRouter = createTRPCRouter({
         }
 
         const rotatedAt = new Date().toISOString();
-        const personToken = randomUUID();
+        const personToken = issueGuestPersonToken();
         const rotationCount = Math.min((previousRotation?.count ?? 0) + 1, 1_000_000);
         // Remove prior join-key and save-key replays: neither may be used to
         // retrieve this fresh secret with an old request from another device.
@@ -2681,7 +2683,7 @@ export const guestRouter = createTRPCRouter({
           // Optional legacy personal identity. An authorized registered organizer
           // can finalize without becoming a bill participant who owes money.
           personId: personIdSchema.optional(),
-          personToken: z.string().uuid().optional(),
+          personToken: guestLinkSecretSchema.optional(),
           tipOverride: z.never().optional(), // no shared tip override
         })
         .refine((value) => (value.personId === undefined) === (value.personToken === undefined), {
@@ -2842,7 +2844,7 @@ export const guestRouter = createTRPCRouter({
   // The declaration is NOT a bank transaction and never means the payer has
   // received money. A person's own token is needed both to read and to write.
   getMyPaymentDeclaration: publicProcedure
-    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: guestLinkSecretSchema }))
     .mutation(async ({ ctx, input }) => {
       if (!checkClaimWriteRateLimit('payment-declaration-read', input.token, input.personToken)) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
@@ -2915,7 +2917,7 @@ export const guestRouter = createTRPCRouter({
       z.strictObject({
         token: shareTokenSchema,
         personId: personIdSchema,
-        personToken: z.string().uuid(),
+        personToken: guestLinkSecretSchema,
         endpoint: z.string().max(2048),
       }),
     )
@@ -2945,7 +2947,7 @@ export const guestRouter = createTRPCRouter({
       z.strictObject({
         token: shareTokenSchema,
         personId: personIdSchema,
-        personToken: z.string().uuid(),
+        personToken: guestLinkSecretSchema,
         subscription: z.strictObject({
           endpoint: z.string().max(2048),
           keys: z.strictObject({ p256dh: z.string().max(140), auth: z.string().max(80) }),
@@ -2996,7 +2998,7 @@ export const guestRouter = createTRPCRouter({
       z.strictObject({
         token: shareTokenSchema,
         personId: personIdSchema,
-        personToken: z.string().uuid(),
+        personToken: guestLinkSecretSchema,
         endpoint: z.string().max(2048),
       }),
     )
@@ -3036,7 +3038,7 @@ export const guestRouter = createTRPCRouter({
       z.strictObject({
         token: shareTokenSchema,
         personId: personIdSchema,
-        personToken: z.string().uuid(),
+        personToken: guestLinkSecretSchema,
         notificationId: z.string().uuid(),
       }),
     )
@@ -3088,7 +3090,7 @@ export const guestRouter = createTRPCRouter({
       z.strictObject({
         token: shareTokenSchema,
         personId: personIdSchema,
-        personToken: z.string().uuid(),
+        personToken: guestLinkSecretSchema,
         // One UUID per deliberate participant button press; optional for
         // existing clients with the same strictly verified personal token.
         requestId: z.string().uuid().optional(),
@@ -3181,7 +3183,7 @@ export const guestRouter = createTRPCRouter({
       z.strictObject({
         token: shareTokenSchema,
         personId: personIdSchema,
-        personToken: z.string().uuid(),
+        personToken: guestLinkSecretSchema,
         requestId: z.string().uuid().optional(),
       }),
     )
@@ -3272,7 +3274,7 @@ export const guestRouter = createTRPCRouter({
   // Payer-only private overview, including who declared a transfer and who
   // has had their incoming payment independently verified by the payer.
   getMyPayerPaymentReview: publicProcedure
-    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: guestLinkSecretSchema }))
     .mutation(async ({ ctx, input }) => {
       if (!checkClaimWriteRateLimit('payer-payment-review', input.token, input.personToken)) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
@@ -3328,7 +3330,7 @@ export const guestRouter = createTRPCRouter({
       z.object({
         token: shareTokenSchema,
         personId: personIdSchema,
-        personToken: z.string().uuid(),
+        personToken: guestLinkSecretSchema,
         debtorId: personIdSchema,
         // New UI sends one UUID per intentional button press. Older API
         // clients can omit it; private server authorization is unchanged.
@@ -3433,7 +3435,7 @@ export const guestRouter = createTRPCRouter({
       z.strictObject({
         token: shareTokenSchema,
         personId: personIdSchema,
-        personToken: z.string().uuid(),
+        personToken: guestLinkSecretSchema,
         debtorId: personIdSchema,
         // New UI sends one UUID per intentional button press. Older API
         // clients can omit it; private server authorization is unchanged.
@@ -3542,7 +3544,7 @@ export const guestRouter = createTRPCRouter({
   // is a public receipt link and MUST NOT return the bank/phone. Use mutation
   // so the person's secret is sent in the request body, not the URL.
   getMyPayerSbpContact: publicProcedure
-    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: guestLinkSecretSchema }))
     .mutation(async ({ ctx, input }) => {
       if (!checkClaimWriteRateLimit('payer-sbp-read', input.token, input.personToken)) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
@@ -3571,7 +3573,7 @@ export const guestRouter = createTRPCRouter({
   // receipt actually requires THEM to reimburse the payer. A public share link,
   // the creator's account and a different guest's personal token are insufficient.
   getPayerSbpForReimbursement: publicProcedure
-    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: z.string().uuid() }))
+    .input(z.object({ token: shareTokenSchema, personId: personIdSchema, personToken: guestLinkSecretSchema }))
     .mutation(async ({ ctx, input }) => {
       if (!checkClaimWriteRateLimit('payer-sbp-reimbursement', input.token, input.personToken)) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
@@ -3657,7 +3659,7 @@ export const guestRouter = createTRPCRouter({
       z.object({
         token: shareTokenSchema,
         personId: personIdSchema,
-        personToken: z.string().uuid(),
+        personToken: guestLinkSecretSchema,
         phone: z.string().max(24).nullable(),
         bankId: z.string().max(40).nullable(),
       }),

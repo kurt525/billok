@@ -19,7 +19,7 @@ import {
   shouldRetryResume,
 } from './guest-session';
 
-const TOKEN = '11111111-1111-4111-8111-111111111111';
+const TOKEN = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const OTHER = '22222222-2222-4222-8222-222222222222';
 const THIRD = '33333333-3333-4333-8333-333333333333';
 
@@ -67,7 +67,8 @@ describe('newRequestKey', () => {
   test('makes a lowercase version 4 UUID that the server accepts', () => {
     const key = newRequestKey();
     expect(key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    expect(isGuestSessionToken(key)).toBe(true);
+    // Idempotency request keys are UUIDs, NOT access credentials.
+    expect(isGuestSessionToken(key)).toBe(false);
   });
 
   test('makes a different key each time', () => {

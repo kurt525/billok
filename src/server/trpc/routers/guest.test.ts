@@ -6,6 +6,15 @@ vi.mock('next/headers', () => ({
 vi.mock('@/server/auth', () => ({ auth: vi.fn() }));
 // Existing fixture token strings test guest business rules (not crypto).
 // Real hashed/encrypted storage is covered by guest-share-link unit + browser E2E.
+// Older business-rule fixtures use UUID strings as personal credentials.
+// Only this mocked-router test accepts those fixture tokens; the real API
+// rejects UUIDs, independently covered by guest-link-secret security tests.
+vi.mock('@/server/lib/guest-link-secret', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/server/lib/guest-link-secret')>();
+  const { z } = await import('zod');
+  return { ...actual, guestLinkSecretSchema: z.union([actual.guestLinkSecretSchema, z.string().uuid()]) };
+});
+
 vi.mock('@/server/lib/guest-share-link', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/server/lib/guest-share-link')>()),
   shareLookupHash: (token: string) => token,
@@ -713,7 +722,7 @@ describe('guest.joinSession', () => {
     const joined = await (await caller()).joinSession({ token: 'share-1', name: 'Bob' });
     expect(joined.personIndex).toBe(1);
     expect(joined.name).toBe('Bob');
-    expect(joined.personToken).toMatch(/^[0-9a-f-]{36}$/);
+    expect(joined.personToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(joined.personId).toMatch(UUID);
     expect(joined.personId).not.toBe(pid(0));
     expect(savedPeople()).toEqual([
@@ -727,7 +736,7 @@ describe('guest.joinSession', () => {
     const before = Date.now();
     const joined = await (await caller()).joinSession({ token: 'share-1', name: ' Bob ', joinKey: JOIN_KEY });
     expect(joined.personIndex).toBe(1);
-    expect(joined.personToken).toMatch(/^[0-9a-f-]{36}$/);
+    expect(joined.personToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(joined.personToken).not.toBe(JOIN_KEY);
     expect(savedPeople()).toEqual([
       { id: pid(0), name: 'Host' },
@@ -1502,7 +1511,7 @@ describe('Issue 3.8.4: creator revokes and rotates a personal link without mutat
     expect(result).toMatchObject({
       personId: pid(1),
       name: 'Андрей',
-      personToken: expect.stringMatching(UUID),
+      personToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
       rotatedAt: expect.any(String),
       rotationCount: 1,
     });
@@ -2077,7 +2086,7 @@ describe('Issue 3.7.2: atomic fixed guest slot reservation with a shared link', 
       personIndex: 1,
       personId: pid(1),
       name: 'Андрей',
-      personToken: expect.stringMatching(UUID),
+      personToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
     });
     const people = savedPeople() as TestPerson[];
     expect(people).toHaveLength(3);
@@ -2728,7 +2737,7 @@ describe('guest.createClaimSession', () => {
     const { people } = created();
     expect(result).toEqual({
       shareToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
-      creator: { personId: people[1]!.id, personToken: expect.stringMatching(UUID), name: 'Pat' },
+      creator: { personId: people[1]!.id, personToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/), name: 'Pat' },
     });
     expect(people[1]!.personToken).toBe(result.creator!.personToken);
     expect(people[0]!.personToken).toBeUndefined();

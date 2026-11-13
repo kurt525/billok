@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
-const guestSessionTokenSchema = z.string().uuid();
+// 256-bit unpadded base64url guest bearer; last sextet has two unused bits.
+const guestSessionTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/);
 
 export const storedClaimIdentitySchema = z.object({
   name: z.string(),
