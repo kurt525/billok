@@ -123,6 +123,15 @@ jobs:
             -v ON_ERROR_STOP=1 < prisma/after-push/owner_bootstrap_identity_guard.sql
           docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
             -v ON_ERROR_STOP=1 < prisma/after-push/owner_bootstrap_identity_guard.sql
+          # Same mandatory post-Prisma DB guard as production; verify
+          # idempotence and direct-SQL rejection on a fresh QA database.
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < prisma/after-push/guest_share_link_storage_guard.sql
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < prisma/after-push/guest_share_link_storage_guard.sql
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < scripts/qa-guest-share-link-postgres.sql
+          echo 'GUEST_SHARE_LINK_POSTGRES_GUARD=PASS'
           # One real-PostgreSQL race check for single-use email confirmation.
           npx tsx scripts/qa-registration-confirmation-postgres.ts
           # Create only disposable fixtures for authenticated mobile flows.

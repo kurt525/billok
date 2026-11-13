@@ -2,6 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { auth } from '@/server/auth';
 import { db } from '@/server/db';
+import { shareLookupHash } from '@/server/lib/guest-share-link';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -99,7 +100,7 @@ function authorized(snapshot: Snapshot, ticket: Ticket): boolean {
 async function sessionRevision(token: string): Promise<Snapshot | null> {
   const rows = await db.$queryRawUnsafe<Snapshot[]>(
     'SELECT xmin::text AS "version", "expiresAt", "userId", "people" FROM "GuestSplit" WHERE "shareToken" = $1 LIMIT 1',
-    token,
+    shareLookupHash(token),
   );
   return rows[0] ?? null;
 }

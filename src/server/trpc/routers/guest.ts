@@ -12,6 +12,7 @@ import {
 } from '../../lib/guest-session-limits';
 import { checkGuestReceiptCreationLimit } from '../../lib/guest-receipt-create-limit';
 import { guestTransaction } from '../../lib/guest-transaction';
+import { issueGuestShareLink, revealGuestShareLink, shareLookupHash } from '../../lib/guest-share-link';
 import {
   MAX_GUEST_PUSH_SUBSCRIPTIONS,
   activeGuestPushSubscriptions,
@@ -581,7 +582,7 @@ function cleanupExpiredSplits(db: typeof import('@/server/db').db, logPrefix: st
 export const guestRouter = createTRPCRouter({
   expireSession: protectedProcedure.input(z.object({ token: shareTokenSchema })).mutation(async ({ ctx, input }) => {
     const session = await ctx.db.guestSplit.findUnique({
-      where: { shareToken: input.token },
+      where: { shareToken: shareLookupHash(input.token) },
       select: { id: true, userId: true },
     });
     if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
@@ -640,7 +641,7 @@ export const guestRouter = createTRPCRouter({
           const items = s.items as PersonJson[] | null;
           return {
             id: s.id,
-            shareToken: s.shareToken,
+            shareToken: revealGuestShareLink(s),
             status: s.status,
             merchantName: receipt?.merchantName as string | undefined,
             total: receipt?.total as number | undefined,
@@ -781,10 +782,12 @@ export const guestRouter = createTRPCRouter({
         filteredPeople[remappedPaidBy]?.name,
       );
 
+      const share = issueGuestShareLink();
       const guestSplit = await ctx.db.$transaction(async (tx) => {
         const receiptId = await lockReceiptForSplit(tx, input.receiptId, ctx.session?.user?.id);
         return tx.guestSplit.create({
           data: {
+            ...share.stored,
             ...(receiptId !== undefined ? { receiptId, receiptShared: true } : {}),
             receiptData: input.receiptData as unknown as Prisma.InputJsonValue,
             items: input.items as unknown as Prisma.InputJsonValue,
@@ -806,17 +809,16 @@ export const guestRouter = createTRPCRouter({
 
       logger.info('guest.split.created', {
         splitId: guestSplit.id,
-        shareToken: guestSplit.shareToken.substring(0, 8) + '...',
         peopleCount: input.people.length,
         itemCount: input.items.length,
       });
 
-      return { shareToken: guestSplit.shareToken };
+      return { shareToken: share.token };
     }),
 
   getSplit: publicProcedure.input(z.object({ token: shareTokenSchema })).query(async ({ ctx, input }) => {
     const split = await ctx.db.guestSplit.findUnique({
-      where: { shareToken: input.token },
+      where: { shareToken: shareLookupHash(input.token) },
     });
     if (!split) {
       throw new AppError('NOT_FOUND', 'splitNotFound');
@@ -847,7 +849,7 @@ export const guestRouter = createTRPCRouter({
 
     return {
       id: split.id,
-      shareToken: split.shareToken,
+      shareToken: input.token,
       receiptData: (() => {
         const {
           finalizationOrganizerUserId: _privateOrganizer,
@@ -1062,10 +1064,12 @@ export const guestRouter = createTRPCRouter({
         people[paidByIndex]?.name,
       );
 
+      const share = issueGuestShareLink();
       const session = await ctx.db.$transaction(async (tx) => {
         const receiptId = await lockReceiptForSplit(tx, input.receiptId, ctx.session?.user?.id);
         return tx.guestSplit.create({
           data: {
+            ...share.stored,
             ...(receiptId !== undefined ? { receiptId, receiptShared: true } : {}),
             // New personal-link claims use one cross-item rounding strategy.
             // Direct finalized splits keep their historical settlement rules.
@@ -1091,11 +1095,10 @@ export const guestRouter = createTRPCRouter({
 
       logger.info('guest.session.created', {
         sessionId: session.id,
-        shareToken: session.shareToken.substring(0, 8) + '...',
         itemCount: expandedItems.length,
       });
 
-      return { shareToken: session.shareToken, creator };
+      return { shareToken: share.token, creator };
     }),
 
   /** 3.7.2: join one of N preallocated guest slots by *stable person id*.
@@ -1132,7 +1135,7 @@ export const guestRouter = createTRPCRouter({
       }
       const ownerId = accountUserId ? await billokOwnerUserId(ctx) : null;
       return guestTransaction(ctx.db, async (tx) => {
-        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
@@ -1279,7 +1282,7 @@ export const guestRouter = createTRPCRouter({
       const ownerId = await billokOwnerUserId(ctx);
       return guestTransaction(ctx.db, async (tx) => {
         const session = await tx.guestSplit.findUnique({
-          where: { shareToken: input.token },
+          where: { shareToken: shareLookupHash(input.token) },
         });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
@@ -1473,7 +1476,7 @@ export const guestRouter = createTRPCRouter({
       }
       // Only what's needed: items and assignments can be large
       const session = await ctx.db.guestSplit.findUnique({
-        where: { shareToken: input.token },
+        where: { shareToken: shareLookupHash(input.token) },
         select: { id: true, expiresAt: true, people: true },
       });
       if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
@@ -1514,7 +1517,7 @@ export const guestRouter = createTRPCRouter({
       }
       return guestTransaction(ctx.db, async (tx) => {
         const session = await tx.guestSplit.findUnique({
-          where: { shareToken: input.token },
+          where: { shareToken: shareLookupHash(input.token) },
         });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
@@ -1592,7 +1595,7 @@ export const guestRouter = createTRPCRouter({
       }
       return guestTransaction(ctx.db, async (tx) => {
         const session = await tx.guestSplit.findUnique({
-          where: { shareToken: input.token },
+          where: { shareToken: shareLookupHash(input.token) },
         });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
@@ -1671,7 +1674,7 @@ export const guestRouter = createTRPCRouter({
       }
       return guestTransaction(ctx.db, async (tx) => {
         const session = await tx.guestSplit.findUnique({
-          where: { shareToken: input.token },
+          where: { shareToken: shareLookupHash(input.token) },
         });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
@@ -1750,7 +1753,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       return guestTransaction(ctx.db, async (tx) => {
-        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         if (session.status !== GuestSplitStatus.CLAIMING) {
@@ -1804,7 +1807,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'claimRateLimited');
       }
       return guestTransaction(ctx.db, async (tx) => {
-        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         const people = session.people as GuestSessionPerson[];
@@ -1967,7 +1970,7 @@ export const guestRouter = createTRPCRouter({
 
       return guestTransaction(ctx.db, async (tx) => {
         const session = await tx.guestSplit.findUnique({
-          where: { shareToken: input.token },
+          where: { shareToken: shareLookupHash(input.token) },
         });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
@@ -2128,7 +2131,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       const session = await ctx.db.guestSplit.findUnique({
-        where: { shareToken: input.token },
+        where: { shareToken: shareLookupHash(input.token) },
         select: { id: true, expiresAt: true, status: true, people: true },
       });
       if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
@@ -2185,7 +2188,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       return guestTransaction(ctx.db, async (tx) => {
-        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!session || session.userId !== ctx.user.id) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         if (parseExtractedData(session.receiptData).guestSlotsMode !== true) {
@@ -2245,7 +2248,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       const session = await ctx.db.guestSplit.findUnique({
-        where: { shareToken: input.token },
+        where: { shareToken: shareLookupHash(input.token) },
         select: { userId: true, expiresAt: true, receiptData: true, people: true },
       });
       // Hide existence of other people's receipts from all registered users,
@@ -2274,7 +2277,7 @@ export const guestRouter = createTRPCRouter({
     }
 
     let session = await ctx.db.guestSplit.findUnique({
-      where: { shareToken: input.token },
+      where: { shareToken: shareLookupHash(input.token) },
     });
     if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
     if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
@@ -2319,7 +2322,7 @@ export const guestRouter = createTRPCRouter({
 
     return {
       id: session.id,
-      shareToken: session.shareToken,
+      shareToken: input.token,
       status: session.status,
       receiptData: (() => {
         const {
@@ -2429,7 +2432,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       return guestTransaction(ctx.db, async (tx) => {
-        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         if (!session.userId || session.userId !== ctx.user.id || ctx.impersonating) {
@@ -2472,7 +2475,7 @@ export const guestRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) =>
       guestTransaction(ctx.db, async (tx) => {
-        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionAlreadyFinalized');
@@ -2542,7 +2545,7 @@ export const guestRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) =>
       guestTransaction(ctx.db, async (tx) => {
-        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionAlreadyFinalized');
@@ -2588,7 +2591,7 @@ export const guestRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) =>
       guestTransaction(ctx.db, async (tx) => {
-        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         if (session.status !== GuestSplitStatus.CLAIMING) {
@@ -2639,7 +2642,7 @@ export const guestRouter = createTRPCRouter({
     .input(z.object({ token: shareTokenSchema }))
     .mutation(async ({ ctx, input }) =>
       guestTransaction(ctx.db, async (tx) => {
-        const session = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionAlreadyFinalized');
@@ -2688,7 +2691,7 @@ export const guestRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const { shareToken, finalizeLog } = await guestTransaction(ctx.db, async (tx) => {
         const session = await tx.guestSplit.findUnique({
-          where: { shareToken: input.token },
+          where: { shareToken: shareLookupHash(input.token) },
         });
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
@@ -2826,7 +2829,7 @@ export const guestRouter = createTRPCRouter({
         });
 
         return {
-          shareToken: session.shareToken,
+          shareToken: input.token,
           finalizeLog: { sessionId: session.id, peopleCount: people.length, itemCount: items.length },
         };
       });
@@ -2845,7 +2848,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       const split = await ctx.db.guestSplit.findUnique({
-        where: { shareToken: input.token },
+        where: { shareToken: shareLookupHash(input.token) },
         select: { expiresAt: true, status: true, people: true, paidByIndex: true, receiptData: true, summary: true },
       });
       if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
@@ -2921,7 +2924,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       const split = await ctx.db.guestSplit.findUnique({
-        where: { shareToken: input.token },
+        where: { shareToken: shareLookupHash(input.token) },
         select: { expiresAt: true, status: true, people: true, paidByIndex: true, receiptData: true, summary: true },
       });
       if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
@@ -2957,7 +2960,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       return guestTransaction(ctx.db, async (tx) => {
-        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         const { people, paymentIndex, personIndex, paymentPerson } = requireGuestDebtor(
@@ -3003,7 +3006,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       return guestTransaction(ctx.db, async (tx) => {
-        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         const { people, paymentIndex, personIndex, paymentPerson } = requireGuestDebtor(
@@ -3042,7 +3045,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       return guestTransaction(ctx.db, async (tx) => {
-        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         const { people, personIndex, paymentIndex, paymentPerson } = requireGuestDebtor(
@@ -3096,7 +3099,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       return guestTransaction(ctx.db, async (tx) => {
-        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         const { people, paymentPerson, paymentIndex, personIndex, amountCents } = requireGuestDebtor(
@@ -3187,7 +3190,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       return guestTransaction(ctx.db, async (tx) => {
-        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         const { people, paymentPerson, paymentIndex, personIndex } = requireGuestDebtor(
@@ -3275,7 +3278,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       const split = await ctx.db.guestSplit.findUnique({
-        where: { shareToken: input.token },
+        where: { shareToken: shareLookupHash(input.token) },
         select: { expiresAt: true, status: true, people: true, paidByIndex: true, receiptData: true, summary: true },
       });
       if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
@@ -3337,7 +3340,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       const outcome = await guestTransaction(ctx.db, async (tx) => {
-        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         const { people, summary, paymentGroups } = requireGuestPayerReview(split, input.personId, input.personToken);
@@ -3442,7 +3445,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       const outcome = await guestTransaction(ctx.db, async (tx) => {
-        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         const { people, summary, paymentGroups } = requireGuestPayerReview(split, input.personId, input.personToken);
@@ -3545,7 +3548,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       const split = await ctx.db.guestSplit.findUnique({
-        where: { shareToken: input.token },
+        where: { shareToken: shareLookupHash(input.token) },
         select: {
           expiresAt: true,
           people: true,
@@ -3574,7 +3577,7 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
       const split = await ctx.db.guestSplit.findUnique({
-        where: { shareToken: input.token },
+        where: { shareToken: shareLookupHash(input.token) },
         select: {
           expiresAt: true,
           status: true,
@@ -3673,7 +3676,7 @@ export const guestRouter = createTRPCRouter({
       }
 
       return guestTransaction(ctx.db, async (tx) => {
-        const split = await tx.guestSplit.findUnique({ where: { shareToken: input.token } });
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
         if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         const payer = (split.people as GuestSessionPerson[])[split.paidByIndex];
@@ -3705,7 +3708,7 @@ export const guestRouter = createTRPCRouter({
       }
 
       const split = await ctx.db.guestSplit.findUnique({
-        where: { shareToken: input.token },
+        where: { shareToken: shareLookupHash(input.token) },
         select: { id: true, userId: true, expiresAt: true },
       });
       if (!split) {

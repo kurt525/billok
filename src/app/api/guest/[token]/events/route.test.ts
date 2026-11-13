@@ -6,6 +6,9 @@ const { queryRaw, authMock } = vi.hoisted(() => ({
 }));
 vi.mock('@/server/db', () => ({ db: { $queryRawUnsafe: queryRaw } }));
 vi.mock('@/server/auth', () => ({ auth: authMock }));
+// Legacy short token fixtures here exercise SSE ticket behavior only; the
+// real hash and strict 256-bit format are covered by guest-share-link tests.
+vi.mock('@/server/lib/guest-share-link', () => ({ shareLookupHash: (token: string) => token }));
 
 const PERSON_ID = '11111111-1111-4111-8111-111111111111';
 const PERSON_TOKEN = '22222222-2222-4222-8222-222222222222';

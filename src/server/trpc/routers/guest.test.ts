@@ -4,6 +4,13 @@ vi.mock('next/headers', () => ({
   cookies: vi.fn().mockResolvedValue({ get: vi.fn().mockReturnValue(null) }),
 }));
 vi.mock('@/server/auth', () => ({ auth: vi.fn() }));
+// Existing fixture token strings test guest business rules (not crypto).
+// Real hashed/encrypted storage is covered by guest-share-link unit + browser E2E.
+vi.mock('@/server/lib/guest-share-link', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/lib/guest-share-link')>()),
+  shareLookupHash: (token: string) => token,
+  revealGuestShareLink: (row: { shareToken: string }) => row.shareToken,
+}));
 
 const mockDb = {
   ownerBootstrap: { findUnique: vi.fn().mockResolvedValue(null) },
@@ -68,6 +75,7 @@ const signedIn: Session = { user: { id: 'user-1' } };
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  vi.stubEnv('AUTH_SECRET', 'isolated-qa-guest-share-link-secret-123456789-abcdef');
   mockDb.ownerBootstrap.findUnique.mockResolvedValue(null);
   checkRateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
   peekRateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
@@ -2644,7 +2652,7 @@ describe('guest.createClaimSession', () => {
     ]);
     expect(people[0]!.id).not.toBe(people[1]!.id);
     // Nobody is joined unless the client asks: older clients join the creator by name afterwards
-    expect(result).toEqual({ shareToken: 'share-token-123', creator: null });
+    expect(result).toEqual({ shareToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/), creator: null });
   });
 
   // #263: Share Link dropped everyone typed on "Who's splitting?" except the payer
@@ -2719,7 +2727,7 @@ describe('guest.createClaimSession', () => {
     });
     const { people } = created();
     expect(result).toEqual({
-      shareToken: 'share-token-123',
+      shareToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
       creator: { personId: people[1]!.id, personToken: expect.stringMatching(UUID), name: 'Pat' },
     });
     expect(people[1]!.personToken).toBe(result.creator!.personToken);
