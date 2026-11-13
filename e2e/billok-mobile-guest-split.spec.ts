@@ -5573,3 +5573,151 @@ test('Issue 3.25.3.2: known personId cannot authorize foreign dish claims', asyn
     await creator.dispose();
   }
 });
+
+test('Issue 3.25.3.3: cross-receipt secrets, group changes and racing shares', async ({ page }) => {
+  test.setTimeout(150_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const tokens: string[] = [];
+  const make = async (merchantName: string, names: string[]) => {
+    const response = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName, subtotal: 900, total: 900, tax: 0, tip: 0, currency: 'RUB' },
+      items: [
+        { name: 'Чай', quantity: 1, unitPrice: 400, totalPrice: 400 },
+        { name: 'Суп', quantity: 1, unitPrice: 500, totalPrice: 500 },
+      ],
+      creatorName: 'Плательщик',
+      paidByName: 'Плательщик',
+      people: ['Плательщик', ...names],
+      joinCreator: true,
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    const data = JSON.parse(await response.text()).result.data.json as { shareToken: string };
+    tokens.push(data.shareToken);
+    return data.shareToken;
+  };
+  const join = async (token: string, name: string) => {
+    const response = await trpcMutation(page.request, 'guest.joinSession', { token, name });
+    expect(response.ok(), await response.text()).toBe(true);
+    return JSON.parse(await response.text()).result.data.json as { personId: string; personToken: string };
+  };
+  const deny = async (procedure: string, data: Record<string, unknown>, code = 'FORBIDDEN') => {
+    const response = await trpcMutation(page.request, procedure, data);
+    expect(response.ok(), await response.text()).toBe(false);
+    expect((await trpcError(response))?.data?.code).toBe(code);
+  };
+  try {
+    const first = await make('Чек А', ['Анна', 'Борис', 'Вера']);
+    const second = await make('Чек Б', ['Анна']);
+    const anna = await join(first, 'Анна');
+    const boris = await join(first, 'Борис');
+    const vera = await join(first, 'Вера');
+    const otherAnna = await join(second, 'Анна');
+
+    for (const [token, personToken, personId] of [
+      [first, otherAnna.personToken, boris.personId],
+      [second, anna.personToken, otherAnna.personId],
+      [first, anna.personToken, otherAnna.personId],
+      [first, first, boris.personId],
+    ] as const) {
+      await deny('guest.claimItems', { token, personId, personToken, addItemIndices: [0] });
+      await deny('guest.setPersonalTip', { token, personId, personToken, tipCents: 12 });
+    }
+    await deny(
+      'guest.claimItems',
+      {
+        token: anna.personToken,
+        personId: anna.personId,
+        personToken: anna.personToken,
+        addItemIndices: [0],
+      },
+      'NOT_FOUND',
+    );
+    for (const [token, personId, personToken] of [
+      [first, boris.personId, otherAnna.personToken],
+      [second, otherAnna.personId, anna.personToken],
+      [first, boris.personId, first],
+    ] as const) {
+      const response = await page.request.post('/api/guest/' + token + '/events', {
+        data: { personId, personToken },
+      });
+      expect(response.status()).toBe(404);
+    }
+
+    const firstGroup = await trpcMutation(owner, 'guest.setPaymentGroups', {
+      token: first,
+      groups: [{ representativeId: anna.personId, memberIds: [anna.personId, boris.personId] }],
+    });
+    expect(firstGroup.ok(), await firstGroup.text()).toBe(true);
+    const saveKey = 'c8468869-3466-4c7f-a72f-86647c993a20';
+    const claim = await trpcMutation(page.request, 'guest.claimItems', {
+      token: first,
+      personToken: anna.personToken,
+      personId: boris.personId,
+      addItemIndices: [0],
+      saveKey,
+    });
+    expect(claim.ok(), await claim.text()).toBe(true);
+    const tip = await trpcMutation(page.request, 'guest.setPersonalTip', {
+      token: first,
+      personToken: anna.personToken,
+      personId: boris.personId,
+      tipCents: 25,
+    });
+    expect(tip.ok(), await tip.text()).toBe(true);
+
+    const regroup = await trpcMutation(owner, 'guest.setPaymentGroups', {
+      token: first,
+      groups: [{ representativeId: boris.personId, memberIds: [boris.personId, vera.personId] }],
+    });
+    expect(regroup.ok(), await regroup.text()).toBe(true);
+    await deny('guest.claimItems', {
+      token: first,
+      personToken: anna.personToken,
+      personId: boris.personId,
+      addItemIndices: [0],
+      saveKey,
+    });
+    await deny('guest.setPersonalTip', {
+      token: first,
+      personToken: anna.personToken,
+      personId: boris.personId,
+      tipCents: 99,
+    });
+    await deny('guest.claimItems', {
+      token: first,
+      personToken: boris.personToken,
+      personId: anna.personId,
+      addItemIndices: [1],
+    });
+
+    const parallel = await Promise.all(
+      [boris, vera].map((member) =>
+        trpcMutation(page.request, 'guest.claimItems', {
+          token: first,
+          personToken: member.personToken,
+          personId: member.personId,
+          addItemIndices: [1],
+        }),
+      ),
+    );
+    for (const response of parallel) expect(response.ok(), await response.text()).toBe(true);
+    const result = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: first }));
+    const idx = (id: string) => result.people.findIndex((p: { id: string }) => p.id === id);
+    expect(result.people[idx(boris.personId)].tipCents).toBe(25);
+    expect(result.people[idx(anna.personId)].paymentGroupRepresentativeId).toBeUndefined();
+    expect(result.people[idx(boris.personId)].paymentGroupRepresentativeId).toBe(boris.personId);
+    expect(result.people[idx(vera.personId)].paymentGroupRepresentativeId).toBe(boris.personId);
+    expect(result.assignments.find((a: { itemIndex: number }) => a.itemIndex === 0).personIndices).toEqual([
+      idx(boris.personId),
+    ]);
+    expect(result.assignments.find((a: { itemIndex: number }) => a.itemIndex === 1).personIndices.sort()).toEqual(
+      [idx(boris.personId), idx(vera.personId)].sort(),
+    );
+    const another = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: second }));
+    expect(another.assignments).toEqual([]);
+    await fitsPhone(page);
+  } finally {
+    for (const token of tokens) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await owner.dispose();
+  }
+});
