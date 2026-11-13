@@ -408,8 +408,10 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
     await expect(save).toBeDisabled();
     await fitsPhone(page);
 
-    // Switching who one is choosing dishes for cannot change tip ownership.
-    await page.getByTestId('switch-person-1').click();
+    // An ordinary guest cannot switch to somebody else's dish assignments.
+    // Their own voluntary tip remains editable independently of other guests.
+    await expect(page.getByTestId('switch-person-0')).toBeEnabled();
+    await expect(page.getByTestId('switch-person-1')).toBeDisabled();
     await expect(amount).toHaveValue('1.25');
     await amount.fill('0');
     await save.click();
