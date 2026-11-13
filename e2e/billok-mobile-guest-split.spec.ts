@@ -5782,3 +5782,85 @@ test('Issue 3.25.4.1: secret-bearing receipt URLs have no referrer and clean sha
     await creator.dispose();
   }
 });
+
+test('Issue 3.25.4.2: public REST and SSE never reveal a guest personal credential', async ({ page }) => {
+  test.setTimeout(120_000);
+  const creator = await authedContext(users.alice.email, users.alice.password);
+  let token: string | undefined;
+  try {
+    const response = await trpcMutation(creator, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Закрытые токены', subtotal: 350, total: 350, tax: 0, tip: 0, currency: 'RUB' },
+      items: [{ name: 'Чай', quantity: 1, unitPrice: 350, totalPrice: 350 }],
+      people: ['Создатель', 'Анна', 'Борис'],
+      creatorName: 'Создатель',
+      paidByName: 'Создатель',
+      joinCreator: true,
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    const created = JSON.parse(await response.text()).result.data.json as {
+      shareToken: string;
+      creator: { personToken: string };
+    };
+    token = created.shareToken;
+    const join = async (name: string) => {
+      const result = await trpcMutation(page.request, 'guest.joinSession', { token, name });
+      expect(result.ok(), await result.text()).toBe(true);
+      return JSON.parse(await result.text()).result.data.json as {
+        personId: string;
+        personToken: string;
+        name: string;
+      };
+    };
+    const anna = await join('Анна');
+    const boris = await join('Борис');
+    const privateTokens = [created.creator.personToken, anna.personToken, boris.personToken];
+
+    for (const request of [page.request, creator]) {
+      const snapshot = await trpcQuery(request, 'guest.getSession', { token });
+      expect(snapshot.ok(), await snapshot.text()).toBe(true);
+      const body = await snapshot.text();
+      for (const secret of privateTokens) expect(body).not.toContain(secret);
+      for (const field of ['accountUserId', 'personToken', 'guestPushSubscriptions', 'delegatedReceiptAudit']) {
+        expect(body).not.toContain('"' + field + '"');
+      }
+    }
+    const wrong = await page.request.post('/api/guest/' + token + '/events', {
+      data: { personId: anna.personId, personToken: boris.personToken },
+    });
+    expect(wrong.status()).toBe(404);
+
+    const authorized = await page.request.post('/api/guest/' + token + '/events', {
+      data: { personId: anna.personId, personToken: anna.personToken },
+    });
+    expect(authorized.status()).toBe(200);
+    expect(await authorized.json()).toEqual({ ok: true });
+    const headers = authorized.headers();
+    expect(headers['cache-control']).toContain('no-store');
+    expect(headers['set-cookie']).toMatch(/httponly/i);
+    expect(headers['set-cookie']).toMatch(/samesite=strict/i);
+    for (const secret of privateTokens) expect(headers['set-cookie']).not.toContain(secret);
+
+    await page.goto('/split', { waitUntil: 'domcontentloaded' });
+    const event = await page.evaluate(async (shareToken) => {
+      const controller = new AbortController();
+      try {
+        const stream = await fetch('/api/guest/' + shareToken + '/events', {
+          signal: controller.signal,
+          credentials: 'same-origin',
+        });
+        const first = await stream.body!.getReader().read();
+        return { status: stream.status, first: new TextDecoder().decode(first.value) };
+      } finally {
+        controller.abort();
+      }
+    }, token);
+    expect(event.status).toBe(200);
+    expect(event.first).toContain('event: ready');
+    expect(event.first).toContain('data: {}');
+    for (const secret of privateTokens) expect(event.first).not.toContain(secret);
+    await fitsPhone(page);
+  } finally {
+    if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
+    await creator.dispose();
+  }
+});

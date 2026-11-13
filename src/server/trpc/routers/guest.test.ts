@@ -716,6 +716,60 @@ function savedPeople() {
   return call?.data.people;
 }
 
+describe('Issue 3.25.4.2: public REST responses redact every guest credential', () => {
+  test('shared receipt and authenticated creator views never expose private tokens, replay keys or account IDs', async () => {
+    const privateRequestKey = 'private-rotation-request-key-not-public';
+    const privateJoinKey = 'private-join-replay-key-not-public';
+    const privatePushEndpoint = 'https://fcm.googleapis.com/fcm/send/private-push-secret';
+    claimSession(
+      [
+        { name: 'Создатель', personToken: ALICE_TOKEN, accountUserId: 'user-1' },
+        {
+          name: 'Анна',
+          personToken: OTHER_TOKEN,
+          guestSlotNumber: 1,
+          personalLinkReadyAt: '2026-11-11T12:00:00.000Z',
+          personalLinkRotation: { requestKey: privateRequestKey, rotatedAt: '2026-11-12T12:00:00.000Z', count: 2 },
+          join: { key: privateJoinKey, name: 'анна', expiresAt: Date.now() + 60000 },
+          saves: [{ key: 'private-save-key', hash: 'private-save-hash' }],
+          delegatedReceiptAudit: [{ actorId: pid(0), targetId: pid(1), action: 'claim-items' }],
+          guestPushSubscriptions: [{ endpoint: privatePushEndpoint }],
+        } as TestPerson,
+      ],
+      {
+        receiptData: { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB', guestSlotsMode: true },
+      },
+    );
+
+    const publicView = await (await caller()).getSession({ token: 'share-1' });
+    const creatorView = await (await caller(signedIn)).getSession({ token: 'share-1' });
+    expect(publicView.personalLinkEvents).toBeNull();
+    expect(creatorView.personalLinkEvents).toEqual([
+      { personId: pid(1), rotatedAt: '2026-11-12T12:00:00.000Z', rotationCount: 2 },
+    ]);
+    for (const result of [publicView, creatorView]) {
+      const json = JSON.stringify(result);
+      for (const sensitive of [
+        ALICE_TOKEN,
+        OTHER_TOKEN,
+        'user-1',
+        privateRequestKey,
+        privateJoinKey,
+        'private-save-key',
+        'private-save-hash',
+        privatePushEndpoint,
+        'personToken',
+        'accountUserId',
+        'delegatedReceiptAudit',
+        'guestPushSubscriptions',
+      ]) {
+        expect(json, sensitive).not.toContain(sensitive);
+      }
+      expect(result.people[1]).toMatchObject({ id: pid(1), name: 'Анна', personalLinkReady: true });
+    }
+  });
+});
+
 describe('guest.joinSession', () => {
   test('adds a new name with a fresh token', async () => {
     claimSession([{ name: 'Host' }]);
