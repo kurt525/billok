@@ -5224,3 +5224,202 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await owner.dispose();
   }
 });
+
+test('Issue 3.25.2.4: mobile personal link rotation revokes old REST and SSE without changing saved guest shares', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const creator = await authedContext(users.alice.email, users.alice.password);
+  const oldPhone = await browser.newContext({ viewport: { width: 320, height: 720 }, isMobile: true, hasTouch: true });
+  const newPhone = await browser.newContext({ viewport: { width: 393, height: 760 }, isMobile: true, hasTouch: true });
+  let token: string | undefined;
+  try {
+    const createdRes = await trpcMutation(creator, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Защищённые ссылки', subtotal: 1234, tax: 0, tip: 0, total: 1234, currency: 'RUB' },
+      items: [{ name: 'Суп', quantity: 1, unitPrice: 1234, totalPrice: 1234 }],
+      guestCount: 2,
+      paidByGuestSlot: 2,
+      joinCreator: true,
+    });
+    expect(createdRes.ok(), await createdRes.text()).toBe(true);
+    token = (JSON.parse(await createdRes.text()).result.data.json as { shareToken: string }).shareToken;
+    const initial = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    const andreyId = initial.people[1].id as string;
+    const yuriId = initial.people[2].id as string;
+    const andreyJoin = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: andreyId,
+      name: 'Андрей',
+    });
+    const yuriJoin = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: yuriId,
+      name: 'Юрий',
+    });
+    expect(andreyJoin.ok(), await andreyJoin.text()).toBe(true);
+    expect(yuriJoin.ok(), await yuriJoin.text()).toBe(true);
+    const andrey = JSON.parse(await andreyJoin.text()).result.data.json as { personId: string; personToken: string };
+    const yuri = JSON.parse(await yuriJoin.text()).result.data.json as { personId: string; personToken: string };
+    expect(andrey.personId).toBe(andreyId);
+    expect(yuri.personId).toBe(yuriId);
+    expect(andrey.personToken.length).toBe(43);
+    expect(yuri.personToken.length).toBe(43);
+
+    const savedName = await trpcMutation(page.request, 'guest.editPersonName', {
+      token,
+      targetId: andreyId,
+      personToken: andrey.personToken,
+      newName: 'Андрей П.',
+    });
+    expect(savedName.ok(), await savedName.text()).toBe(true);
+    const savedParts = await trpcMutation(page.request, 'guest.claimItems', {
+      token,
+      personId: andreyId,
+      personToken: andrey.personToken,
+      addItemIndices: [0],
+      removeItemIndices: [],
+      saveKey: '123e4567-e89b-42d3-a456-426614174096',
+    });
+    expect(savedParts.ok(), await savedParts.text()).toBe(true);
+    const savedTip = await trpcMutation(page.request, 'guest.setPersonalTip', {
+      token,
+      personId: andreyId,
+      personToken: andrey.personToken,
+      tipCents: 75,
+    });
+    expect(savedTip.ok(), await savedTip.text()).toBe(true);
+
+    const before = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(before.people[1]).toMatchObject({ id: andreyId, name: 'Андрей П.', personalLinkReady: true, tipCents: 75 });
+    const originalAssignments = before.assignments;
+    const savedLinkRes = await trpcMutation(creator, 'guest.getGuestPersonalLink', { token, personId: andreyId });
+    expect(savedLinkRes.ok(), await savedLinkRes.text()).toBe(true);
+    const oldToken = (JSON.parse(await savedLinkRes.text()).result.data.json as { personToken: string }).personToken;
+    expect(oldToken === andrey.personToken).toBe(true);
+    const deniedDisclosure = await trpcMutation(page.request, 'guest.getGuestPersonalLink', {
+      token,
+      personId: andreyId,
+    });
+    expect(deniedDisclosure.ok()).toBe(false);
+
+    const oldPage = await oldPhone.newPage();
+    await oldPage.goto('/split/' + token + '/claim#me=' + oldToken);
+    await expect(oldPage.getByTestId('personal-link-offer')).toContainText('Андрей П.', { timeout: 20_000 });
+    await oldPage.getByTestId('personal-link-accept').click();
+    await expect(oldPage.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+    const eventPath = '/api/guest/' + token + '/events';
+    const firstGrant = await oldPage.request.post(eventPath, {
+      data: { personId: andreyId, personToken: oldToken },
+    });
+    expect(firstGrant.status()).toBe(200);
+    const firstStreamStatus = await oldPage.evaluate(async (path) => {
+      const response = await fetch(path);
+      if (response.body) await response.body.cancel();
+      return response.status;
+    }, eventPath);
+    expect(firstStreamStatus).toBe(200);
+
+    const requestKey = '123e4567-e89b-42d3-a456-426614174097';
+    const rotatedRes = await trpcMutation(creator, 'guest.rotateGuestPersonalLink', {
+      token,
+      personId: andreyId,
+      requestKey,
+    });
+    expect(rotatedRes.ok(), await rotatedRes.text()).toBe(true);
+    const rotated = JSON.parse(await rotatedRes.text()).result.data.json as {
+      personId: string;
+      personToken: string;
+      rotationCount: number;
+    };
+    expect(rotated.personId).toBe(andreyId);
+    expect(rotated.personToken.length).toBe(43);
+    expect(rotated.personToken !== oldToken).toBe(true);
+    expect(rotated.rotationCount).toBe(1);
+    const retried = await trpcMutation(creator, 'guest.rotateGuestPersonalLink', {
+      token,
+      personId: andreyId,
+      requestKey,
+    });
+    expect(retried.ok(), await retried.text()).toBe(true);
+    const replay = JSON.parse(await retried.text()).result.data.json as { personToken: string; rotationCount: number };
+    expect(replay.personToken === rotated.personToken).toBe(true);
+    expect(replay.rotationCount).toBe(1);
+
+    const deniedOldResume = await trpcMutation(oldPage.request, 'guest.resumeSession', {
+      token,
+      personToken: oldToken,
+    });
+    expect(deniedOldResume.ok(), await deniedOldResume.text()).toBe(true);
+    expect(JSON.parse(await deniedOldResume.text()).result.data.json ?? null).toBeNull();
+    const deniedOldTip = await trpcMutation(oldPage.request, 'guest.setPersonalTip', {
+      token,
+      personId: andreyId,
+      personToken: oldToken,
+      tipCents: 150,
+    });
+    expect(deniedOldTip.ok()).toBe(false);
+    expect((await trpcError(deniedOldTip))?.data?.code).toBe('FORBIDDEN');
+    const deniedOldSsePost = await oldPage.request.post(eventPath, {
+      data: { personId: andreyId, personToken: oldToken },
+    });
+    expect(deniedOldSsePost.status()).toBe(404);
+    // An already-issued HttpOnly SSE ticket must stop authorizing as soon as its bearer is rotated.
+    const staleStreamStatus = await oldPage.evaluate(async (path) => {
+      const response = await fetch(path);
+      if (response.body) await response.body.cancel();
+      return response.status;
+    }, eventPath);
+    expect(staleStreamStatus).toBe(404);
+    const mismatchedSse = await page.request.post(eventPath, {
+      data: { personId: yuriId, personToken: rotated.personToken },
+    });
+    expect(mismatchedSse.status()).toBe(404);
+
+    const currentLink = await trpcMutation(creator, 'guest.getGuestPersonalLink', {
+      token,
+      personId: andreyId,
+    });
+    expect(currentLink.ok(), await currentLink.text()).toBe(true);
+    const currentToken = (JSON.parse(await currentLink.text()).result.data.json as { personToken: string }).personToken;
+    expect(currentToken === rotated.personToken).toBe(true);
+    const newPage = await newPhone.newPage();
+    await newPage.goto('/split/' + token + '/claim#me=' + currentToken);
+    await expect(newPage.getByTestId('personal-link-offer')).toContainText('Андрей П.', { timeout: 20_000 });
+    await newPage.getByTestId('personal-link-accept').click();
+    await expect(newPage.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+    await expect(newPage.getByTestId('personal-tip-input')).toHaveValue(/0[.,]75/, { timeout: 15_000 });
+    for (const width of [320, 360, 393, 412, 720]) {
+      await newPage.setViewportSize({ width, height: 760 });
+      await fitsPhone(newPage);
+    }
+    const secondGrant = await newPage.request.post(eventPath, {
+      data: { personId: andreyId, personToken: currentToken },
+    });
+    expect(secondGrant.status()).toBe(200);
+    const newStreamStatus = await newPage.evaluate(async (path) => {
+      const response = await fetch(path);
+      if (response.body) await response.body.cancel();
+      return response.status;
+    }, eventPath);
+    expect(newStreamStatus).toBe(200);
+
+    const otherGuest = await trpcMutation(page.request, 'guest.resumeSession', {
+      token,
+      personToken: yuri.personToken,
+    });
+    expect(otherGuest.ok(), await otherGuest.text()).toBe(true);
+    expect((JSON.parse(await otherGuest.text()).result.data.json as { personId: string }).personId).toBe(yuriId);
+    const after = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(after.people).toHaveLength(3);
+    expect(after.people[1]).toMatchObject({ id: andreyId, name: 'Андрей П.', tipCents: 75 });
+    expect(after.assignments).toEqual(originalAssignments);
+    expect(JSON.stringify(after).includes(oldToken)).toBe(false);
+    expect(JSON.stringify(after).includes(currentToken)).toBe(false);
+  } finally {
+    if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
+    await oldPhone.close();
+    await newPhone.close();
+    await creator.dispose();
+  }
+});
