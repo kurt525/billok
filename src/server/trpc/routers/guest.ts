@@ -62,6 +62,7 @@ import { normalizeSbpPhone, isSupportedSbpBankId } from '@/lib/sbp-banks';
 import { checkJoinRateLimit } from '../../lib/guest-join-limit';
 import {
   assignPersonIds,
+  newGuestPersonId,
   findTargetIndex,
   hasPersonIds,
   personIdSchema,
@@ -979,13 +980,14 @@ export const guestRouter = createTRPCRouter({
         throw new AppError('CONFLICT', 'nameTaken');
       }
       const people: IdentifiedGuestPerson[] = [];
+      const mintPersonId = () => newGuestPersonId(people.map((person) => person.id));
       const indexOf = (name: string) =>
         people.findIndex((p) => normalizeGuestName(p.name) === normalizeGuestName(name));
       if (usingGuestSlots) {
         // Always exactly one creator plus guestCount independently addressable
         // slots. The payer is a role on one of these rows, never an extra guest.
         people.push({
-          id: randomUUID(),
+          id: mintPersonId(),
           name: creatorName,
           accountUserId: ctx.user.id,
           ...(ownerId ? { reservedOwner: true } : {}),
@@ -993,11 +995,11 @@ export const guestRouter = createTRPCRouter({
         for (let slot = 1; slot <= guestCount; slot++) {
           const preferredName = `Гость ${slot}`;
           const name = indexOf(preferredName) < 0 ? preferredName : `${preferredName} (гость)`;
-          people.push({ id: randomUUID(), name, guestSlotNumber: slot });
+          people.push({ id: mintPersonId(), name, guestSlotNumber: slot });
         }
       } else {
         for (const name of [...(input.people ?? []), creatorName, paidByName]) {
-          if (indexOf(name) < 0) people.push({ id: randomUUID(), name: name.normalize('NFC') });
+          if (indexOf(name) < 0) people.push({ id: mintPersonId(), name: name.normalize('NFC') });
         }
         if (ownerId) {
           const idx = indexOf(RESERVED_OWNER_NAME);
@@ -1342,7 +1344,7 @@ export const guestRouter = createTRPCRouter({
             };
           } else {
             people.push({
-              id: randomUUID(),
+              id: newGuestPersonId(people.map((person) => person.id)),
               name: RESERVED_OWNER_NAME,
               accountUserId: ownerId,
               reservedOwner: true,
@@ -1435,7 +1437,7 @@ export const guestRouter = createTRPCRouter({
         }
 
         const name = input.name.normalize('NFC').trim();
-        const personId = randomUUID();
+        const personId = newGuestPersonId(people.map((person) => person.id));
         people.push({
           id: personId,
           name,

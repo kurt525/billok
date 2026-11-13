@@ -3,7 +3,8 @@ import { z } from 'zod';
 import type { GuestWebPushSubscription } from './guest-web-push';
 
 /** A person id as requests send it (personId / targetId), and as stored ids must be */
-export const personIdSchema = z.string().uuid();
+// Exactly RFC 4122 CSPRNG UUIDv4: neither timestamps nor counters.
+export const personIdSchema = z.uuidv4();
 
 function isPersonId(id: unknown): id is string {
   return personIdSchema.safeParse(id).success;
@@ -121,17 +122,43 @@ export type GuestSessionPerson = {
 
 export type IdentifiedGuestPerson = GuestSessionPerson & { id: string };
 
-// An id that isn't a UUID counts as missing: no request could name that person
-export function hasPersonIds(people: readonly GuestSessionPerson[]): people is IdentifiedGuestPerson[] {
-  return people.every((p) => isPersonId(p.id));
+/** Independent random UUIDv4 for a participant within one receipt. */
+export function newGuestPersonId(
+  existingIds: Iterable<string | undefined>,
+  generate: () => string = randomUUID,
+): string {
+  const used = new Set(existingIds);
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const candidate = generate();
+    if (isPersonId(candidate) && !used.has(candidate)) return candidate;
+  }
+  throw new Error('Не удалось создать уникальный идентификатор гостя');
 }
 
-/** The people with an id each: anyone without a valid one gets a new random id. */
+/** All IDs must be valid UUIDv4 and unique in a receipt. */
+export function hasPersonIds(people: readonly GuestSessionPerson[]): people is IdentifiedGuestPerson[] {
+  const seen = new Set<string>();
+  for (const person of people) {
+    if (!isPersonId(person.id) || seen.has(person.id)) return false;
+    seen.add(person.id);
+  }
+  return true;
+}
+
+/** Preserve every valid ID; repair missing, malformed or repeated legacy IDs. */
 export function assignPersonIds(
   people: readonly GuestSessionPerson[],
   newId: () => string = randomUUID,
 ): IdentifiedGuestPerson[] {
-  return people.map((p) => (isPersonId(p.id) ? { ...p, id: p.id } : { ...p, id: newId() }));
+  // Reserve future row IDs as well, so no new ID collides with an existing row.
+  const reserved = new Set(people.map((p) => p.id).filter((id): id is string => isPersonId(id)));
+  const seen = new Set<string>();
+  return people.map((person) => {
+    const id = isPersonId(person.id) && !seen.has(person.id) ? person.id : newGuestPersonId(reserved, newId);
+    seen.add(id);
+    reserved.add(id);
+    return { ...person, id };
+  });
 }
 
 /**
