@@ -81,3 +81,19 @@ describe('errorShape', () => {
     expect(formatted.data.messageKey).toBeNull();
   });
 });
+
+describe('Issue 3.25.4.3: missing and expired receipt links', () => {
+  test('external errors use identical codes, messages and messageKeys regardless of whether a link ever existed', () => {
+    for (const [missing, expired] of [
+      ['sessionNotFound', 'sessionExpired'],
+      ['splitNotFound', 'splitExpired'],
+    ] as const) {
+      const shape = { message: 'Internal', data: { httpStatus: 404, code: 'NOT_FOUND' } };
+      const absent = errorShape(shape, new AppError('NOT_FOUND', missing), 'ru');
+      const old = errorShape(shape, new AppError('NOT_FOUND', expired), 'ru');
+      expect(old).toEqual(absent);
+      expect(old.data.messageKey).toBe(missing);
+      expect(old.message).not.toContain('истёк');
+    }
+  });
+});

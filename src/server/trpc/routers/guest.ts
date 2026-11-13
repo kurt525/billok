@@ -571,7 +571,7 @@ function cleanupExpiredSplits(db: typeof import('@/server/db').db, logPrefix: st
   deleteExpiredSplits(db, 100)
     .then((deletedCount) => {
       if (deletedCount > 0) {
-        logger.info(`${logPrefix}.cleanup`, { deletedCount });
+        logger.info(`${logPrefix}.cleanup`);
       }
     })
     .catch((err) => {
@@ -785,7 +785,7 @@ export const guestRouter = createTRPCRouter({
       );
 
       const share = issueGuestShareLink();
-      const guestSplit = await ctx.db.$transaction(async (tx) => {
+      await ctx.db.$transaction(async (tx) => {
         const receiptId = await lockReceiptForSplit(tx, input.receiptId, ctx.session?.user?.id);
         return tx.guestSplit.create({
           data: {
@@ -809,16 +809,16 @@ export const guestRouter = createTRPCRouter({
 
       cleanupExpiredSplits(ctx.db, 'guest.split');
 
-      logger.info('guest.split.created', {
-        splitId: guestSplit.id,
-        peopleCount: input.people.length,
-        itemCount: input.items.length,
-      });
+      logger.info('guest.split.created');
 
       return { shareToken: share.token };
     }),
 
   getSplit: publicProcedure.input(z.object({ token: shareTokenSchema })).query(async ({ ctx, input }) => {
+    // Bound share-link lookups before PostgreSQL, including invented tokens.
+    if (!checkTokenRateLimit(`guest-finalized-read:${input.token}`, 600, 60_000).allowed) {
+      throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+    }
     const split = await ctx.db.guestSplit.findUnique({
       where: { shareToken: shareLookupHash(input.token) },
     });
@@ -1067,7 +1067,7 @@ export const guestRouter = createTRPCRouter({
       );
 
       const share = issueGuestShareLink();
-      const session = await ctx.db.$transaction(async (tx) => {
+      await ctx.db.$transaction(async (tx) => {
         const receiptId = await lockReceiptForSplit(tx, input.receiptId, ctx.session?.user?.id);
         return tx.guestSplit.create({
           data: {
@@ -1095,10 +1095,7 @@ export const guestRouter = createTRPCRouter({
 
       cleanupExpiredSplits(ctx.db, 'guest.session');
 
-      logger.info('guest.session.created', {
-        sessionId: session.id,
-        itemCount: expandedItems.length,
-      });
+      logger.info('guest.session.created');
 
       return { shareToken: share.token, creator };
     }),
@@ -2863,12 +2860,12 @@ export const guestRouter = createTRPCRouter({
 
         return {
           shareToken: input.token,
-          finalizeLog: { sessionId: session.id, peopleCount: people.length, itemCount: items.length },
+          finalizeLog: true,
         };
       });
 
       // Log only once the transaction has committed; the callback may run more than once.
-      logger.info('guest.session.finalized', finalizeLog);
+      if (finalizeLog) logger.info('guest.session.finalized');
       return { shareToken };
     }),
 

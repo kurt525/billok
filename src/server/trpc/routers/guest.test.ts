@@ -7158,3 +7158,15 @@ describe('Issue #1 5.21: server-side guest and payer payment permissions', () =>
     expect(saved[1]).toEqual(record().people[1]);
   });
 });
+
+describe('Issue 3.25.4.3: finalized receipt reads', () => {
+  test('enforces the same rate limit before database lookups for invented and valid share links', async () => {
+    checkRateLimit.mockReturnValueOnce({ allowed: false, retryAfterMs: 60_000 });
+    await expect((await caller()).getSplit({ token: 'invented-share-link' })).rejects.toMatchObject({
+      code: 'TOO_MANY_REQUESTS',
+      messageKey: 'tooManyRequests',
+    });
+    expect(checkRateLimit).toHaveBeenCalledWith('guest-finalized-read:invented-share-link', 600, 60_000);
+    expect(mockDb.guestSplit.findUnique).not.toHaveBeenCalled();
+  });
+});

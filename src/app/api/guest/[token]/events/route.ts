@@ -4,6 +4,7 @@ import { auth } from '@/server/auth';
 import { db } from '@/server/db';
 import { shareLookupHash } from '@/server/lib/guest-share-link';
 import { revealGuestPeopleTokens } from '@/server/lib/guest-person-secret';
+import { checkTokenRateLimit } from '@/server/lib/rate-limit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -137,6 +138,11 @@ function reserveStream(token: string): (() => void) | null {
 export async function POST(request: Request, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   if (!validShareToken(token)) return new Response(null, { status: 404 });
+  // A full table may reconnect; repeated ticket guesses must not flood DB.
+  // The quota is identical for real and nonexistent receipts.
+  if (!checkTokenRateLimit(`guest-sse-ticket:${token}`, 600, 60_000).allowed) {
+    return new Response(null, { status: 429, headers: { 'Cache-Control': 'no-store' } });
+  }
   const key = ticketKey();
   if (!key) return new Response(null, { status: 503 });
   // Avoid accepting any cross-origin credential issuance, including browser

@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { sealGuestPeopleTokens } from '@/server/lib/guest-person-secret';
 
-const { queryRaw, authMock } = vi.hoisted(() => ({
+const { queryRaw, authMock, sseRateLimit } = vi.hoisted(() => ({
   queryRaw: vi.fn(),
   authMock: vi.fn(),
+  sseRateLimit: vi.fn(),
 }));
 vi.mock('@/server/db', () => ({ db: { $queryRawUnsafe: queryRaw } }));
 vi.mock('@/server/auth', () => ({ auth: authMock }));
+vi.mock('@/server/lib/rate-limit', () => ({ checkTokenRateLimit: sseRateLimit }));
 // Legacy short token fixtures here exercise SSE ticket behavior only; the
 // real hash and strict 256-bit format are covered by guest-share-link tests.
 vi.mock('@/server/lib/guest-share-link', () => ({ shareLookupHash: (token: string) => token }));
@@ -83,6 +85,7 @@ async function get(token = 'share-test', cookie?: string, signal?: AbortSignal) 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sseRateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
   vi.stubEnv('AUTH_SECRET', 'local-test-sse-hmac-secret-123456789');
   queryRaw.mockImplementation(async () => revision('100'));
   authMock.mockResolvedValue(null);
@@ -289,5 +292,20 @@ describe('3.21: server-signed per-receipt authorization for SSE invalidations', 
     await recovered.body!.cancel();
     for (const reader of open.slice(1)) await reader.cancel();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('Issue 3.25.4.3: SSE ticket flood protection', () => {
+  test('rate-limits anonymous ticket attempts before database access, independent of receipt existence', async () => {
+    sseRateLimit.mockReturnValueOnce({ allowed: false, retryAfterMs: 20_000 });
+    const rejected = await post('invented-receipt');
+    expect(rejected.status).toBe(429);
+    expect(rejected.headers.get('cache-control')).toBe('no-store');
+    expect(sseRateLimit).toHaveBeenCalledWith('guest-sse-ticket:invented-receipt', 600, 60_000);
+    expect(queryRaw).not.toHaveBeenCalled();
+    sseRateLimit.mockReturnValueOnce({ allowed: false, retryAfterMs: 20_000 });
+    const existing = await post('share-test');
+    expect(existing.status).toBe(rejected.status);
+    expect(queryRaw).not.toHaveBeenCalled();
   });
 });

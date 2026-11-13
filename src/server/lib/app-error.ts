@@ -78,10 +78,17 @@ function genericMessage(code: ErrorCode, locale: Locale): string {
  * a key (an unexpected exception, input that failed validation, tRPC's own errors) the
  * general message for its code, never the error's own text.
  */
+function publicErrorKey(error: TRPCError): ErrorKey | null {
+  if (!(error instanceof AppError)) return null;
+  // A guessed receipt link cannot reveal whether it previously existed.
+  if (error.code === 'NOT_FOUND' && error.messageKey === 'sessionExpired') return 'sessionNotFound';
+  if (error.code === 'NOT_FOUND' && error.messageKey === 'splitExpired') return 'splitNotFound';
+  return error.messageKey;
+}
+
 export function userErrorMessage(error: TRPCError, locale: Locale): string {
-  if (error instanceof AppError && error.messageKey) {
-    return translate(locale, error.messageKey, error.messageValues);
-  }
+  const key = publicErrorKey(error);
+  if (key) return translate(locale, key, error instanceof AppError ? error.messageValues : undefined);
   return genericMessage(error.code, locale);
 }
 
@@ -101,7 +108,7 @@ export function errorShape<Shape extends { message: string; data: object }>(
     message: userErrorMessage(error, locale),
     data: {
       ...shape.data,
-      messageKey: error instanceof AppError ? error.messageKey : null,
+      messageKey: publicErrorKey(error),
       // Only a known-original-parts conflict has a numeric remainder.
       ...(error instanceof AppError && error.remainingParts !== undefined
         ? { remainingParts: error.remainingParts }
