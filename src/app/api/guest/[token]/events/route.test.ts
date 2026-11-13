@@ -31,7 +31,9 @@ function revision(
       expiresAt: options?.expiresAt ?? new Date(Date.now() + 86_400_000),
       userId: options?.userId === undefined ? ownerId : options.userId,
       // Simulate PostgreSQL JSON, not the already-decrypted Prisma view.
-      people: sealGuestPeopleTokens(options?.people ?? [{ id: PERSON_ID, personToken: options?.personToken ?? PERSON_TOKEN }]),
+      people: sealGuestPeopleTokens(
+        options?.people ?? [{ id: PERSON_ID, personToken: options?.personToken ?? PERSON_TOKEN }],
+      ),
     },
   ];
 }
