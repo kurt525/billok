@@ -5489,3 +5489,85 @@ test('Issue 3.25.3.1: guest cannot remove a different participant by ID on mobil
     await creator.dispose();
   }
 });
+
+test('Issue 3.25.3.2: known personId cannot authorize foreign dish claims', async ({ page }) => {
+  test.setTimeout(130_000);
+  const creator = await authedContext(users.alice.email, users.alice.password);
+  let token: string | undefined;
+  try {
+    const created = await trpcMutation(creator, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Личные доли', subtotal: 800, total: 800, tax: 0, tip: 0, currency: 'RUB' },
+      items: [
+        { name: 'Суп', quantity: 1, unitPrice: 400, totalPrice: 400 },
+        { name: 'Чай', quantity: 1, unitPrice: 400, totalPrice: 400 },
+      ],
+      people: ['Создатель', 'Анна', 'Борис'],
+      creatorName: 'Создатель',
+      paidByName: 'Создатель',
+      joinCreator: true,
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    const setup = JSON.parse(await created.text()).result.data.json as {
+      shareToken: string;
+      creator: { personToken: string };
+    };
+    token = setup.shareToken;
+    const a = await trpcMutation(page.request, 'guest.joinSession', { token, name: 'Анна' });
+    const b = await trpcMutation(page.request, 'guest.joinSession', { token, name: 'Борис' });
+    expect(a.ok(), await a.text()).toBe(true);
+    expect(b.ok(), await b.text()).toBe(true);
+    const anna = JSON.parse(await a.text()).result.data.json as {
+      personId: string;
+      personToken: string;
+      name: string;
+    };
+    const boris = JSON.parse(await b.text()).result.data.json as { personId: string; personToken: string };
+    await rememberClaimIdentity(page.context(), token, anna);
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+    await expect(page.getByTestId('switch-person-1')).toBeEnabled();
+    await expect(page.getByTestId('switch-person-0')).toBeDisabled();
+    await expect(page.getByTestId('switch-person-2')).toBeDisabled();
+    await fitsPhone(page);
+
+    const attack = await trpcMutation(page.request, 'guest.claimItems', {
+      token,
+      personId: boris.personId,
+      personToken: anna.personToken,
+      addItemIndices: [0],
+      removeItemIndices: [],
+    });
+    expect(attack.ok()).toBe(false);
+    expect((await trpcError(attack))?.data?.code).toBe('FORBIDDEN');
+    const before = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(before.assignments).toEqual([]);
+
+    const self = await trpcMutation(page.request, 'guest.claimItems', {
+      token,
+      personId: anna.personId,
+      personToken: anna.personToken,
+      addItemIndices: [0],
+      removeItemIndices: [],
+    });
+    expect(self.ok(), await self.text()).toBe(true);
+    const creatorAction = await trpcMutation(creator, 'guest.claimItems', {
+      token,
+      personId: boris.personId,
+      personToken: setup.creator.personToken,
+      addItemIndices: [1],
+      removeItemIndices: [],
+    });
+    expect(creatorAction.ok(), await creatorAction.text()).toBe(true);
+    const after = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(after.assignments).toHaveLength(2);
+    expect(after.assignments.find((entry: { itemIndex: number }) => entry.itemIndex === 0).personIndices).toEqual([1]);
+    expect(after.assignments.find((entry: { itemIndex: number }) => entry.itemIndex === 1).personIndices).toEqual([2]);
+    for (const width of [320, 360, 412, 720]) {
+      await page.setViewportSize({ width, height: 730 });
+      await fitsPhone(page);
+    }
+  } finally {
+    if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
+    await creator.dispose();
+  }
+});

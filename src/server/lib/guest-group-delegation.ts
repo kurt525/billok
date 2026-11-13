@@ -18,16 +18,16 @@ export type DelegatedReceiptAudit = {
  * A representative can edit another person only within their own validated
  * group. Ordinary self-edit continues to work for every diner.
  *
- * Historical, ungrouped claim screens permitted claiming on behalf of others;
- * preserve them until the group UI migration. Once any group exists, the
- * group boundary applies to all cross-person claim edits in that receipt.
+ * Only a verified receipt creator may explicitly allocate for another diner
+ * in an ungrouped receipt. The caller must prove creator authorization before
+ * passing allowCreatorClaims=true. Group boundaries always override it.
  */
 export function authorizeReceiptPersonEdit(
   people: readonly GuestSessionPerson[],
   paidByIndex: number,
   actorToken: string,
   targetId: string,
-  allowLegacyClaims = false,
+  allowCreatorClaims = false,
 ): { actorIndex: number; targetIndex: number; delegated: boolean } {
   const actorIndex = people.findIndex((person) => person.personToken === actorToken);
   const targetIndex = people.findIndex((person) => person.id === targetId);
@@ -35,7 +35,7 @@ export function authorizeReceiptPersonEdit(
     throw new AppError('FORBIDDEN', 'invalidPersonToken');
   }
   if (actorIndex === targetIndex) return { actorIndex, targetIndex, delegated: false };
-  if (allowLegacyClaims && !people.some((person) => person.paymentGroupRepresentativeId !== undefined)) {
+  if (allowCreatorClaims && !people.some((person) => person.paymentGroupRepresentativeId !== undefined)) {
     return { actorIndex, targetIndex, delegated: false };
   }
   const actor = people[actorIndex]!;

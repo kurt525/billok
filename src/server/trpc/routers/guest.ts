@@ -1690,8 +1690,17 @@ export const guestRouter = createTRPCRouter({
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionFinalized');
 
         const people = session.people as GuestSessionPerson[];
-        const isParticipant = people.some((p) => p.personToken === input.personToken);
-        if (!isParticipant) throw new AppError('FORBIDDEN', 'notParticipant');
+        const actorIndex = people.findIndex((p) => p.personToken === input.personToken);
+        if (actorIndex < 0) throw new AppError('FORBIDDEN', 'notParticipant');
+        // Splitting a dish that somebody else has already claimed changes the
+        // shared receipt item and their price. It needs the actual creator's
+        // authenticated permission, not simply any guest's valid bearer.
+        const isCreator = !!session.userId && session.userId === ctx.session?.user?.id && !ctx.impersonating;
+        const modifiesOtherClaims = (session.assignments as GuestPortionAssignment[]).some(
+          (assignment) =>
+            assignment.itemIndex === input.itemIndex && assignment.personIndices.some((index) => index !== actorIndex),
+        );
+        if (modifiesOtherClaims && !isCreator) throw new AppError('FORBIDDEN', 'notParticipant');
 
         const items = [
           ...(session.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[]),
@@ -1993,12 +2002,27 @@ export const guestRouter = createTRPCRouter({
         if (callerIndex < 0) {
           throw new AppError('FORBIDDEN', 'invalidPersonToken');
         }
-        // In receipts containing payment groups, every cross-person claim
-        // must be authorized against the current group snapshot, including
-        // retries after a representative has been replaced.
+        // The public personId never grants rights to change someone else's
+        // claims. A group representative may delegate within the current
+        // group; on ungrouped receipts, only the authenticated receipt creator
+        // may explicitly allocate for another diner. Apply this to retries as
+        // well, so an old save key cannot bypass revoked privileges.
         const groupedReceipt = people.some((p) => p.paymentGroupRepresentativeId !== undefined);
-        if (groupedReceipt) {
-          authorizeReceiptPersonEdit(people, session.paidByIndex, input.personToken, input.personId, true);
+        const creatorCanAllocate =
+          !groupedReceipt && !!session.userId && session.userId === ctx.session?.user?.id && !ctx.impersonating;
+        // If a creator's previous allocation targets a subsequently removed
+        // person, its exact idempotent replay is still safe to acknowledge.
+        // Everyone else must have a live, authorized target.
+        if (people.some((p) => p.id === input.personId)) {
+          authorizeReceiptPersonEdit(
+            people,
+            session.paidByIndex,
+            input.personToken,
+            input.personId,
+            creatorCanAllocate,
+          );
+        } else if (!creatorCanAllocate) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
         }
 
         // A retry of a save that was stored: answer as stored, without applying it again. Checked
@@ -2025,7 +2049,7 @@ export const guestRouter = createTRPCRouter({
           session.paidByIndex,
           input.personToken,
           input.personId,
-          true,
+          creatorCanAllocate,
         );
 
         for (const idx of [

@@ -63,7 +63,7 @@ describe('Issue 3.24.1.3: representative authorizes edits within a single group'
     expect(() => authorizeReceiptPersonEdit(invalid, 0, 'wife-secret', child)).toThrow();
   });
 
-  test('ordinary receipts preserve historical cross-person claim behavior, not tips or parts', () => {
+  test('ungrouped receipts allow delegated claims only when the caller has verified creator rights', () => {
     const individual = family.map(({ paymentGroupRepresentativeId: unused, ...person }) => {
       void unused;
       return person;

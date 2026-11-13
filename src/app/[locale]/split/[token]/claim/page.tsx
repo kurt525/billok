@@ -506,13 +506,14 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // null while this device's person isn't in the session as loaded: they just joined (the
   // session is loaded again right away), or someone removed them (checked below)
   const myPersonIndex = myPersonId === null ? null : (indexById.get(myPersonId) ?? null);
-  // The original ungrouped receipt keeps its old claim flow. In grouped
-  // receipts the responsible diner's own token can edit only their group.
+  // A guest may allocate only for themselves. The authenticated creator may
+  // also allocate on an ungrouped receipt; a group representative may change
+  // portions only for members of their current validated payment group.
   const hasPaymentGroups =
     session.data?.people.some((person) => person.paymentGroupRepresentativeId !== undefined) ?? false;
   const myPerson = myPersonIndex === null ? null : session.data?.people[myPersonIndex];
   const canEditFor = (targetId: string) => {
-    if (!hasPaymentGroups) return true;
+    if (!hasPaymentGroups) return targetId === myPersonId || (!!personToken && !!session.data?.isCreator);
     if (myPersonId === targetId) return true;
     return (
       !!myPersonId &&
@@ -2941,21 +2942,29 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           {item.quantity > 1 && <span className="text-muted-foreground ml-1">x{item.quantity}</span>}
                         </span>
                         <div className="flex items-center gap-1 shrink-0">
-                          {item.quantity > 1 && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSplittingItemIdx(idx);
-                                setSplitQty('1');
-                              }}
-                              className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
-                              aria-label={t('splitItem')}
-                              data-testid={`split-claim-item-${idx}`}
-                            >
-                              <Scissors className="h-3.5 w-3.5" />
-                            </button>
-                          )}
+                          {item.quantity > 1 &&
+                            !!personToken &&
+                            (data.isCreator ||
+                              (myPersonIndex !== null &&
+                                !data.assignments.some(
+                                  (assignment) =>
+                                    assignment.itemIndex === idx &&
+                                    assignment.personIndices.some((index) => index !== myPersonIndex),
+                                ))) && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSplittingItemIdx(idx);
+                                  setSplitQty('1');
+                                }}
+                                className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                                aria-label={t('splitItem')}
+                                data-testid={`split-claim-item-${idx}`}
+                              >
+                                <Scissors className="h-3.5 w-3.5" />
+                              </button>
+                            )}
                           <span className="font-semibold">{formatCents(item.totalPrice, currency, locale)}</span>
                         </div>
                       </div>

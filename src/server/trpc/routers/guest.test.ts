@@ -2017,20 +2017,18 @@ describe('Issue 3.8.1: personal link only after the guest saves a real change', 
     expect(payload.assignments).toMatchObject([{ itemIndex: 0, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } }]);
   });
 
-  test('changing another person allocation with own token cannot unlock target recovery link', async () => {
-    await (
-      await caller()
-    ).claimItems({
-      token: 'share-1',
-      personId: pid(0),
-      personToken: ALICE_TOKEN,
-      addItemIndices: [0],
-      removeItemIndices: [],
-      saveKey: JOIN_KEY,
-    });
-    const saved = savedPeople() as TestPerson[];
-    expect(saved[1]?.personalLinkReadyAt).toBeUndefined();
-    expect(saved[0]?.personalLinkReadyAt).toBeUndefined();
+  test('3.25.3.2: an anonymous guest cannot change another person allocation with their own token', async () => {
+    await expect(
+      (await caller()).claimItems({
+        token: 'share-1',
+        personId: pid(0),
+        personToken: ALICE_TOKEN,
+        addItemIndices: [0],
+        removeItemIndices: [],
+        saveKey: JOIN_KEY,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
   test('legacy named guest does not need first action eligibility to preserve old personal links', async () => {
@@ -3394,6 +3392,122 @@ describe('Issue 3.19: claimItems persists actual pieces for all claimants', () =
   });
 });
 
+describe('Issue 3.25.3.2: splitting item quantity cannot modify another guest allocation', () => {
+  const participants = [
+    { name: 'Создатель', personToken: ALICE_TOKEN },
+    { name: 'Анна', personToken: OTHER_TOKEN },
+    { name: 'Борис', personToken: D_TOKEN },
+  ];
+  function receipt(indices: number[]) {
+    claimSession(participants, {
+      items: [{ name: 'Чай', quantity: 2, unitPrice: 100, totalPrice: 200 }],
+      assignments: indices.length ? [{ itemIndex: 0, personIndices: indices }] : [],
+      receiptData: { subtotal: 200, total: 200, tip: 0, tax: 0, currency: 'RUB' },
+    });
+  }
+  const split = { token: 'share-1', personToken: OTHER_TOKEN, itemIndex: 0, splitQuantity: 1 };
+
+  test('a guest cannot split an item already claimed by another participant', async () => {
+    receipt([2]);
+    await expect((await caller()).splitClaimItem(split)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('a guest can split an unclaimed or exclusively own item', async () => {
+    for (const indices of [[], [1]]) {
+      receipt(indices);
+      expect(await (await caller()).splitClaimItem(split)).toMatchObject({ success: true, itemCount: 2 });
+      expect(mockDb.guestSplit.update).toHaveBeenCalled();
+      mockDb.guestSplit.update.mockClear();
+    }
+  });
+
+  test('a signed-in creator may split a shared item; impersonation cannot', async () => {
+    receipt([1, 2]);
+    expect(await (await caller(signedIn)).splitClaimItem(split)).toMatchObject({ success: true, itemCount: 2 });
+    mockDb.guestSplit.update.mockClear();
+    const { guestRouter } = await import('./guest');
+    const impersonated = guestRouter.createCaller({
+      session: signedIn,
+      db: mockDb,
+      headers: new Headers(),
+      impersonating: { adminId: 'another-user' },
+    } as unknown as Parameters<typeof guestRouter.createCaller>[0]);
+    await expect(impersonated.splitClaimItem(split)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue 3.25.3.2: personId never authorizes editing another guest share', () => {
+  function ungrouped() {
+    claimSession(
+      [
+        { name: 'Создатель', personToken: ALICE_TOKEN },
+        { name: 'Анна', personToken: OTHER_TOKEN },
+        { name: 'Борис', personToken: D_TOKEN },
+      ],
+      { items: items(2), assignments: [{ itemIndex: 0, personIndices: [2] }] },
+    );
+  }
+
+  test('a valid guest token plus a foreign personId cannot alter the foreign guest claim', async () => {
+    ungrouped();
+    await expect(
+      (await caller()).claimItems({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        personId: pid(2),
+        addItemIndices: [1],
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('an unrelated signed-in account or impersonated creator cannot edit another guest', async () => {
+    ungrouped();
+    await expect(
+      (await caller({ user: { id: 'unrelated' } })).claimItems({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        personId: pid(2),
+        addItemIndices: [1],
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const { guestRouter } = await import('./guest');
+    const impersonator = guestRouter.createCaller({
+      session: signedIn,
+      db: mockDb,
+      headers: new Headers(),
+      impersonating: { adminId: 'someone' },
+    } as unknown as Parameters<typeof guestRouter.createCaller>[0]);
+    await expect(
+      impersonator.claimItems({
+        token: 'share-1',
+        personToken: ALICE_TOKEN,
+        personId: pid(2),
+        addItemIndices: [1],
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('receipt creator may explicitly allocate, without granting the same rights to guests', async () => {
+    ungrouped();
+    await (
+      await caller(signedIn)
+    ).claimItems({
+      token: 'share-1',
+      personToken: ALICE_TOKEN,
+      personId: pid(1),
+      addItemIndices: [1],
+    });
+    expect(savedAssignments()).toEqual([
+      { itemIndex: 0, personIndices: [2], partsByPersonId: { [pid(2)]: 1 } },
+      { itemIndex: 1, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
+    ]);
+  });
+});
+
 describe('guest.claimItems with added and removed items (#226)', () => {
   // Cat's own phone saved items 0 and 1 while Ann's page was editing Cat's claims
   function catSavedMeanwhile() {
@@ -3421,7 +3535,7 @@ describe('guest.claimItems with added and removed items (#226)', () => {
 
   test('adds to the claims stored now, keeping the ones another device saved meanwhile', async () => {
     catSavedMeanwhile();
-    await (await caller()).claimItems(forCat({ addItemIndices: [2] }));
+    await (await caller(signedIn)).claimItems(forCat({ addItemIndices: [2] }));
     expect(savedAssignments()).toEqual([
       { itemIndex: 0, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
       { itemIndex: 1, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
@@ -3431,13 +3545,13 @@ describe('guest.claimItems with added and removed items (#226)', () => {
 
   test('removes only the items named', async () => {
     catSavedMeanwhile();
-    await (await caller()).claimItems(forCat({ removeItemIndices: [0] }));
+    await (await caller(signedIn)).claimItems(forCat({ removeItemIndices: [0] }));
     expect(savedAssignments()).toEqual([{ itemIndex: 1, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } }]);
   });
 
   test('adds and removes in one save', async () => {
     catSavedMeanwhile();
-    await (await caller()).claimItems(forCat({ addItemIndices: [2], removeItemIndices: [0] }));
+    await (await caller(signedIn)).claimItems(forCat({ addItemIndices: [2], removeItemIndices: [0] }));
     expect(savedAssignments()).toEqual([
       { itemIndex: 1, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
       { itemIndex: 2, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
@@ -3446,7 +3560,7 @@ describe('guest.claimItems with added and removed items (#226)', () => {
 
   test('adding an item the person has, or removing one they lack, changes nothing', async () => {
     catSavedMeanwhile();
-    await (await caller()).claimItems(forCat({ addItemIndices: [0], removeItemIndices: [2] }));
+    await (await caller(signedIn)).claimItems(forCat({ addItemIndices: [0], removeItemIndices: [2] }));
     expect(savedAssignments()).toEqual([
       { itemIndex: 0, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
       { itemIndex: 1, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
@@ -3461,7 +3575,7 @@ describe('guest.claimItems with added and removed items (#226)', () => {
       ],
       { items: items(2), assignments: [{ itemIndex: 0, personIndices: [0, 1] }] },
     );
-    await (await caller()).claimItems(forCat({ addItemIndices: [1], removeItemIndices: [0] }));
+    await (await caller(signedIn)).claimItems(forCat({ addItemIndices: [1], removeItemIndices: [0] }));
     expect(savedAssignments()).toEqual([
       { itemIndex: 0, personIndices: [0], partsByPersonId: { [pid(0)]: 1 } },
       { itemIndex: 1, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
@@ -3471,14 +3585,14 @@ describe('guest.claimItems with added and removed items (#226)', () => {
   test('refuses an item named as both added and removed', async () => {
     catSavedMeanwhile();
     await expect(
-      (await caller()).claimItems(forCat({ addItemIndices: [2], removeItemIndices: [2] })),
+      (await caller(signedIn)).claimItems(forCat({ addItemIndices: [2], removeItemIndices: [2] })),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
   test('refuses an item index past the end, added or removed', async () => {
     catSavedMeanwhile();
-    const api = await caller();
+    const api = await caller(signedIn);
     await expect(api.claimItems(forCat({ addItemIndices: [3] }))).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     await expect(api.claimItems(forCat({ removeItemIndices: [3] }))).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
@@ -3486,7 +3600,7 @@ describe('guest.claimItems with added and removed items (#226)', () => {
 
   test('refuses a request that sends the whole claim set and changes too, or neither', async () => {
     catSavedMeanwhile();
-    const api = await caller();
+    const api = await caller(signedIn);
     await expect(
       api.claimItems({ ...forCat({ addItemIndices: [2] }), claimedItemIndices: [0, 2] }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
@@ -3496,7 +3610,7 @@ describe('guest.claimItems with added and removed items (#226)', () => {
 
   test('the whole claim set still replaces what is stored (older clients)', async () => {
     catSavedMeanwhile();
-    await (await caller()).claimItems({ ...forCat({}), claimedItemIndices: [2] });
+    await (await caller(signedIn)).claimItems({ ...forCat({}), claimedItemIndices: [2] });
     expect(savedAssignments()).toEqual([{ itemIndex: 2, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } }]);
   });
 });
@@ -3542,7 +3656,7 @@ describe('guest.claimItems with a save key (#238)', () => {
 
   test("records the key on the caller's person with the save", async () => {
     session([]);
-    await (await caller()).claimItems(forCat({ addItemIndices: [2] }));
+    await (await caller(signedIn)).claimItems(forCat({ addItemIndices: [2] }));
     expect(savedAssignments()).toEqual([{ itemIndex: 2, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } }]);
     const people = savedPeople() as { saves?: { key: string }[] }[];
     expect(people[0]!.saves?.map((s) => s.key)).toEqual([SAVE_KEY]);
@@ -3551,7 +3665,7 @@ describe('guest.claimItems with a save key (#238)', () => {
 
   test('a retry of a stored save answers saved without applying it again', async () => {
     session([]);
-    const api = await caller();
+    const api = await caller(signedIn);
     await api.claimItems(forCat({ addItemIndices: [2] }));
     // Ann's page never got the answer; meanwhile Cat's own phone unclaimed the pie
     storedSinceLastSave([]);
@@ -3563,7 +3677,7 @@ describe('guest.claimItems with a save key (#238)', () => {
 
   test('a retry of a whole-claim-set save answers saved without applying it again', async () => {
     session([]);
-    const api = await caller();
+    const api = await caller(signedIn);
     await api.claimItems(forCat({ claimedItemIndices: [2] }));
     storedSinceLastSave([]);
     expect(await api.claimItems(forCat({ claimedItemIndices: [2] }))).toEqual({ success: true, conflicts: [] });
@@ -3572,7 +3686,7 @@ describe('guest.claimItems with a save key (#238)', () => {
 
   test('matches a retry that lists an item twice', async () => {
     session([]);
-    const api = await caller();
+    const api = await caller(signedIn);
     await api.claimItems(forCat({ addItemIndices: [2] }));
     storedSinceLastSave();
     await api.claimItems(forCat({ addItemIndices: [2, 2] }));
@@ -3581,7 +3695,7 @@ describe('guest.claimItems with a save key (#238)', () => {
 
   test('matches a retry whatever order it lists the items in', async () => {
     session([]);
-    const api = await caller();
+    const api = await caller(signedIn);
     await api.claimItems(forCat({ addItemIndices: [0, 2], removeItemIndices: [1] }));
     storedSinceLastSave();
     await api.claimItems(forCat({ addItemIndices: [2, 0], removeItemIndices: [1] }));
@@ -3590,7 +3704,7 @@ describe('guest.claimItems with a save key (#238)', () => {
 
   test("a replay reports the conflicts on the person's claims as stored now", async () => {
     session([]);
-    const api = await caller();
+    const api = await caller(signedIn);
     await api.claimItems(forCat({ addItemIndices: [2] }));
     // Meanwhile Ann claimed the pie for herself too
     storedSinceLastSave([{ itemIndex: 2, personIndices: [1, 0] }]);
@@ -3601,7 +3715,7 @@ describe('guest.claimItems with a save key (#238)', () => {
 
   test('refuses the same key with different changes, and saves nothing', async () => {
     session([]);
-    const api = await caller();
+    const api = await caller(signedIn);
     await api.claimItems(forCat({ addItemIndices: [2] }));
     storedSinceLastSave();
     await expect(api.claimItems(forCat({ addItemIndices: [1] }))).rejects.toMatchObject({ code: 'CONFLICT' });
@@ -3614,10 +3728,10 @@ describe('guest.claimItems with a save key (#238)', () => {
 
   test("another person's save key isn't the caller's: it applies as a new save", async () => {
     session([]);
-    await (await caller()).claimItems(forCat({ addItemIndices: [2] }));
+    await (await caller(signedIn)).claimItems(forCat({ addItemIndices: [2] }));
     storedSinceLastSave();
     // Cat's phone happens to send the same key
-    await (await caller()).claimItems({ ...forCat({ removeItemIndices: [2] }), personToken: OTHER_TOKEN });
+    await (await caller(signedIn)).claimItems({ ...forCat({ removeItemIndices: [2] }), personToken: OTHER_TOKEN });
     expect(savedAssignments()).toEqual([]);
   });
 
@@ -3627,7 +3741,7 @@ describe('guest.claimItems with a save key (#238)', () => {
       hash: 'x',
     }));
     session([], older);
-    await (await caller()).claimItems(forCat({ addItemIndices: [2] }));
+    await (await caller(signedIn)).claimItems(forCat({ addItemIndices: [2] }));
     const people = savedPeople() as { saves?: { key: string }[] }[];
     expect(people[0]!.saves?.map((s) => s.key)).toEqual([...older.slice(1).map((s) => s.key), SAVE_KEY]);
   });
@@ -3635,7 +3749,7 @@ describe('guest.claimItems with a save key (#238)', () => {
   test('without a save key, records nothing and leaves the people alone', async () => {
     session([]);
     await (
-      await caller()
+      await caller(signedIn)
     ).claimItems({ token: 'share-1', personToken: ALICE_TOKEN, personId: pid(1), addItemIndices: [2] });
     const call = mockDb.guestSplit.update.mock.calls.at(-1)?.[0] as { data: Record<string, unknown> };
     expect(call.data).not.toHaveProperty('people');
@@ -3643,7 +3757,7 @@ describe('guest.claimItems with a save key (#238)', () => {
 
   test('a retry of a stored save answers saved even after the split was finalized', async () => {
     session([]);
-    const api = await caller();
+    const api = await caller(signedIn);
     await api.claimItems(forCat({ addItemIndices: [2] }));
     const stored = mockDb.guestSplit.update.mock.calls.at(-1)?.[0] as {
       data: { people: TestPerson[]; assignments: { itemIndex: number; personIndices: number[] }[] };
@@ -3660,7 +3774,7 @@ describe('guest.claimItems with a save key (#238)', () => {
 
   test('a retry of a stored save answers saved, with no conflicts, after the person was removed', async () => {
     session([]);
-    const api = await caller();
+    const api = await caller(signedIn);
     await api.claimItems(forCat({ addItemIndices: [2] }));
     const stored = mockDb.guestSplit.update.mock.calls.at(-1)?.[0] as { data: { people: TestPerson[] } };
     // Cat was removed, and her claims with her
@@ -3672,7 +3786,7 @@ describe('guest.claimItems with a save key (#238)', () => {
 
   test('records a short digest of the changes, not the changes', async () => {
     session([]);
-    await (await caller()).claimItems(forCat({ addItemIndices: [0, 1, 2] }));
+    await (await caller(signedIn)).claimItems(forCat({ addItemIndices: [0, 1, 2] }));
     const people = savedPeople() as { saves?: { hash: string }[] }[];
     expect(people[0]!.saves?.[0]?.hash).toMatch(/^[A-Za-z0-9_-]{16}$/);
   });
@@ -3680,7 +3794,7 @@ describe('guest.claimItems with a save key (#238)', () => {
   test('ignores save records that are not well formed, and drops them with the next save', async () => {
     const junk = [null, 'x', { key: 1, hash: 'y' }, { key: SAVE_KEY }] as unknown as { key: string; hash: string }[];
     session([], junk);
-    await (await caller()).claimItems(forCat({ addItemIndices: [2] }));
+    await (await caller(signedIn)).claimItems(forCat({ addItemIndices: [2] }));
     expect(savedAssignments()).toEqual([{ itemIndex: 2, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } }]);
     const people = savedPeople() as { saves?: { key: string }[] }[];
     expect(people[0]!.saves?.map((s) => s.key)).toEqual([SAVE_KEY]);
@@ -3689,7 +3803,7 @@ describe('guest.claimItems with a save key (#238)', () => {
   test('refuses a save key that is not a UUID', async () => {
     session([]);
     await expect(
-      (await caller()).claimItems({ ...forCat({ addItemIndices: [2] }), saveKey: 'not-a-uuid' }),
+      (await caller(signedIn)).claimItems({ ...forCat({ addItemIndices: [2] }), saveKey: 'not-a-uuid' }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
@@ -3729,7 +3843,7 @@ describe('guest.claimItems', () => {
     ]);
   });
 
-  test('refuses an id nobody has any more with CONFLICT, and saves nothing', async () => {
+  test('refuses a removed foreign person id without disclosing its state, and saves nothing', async () => {
     sessionAfterBWasRemoved();
     await expect(
       (await caller()).claimItems({
@@ -3738,7 +3852,7 @@ describe('guest.claimItems', () => {
         personId: pid(1),
         claimedItemIndices: [0],
       }),
-    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
