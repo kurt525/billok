@@ -3758,9 +3758,46 @@ describe('guest.claimItems', () => {
 });
 
 describe('guest.removePerson', () => {
-  test('removes the person the id names, wherever they are now', async () => {
+  test('3.25.3.1: anonymous guest cannot remove a different guest by known targetId', async () => {
     sessionAfterBWasRemoved();
-    await (await caller()).removePerson({ token: 'share-1', personToken: ALICE_TOKEN, targetId: pid(2) });
+    await expect(
+      (await caller()).removePerson({ token: 'share-1', personToken: ALICE_TOKEN, targetId: pid(2) }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      (await caller({ user: { id: 'unrelated-user' } })).removePerson({
+        token: 'share-1',
+        personToken: ALICE_TOKEN,
+        targetId: pid(2),
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('3.25.3.1: valid personal token allows only removal of its own row', async () => {
+    sessionAfterBWasRemoved();
+    await (await caller()).removePerson({ token: 'share-1', personToken: OTHER_TOKEN, targetId: pid(2) });
+    expect((savedPeople() as { id: string }[]).map((p) => p.id)).toEqual([pid(0), pid(3)]);
+    expect(savedAssignments()).toEqual([{ itemIndex: 1, personIndices: [1] }]);
+  });
+
+  test('3.25.3.1: impersonated creator cannot delete another guest even with a valid token', async () => {
+    sessionAfterBWasRemoved();
+    const { guestRouter } = await import('./guest');
+    const impersonator = guestRouter.createCaller({
+      session: signedIn,
+      db: mockDb,
+      headers: new Headers(),
+      impersonating: { adminId: 'other-user' },
+    } as unknown as Parameters<typeof guestRouter.createCaller>[0]);
+    await expect(
+      impersonator.removePerson({ token: 'share-1', personToken: ALICE_TOKEN, targetId: pid(2) }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('receipt creator removes the person the id names, wherever they are now', async () => {
+    sessionAfterBWasRemoved();
+    await (await caller(signedIn)).removePerson({ token: 'share-1', personToken: ALICE_TOKEN, targetId: pid(2) });
     expect((savedPeople() as { id: string }[]).map((p) => p.id)).toEqual([pid(0), pid(3)]);
     // D's claim moves down with D
     expect(savedAssignments()).toEqual([{ itemIndex: 1, personIndices: [1] }]);

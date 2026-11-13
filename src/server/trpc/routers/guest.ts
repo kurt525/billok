@@ -1612,6 +1612,13 @@ export const guestRouter = createTRPCRouter({
         const isParticipant = people.some((p) => p.personToken === input.personToken);
         if (!isParticipant) throw new AppError('FORBIDDEN', 'notParticipant');
         const targetIndex = targetIndexOrThrow(people, input.targetId);
+        // A known personId is an identifier, never a permission to eject its
+        // holder. Only that exact guest or the authenticated receipt creator
+        // can remove the row. A borrowed guest token does not grant creator
+        // privileges and an impersonated account never inherits them.
+        const isCreator = !!session.userId && session.userId === ctx.session?.user?.id && !ctx.impersonating;
+        const isSelf = people[targetIndex]?.personToken === input.personToken;
+        if (!isCreator && !isSelf) throw new AppError('FORBIDDEN', 'notParticipant');
         // No other person's guest token may eject the account-bound owner.
         if (people[targetIndex]?.accountUserId && people[targetIndex]?.personToken !== input.personToken) {
           throw new AppError('FORBIDDEN', 'notParticipant');

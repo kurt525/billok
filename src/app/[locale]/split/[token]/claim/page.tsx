@@ -2788,17 +2788,20 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
                     )}
-                    {data.people.length > 1 && (!hasPaymentGroups || data.isCreator) && (
-                      <button
-                        type="button"
-                        onClick={() => setRemoveFor({ id: person.id, name: person.name })}
-                        className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-destructive"
-                        aria-label={t('removePerson')}
-                        data-testid={`remove-person-${idx}`}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    )}
+                    {data.people.length > 1 &&
+                      !!personToken &&
+                      (data.isCreator || person.id === myPersonId) &&
+                      (!hasPaymentGroups || data.isCreator) && (
+                        <button
+                          type="button"
+                          onClick={() => setRemoveFor({ id: person.id, name: person.name })}
+                          className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-destructive"
+                          aria-label={t('removePerson')}
+                          data-testid={`remove-person-${idx}`}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                   </>
                 )}
                 {creatorGuestLinkControls(person, idx)}

@@ -5423,3 +5423,69 @@ test('Issue 3.25.2.4: mobile personal link rotation revokes old REST and SSE wit
     await creator.dispose();
   }
 });
+
+test('Issue 3.25.3.1: guest cannot remove a different participant by ID on mobile or REST', async ({ page }) => {
+  test.setTimeout(130_000);
+  const creator = await authedContext(users.alice.email, users.alice.password);
+  let token: string | undefined;
+  try {
+    const created = await trpcMutation(creator, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Права участников', subtotal: 500, total: 500, tax: 0, tip: 0, currency: 'RUB' },
+      items: [{ name: 'Суп', quantity: 1, unitPrice: 500, totalPrice: 500 }],
+      creatorName: 'Илья',
+      paidByName: 'Илья',
+      people: ['Илья', 'Андрей', 'Борис'],
+      joinCreator: true,
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    const setup = JSON.parse(await created.text()).result.data.json as {
+      shareToken: string;
+      creator: { personToken: string };
+    };
+    token = setup.shareToken;
+    const guestOne = await trpcMutation(page.request, 'guest.joinSession', { token, name: 'Андрей' });
+    const guestTwo = await trpcMutation(page.request, 'guest.joinSession', { token, name: 'Борис' });
+    expect(guestOne.ok(), await guestOne.text()).toBe(true);
+    expect(guestTwo.ok(), await guestTwo.text()).toBe(true);
+    const andrey = JSON.parse(await guestOne.text()).result.data.json as {
+      personId: string;
+      personToken: string;
+      name: string;
+    };
+    const boris = JSON.parse(await guestTwo.text()).result.data.json as { personId: string };
+    await rememberClaimIdentity(page.context(), token, andrey);
+    await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+    await expect(page.getByTestId('remove-person-1')).toBeVisible();
+    await expect(page.getByTestId('remove-person-0')).toHaveCount(0);
+    await expect(page.getByTestId('remove-person-2')).toHaveCount(0);
+    await fitsPhone(page);
+
+    const illegal = await trpcMutation(page.request, 'guest.removePerson', {
+      token,
+      personToken: andrey.personToken,
+      targetId: boris.personId,
+    });
+    expect(illegal.ok()).toBe(false);
+    expect((await trpcError(illegal))?.data?.code).toBe('FORBIDDEN');
+    const afterRefusal = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(afterRefusal.people).toHaveLength(3);
+    expect(afterRefusal.people[2].id).toBe(boris.personId);
+
+    const authorized = await trpcMutation(creator, 'guest.removePerson', {
+      token,
+      personToken: setup.creator.personToken,
+      targetId: boris.personId,
+    });
+    expect(authorized.ok(), await authorized.text()).toBe(true);
+    const afterCreator = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
+    expect(afterCreator.people).toHaveLength(2);
+    expect(afterCreator.people[1].id).toBe(andrey.personId);
+    expect(afterCreator.people[1].name).toBe('Андрей');
+    await expect(page.getByTestId('remove-person-2')).toHaveCount(0);
+    await fitsPhone(page);
+  } finally {
+    if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
+    await creator.dispose();
+  }
+});
