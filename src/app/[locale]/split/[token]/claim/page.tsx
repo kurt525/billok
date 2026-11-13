@@ -1262,9 +1262,9 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   }
 
   async function copyLink() {
-    // The plain share link; never carry a #fragment, which could hold a personal token
-    const url = new URL(window.location.href);
-    url.hash = '';
+    // Construct the public share link from the origin and pathname only.
+    // Neither a private personal-link fragment nor arbitrary query parameters belong in it.
+    const url = new URL(window.location.origin + window.location.pathname);
     if (await copyToClipboard(url.toString())) {
       toast.success(t('linkCopied'));
     } else {

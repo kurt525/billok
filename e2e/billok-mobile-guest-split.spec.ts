@@ -5721,3 +5721,64 @@ test('Issue 3.25.3.3: cross-receipt secrets, group changes and racing shares', a
     await owner.dispose();
   }
 });
+
+test('Issue 3.25.4.1: secret-bearing receipt URLs have no referrer and clean share links', async ({ page }) => {
+  test.setTimeout(120_000);
+  const creator = await authedContext(users.alice.email, users.alice.password);
+  let token: string | undefined;
+  try {
+    const response = await trpcMutation(creator, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Приватность ссылок', subtotal: 300, total: 300, tax: 0, tip: 0, currency: 'RUB' },
+      items: [{ name: 'Чай', quantity: 1, unitPrice: 300, totalPrice: 300 }],
+      creatorName: 'Создатель',
+      paidByName: 'Создатель',
+      people: ['Создатель', 'Анна'],
+      joinCreator: true,
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    token = (JSON.parse(await response.text()).result.data.json as { shareToken: string }).shareToken;
+    const joined = await trpcMutation(page.request, 'guest.joinSession', { token, name: 'Анна' });
+    expect(joined.ok(), await joined.text()).toBe(true);
+    const identity = JSON.parse(await joined.text()).result.data.json as {
+      personId: string;
+      personToken: string;
+      name: string;
+    };
+    await rememberClaimIdentity(page.context(), token, identity);
+
+    // A secret in the route path must never be disclosed to a cross-origin
+    // destination, regardless of an incidental query or fragment.
+    const nav = await page.goto('/split/' + token + '/claim?tracking=sensitive-marker', {
+      waitUntil: 'domcontentloaded',
+    });
+    expect(nav?.headers()['referrer-policy']).toBe('no-referrer');
+    const api = await trpcQuery(page.request, 'guest.getSession', { token });
+    expect(api.ok()).toBe(true);
+    expect(api.headers()['referrer-policy']).toBe('no-referrer');
+
+    let externalReferrer: string | null | undefined;
+    await page.route('https://privacy-probe.invalid/collect', async (route) => {
+      externalReferrer = route.request().headers()['referer'] ?? null;
+      await route.fulfill({ status: 204 });
+    });
+    await page.evaluate(async () => {
+      await fetch('https://privacy-probe.invalid/collect', { mode: 'no-cors' });
+    });
+    expect(externalReferrer).toBeNull();
+
+    await expect(page.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await expect(page.getByTestId('copy-link-btn')).toBeVisible();
+    await page.getByTestId('copy-link-btn').click();
+    const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+    const cleanUrl = new URL(page.url());
+    cleanUrl.search = '';
+    cleanUrl.hash = '';
+    expect(clipboard).toBe(cleanUrl.toString());
+    expect(clipboard).not.toContain('tracking=');
+    await fitsPhone(page);
+  } finally {
+    if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
+    await creator.dispose();
+  }
+});
