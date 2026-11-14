@@ -11,7 +11,11 @@ import {
   OWNER_APPROVAL_BINDING_COOKIE,
   isOwnerPasskeyAction,
 } from '@/server/lib/owner-passkey-action-approval';
-import { readBillokWebAuthnRelyingParty, WEBAUTHN_CHALLENGE_TTL_MS } from '@/server/lib/webauthn-relying-party';
+import {
+  isDisposableWebAuthnQa,
+  readBillokWebAuthnRelyingParty,
+  WEBAUTHN_CHALLENGE_TTL_MS,
+} from '@/server/lib/webauthn-relying-party';
 
 export async function POST(request: Request) {
   const denied = () => NextResponse.json({ error: 'Повторная проверка владельца не разрешена.' }, { status: 403 });
@@ -24,8 +28,14 @@ export async function POST(request: Request) {
   } catch {
     return denied();
   }
+  // 6.12.4.3 E2E: the disposable browser QA owner signs invitations,
+  // user status, key rename/revoke and the two-key recovery lifecycle in
+  // one hour. They share a single ownerId and in-memory rate-limit bucket.
+  // Keep the production budget at 12; only the already-validated isolated
+  // loopback billokqa PostgreSQL can raise it for regression coverage.
+  const perOwnerBudget = isDisposableWebAuthnQa(process.env) ? 48 : 12;
   if (
-    !checkRateLimit('owner-approval-start:' + session.user.id, 12, 60 * 60 * 1000).allowed ||
+    !checkRateLimit('owner-approval-start:' + session.user.id, perOwnerBudget, 60 * 60 * 1000).allowed ||
     !checkRateLimit('owner-approval-start-ip:' + getClientIp(request.headers), 30, 60 * 60 * 1000).allowed
   ) {
     return NextResponse.json({ error: 'Слишком много запросов.' }, { status: 429 });

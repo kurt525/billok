@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { authMock, beginMock, rateMock, sessionFingerprintMock } = vi.hoisted(() => ({
+const { authMock, beginMock, rateMock, sessionFingerprintMock, qaMock } = vi.hoisted(() => ({
   authMock: vi.fn(),
   beginMock: vi.fn(),
   rateMock: vi.fn(),
   sessionFingerprintMock: vi.fn(),
+  qaMock: vi.fn(),
 }));
 vi.mock('@/server/auth', () => ({ auth: authMock }));
 vi.mock('@/server/db', () => ({ db: {} }));
@@ -34,6 +35,7 @@ vi.mock('@/server/lib/webauthn-registration', () => ({
 }));
 vi.mock('@/server/lib/webauthn-relying-party', () => ({
   readBillokWebAuthnRelyingParty: () => ({ origin: 'https://billok.ru' }),
+  isDisposableWebAuthnQa: qaMock,
   WEBAUTHN_CHALLENGE_TTL_MS: 300_000,
 }));
 vi.mock('@/server/lib/rate-limit', () => ({ checkRateLimit: rateMock }));
@@ -53,9 +55,35 @@ beforeEach(() => {
   rateMock.mockReturnValue({ allowed: true });
   beginMock.mockResolvedValue({ challenge: 'q'.repeat(43), allowCredentials: [] });
   sessionFingerprintMock.mockReturnValue('a'.repeat(64));
+  qaMock.mockReturnValue(false);
 });
 
 describe('Issue #1 6.10.2.2: approval/start requires logged-in owner', () => {
+  it('keeps the 12-per-owner/hour budget in ordinary environments; higher QA budget is guarded', async () => {
+    const request = createRequest({ action: 'SYSTEM_INVITE_CREATE', targetId: 'invite:v1:7:none' });
+    const production = await POST(request);
+    expect(production.status).toBe(200);
+    expect(rateMock).toHaveBeenNthCalledWith(1, 'owner-approval-start:owner', 12, 60 * 60 * 1000);
+    expect(rateMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringMatching(/^owner-approval-start-ip:/u),
+      30,
+      60 * 60 * 1000,
+    );
+
+    rateMock.mockClear();
+    qaMock.mockReturnValue(true); // fake the already-tested, disposable-only predicate
+    const isolatedQa = await POST(createRequest({ action: 'SYSTEM_INVITE_REVOKE', targetId: 'invite-row-1' }));
+    expect(isolatedQa.status).toBe(200);
+    expect(rateMock).toHaveBeenNthCalledWith(1, 'owner-approval-start:owner', 48, 60 * 60 * 1000);
+    expect(rateMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringMatching(/^owner-approval-start-ip:/u),
+      30,
+      60 * 60 * 1000,
+    );
+  });
+
   it('creates an HttpOnly browser nonce tied to one validated operation', async () => {
     const response = await POST(createRequest({ action: 'REVOKE', targetId: 'target-1' }));
     expect(response.status).toBe(200);
