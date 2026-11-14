@@ -18,7 +18,7 @@ import {
 import { Trash2, Loader2, Ban, CheckCircle2, UserCheck, Search, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
-import { approveOwnerUserAction, type OwnerUserAction } from '@/lib/owner-admin-approval';
+import { approveOwnerUserAction, approveOwnerPrivilegedAction, type OwnerUserAction } from '@/lib/owner-admin-approval';
 
 type UserSortBy = 'name' | 'email' | 'groupCount' | 'createdAt';
 type UserStatus = 'all' | 'active' | 'suspended' | 'placeholder';
@@ -127,12 +127,14 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
   };
 
   const handleImpersonate = async (userId: string) => {
+    if (impersonating || approvingUser) return;
     setImpersonating(true);
     try {
+      const approvalToken = await approveOwnerPrivilegedAction('IMPERSONATE', userId);
       const res = await fetch('/api/admin/impersonate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId }),
+        body: JSON.stringify({ userId, approvalToken }),
       });
       if (res.ok) {
         // BillOK uses canonical, unprefixed Russian-only URLs.
@@ -321,7 +323,7 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
                                   className="size-11 shrink-0"
                                   aria-label={t('users.impersonate', { name: user.name ?? user.email })}
                                   onClick={() => handleImpersonate(user.id)}
-                                  disabled={impersonating}
+                                  disabled={impersonating || approvingUser}
                                 >
                                   <UserCheck className="h-4 w-4 text-purple-600" />
                                 </Button>

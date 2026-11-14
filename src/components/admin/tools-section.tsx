@@ -8,6 +8,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Loader2, Download, Mail, Wrench, CheckCircle2, AlertCircle, Trash2 } from 'lucide-react';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
+import { approveOwnerPrivilegedAction } from '@/lib/owner-admin-approval';
 
 export function ToolsSection() {
   const t = useTranslations('admin');
@@ -22,10 +23,17 @@ export function ToolsSection() {
   const [exportResult, setExportResult] = useState<{ message: string; isError: boolean } | null>(null);
 
   const handleExport = async () => {
+    if (exporting) return;
     setExporting(true);
     setExportResult(null);
     try {
-      const res = await fetch('/api/admin/export');
+      const approvalToken = await approveOwnerPrivilegedAction('ADMIN_EXPORT', 'all-data:v1');
+      const res = await fetch('/api/admin/export', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approvalToken }),
+      });
       if (!res.ok) {
         setExportResult({ message: t('tools.exportFailed', { error: 'Код ответа ' + res.status }), isError: true });
         return;

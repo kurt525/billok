@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type APIRequestContext } from '@playwright/test';
 import {
   authedPasskeyContext,
   enableVirtualPasskey,
@@ -32,6 +32,25 @@ async function findOwnerRecoveryLink(page: Page): Promise<string> {
     )
     .toBeGreaterThan(0);
   return links[0]!;
+}
+
+// One real ES256 QA WebAuthn assertion, bound to the exact privileged
+// action+target and the current owner Auth.js session (6.12.4.5).
+async function signSensitiveOwnerAction(
+  context: APIRequestContext,
+  action: 'IMPERSONATE' | 'ADMIN_EXPORT',
+  targetId: string,
+): Promise<string> {
+  const start = await context.post('/api/webauthn/owner/approval/start', { data: { action, targetId } });
+  expect(start.status()).toBe(200);
+  const { options } = (await start.json()) as { options: { challenge: string; rpId: string } };
+  const finish = await context.post('/api/webauthn/owner/approval/finish', {
+    data: signedQaAssertion({ email, credentialIndex: 0, challenge: options.challenge, rpId: options.rpId }),
+  });
+  expect(finish.status()).toBe(200);
+  const { approvalToken } = (await finish.json()) as { approvalToken: string };
+  expect(approvalToken).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+  return approvalToken;
 }
 
 async function expectNoSession(page: Page) {
@@ -112,6 +131,48 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
       expect(revokeBounds!.x + revokeBounds!.width).toBeLessThanOrEqual(321);
       await dialog.locator('[data-slot="alert-dialog-action"]').click();
       await expect(inviteRow.getByTestId('admin-registration-revoke-invite')).toHaveCount(0);
+
+      // Issue 6.12.4.5: a JWT, GET, or old export link cannot download data.
+      expect((await oldSession.get('/api/admin/export')).status()).toBe(405);
+      expect((await oldSession.post('/api/admin/export', { data: {} })).status()).toBe(403);
+      expect(
+        (await oldSession.post('/api/admin/impersonate', { data: { userId: 'owner-users-target' } })).status(),
+      ).toBe(400);
+      // Exercise the genuine MOBILE BUTTON → native CTAP2 → one-use export
+      // rather than skipping the UI with a fabricated token.
+      await page.getByTestId('admin-tools-export').scrollIntoViewIfNeeded();
+      const exportBounds = await page.getByTestId('admin-tools-export').boundingBox();
+      expect(exportBounds).not.toBeNull();
+      expect(exportBounds!.x).toBeGreaterThanOrEqual(-1);
+      expect(exportBounds!.x + exportBounds!.width).toBeLessThanOrEqual(321);
+      const signedDownload = page.waitForEvent('download', { timeout: 45_000 });
+      await page.getByTestId('admin-tools-export').click();
+      const exportFile = await signedDownload;
+      expect(exportFile.suggestedFilename()).toMatch(/^billok-export-.*[.]json$/u);
+
+      // Sign the exact person to impersonate; the cookie must be tied to
+      // this signed-in owner session and cleared before resuming key lifecycle.
+      const chosenId = 'owner-users-target';
+      const modeApproval = await signSensitiveOwnerAction(oldSession, 'IMPERSONATE', chosenId);
+      const modeBegin = await oldSession.post('/api/admin/impersonate', {
+        data: { userId: chosenId, approvalToken: modeApproval },
+      });
+      expect(modeBegin.status()).toBe(200);
+      expect((await modeBegin.json()) as { impersonating?: { id: string } }).toMatchObject({
+        impersonating: { id: chosenId },
+      });
+      // No second impersonation or approval reuse in the active mode.
+      expect(
+        (
+          await oldSession.post('/api/admin/impersonate', {
+            data: { userId: chosenId, approvalToken: modeApproval },
+          })
+        ).status(),
+      ).toBe(403);
+      expect((await oldSession.delete('/api/admin/impersonate')).status()).toBe(200);
+      expect((await (await oldSession.get('/api/auth/session')).json()) as { user?: { email?: string } }).toMatchObject(
+        { user: { email } },
+      );
 
       await expect(page.getByTestId('owner-users-nav')).toBeVisible();
       await page.getByTestId('owner-users-nav').click();

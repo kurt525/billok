@@ -5,12 +5,13 @@ import { requireOwner } from '@/server/lib/owner-access';
 import { logAdminAction } from '@/server/trpc/routers/admin';
 import { signPayload } from '@/server/lib/signed-cookie';
 import { currentImpersonationSessionBinding, verifiedImpersonationSession } from '@/server/lib/impersonation-session';
+import { ownerSessionFingerprint, consumeOwnerPasskeyActionProof } from '@/server/lib/owner-passkey-action-approval';
 
 const COOKIE_NAME = 'sharetab-impersonate';
 
 /**
  * POST /api/admin/impersonate
- * Body: { userId: string }
+ * Body: { userId: string, approvalToken: string }
  * Sets impersonation cookie so tRPC context switches effective user.
  */
 export async function POST(req: Request) {
@@ -33,8 +34,10 @@ export async function POST(req: Request) {
     !body ||
     typeof body !== 'object' ||
     Array.isArray(body) ||
-    Object.keys(body).length !== 1 ||
-    typeof (body as { userId?: unknown }).userId !== 'string'
+    Object.keys(body).length !== 2 ||
+    typeof (body as { userId?: unknown }).userId !== 'string' ||
+    typeof (body as { approvalToken?: unknown }).approvalToken !== 'string' ||
+    !/^[A-Za-z0-9_-]{43}$/u.test((body as { approvalToken: string }).approvalToken)
   ) {
     return Response.json({ error: 'Не указан пользователь' }, { status: 400 });
   }
@@ -47,14 +50,42 @@ export async function POST(req: Request) {
     return Response.json({ error: 'Нельзя войти от собственного имени' }, { status: 400 });
   }
 
-  const targetUser = await db.user.findUnique({
-    where: { id: targetUserId },
-    select: { id: true, name: true, email: true },
-  });
-
-  if (!targetUser) {
-    return Response.json({ error: 'Пользователь не найден' }, { status: 404 });
+  // One signed grant is valid ONLY for this target and authenticated session.
+  // Owner lock, target lock, proof consumption and audit are one transaction.
+  // The impersonation cookie is never set if any check or write fails.
+  let targetUser: { id: string; name: string | null; email: string } | null;
+  try {
+    const sessionHash = ownerSessionFingerprint(req.headers);
+    targetUser = await db.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', session.user.id);
+      await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', targetUserId);
+      await requireOwner(tx, session.user.id);
+      const selected = await tx.user.findUnique({
+        where: { id: targetUserId },
+        select: { id: true, name: true, email: true },
+      });
+      if (!selected) return null;
+      await consumeOwnerPasskeyActionProof(tx, {
+        userId: session.user.id,
+        action: 'IMPERSONATE',
+        targetId: targetUserId,
+        sessionHash,
+        approvalToken: (body as { approvalToken: string }).approvalToken,
+      });
+      await tx.adminAuditLog.create({
+        data: {
+          adminId: session.user.id,
+          action: 'IMPERSONATION_STARTED',
+          targetId: targetUserId,
+          metadata: { targetEmail: selected.email, targetName: selected.name },
+        },
+      });
+      return selected;
+    });
+  } catch {
+    return Response.json({ error: 'Доступ запрещён' }, { status: 403 });
   }
+  if (!targetUser) return Response.json({ error: 'Пользователь не найден' }, { status: 404 });
 
   const impersonationData = JSON.stringify({
     adminId: session.user.id,
@@ -72,11 +103,6 @@ export async function POST(req: Request) {
     sameSite: 'strict',
     path: '/',
     maxAge: 60 * 60, // 1 hour max
-  });
-
-  await logAdminAction(db, session.user.id, 'IMPERSONATION_STARTED', targetUserId, {
-    targetEmail: targetUser.email,
-    targetName: targetUser.name,
   });
 
   return Response.json({
