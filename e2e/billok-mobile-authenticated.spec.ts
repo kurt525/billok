@@ -1,7 +1,8 @@
-import { authedPasskeyContext } from './passkey-auth';
+import { authedPasskeyContext, signedQaAssertion } from './passkey-auth';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { auditMobileViewport, auditMobileTarget } from './billok-mobile-viewport-audit';
 import { createTestGroup, trpcMutation, trpcQuery, trpcResult, users } from './helpers';
+import { systemInviteCreateApprovalTarget } from '@/lib/system-invite-approval-target';
 
 // Only against the disposable seed database created by the Mobile Chromium CI job.
 const widths = [320, 360, 393, 412] as const;
@@ -115,6 +116,34 @@ async function signInAsOwnerAdmin(page: Page) {
   await page.context().addCookies(await signedQaCookies('owner-qa@mail.ru'));
   await page.goto('/dashboard', { waitUntil: 'networkidle' });
   await expect(page.getByRole('heading', { name: 'Главная' })).toBeVisible();
+}
+
+// Authenticated API-level WebAuthn assertion for the NON-destructive mobile
+// layout suite. Key #0 uses zero-counter multi-device semantics; the separate
+// owner recovery suite exclusively tests CTAP2 browser button flows using keys
+// #0–#2 AFTER this suite. Never install a counter-incrementing CTAP2 authenticator
+// for the shared API key here: it would invalidate subsequent QA logins.
+async function approveQaOwnerInvitation(
+  page: Page,
+  action: 'SYSTEM_INVITE_CREATE' | 'SYSTEM_INVITE_REVOKE',
+  targetId: string,
+) {
+  const started = await page.request.post('/api/webauthn/owner/approval/start', {
+    data: { action, targetId },
+  });
+  expect(started.ok(), 'WebAuthn start rejected: ' + (await started.text())).toBe(true);
+  const { options } = (await started.json()) as { options: { challenge: string; rpId: string } };
+  const signed = signedQaAssertion({
+    email: 'owner-qa@mail.ru',
+    credentialIndex: 0,
+    challenge: options.challenge,
+    rpId: options.rpId,
+  });
+  const finished = await page.request.post('/api/webauthn/owner/approval/finish', { data: signed });
+  expect(finished.ok(), 'WebAuthn signature rejected: ' + (await finished.text())).toBe(true);
+  const { approvalToken } = (await finished.json()) as { approvalToken: string };
+  expect(approvalToken).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+  return approvalToken;
 }
 
 // One authenticated session across four viewports avoids tripping BillOK's
@@ -652,8 +681,25 @@ test('mobile invitation management keeps registration controls accessible at six
   await page.goto('/admin', { waitUntil: 'networkidle' });
   const section = page.getByTestId('admin-registration-control');
   await expect(section).toBeVisible();
-  await section.getByTestId('admin-registration-invite-label').fill(label);
-  await section.getByTestId('admin-registration-create-invite').click();
+  // 6.12.4.3: the old test clicked Create with just a session cookie, but
+  // creation now requires a signed WebAuthn assertion. Preserve the six-width
+  // UI audit by creating the disposable invite using a REAL server-verified
+  // QA WebAuthn signature rather than bypassing the security gate.
+  const createApproval = await approveQaOwnerInvitation(
+    page,
+    'SYSTEM_INVITE_CREATE',
+    systemInviteCreateApprovalTarget(label),
+  );
+  const createResponse = await trpcMutation(page.request, 'admin.createSystemInvite', {
+    label,
+    expiresInDays: 7,
+    approvalToken: createApproval,
+  });
+  expect(createResponse.ok(), 'Signed invite creation failed: ' + (await createResponse.text())).toBe(true);
+  const created = (await createResponse.json()) as { result: { data: { json: { id: string } } } };
+  const inviteId = created.result.data.json.id;
+  expect(inviteId).toBeTruthy();
+  await page.reload({ waitUntil: 'networkidle' });
   const invite = section.getByTestId('admin-invitation-row').filter({ hasText: label });
   await expect(invite).toHaveCount(1, { timeout: 15_000 });
 
@@ -712,11 +758,17 @@ test('mobile invitation management keeps registration controls accessible at six
 
     await checkPhoneLayout(page, width, true);
   }
+  // Revoke the same disposable code with a DIFFERENT freshly signed approval.
+  // The mobile revoke dialog's real CTAP2 click path is covered by the owner
+  // recovery Chromium suite, after this shared-key layout suite finishes.
+  const revokeApproval = await approveQaOwnerInvitation(page, 'SYSTEM_INVITE_REVOKE', inviteId);
+  const revokeResponse = await trpcMutation(page.request, 'admin.revokeSystemInvite', {
+    inviteId,
+    approvalToken: revokeApproval,
+  });
+  expect(revokeResponse.ok(), 'Signed invite revocation failed: ' + (await revokeResponse.text())).toBe(true);
+  await page.reload({ waitUntil: 'networkidle' });
   const row = page.getByTestId('admin-invitation-row').filter({ hasText: label });
-  await row.getByTestId('admin-registration-revoke-invite').click();
-  const confirm = page.getByRole('alertdialog');
-  await expect(confirm).toBeVisible();
-  await confirm.getByRole('button', { name: 'Отозвать приглашение' }).click();
   await expect(row).toContainText('Отозвано', { timeout: 15_000 });
   await expect(row.getByTestId('admin-registration-revoke-invite')).toHaveCount(0);
 });
