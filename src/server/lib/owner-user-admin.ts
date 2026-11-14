@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from '@/generated/prisma/client';
 import { AppError } from './app-error';
 import { requireOwner } from './owner-access';
 import { revokeAccountAuthenticationStateInTransaction } from './revoke-account-auth';
+import { consumeOwnerPasskeyActionProof } from './owner-passkey-action-approval';
 
 export const OWNER_USERS_PAGE_LIMIT = 20;
 export type OwnerUserStatus = 'all' | 'active' | 'suspended' | 'pending';
@@ -82,12 +83,17 @@ export async function changeRegisteredUserSuspension(input: {
   ownerId: string;
   userId: string;
   suspend: boolean;
+  sessionHash: string;
+  approvalToken: string;
   now?: Date;
 }): Promise<{ suspended: boolean; userId: string }> {
-  if (!input.ownerId || !input.userId || input.userId === input.ownerId) throw new AppError('FORBIDDEN');
+  if (!input.ownerId || !input.userId || input.userId === input.ownerId || !input.approvalToken || !input.sessionHash)
+    throw new AppError('FORBIDDEN');
   const now = input.now ?? new Date();
   return input.db.$transaction(async (tx) => {
-    // Serialize state changes for this user and avoid lost updates/replays.
+    // Serialize owner privilege/proof checks and target mutations. All paths
+    // lock owner first, target second, to avoid opposite-order deadlocks.
+    await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', input.ownerId);
     await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', input.userId);
     const [bootstrap, actor, target] = await Promise.all([
       tx.ownerBootstrap.findUnique({ where: { id: 1 }, select: { userId: true, completedAt: true } }),
@@ -112,6 +118,16 @@ export async function changeRegisteredUserSuspension(input: {
       Boolean(target.suspendedAt) === input.suspend
     )
       throw new AppError('FORBIDDEN');
+    // A signed proof is consumed in the SAME PostgreSQL transaction as the
+    // actual status change. Any error rolls both the status and proof back.
+    await consumeOwnerPasskeyActionProof(tx, {
+      userId: input.ownerId,
+      action: input.suspend ? 'USER_SUSPEND' : 'USER_UNSUSPEND',
+      targetId: input.userId,
+      sessionHash: input.sessionHash,
+      approvalToken: input.approvalToken,
+      now,
+    });
     const result = await tx.user.updateMany({
       where: {
         id: input.userId,

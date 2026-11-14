@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { ArrowLeft, ArrowDownUp, LoaderCircle, Search, ShieldCheck, Users } from 'lucide-react';
 import { toast } from 'sonner';
+import { approveOwnerUserAction } from '@/lib/owner-admin-approval';
 
 type Status = 'all' | 'active' | 'suspended' | 'pending';
 type Sort = 'name' | 'email' | 'createdAt';
@@ -33,6 +34,7 @@ export function OwnerUsersClient() {
   const [sortBy, setSortBy] = useState<Sort>('createdAt');
   const [direction, setDirection] = useState<Direction>('desc');
   const [selected, setSelected] = useState<{ id: string; name: string; suspend: boolean } | null>(null);
+  const [approving, setApproving] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(search.trim()), 300);
@@ -53,6 +55,23 @@ export function OwnerUsersClient() {
     },
     onError: () => toast.error(t('mutationFailed')),
   });
+
+  async function confirmWithPasskey() {
+    if (!selected || approving || setSuspended.isPending) return;
+    setApproving(true);
+    try {
+      const approvalToken = await approveOwnerUserAction(
+        selected.suspend ? 'USER_SUSPEND' : 'USER_UNSUSPEND',
+        selected.id,
+      );
+      await setSuspended.mutateAsync({ userId: selected.id, suspend: selected.suspend, approvalToken });
+    } catch {
+      // Cancellation, malformed assertion and server refusal are fail-closed.
+      toast.error('Действие не подтверждено через Passkey');
+    } finally {
+      setApproving(false);
+    }
+  }
 
   return (
     <div data-testid="owner-users-page" className="min-w-0 space-y-5">
@@ -169,7 +188,7 @@ export function OwnerUsersClient() {
                     className="min-h-11 w-full whitespace-normal"
                     variant={user.status === 'suspended' ? 'outline' : 'destructive'}
                     data-testid={'owner-user-toggle-' + user.id}
-                    disabled={setSuspended.isPending}
+                    disabled={approving || setSuspended.isPending}
                     onClick={() =>
                       setSelected({ id: user.id, name: user.name || user.email, suspend: user.status !== 'suspended' })
                     }
@@ -197,7 +216,7 @@ export function OwnerUsersClient() {
       <Dialog
         open={selected !== null}
         onOpenChange={(open) => {
-          if (!open && !setSuspended.isPending) setSelected(null);
+          if (!open && !approving && !setSuspended.isPending) setSelected(null);
         }}
       >
         <DialogContent
@@ -210,12 +229,15 @@ export function OwnerUsersClient() {
               {selected && t(selected.suspend ? 'blockDescription' : 'unblockDescription', { name: selected.name })}
             </DialogDescription>
           </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Перед изменением статуса подтвердите действие с помощью Passkey владельца.
+          </p>
           <DialogFooter className="flex min-w-0 flex-wrap gap-2">
             <Button
               type="button"
               variant="outline"
               className="min-h-11"
-              disabled={setSuspended.isPending}
+              disabled={approving || setSuspended.isPending}
               data-testid="owner-users-cancel"
               onClick={() => setSelected(null)}
             >
@@ -225,11 +247,11 @@ export function OwnerUsersClient() {
               type="button"
               className="min-h-11"
               variant={selected?.suspend ? 'destructive' : 'default'}
-              disabled={setSuspended.isPending || !selected}
+              disabled={approving || setSuspended.isPending || !selected}
               data-testid="owner-users-confirm-submit"
-              onClick={() => selected && setSuspended.mutate({ userId: selected.id, suspend: selected.suspend })}
+              onClick={() => void confirmWithPasskey()}
             >
-              {setSuspended.isPending ? t('loading') : selected?.suspend ? t('block') : t('unblock')}
+              {approving || setSuspended.isPending ? t('loading') : selected?.suspend ? t('block') : t('unblock')}
             </Button>
           </DialogFooter>
         </DialogContent>

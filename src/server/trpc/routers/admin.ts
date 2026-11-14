@@ -21,6 +21,7 @@ import { REGISTRATION_MODES, readRegistrationMode } from '@/server/lib/registrat
 import { activeSystemInviteWindow, SYSTEM_INVITE_TTL_MS } from '@/server/lib/system-invite-lifetime';
 import { totalsInGroupCurrency } from '@/server/lib/group-expense-totals';
 import { listOwnerRegisteredUsers, changeRegisteredUserSuspension } from '@/server/lib/owner-user-admin';
+import { ownerSessionFingerprint, consumeOwnerPasskeyActionProof } from '@/server/lib/owner-passkey-action-approval';
 
 const serverStartTime = new Date();
 const { version: cachedVersion, commitSha: cachedCommitSha } = getBuildInfo();
@@ -69,13 +70,21 @@ export const adminRouter = createTRPCRouter({
     .query(({ ctx, input }) => listOwnerRegisteredUsers(ctx.db, ctx.user.id, input)),
 
   ownerSetUserSuspended: ownerUsersProcedure
-    .input(z.object({ userId: z.string().min(1).max(128), suspend: z.boolean() }))
+    .input(
+      z.object({
+        userId: z.string().min(1).max(128),
+        suspend: z.boolean(),
+        approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+      }),
+    )
     .mutation(({ ctx, input }) =>
       changeRegisteredUserSuspension({
         db: ctx.db,
         ownerId: ctx.user.id,
         userId: input.userId,
         suspend: input.suspend,
+        approvalToken: input.approvalToken,
+        sessionHash: ownerSessionFingerprint(ctx.headers),
       }),
     ),
 
@@ -248,134 +257,125 @@ export const adminRouter = createTRPCRouter({
       };
     }),
 
-  suspendUser: adminProcedure.input(z.object({ userId: z.string() })).mutation(async ({ ctx, input }) => {
-    if (input.userId === ctx.user.id) {
-      throw new AppError('BAD_REQUEST', 'cannotSuspendYourself');
-    }
-
-    const user = await ctx.db.user.findUnique({
-      where: { id: input.userId },
-      select: { id: true, email: true, suspendedAt: true },
-    });
-
-    if (!user) {
-      throw new AppError('NOT_FOUND', 'userNotFound');
-    }
-
-    if (user.suspendedAt) {
-      throw new AppError('BAD_REQUEST', 'alreadySuspended');
-    }
-
-    await ctx.db.user.update({
-      where: { id: input.userId },
-      data: { suspendedAt: new Date() },
-    });
-
-    await logAdminAction(ctx.db, ctx.user.id, 'USER_SUSPENDED', input.userId, { email: user.email });
-
-    return { suspended: true, userId: input.userId };
-  }),
-
-  unsuspendUser: adminProcedure.input(z.object({ userId: z.string() })).mutation(async ({ ctx, input }) => {
-    const user = await ctx.db.user.findUnique({
-      where: { id: input.userId },
-      select: { id: true, email: true, suspendedAt: true, isPlaceholder: true },
-    });
-
-    if (!user) {
-      throw new AppError('NOT_FOUND', 'userNotFound');
-    }
-
-    if (!user.suspendedAt) {
-      throw new AppError('BAD_REQUEST', 'notSuspended');
-    }
-
-    if (user.isPlaceholder) {
-      throw new AppError('BAD_REQUEST', 'cannotUnsuspend');
-    }
-
-    await ctx.db.user.update({
-      where: { id: input.userId },
-      data: { suspendedAt: null },
-    });
-
-    await logAdminAction(ctx.db, ctx.user.id, 'USER_UNSUSPENDED', input.userId, { email: user.email });
-
-    return { unsuspended: true, userId: input.userId };
-  }),
-
-  deleteUser: adminProcedure.input(z.object({ userId: z.string() })).mutation(async ({ ctx, input }) => {
-    if (input.userId === ctx.user.id) {
-      throw new AppError('BAD_REQUEST', 'cannotDeleteYourself');
-    }
-
-    const user = await ctx.db.user.findUnique({
-      where: { id: input.userId },
-      select: { id: true, email: true },
-    });
-
-    if (!user) {
-      throw new AppError('NOT_FOUND', 'userNotFound');
-    }
-
-    await ctx.db.$transaction(async (tx) => {
-      // Convert to placeholder to preserve financial history, then strip auth data
-      await tx.user.update({
-        where: { id: input.userId },
-        data: {
-          isPlaceholder: true,
-          name: 'Deleted user',
-          placeholderName: 'Deleted user',
-          email: `deleted-${input.userId}@placeholder.local`,
-          image: null,
-          venmoUsername: null,
-          suspendedAt: new Date(),
-        },
+  // Legacy admin page must use the exact same transaction+WebAuthn guard as
+  // /admin/users; it must never offer an alternate unauthenticated mutation.
+  suspendUser: adminProcedure
+    .input(z.object({ userId: z.string().min(1).max(128), approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u) }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await changeRegisteredUserSuspension({
+        db: ctx.db,
+        ownerId: ctx.user.id,
+        userId: input.userId,
+        suspend: true,
+        approvalToken: input.approvalToken,
+        sessionHash: ownerSessionFingerprint(ctx.headers),
       });
-      // Remove sessions and WebAuthn credentials: deleted accounts must not
-      // authenticate with a previously enrolled passkey.
-      await tx.session.deleteMany({ where: { userId: input.userId } });
-      await tx.webAuthnChallenge.deleteMany({ where: { userId: input.userId } });
-      await tx.passkeyCredential.deleteMany({ where: { userId: input.userId } });
-      // Transfer ownership before removing memberships
-      const ownedGroups = await tx.groupMember.findMany({
-        where: { userId: input.userId, role: 'OWNER' },
-        select: { groupId: true },
+      return { suspended: result.suspended, userId: result.userId };
+    }),
+
+  unsuspendUser: adminProcedure
+    .input(z.object({ userId: z.string().min(1).max(128), approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u) }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await changeRegisteredUserSuspension({
+        db: ctx.db,
+        ownerId: ctx.user.id,
+        userId: input.userId,
+        suspend: false,
+        approvalToken: input.approvalToken,
+        sessionHash: ownerSessionFingerprint(ctx.headers),
       });
-      const keepMembershipGroupIds: string[] = [];
-      for (const { groupId } of ownedGroups) {
-        const nextOwner = await tx.groupMember.findFirst({
-          where: {
-            groupId,
-            userId: { not: input.userId },
-            user: { isPlaceholder: false, suspendedAt: null },
-          },
-          orderBy: { joinedAt: 'asc' },
-        });
-        if (nextOwner) {
-          await tx.groupMember.update({
-            where: { id: nextOwner.id },
-            data: { role: 'OWNER' },
-          });
-        } else {
-          keepMembershipGroupIds.push(groupId);
-        }
+      return { unsuspended: !result.suspended, userId: result.userId };
+    }),
+
+  deleteUser: adminProcedure
+    .input(z.object({ userId: z.string().min(1).max(128), approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u) }))
+    .mutation(async ({ ctx, input }) => {
+      if (input.userId === ctx.user.id) {
+        throw new AppError('BAD_REQUEST', 'cannotDeleteYourself');
       }
-      // Remove memberships except where user is the sole active owner
-      await tx.groupMember.deleteMany({
-        where: {
-          userId: input.userId,
-          ...(keepMembershipGroupIds.length > 0 ? { groupId: { notIn: keepMembershipGroupIds } } : {}),
-        },
+
+      const sessionHash = ownerSessionFingerprint(ctx.headers);
+      await ctx.db.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', ctx.user.id);
+        await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', input.userId);
+        // Double-check the immutable owner and account under the row lock.
+        await requireOwner(tx, ctx.user.id);
+        const bootstrap = await tx.ownerBootstrap.findUnique({ where: { id: 1 }, select: { userId: true } });
+        if (bootstrap?.userId === input.userId) throw new AppError('FORBIDDEN');
+        const user = await tx.user.findUnique({
+          where: { id: input.userId },
+          select: { id: true, email: true, isPlaceholder: true },
+        });
+        if (!user || user.isPlaceholder) throw new AppError('FORBIDDEN');
+        await consumeOwnerPasskeyActionProof(tx, {
+          userId: ctx.user.id,
+          action: 'USER_DELETE',
+          targetId: input.userId,
+          sessionHash,
+          approvalToken: input.approvalToken,
+        });
+        // Convert to placeholder to preserve financial history, then strip auth data
+        await tx.user.update({
+          where: { id: input.userId },
+          data: {
+            isPlaceholder: true,
+            name: 'Deleted user',
+            placeholderName: 'Deleted user',
+            email: `deleted-${input.userId}@placeholder.local`,
+            image: null,
+            venmoUsername: null,
+            suspendedAt: new Date(),
+          },
+        });
+        // Remove sessions and WebAuthn credentials: deleted accounts must not
+        // authenticate with a previously enrolled passkey.
+        await tx.session.deleteMany({ where: { userId: input.userId } });
+        await tx.passkeyLoginTicket.deleteMany({ where: { userId: input.userId } });
+        await tx.webAuthnChallenge.deleteMany({ where: { userId: input.userId } });
+        await tx.passkeyCredential.deleteMany({ where: { userId: input.userId } });
+        // Transfer ownership before removing memberships
+        const ownedGroups = await tx.groupMember.findMany({
+          where: { userId: input.userId, role: 'OWNER' },
+          select: { groupId: true },
+        });
+        const keepMembershipGroupIds: string[] = [];
+        for (const { groupId } of ownedGroups) {
+          const nextOwner = await tx.groupMember.findFirst({
+            where: {
+              groupId,
+              userId: { not: input.userId },
+              user: { isPlaceholder: false, suspendedAt: null },
+            },
+            orderBy: { joinedAt: 'asc' },
+          });
+          if (nextOwner) {
+            await tx.groupMember.update({
+              where: { id: nextOwner.id },
+              data: { role: 'OWNER' },
+            });
+          } else {
+            keepMembershipGroupIds.push(groupId);
+          }
+        }
+        // Remove memberships except where user is the sole active owner
+        await tx.groupMember.deleteMany({
+          where: {
+            userId: input.userId,
+            ...(keepMembershipGroupIds.length > 0 ? { groupId: { notIn: keepMembershipGroupIds } } : {}),
+          },
+        });
+        await tx.adminAuditLog.create({
+          data: {
+            adminId: ctx.user.id,
+            action: 'USER_DELETED',
+            targetId: input.userId,
+            metadata: { email: user.email },
+          },
+        });
       });
-    });
 
-    await logAdminAction(ctx.db, ctx.user.id, 'USER_DELETED', input.userId, {
-      email: user.email,
-    });
-
-    return { deleted: true, userId: input.userId };
-  }),
+      return { deleted: true, userId: input.userId };
+    }),
 
   listGroups: adminProcedure
     .input(

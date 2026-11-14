@@ -18,6 +18,7 @@ import {
 import { Trash2, Loader2, Ban, CheckCircle2, UserCheck, Search, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
+import { approveOwnerUserAction, type OwnerUserAction } from '@/lib/owner-admin-approval';
 
 type UserSortBy = 'name' | 'email' | 'groupCount' | 'createdAt';
 type UserStatus = 'all' | 'active' | 'suspended' | 'placeholder';
@@ -108,6 +109,22 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
     email: string;
   } | null>(null);
   const [impersonating, setImpersonating] = useState(false);
+  const [approvingUser, setApprovingUser] = useState(false);
+
+  const approveAndChangeUser = async (action: OwnerUserAction, userId: string) => {
+    if (approvingUser || suspendUser.isPending || unsuspendUser.isPending || deleteUser.isPending) return;
+    setApprovingUser(true);
+    try {
+      const approvalToken = await approveOwnerUserAction(action, userId);
+      if (action === 'USER_SUSPEND') await suspendUser.mutateAsync({ userId, approvalToken });
+      if (action === 'USER_UNSUSPEND') await unsuspendUser.mutateAsync({ userId, approvalToken });
+      if (action === 'USER_DELETE') await deleteUser.mutateAsync({ userId, approvalToken });
+    } catch {
+      toast.error('Действие не подтверждено через Passkey');
+    } finally {
+      setApprovingUser(false);
+    }
+  };
 
   const handleImpersonate = async (userId: string) => {
     setImpersonating(true);
@@ -280,8 +297,8 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
                                   size="icon-sm"
                                   className="size-11 shrink-0"
                                   aria-label={t('users.unsuspend', { name: user.name ?? user.email })}
-                                  onClick={() => unsuspendUser.mutate({ userId: user.id })}
-                                  disabled={unsuspendUser.isPending}
+                                  onClick={() => void approveAndChangeUser('USER_UNSUSPEND', user.id)}
+                                  disabled={approvingUser || unsuspendUser.isPending}
                                 >
                                   <CheckCircle2 className="h-4 w-4 text-green-600" />
                                 </Button>
@@ -291,8 +308,8 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
                                   size="icon-sm"
                                   className="size-11 shrink-0"
                                   aria-label={t('users.suspend', { name: user.name ?? user.email })}
-                                  onClick={() => suspendUser.mutate({ userId: user.id })}
-                                  disabled={suspendUser.isPending}
+                                  onClick={() => void approveAndChangeUser('USER_SUSPEND', user.id)}
+                                  disabled={approvingUser || suspendUser.isPending}
                                 >
                                   <Ban className="h-4 w-4 text-orange-600" />
                                 </Button>
@@ -365,20 +382,21 @@ export function UserManagementSection({ currentUserEmail }: { currentUserEmail?:
               })}
             </DialogDescription>
           </DialogHeader>
+          <p className="text-sm text-muted-foreground">Для удаления подтвердите действие через Passkey владельца.</p>
           <DialogFooter>
             <Button
               variant="outline"
               className="min-h-11 min-w-11 whitespace-normal"
               onClick={() => setDeleteTarget(null)}
-              disabled={deleteUser.isPending}
+              disabled={approvingUser || deleteUser.isPending}
             >
               {t('users.cancel')}
             </Button>
             <Button
               variant="destructive"
               className="min-h-11 min-w-11 whitespace-normal"
-              onClick={() => deleteTarget && deleteUser.mutate({ userId: deleteTarget.id })}
-              disabled={deleteUser.isPending}
+              onClick={() => deleteTarget && void approveAndChangeUser('USER_DELETE', deleteTarget.id)}
+              disabled={approvingUser || deleteUser.isPending}
             >
               {deleteUser.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {t('users.delete')}

@@ -60,6 +60,9 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
     const initial = await oldSession.get('/api/auth/session');
     expect((await initial.json()) as { user?: { email?: string } }).toMatchObject({ user: { email } });
     await page.context().addCookies((await oldSession.storageState()).cookies);
+    // Real Chromium authenticator signs fresh WebAuthn confirmations for
+    // owner block/unblock. QA credential #0 is later revoked in this suite.
+    await installSelectedQaPasskey(page, email, 0);
     await page.goto('/settings', { waitUntil: 'networkidle' });
     await expect(page.getByTestId('passkey-limit')).toContainText('3 из 3');
     await expect(page.getByTestId('passkey-items').getByTestId('passkey-item')).toHaveCount(3);
@@ -97,6 +100,15 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
       }
 
+      // A JWT-only request must never be able to bypass Passkey verification.
+      for (const endpoint of ['ownerSetUserSuspended', 'suspendUser', 'unsuspendUser', 'deleteUser']) {
+        const missingProof = await oldSession.post('/api/trpc/admin.' + endpoint, {
+          data: {
+            json: { userId: 'owner-users-target', ...(endpoint === 'ownerSetUserSuspended' ? { suspend: true } : {}) },
+          },
+        });
+        expect(missingProof.ok(), endpoint).toBe(false);
+      }
       await targetCard.getByRole('button', { name: 'Заблокировать' }).click();
       await expect(page.getByTestId('owner-users-confirm')).toBeVisible();
       for (const width of widths) {

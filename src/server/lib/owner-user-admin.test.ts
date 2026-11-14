@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { requireRegisteredOwner, listOwnerRegisteredUsers, changeRegisteredUserSuspension } from './owner-user-admin';
+import { consumeOwnerPasskeyActionProof } from './owner-passkey-action-approval';
+
+vi.mock('./owner-passkey-action-approval', () => ({
+  consumeOwnerPasskeyActionProof: vi.fn().mockResolvedValue(undefined),
+}));
 
 const now = new Date('2026-11-12T12:00:00Z');
 function fixture() {
@@ -71,7 +76,16 @@ function fixture() {
 type DB = ReturnType<typeof fixture>['db'];
 const asDb = (db: DB) => db as unknown as PrismaClient;
 const mutation = (db: DB, suspend: boolean, patch: Record<string, unknown> = {}) =>
-  changeRegisteredUserSuspension({ db: asDb(db), ownerId: 'owner-id', userId: 'member-id', suspend, now, ...patch });
+  changeRegisteredUserSuspension({
+    db: asDb(db),
+    ownerId: 'owner-id',
+    userId: 'member-id',
+    suspend,
+    now,
+    sessionHash: 'a'.repeat(64),
+    approvalToken: 'b'.repeat(43),
+    ...patch,
+  });
 
 describe('Issue #1 6.11: registered user management is owner-only', () => {
   it('requires completed immutable bootstrap ID and a verified, active owner account', async () => {
@@ -207,5 +221,67 @@ describe('Issue #1 6.11: registered user management is owner-only', () => {
     missing.db.user.updateMany.mockResolvedValueOnce({ count: 0 });
     await expect(mutation(missing.db, true)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(missing.db.session.deleteMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue 6.12.4.2: WebAuthn proof is mandatory and atomic for user suspension', () => {
+  it('does not mutate or audit without a proof or valid owner/session', async () => {
+    const { db, target } = fixture();
+    for (const patch of [{ approvalToken: '' }, { sessionHash: '' }]) {
+      await expect(mutation(db, true, patch)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    expect(db.user.updateMany).not.toHaveBeenCalled();
+    expect(db.adminAuditLog.create).not.toHaveBeenCalled();
+    expect(target.suspendedAt).toBeNull();
+  });
+
+  it('consumes the exact action, target, session proof between row locks and mutation', async () => {
+    const { db } = fixture();
+    vi.mocked(consumeOwnerPasskeyActionProof).mockClear();
+    await mutation(db, true);
+    expect(db.$queryRawUnsafe.mock.calls.slice(0, 2)).toEqual([
+      ['SELECT id FROM "User" WHERE id = $1 FOR UPDATE', 'owner-id'],
+      ['SELECT id FROM "User" WHERE id = $1 FOR UPDATE', 'member-id'],
+    ]);
+    expect(consumeOwnerPasskeyActionProof).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        userId: 'owner-id',
+        targetId: 'member-id',
+        action: 'USER_SUSPEND',
+        sessionHash: 'a'.repeat(64),
+        approvalToken: 'b'.repeat(43),
+      }),
+    );
+    // One status update plus one sessionSecurityVersion bump during JWT revocation.
+    expect(db.user.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'member-id', isPlaceholder: false, suspendedAt: null },
+        data: { suspendedAt: now },
+      }),
+    );
+    const other = fixture();
+    other.target.suspendedAt = now;
+    vi.mocked(consumeOwnerPasskeyActionProof).mockClear();
+    await mutation(other.db, false);
+    expect(consumeOwnerPasskeyActionProof).toHaveBeenCalledWith(
+      other.db,
+      expect.objectContaining({
+        action: 'USER_UNSUSPEND',
+        targetId: 'member-id',
+        userId: 'owner-id',
+      }),
+    );
+  });
+
+  it('fails closed if the atomic one-time proof is missing, replayed, another user, or another action', async () => {
+    for (const reason of ['consumed', 'wrong action', 'wrong user', 'expired']) {
+      const { db, target } = fixture();
+      vi.mocked(consumeOwnerPasskeyActionProof).mockRejectedValueOnce(new Error(reason));
+      await expect(mutation(db, true)).rejects.toThrow(reason);
+      expect(db.user.updateMany).not.toHaveBeenCalled();
+      expect(db.adminAuditLog.create).not.toHaveBeenCalled();
+      expect(target.suspendedAt).toBeNull();
+    }
   });
 });
