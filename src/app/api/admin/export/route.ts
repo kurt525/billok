@@ -1,4 +1,5 @@
 import { auth } from '@/server/auth';
+import { cookies } from 'next/headers';
 import { db } from '@/server/db';
 import { requireOwner } from '@/server/lib/owner-access';
 import { logAdminAction } from '@/server/trpc/routers/admin';
@@ -7,6 +8,11 @@ export async function GET() {
   // Owner privileges are bound to the immutable DB user ID, not email.
   const session = await auth();
   if (!session?.user?.id) return new Response('Доступ запрещён', { status: 403 });
+  // Auth.js still sees the real owner while impersonating; block owner REST
+  // exports whenever the mode cookie is present (even if forged/expired).
+  if ((await cookies()).get('sharetab-impersonate')) {
+    return new Response('Доступ запрещён', { status: 403 });
+  }
   try {
     await requireOwner(db, session.user.id);
   } catch {

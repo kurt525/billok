@@ -1,7 +1,7 @@
 import { authedPasskeyContext } from './passkey-auth';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { auditMobileViewport, auditMobileTarget } from './billok-mobile-viewport-audit';
-import { createTestGroup, trpcMutation, users } from './helpers';
+import { createTestGroup, trpcMutation, trpcQuery, trpcResult, users } from './helpers';
 
 // Only against the disposable seed database created by the Mobile Chromium CI job.
 const widths = [320, 360, 393, 412] as const;
@@ -2057,5 +2057,53 @@ test('six-width final authenticated mobile adaptation audit across main screens'
     await expect(page.getByTestId('manual-group-receipt-entry')).toBeVisible();
     await auditMobileViewport(page, width, 'manual group receipt creation');
     await auditMobileTarget(page.locator('#title'), width, 'new group expense title');
+  }
+});
+
+test('Issue 6.12.3: real Passkey owner impersonation cannot access owner APIs', async ({ page }) => {
+  test.setTimeout(120_000);
+  const owner = await authedPasskeyContext('owner-qa@mail.ru', 0);
+  const ordinary = await authedPasskeyContext('alice@example.com', 0);
+  try {
+    const ownerSession = (await (await owner.get('/api/auth/session')).json()) as {
+      user?: { id?: string; email?: string };
+    };
+    const ordinarySession = (await (await ordinary.get('/api/auth/session')).json()) as {
+      user?: { id?: string; email?: string };
+    };
+    expect(ownerSession.user?.email).toBe('owner-qa@mail.ru');
+    expect(ordinarySession.user?.email).toBe('alice@example.com');
+    expect(ownerSession.user?.id).toBeTruthy();
+    expect(ordinarySession.user?.id).toBeTruthy();
+    expect(ownerSession.user?.id).not.toBe(ordinarySession.user?.id);
+
+    const start = await owner.post('/api/admin/impersonate', { data: { userId: ordinarySession.user!.id! } });
+    expect(start.status(), await start.text()).toBe(200);
+    const current = await trpcResult(await trpcQuery(owner, 'admin.getImpersonationStatus'));
+    expect(current).toMatchObject({ isImpersonating: true, targetEmail: 'alice@example.com' });
+    expect((await owner.get('/api/admin/export')).status()).toBe(403);
+    const audit = await trpcQuery(owner, 'admin.getAuditLog', { limit: 1 });
+    expect(audit.status()).toBe(403);
+    const underlying = (await (await owner.get('/api/auth/session')).json()) as { user?: { id?: string } };
+    expect(underlying.user?.id).toBe(ownerSession.user?.id);
+
+    await page.context().addCookies((await owner.storageState()).cookies);
+    await page.goto('/dashboard', { waitUntil: 'domcontentloaded' });
+    // The real mobile browser uses the same signed JWT + impersonation cookie.
+    const mobileStatus = await trpcResult(await trpcQuery(page.request, 'admin.getImpersonationStatus'));
+    expect(mobileStatus).toMatchObject({ isImpersonating: true, targetEmail: 'alice@example.com' });
+
+    const end = await owner.delete('/api/admin/impersonate');
+    expect(end.status(), await end.text()).toBe(200);
+    expect(await trpcResult(await trpcQuery(owner, 'admin.getImpersonationStatus'))).toMatchObject({
+      isImpersonating: false,
+    });
+    const restored = (await (await owner.get('/api/auth/session')).json()) as { user?: { id?: string } };
+    expect(restored.user?.id).toBe(ownerSession.user?.id);
+    const ownerAudit = await trpcQuery(owner, 'admin.getAuditLog', { limit: 1 });
+    expect(ownerAudit.ok(), await ownerAudit.text()).toBe(true);
+  } finally {
+    await ordinary.dispose();
+    await owner.dispose();
   }
 });

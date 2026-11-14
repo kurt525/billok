@@ -3,6 +3,7 @@ import Credentials from 'next-auth/providers/credentials';
 import { db } from './db';
 import { logger } from './lib/logger';
 import { consumePasskeyLoginTicket } from './lib/passkey-login';
+import { issueAuthSessionNonce } from './lib/impersonation-session';
 
 // A verified, short-lived WebAuthn ticket is the ONLY credential accepted.
 // No additional identity provider, adapter or external account linking exists.
@@ -24,6 +25,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (user?.id) {
         // The passkey login ticket is already verified and single-use.
         token.id = user.id;
+        token.impersonationSessionNonce = issueAuthSessionNonce();
         token.sessionSecurityVersion = undefined; // assign from DB, never from a browser claim
       }
       if (typeof token.id !== 'string') return token;

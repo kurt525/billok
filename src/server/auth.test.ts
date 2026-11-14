@@ -206,3 +206,19 @@ describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
     expect(config.callbacks.session({ session: { user: {} }, token: renewed }).user?.id).toBe('user-1');
   });
 });
+
+describe('Issue #1 6.12.3: Passkey login has an independent impersonation binding', () => {
+  test('fresh login rotates nonce, JWT refresh preserves it, session response does not expose it', async () => {
+    const config = await loadAuth();
+    const first = await config.callbacks.jwt({ token: {}, user: { id: 'owner-1' } });
+    const nonce = first.impersonationSessionNonce;
+    expect(typeof nonce).toBe('string');
+    expect(Buffer.from(nonce as string, 'base64url')).toHaveLength(32);
+    const refresh = await config.callbacks.jwt({ token: first });
+    expect(refresh.impersonationSessionNonce).toBe(nonce);
+    const second = await config.callbacks.jwt({ token: {}, user: { id: 'owner-1' } });
+    expect(second.impersonationSessionNonce).not.toBe(nonce);
+    const visible = config.callbacks.session({ session: { user: {} }, token: first });
+    expect(JSON.stringify(visible)).not.toContain(nonce as string);
+  });
+});
