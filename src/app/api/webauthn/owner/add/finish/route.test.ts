@@ -73,8 +73,9 @@ describe('6.10.2.3: additional Passkey finish is not an auth bypass', () => {
     finishMock.mockRejectedValue(new Error('proof revoked'));
     expect((await POST(request())).status).toBe(403);
   });
-  it('rate limits before verifying registration attestation', async () => {
+  it('stops machine-speed bursts before registration attestation', async () => {
     rateMock.mockReturnValueOnce({ allowed: false });
+    // No per-hour quota: only 8 requests within a 2s anti-flood window.
     expect((await POST(request())).status).toBe(429);
     expect(finishMock).not.toHaveBeenCalled();
   });

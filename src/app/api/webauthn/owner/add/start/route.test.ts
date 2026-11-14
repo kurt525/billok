@@ -77,8 +77,9 @@ describe('6.10.2.3: additional Passkey start requires signed ADD approval', () =
     expect((await POST(request({ approvalToken: null }))).status).toBe(403);
     expect((await POST(request({ approvalToken: 'x'.repeat(43) }))).status).toBe(403);
   });
-  it('rate limits owner and caller IP before any registration', async () => {
+  it('limits machine-speed bursts by verified owner, not shared IP', async () => {
     rateMock.mockReturnValueOnce({ allowed: false });
+    // No per-hour quota: only 8 requests within a 2s anti-flood window.
     expect((await POST(request({ approvalToken: 'p'.repeat(43) }))).status).toBe(429);
     expect(addMock).not.toHaveBeenCalled();
   });

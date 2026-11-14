@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/server/auth';
 import { db } from '@/server/db';
 import { requireOwner } from '@/server/lib/owner-access';
-import { getClientIp } from '@/server/lib/client-ip';
-import { checkRateLimit } from '@/server/lib/rate-limit';
+import { allowOwnerWebAuthnRequest } from '@/server/lib/owner-webauthn-burst';
 import { newWebAuthnBindingSecret } from '@/server/lib/webauthn-registration';
 import { ownerSessionFingerprint } from '@/server/lib/owner-passkey-action-approval';
 import { beginAdditionalOwnerPasskey, OWNER_ADD_BINDING_COOKIE } from '@/server/lib/owner-passkey-add';
@@ -20,11 +19,9 @@ export async function POST(request: Request) {
   } catch {
     return denied();
   }
-  if (
-    !checkRateLimit('owner-add-key-start:' + session.user.id, 8, 60 * 60 * 1000).allowed ||
-    !checkRateLimit('owner-add-key-start-ip:' + getClientIp(request.headers), 20, 60 * 60 * 1000).allowed
-  ) {
-    return NextResponse.json({ error: 'Слишком много попыток.' }, { status: 429 });
+  // Technical 2-second anti-flood, never an hourly limit on owner actions.
+  if (!allowOwnerWebAuthnRequest(session.user.id, 'add-start')) {
+    return NextResponse.json({ error: 'Слишком много запросов подряд.' }, { status: 429 });
   }
   try {
     const raw = await request.text();

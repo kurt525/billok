@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/server/auth';
 import { db } from '@/server/db';
 import { requireOwner } from '@/server/lib/owner-access';
-import { getClientIp } from '@/server/lib/client-ip';
-import { checkRateLimit } from '@/server/lib/rate-limit';
+import { allowOwnerWebAuthnRequest } from '@/server/lib/owner-webauthn-burst';
 import { newWebAuthnBindingSecret } from '@/server/lib/webauthn-registration';
 import {
   beginOwnerPasskeyActionApproval,
@@ -11,11 +10,7 @@ import {
   OWNER_APPROVAL_BINDING_COOKIE,
   isOwnerPasskeyAction,
 } from '@/server/lib/owner-passkey-action-approval';
-import {
-  isDisposableWebAuthnQa,
-  readBillokWebAuthnRelyingParty,
-  WEBAUTHN_CHALLENGE_TTL_MS,
-} from '@/server/lib/webauthn-relying-party';
+import { readBillokWebAuthnRelyingParty, WEBAUTHN_CHALLENGE_TTL_MS } from '@/server/lib/webauthn-relying-party';
 
 export async function POST(request: Request) {
   const denied = () => NextResponse.json({ error: 'Повторная проверка владельца не разрешена.' }, { status: 403 });
@@ -28,17 +23,9 @@ export async function POST(request: Request) {
   } catch {
     return denied();
   }
-  // 6.12.4.3 E2E: the disposable browser QA owner signs invitations,
-  // user status, key rename/revoke and the two-key recovery lifecycle in
-  // one hour. They share a single ownerId and in-memory rate-limit bucket.
-  // Keep the production budget at 12; only the already-validated isolated
-  // loopback billokqa PostgreSQL can raise it for regression coverage.
-  const perOwnerBudget = isDisposableWebAuthnQa(process.env) ? 48 : 12;
-  if (
-    !checkRateLimit('owner-approval-start:' + session.user.id, perOwnerBudget, 60 * 60 * 1000).allowed ||
-    !checkRateLimit('owner-approval-start-ip:' + getClientIp(request.headers), 30, 60 * 60 * 1000).allowed
-  ) {
-    return NextResponse.json({ error: 'Слишком много запросов.' }, { status: 429 });
+  // Technical 2-second anti-flood, never an hourly limit on owner actions.
+  if (!allowOwnerWebAuthnRequest(session.user.id, 'approval-start')) {
+    return NextResponse.json({ error: 'Слишком много запросов подряд.' }, { status: 429 });
   }
   try {
     const raw = await request.text();

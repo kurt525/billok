@@ -76,8 +76,9 @@ describe('Issue #1 6.10.2.2: approval/finish does not mutate keys or create a se
     });
     expect((await POST(createRequest())).status).toBe(403);
   });
-  it('rate limits before requesting WebAuthn verification', async () => {
+  it('stops machine-speed bursts before WebAuthn verification', async () => {
     rateMock.mockReturnValueOnce({ allowed: false });
+    // No per-hour quota: only 8 requests within a 2s anti-flood window.
     expect((await POST(createRequest())).status).toBe(429);
     expect(finishMock).not.toHaveBeenCalled();
   });

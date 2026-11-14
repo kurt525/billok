@@ -3,8 +3,7 @@ import type { AuthenticationResponseJSON } from '@simplewebauthn/server';
 import { auth } from '@/server/auth';
 import { db } from '@/server/db';
 import { requireOwner } from '@/server/lib/owner-access';
-import { getClientIp } from '@/server/lib/client-ip';
-import { checkRateLimit } from '@/server/lib/rate-limit';
+import { allowOwnerWebAuthnRequest } from '@/server/lib/owner-webauthn-burst';
 import {
   finishOwnerPasskeyActionApproval,
   ownerSessionFingerprint,
@@ -23,11 +22,9 @@ export async function POST(request: Request) {
   } catch {
     return denied();
   }
-  if (
-    !checkRateLimit('owner-approval-finish:' + session.user.id, 20, 60 * 60 * 1000).allowed ||
-    !checkRateLimit('owner-approval-finish-ip:' + getClientIp(request.headers), 50, 60 * 60 * 1000).allowed
-  ) {
-    return NextResponse.json({ error: 'Слишком много запросов.' }, { status: 429 });
+  // Technical 2-second anti-flood, never an hourly limit on owner actions.
+  if (!allowOwnerWebAuthnRequest(session.user.id, 'approval-finish')) {
+    return NextResponse.json({ error: 'Слишком много запросов подряд.' }, { status: 429 });
   }
   try {
     const binding = (request.headers.get('cookie') ?? '')

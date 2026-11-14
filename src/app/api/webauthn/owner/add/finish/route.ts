@@ -3,8 +3,7 @@ import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 import { auth } from '@/server/auth';
 import { db } from '@/server/db';
 import { requireOwner } from '@/server/lib/owner-access';
-import { getClientIp } from '@/server/lib/client-ip';
-import { checkRateLimit } from '@/server/lib/rate-limit';
+import { allowOwnerWebAuthnRequest } from '@/server/lib/owner-webauthn-burst';
 import { ownerSessionFingerprint } from '@/server/lib/owner-passkey-action-approval';
 import { finishAdditionalOwnerPasskey, OWNER_ADD_BINDING_COOKIE } from '@/server/lib/owner-passkey-add';
 import { readBillokWebAuthnRelyingParty } from '@/server/lib/webauthn-relying-party';
@@ -20,11 +19,9 @@ export async function POST(request: Request) {
   } catch {
     return denied();
   }
-  if (
-    !checkRateLimit('owner-add-key-finish:' + session.user.id, 15, 60 * 60 * 1000).allowed ||
-    !checkRateLimit('owner-add-key-finish-ip:' + getClientIp(request.headers), 35, 60 * 60 * 1000).allowed
-  ) {
-    return NextResponse.json({ error: 'Слишком много попыток.' }, { status: 429 });
+  // Technical 2-second anti-flood, never an hourly limit on owner actions.
+  if (!allowOwnerWebAuthnRequest(session.user.id, 'add-finish')) {
+    return NextResponse.json({ error: 'Слишком много запросов подряд.' }, { status: 429 });
   }
   try {
     const secretCookie = (request.headers.get('cookie') ?? '')
