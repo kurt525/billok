@@ -1,6 +1,9 @@
 'use client';
 
 import { useState } from 'react';
+import { toast } from 'sonner';
+import { approveOwnerPrivilegedAction } from '@/lib/owner-admin-approval';
+import { systemInviteCreateApprovalTarget } from '@/lib/system-invite-approval-target';
 import { useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
@@ -35,6 +38,7 @@ export function RegistrationControlSection() {
   const [inviteLabel, setInviteLabel] = useState('');
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<{ id: string; codePreview: string } | null>(null);
+  const [approvingInvite, setApprovingInvite] = useState(false);
 
   const currentMode = regMode.data?.mode ?? 'open';
 
@@ -55,6 +59,36 @@ export function RegistrationControlSection() {
       variant: 'destructive' as const,
     },
   };
+
+  async function createWithPasskey() {
+    if (approvingInvite || createInvite.isPending || revokeInvite.isPending) return;
+    setApprovingInvite(true);
+    try {
+      const label = inviteLabel.trim() || undefined;
+      const targetId = systemInviteCreateApprovalTarget(label);
+      const approvalToken = await approveOwnerPrivilegedAction('SYSTEM_INVITE_CREATE', targetId);
+      await createInvite.mutateAsync({ label, expiresInDays: 7, approvalToken });
+      setInviteLabel('');
+    } catch {
+      toast.error('Создание приглашения не подтверждено через Passkey');
+    } finally {
+      setApprovingInvite(false);
+    }
+  }
+
+  async function revokeWithPasskey(selectedInviteId: string) {
+    if (!selectedInviteId || approvingInvite || createInvite.isPending || revokeInvite.isPending) return;
+    setApprovingInvite(true);
+    try {
+      const approvalToken = await approveOwnerPrivilegedAction('SYSTEM_INVITE_REVOKE', selectedInviteId);
+      await revokeInvite.mutateAsync({ inviteId: selectedInviteId, approvalToken });
+      setRevokeTarget(null);
+    } catch {
+      toast.error('Отзыв приглашения не подтверждён через Passkey');
+    } finally {
+      setApprovingInvite(false);
+    }
+  }
 
   return (
     <section data-testid="admin-registration-control" className="min-w-0">
@@ -118,14 +152,8 @@ export function RegistrationControlSection() {
                 data-testid="admin-registration-create-invite"
                 size="sm"
                 className="min-h-11 min-w-11 whitespace-normal"
-                disabled={createInvite.isPending}
-                onClick={() => {
-                  createInvite.mutate({
-                    label: inviteLabel || undefined,
-                    expiresInDays: 7,
-                  });
-                  setInviteLabel('');
-                }}
+                disabled={createInvite.isPending || approvingInvite || revokeInvite.isPending}
+                onClick={() => void createWithPasskey()}
               >
                 {createInvite.isPending ? (
                   <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -136,6 +164,9 @@ export function RegistrationControlSection() {
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">{t('registration.inviteExpiry')}</p>
+            <p className="break-words text-xs text-muted-foreground">
+              Создание приглашения требует подтверждения Passkey владельца.
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -225,7 +256,7 @@ export function RegistrationControlSection() {
                             className="size-11 shrink-0"
                             data-testid="admin-registration-revoke-invite"
                             onClick={() => setRevokeTarget({ id: inv.id, codePreview: inv.code.slice(0, 12) + '…' })}
-                            disabled={revokeInvite.isPending}
+                            disabled={revokeInvite.isPending || approvingInvite || createInvite.isPending}
                             aria-label={t('registration.revoke')}
                             title={t('registration.revoke')}
                           >
@@ -243,14 +274,11 @@ export function RegistrationControlSection() {
       )}
       <ConfirmDialog
         open={revokeTarget !== null}
-        onOpenChange={(open) => !open && setRevokeTarget(null)}
+        onOpenChange={(open) => !open && !approvingInvite && setRevokeTarget(null)}
         title={t('registration.revokeTitle')}
         description={t('registration.revokeDescription', { code: revokeTarget?.codePreview ?? '' })}
         confirmLabel={t('registration.revoke')}
-        onConfirm={() => {
-          if (revokeTarget)
-            revokeInvite.mutate({ inviteId: revokeTarget.id }, { onSettled: () => setRevokeTarget(null) });
-        }}
+        onConfirm={() => revokeTarget && void revokeWithPasskey(revokeTarget.id)}
       />
     </section>
   );

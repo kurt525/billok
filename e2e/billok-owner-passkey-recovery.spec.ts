@@ -73,7 +73,46 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
     const managedEmail = 'owner-users-target@mail.ru';
     const managedSession = await authedPasskeyContext(managedEmail, 0);
     try {
+      // Issue 6.12.4.3: no system invitation may be created or revoked
+      // with only the signed owner JWT; the mobile UI performs a real CTAP2
+      // WebAuthn ceremony for BOTH operations.
+      const inviteLabel = 'QA-Passkey-6.12.4.3';
+      for (const [procedure, data] of [
+        ['admin.createSystemInvite', { label: inviteLabel, expiresInDays: 7 }],
+        ['admin.revokeSystemInvite', { inviteId: 'unknown-invite-id' }],
+      ] as const) {
+        const withoutSignature = await oldSession.post('/api/trpc/' + procedure, {
+          data: { json: data },
+        });
+        expect(withoutSignature.ok(), procedure + ' must reject JWT-only requests').toBe(false);
+      }
+
       await page.goto('/admin', { waitUntil: 'networkidle' });
+      const invitationSection = page.getByTestId('admin-registration-control');
+      await expect(invitationSection).toBeVisible();
+      await page.setViewportSize({ width: 320, height: 560 });
+      const createButton = page.getByTestId('admin-registration-create-invite');
+      await expect(createButton).toBeVisible();
+      await createButton.scrollIntoViewIfNeeded();
+      const createBounds = await createButton.boundingBox();
+      expect(createBounds, 'System invite button missing at 320px').not.toBeNull();
+      expect(createBounds!.x).toBeGreaterThanOrEqual(-1);
+      expect(createBounds!.x + createBounds!.width).toBeLessThanOrEqual(321);
+      await page.getByTestId('admin-registration-invite-label').fill(inviteLabel);
+      await createButton.click();
+      const inviteRow = page.getByTestId('admin-invitation-row').filter({ hasText: inviteLabel });
+      await expect(inviteRow).toHaveCount(1);
+      const revoke = inviteRow.getByTestId('admin-registration-revoke-invite');
+      await revoke.click();
+      const dialog = page.locator('[data-slot="alert-dialog-content"]');
+      await expect(dialog).toBeVisible();
+      const revokeBounds = await dialog.boundingBox();
+      expect(revokeBounds, 'Invite revoke dialog must fit 320px').not.toBeNull();
+      expect(revokeBounds!.x).toBeGreaterThanOrEqual(-1);
+      expect(revokeBounds!.x + revokeBounds!.width).toBeLessThanOrEqual(321);
+      await dialog.locator('[data-slot="alert-dialog-action"]').click();
+      await expect(inviteRow.getByTestId('admin-registration-revoke-invite')).toHaveCount(0);
+
       await expect(page.getByTestId('owner-users-nav')).toBeVisible();
       await page.getByTestId('owner-users-nav').click();
       await expect(page.getByTestId('owner-users-page')).toBeVisible();

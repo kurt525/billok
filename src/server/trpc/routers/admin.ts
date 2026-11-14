@@ -22,6 +22,7 @@ import { activeSystemInviteWindow, SYSTEM_INVITE_TTL_MS } from '@/server/lib/sys
 import { totalsInGroupCurrency } from '@/server/lib/group-expense-totals';
 import { listOwnerRegisteredUsers, changeRegisteredUserSuspension } from '@/server/lib/owner-user-admin';
 import { ownerSessionFingerprint, consumeOwnerPasskeyActionProof } from '@/server/lib/owner-passkey-action-approval';
+import { systemInviteCreateApprovalTarget } from '@/lib/system-invite-approval-target';
 
 const serverStartTime = new Date();
 const { version: cachedVersion, commitSha: cachedCommitSha } = getBuildInfo();
@@ -549,14 +550,26 @@ export const adminRouter = createTRPCRouter({
         // Existing clients may still pass 7; other durations and invitations
         // without an expiry are forbidden for BillOK (Issue #1 6.2).
         expiresInDays: z.literal(7).optional(),
+        approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const sessionHash = ownerSessionFingerprint(ctx.headers);
+      const createTarget = systemInviteCreateApprovalTarget(input.label);
       const expiresAt = new Date(Date.now() + SYSTEM_INVITE_TTL_MS);
       // The invite and its audit record are committed together. Never log the
       // bearer code itself: it is returned only to the authenticated admin for
       // manual delivery and can be viewed later in that admin's invite list.
       const invite = await ctx.db.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', ctx.user.id);
+        await requireOwner(tx, ctx.user.id);
+        await consumeOwnerPasskeyActionProof(tx, {
+          userId: ctx.user.id,
+          action: 'SYSTEM_INVITE_CREATE',
+          targetId: createTarget,
+          sessionHash,
+          approvalToken: input.approvalToken,
+        });
         const created = await tx.systemInvite.create({
           data: {
             ...(input.label !== undefined ? { label: input.label } : {}),
@@ -619,9 +632,18 @@ export const adminRouter = createTRPCRouter({
   }),
 
   revokeSystemInvite: adminProcedure
-    .input(z.strictObject({ inviteId: z.string().min(1).max(128) }))
+    .input(
+      z.strictObject({
+        inviteId: z.string().min(1).max(128),
+        approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
+      const sessionHash = ownerSessionFingerprint(ctx.headers);
       return ctx.db.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', ctx.user.id);
+        await tx.$queryRawUnsafe('SELECT id FROM "SystemInvite" WHERE id = $1 FOR UPDATE', input.inviteId);
+        await requireOwner(tx, ctx.user.id);
         const invite = await tx.systemInvite.findUnique({
           where: { id: input.inviteId },
           select: { id: true, usedAt: true, usedById: true, revokedAt: true, createdAt: true, expiresAt: true },
@@ -637,6 +659,13 @@ export const adminRouter = createTRPCRouter({
         ) {
           throw new AppError('BAD_REQUEST', 'inviteInvalid');
         }
+        await consumeOwnerPasskeyActionProof(tx, {
+          userId: ctx.user.id,
+          action: 'SYSTEM_INVITE_REVOKE',
+          targetId: input.inviteId,
+          sessionHash,
+          approvalToken: input.approvalToken,
+        });
         // Conditional write closes the race with concurrent verification,
         // cancellation or a second admin revocation. The reservation, if any,
         // remains invalidated by revokedAt; it cannot be redeemed afterward.

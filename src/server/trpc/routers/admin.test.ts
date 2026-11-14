@@ -36,6 +36,7 @@ vi.mock('@/server/auth', () => ({
 // Mock Prisma client
 const mockDb = {
   $queryRaw: vi.fn(),
+  $queryRawUnsafe: vi.fn().mockResolvedValue([]),
   ownerBootstrap: {
     findUnique: vi.fn().mockResolvedValue({ userId: 'admin-1', completedAt: new Date() }),
   },
@@ -96,6 +97,12 @@ const mockDb = {
 };
 
 vi.mock('@/server/db', () => ({ db: mockDb }));
+const { proofConfirmation } = vi.hoisted(() => ({ proofConfirmation: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@/server/lib/owner-passkey-action-approval', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/lib/owner-passkey-action-approval')>()),
+  consumeOwnerPasskeyActionProof: proofConfirmation,
+}));
+
 vi.mock('@/server/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
@@ -337,7 +344,12 @@ const adminSession = { user: { id: 'admin-1', email: 'admin@example.com' } };
 
 async function callerAs(session: { user: { id: string; email: string } }) {
   const { adminRouter } = await import('./admin');
-  const ctx = { session, db: mockDb, headers: new Headers(), impersonating: null };
+  const ctx = {
+    session,
+    db: mockDb,
+    headers: new Headers({ cookie: 'authjs.session-token=mock-' + session.user.id }),
+    impersonating: null,
+  };
   return adminRouter.createCaller(ctx as unknown as Parameters<typeof adminRouter.createCaller>[0]);
 }
 
@@ -401,7 +413,9 @@ describe('Issue #1 6.12.1: immutable owner ID, never ADMIN_EMAIL authorization',
     ]) {
       mockDb.user.findUnique.mockResolvedValue(state);
       await expect(api.getAuditLog({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-      await expect(api.createSystemInvite({ expiresInDays: 7 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(api.createSystemInvite({ expiresInDays: 7, approvalToken: 'b'.repeat(43) })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
       await expect(api.ownerRegisteredUsers({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     }
     expect(mockDb.adminAuditLog.findMany).not.toHaveBeenCalled();
@@ -692,6 +706,7 @@ describe('unused receipts', () => {
 
 describe('Issue #1 6.2: seven-day admin invitations, revocation and usage history', () => {
   const code = 'invite-secret-to-deliver';
+  const approvalToken = 'b'.repeat(43);
   const createdAt = new Date('2026-11-10T09:00:00.000Z');
   const expiresAt = new Date('2026-11-17T09:00:00.000Z');
   const usedAt = new Date('2026-11-11T09:00:00.000Z');
@@ -733,7 +748,7 @@ describe('Issue #1 6.2: seven-day admin invitations, revocation and usage histor
     mockDb.systemInvite.create.mockImplementationOnce(async ({ data }) => ({ ...invite, expiresAt: data.expiresAt }));
     const api = await callerAs(adminSession);
     const before = Date.now();
-    const result = await api.createSystemInvite({ label: 'Для Анны' });
+    const result = await api.createSystemInvite({ label: 'Для Анны', approvalToken });
     const after = Date.now();
     expect(result).toEqual({ id: 'invite-1', code, label: 'Для Анны', expiresAt: expect.any(Date) });
     expect(mockDb.$transaction).toHaveBeenCalled();
@@ -751,7 +766,10 @@ describe('Issue #1 6.2: seven-day admin invitations, revocation and usage histor
       },
     });
     expect(JSON.stringify(mockDb.adminAuditLog.create.mock.calls)).not.toContain(code);
-    expect(await api.createSystemInvite({ label: 'Другой', expiresInDays: 7 })).toHaveProperty('code', code);
+    expect(await api.createSystemInvite({ label: 'Другой', expiresInDays: 7, approvalToken })).toHaveProperty(
+      'code',
+      code,
+    );
   });
 
   test('admin cannot create timeless, 365-day, zero-day or malformed invites', async () => {
@@ -764,7 +782,9 @@ describe('Issue #1 6.2: seven-day admin invitations, revocation and usage histor
       { label: 'x'.repeat(101) },
       { expiresInDays: 7, allowMultiple: true },
     ]) {
-      await expect(api.createSystemInvite(invalid as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(api.createSystemInvite({ ...(invalid as object), approvalToken } as never)).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
     }
     expect(mockDb.systemInvite.create).not.toHaveBeenCalled();
     expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
@@ -804,7 +824,7 @@ describe('Issue #1 6.2: seven-day admin invitations, revocation and usage histor
 
   test('revocation of an unused or reserved code is atomic and audited without leaking the code', async () => {
     const api = await callerAs(adminSession);
-    const result = await api.revokeSystemInvite({ inviteId: invite.id });
+    const result = await api.revokeSystemInvite({ inviteId: invite.id, approvalToken });
     expect(result).toEqual({ revoked: true });
     expect(mockDb.$transaction).toHaveBeenCalled();
     expect(mockDb.systemInvite.updateMany).toHaveBeenCalledWith({
@@ -837,19 +857,114 @@ describe('Issue #1 6.2: seven-day admin invitations, revocation and usage histor
       { ...invite, expiresAt: new Date(Date.now() - 1000) },
     ]) {
       mockDb.systemInvite.findUnique.mockResolvedValueOnce(row);
-      await expect(api.revokeSystemInvite({ inviteId: invite.id })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(api.revokeSystemInvite({ inviteId: invite.id, approvalToken })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
     }
     expect(mockDb.systemInvite.updateMany).not.toHaveBeenCalled();
     mockDb.systemInvite.updateMany.mockResolvedValueOnce({ count: 0 });
-    await expect(api.revokeSystemInvite({ inviteId: invite.id })).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(api.revokeSystemInvite({ inviteId: invite.id, approvalToken })).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
     expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('6.12.4.3: both mutations reject a JWT without a one-time Passkey token', async () => {
+    const api = await callerAs(adminSession);
+    await expect(api.createSystemInvite({ label: 'Для Анны' } as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(api.revokeSystemInvite({ inviteId: invite.id } as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.systemInvite.create).not.toHaveBeenCalled();
+    expect(mockDb.systemInvite.updateMany).not.toHaveBeenCalled();
+    expect(proofConfirmation).not.toHaveBeenCalled();
+  });
+
+  test('6.12.4.3: grants only canonical 7-day creation label and the exact revoke id', async () => {
+    const { systemInviteCreateApprovalTarget } = await import('@/lib/system-invite-approval-target');
+    const api = await callerAs(adminSession);
+    await api.createSystemInvite({ label: ' Для Анны ', approvalToken });
+    expect(proofConfirmation).toHaveBeenCalledWith(
+      mockDb,
+      expect.objectContaining({
+        userId: 'admin-1',
+        action: 'SYSTEM_INVITE_CREATE',
+        targetId: systemInviteCreateApprovalTarget('Для Анны'),
+        sessionHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        approvalToken,
+      }),
+    );
+    const createLockOrder = mockDb.$queryRawUnsafe.mock.invocationCallOrder[0]!;
+    const proofOrder = proofConfirmation.mock.invocationCallOrder[0]!;
+    const createOrder = mockDb.systemInvite.create.mock.invocationCallOrder[0]!;
+    expect(createLockOrder).toBeLessThan(proofOrder);
+    expect(proofOrder).toBeLessThan(createOrder);
+    expect(mockDb.systemInvite.create.mock.calls[0]![0].data.label).toBe('Для Анны');
+    proofConfirmation.mockClear();
+    await api.revokeSystemInvite({ inviteId: invite.id, approvalToken });
+    expect(proofConfirmation).toHaveBeenCalledWith(
+      mockDb,
+      expect.objectContaining({
+        userId: 'admin-1',
+        action: 'SYSTEM_INVITE_REVOKE',
+        targetId: invite.id,
+        sessionHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        approvalToken,
+      }),
+    );
+    expect(mockDb.$queryRawUnsafe).toHaveBeenCalledWith(
+      'SELECT id FROM "SystemInvite" WHERE id = $1 FOR UPDATE',
+      invite.id,
+    );
+  });
+
+  test('6.12.4.3: another action/label/invite/session or a replay cannot commit an invite', async () => {
+    const api = await callerAs(adminSession);
+    for (const reason of [
+      'wrong action',
+      'different label',
+      'different invite',
+      'different session',
+      'expired',
+      'replay',
+    ]) {
+      proofConfirmation.mockRejectedValueOnce(new Error(reason));
+      await expect(api.createSystemInvite({ label: 'Для Анны', approvalToken })).rejects.toThrow(reason);
+    }
+    expect(mockDb.systemInvite.create).not.toHaveBeenCalled();
+    expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
+    proofConfirmation.mockRejectedValueOnce(new Error('wrong invite target'));
+    await expect(api.revokeSystemInvite({ inviteId: invite.id, approvalToken })).rejects.toThrow('wrong invite target');
+    expect(mockDb.systemInvite.updateMany).not.toHaveBeenCalled();
+    expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('6.12.4.3: a consumed permission cannot be reused for two create or revoke writes', async () => {
+    const api = await callerAs(adminSession);
+    let consumed = false;
+    proofConfirmation.mockImplementation(async () => {
+      if (consumed) throw new Error('already consumed');
+      consumed = true;
+    });
+    await api.createSystemInvite({ label: 'Для Анны', approvalToken });
+    await expect(api.createSystemInvite({ label: 'Для Анны', approvalToken })).rejects.toThrow('already consumed');
+    expect(mockDb.systemInvite.create).toHaveBeenCalledTimes(1);
+    expect(mockDb.adminAuditLog.create).toHaveBeenCalledTimes(1);
+    consumed = false;
+    await api.revokeSystemInvite({ inviteId: invite.id, approvalToken });
+    await expect(api.revokeSystemInvite({ inviteId: invite.id, approvalToken })).rejects.toThrow('already consumed');
+    expect(mockDb.systemInvite.updateMany).toHaveBeenCalledTimes(1);
   });
 
   test('regular account cannot create, list or revoke a system invite, even knowing an id', async () => {
     const api = await callerAs({ user: { id: 'ordinary-user', email: 'guest@example.ru' } });
-    await expect(api.createSystemInvite({ label: 'Для Анны' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.createSystemInvite({ label: 'Для Анны', approvalToken })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
     await expect(api.listSystemInvites()).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(api.revokeSystemInvite({ inviteId: invite.id })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.revokeSystemInvite({ inviteId: invite.id, approvalToken })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
     expect(mockDb.systemInvite.create).not.toHaveBeenCalled();
     expect(mockDb.systemInvite.updateMany).not.toHaveBeenCalled();
   });

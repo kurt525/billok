@@ -2,13 +2,15 @@ import { startAuthentication } from '@simplewebauthn/browser';
 import type { PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/browser';
 
 export type OwnerUserAction = 'USER_SUSPEND' | 'USER_UNSUSPEND' | 'USER_DELETE';
+export type OwnerInviteAction = 'SYSTEM_INVITE_CREATE' | 'SYSTEM_INVITE_REVOKE';
+export type OwnerPrivilegedAction = OwnerUserAction | OwnerInviteAction;
 
 /**
  * Issue 6.12.4.2: the browser NEVER fabricates an administrative proof.
  * The server verifies a fresh owner WebAuthn assertion and returns a single-use
  * action+target+session-scoped token (TTL 120 seconds).
  */
-export async function approveOwnerUserAction(action: OwnerUserAction, userId: string): Promise<string> {
+export async function approveOwnerPrivilegedAction(action: OwnerPrivilegedAction, userId: string): Promise<string> {
   if (!userId || userId.length > 128 || !window.PublicKeyCredential) throw new Error('passkey-unavailable');
   const started = await fetch('/api/webauthn/owner/approval/start', {
     method: 'POST',
@@ -33,3 +35,8 @@ export async function approveOwnerUserAction(action: OwnerUserAction, userId: st
   }
   return result.approvalToken;
 }
+
+// Preserve the typed user-management entrypoint; invite workflows cannot
+// impersonate user actions by accidentally reusing another action string.
+export const approveOwnerUserAction = (action: OwnerUserAction, userId: string) =>
+  approveOwnerPrivilegedAction(action, userId);
