@@ -9,7 +9,7 @@ import {
   beginOwnerPasskeyActionApproval,
   ownerSessionFingerprint,
   OWNER_APPROVAL_BINDING_COOKIE,
-  type OwnerPasskeyAction,
+  isOwnerPasskeyAction,
 } from '@/server/lib/owner-passkey-action-approval';
 import { readBillokWebAuthnRelyingParty, WEBAUTHN_CHALLENGE_TTL_MS } from '@/server/lib/webauthn-relying-party';
 
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     const raw = await request.text();
     if (raw.length > 512) return denied();
     const data = JSON.parse(raw) as { action?: unknown; targetId?: unknown };
-    if (data.action !== 'ADD' && data.action !== 'RENAME' && data.action !== 'REVOKE') return denied();
+    if (!isOwnerPasskeyAction(data.action)) return denied();
     if (data.targetId !== undefined && data.targetId !== null && typeof data.targetId !== 'string') return denied();
     const sessionHash = ownerSessionFingerprint(request.headers);
     const bindingSecret = newWebAuthnBindingSecret();
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
       userId: session.user.id,
       sessionHash,
       bindingSecret,
-      action: data.action as OwnerPasskeyAction,
+      action: data.action,
       targetId: (data.targetId as string | null | undefined) ?? null,
     });
     const response = NextResponse.json({ options });

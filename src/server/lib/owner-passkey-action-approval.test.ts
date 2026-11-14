@@ -9,6 +9,7 @@ import {
   consumeOwnerPasskeyActionProof,
   ownerSessionFingerprint,
   OWNER_APPROVAL_TICKET_TTL_MS,
+  type OwnerPasskeyAction,
 } from './owner-passkey-action-approval';
 import { hashWebAuthnBinding } from './webauthn-registration';
 
@@ -42,7 +43,7 @@ const signed = {
   },
 } as AuthenticationResponseJSON;
 
-function fixture(n = 2, action: 'ADD' | 'RENAME' | 'REVOKE' = 'REVOKE') {
+function fixture(n = 2, action: OwnerPasskeyAction = 'REVOKE') {
   const owner = { userId: 'owner', completedAt: now as Date | null };
   const user = {
     emailVerified: now,
@@ -84,7 +85,21 @@ function fixture(n = 2, action: 'ADD' | 'RENAME' | 'REVOKE' = 'REVOKE') {
     userId: 'owner',
     purpose: 'OWNER_APPROVAL',
     ownerActionType: action,
-    targetCredentialRowId: action === 'ADD' ? null : 'key-lost',
+    targetCredentialRowId: [
+      'ADD',
+      'USER_SUSPEND',
+      'USER_UNSUSPEND',
+      'USER_DELETE',
+      'SYSTEM_INVITE_CREATE',
+      'SYSTEM_INVITE_REVOKE',
+      'REGISTRATION_MODE_UPDATE',
+      'OWNER_SETTING_UPDATE',
+      'IMPERSONATE',
+      'ADMIN_EXPORT',
+    ].includes(action)
+      ? null
+      : 'key-lost',
+    ownerActionTargetId: ['ADD', 'RENAME', 'REVOKE'].includes(action) ? null : 'user-2',
     sessionBindingHash: sessionHash,
     bindingHash,
     challengeHash: hash(challenge),
@@ -97,6 +112,7 @@ function fixture(n = 2, action: 'ADD' | 'RENAME' | 'REVOKE' = 'REVOKE') {
     userId: 'owner',
     action,
     targetCredentialRowId: challengeRow.targetCredentialRowId,
+    ownerActionTargetId: challengeRow.ownerActionTargetId,
     signerCredentialRowId: 'key-keep',
     sessionBindingHash: sessionHash,
     sessionSecurityVersion: 2,
@@ -152,7 +168,7 @@ const asDb = (db: ReturnType<typeof fixture>['db']) => db as unknown as PrismaCl
 const asTx = (db: ReturnType<typeof fixture>['db']) => db as unknown as Prisma.TransactionClient;
 function begin(
   db: ReturnType<typeof fixture>['db'],
-  action: 'ADD' | 'RENAME' | 'REVOKE' = 'REVOKE',
+  action: OwnerPasskeyAction = 'REVOKE',
   targetId: string | null = 'key-lost',
   sess = sessionHash,
 ) {
@@ -495,5 +511,90 @@ describe('Issue #1 6.10.2.2: fresh owner WebAuthn approval', () => {
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect(db.ownerPasskeyActionProof.updateMany).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('Issue #1 6.12.4.1: strict owner-approved administrative action scope', () => {
+  it('issues user-targeted challenges only for a nonempty exact target without treating it as a Passkey id', async () => {
+    const { db } = fixture(2, 'USER_SUSPEND');
+    await expect(begin(db, 'USER_SUSPEND', null)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(begin(db, 'USER_SUSPEND', '')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(begin(db, 'USER_SUSPEND', 'a'.repeat(129))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await begin(db, 'USER_SUSPEND', 'user-2');
+    expect(db.webAuthnChallenge.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        purpose: 'OWNER_APPROVAL',
+        userId: 'owner',
+        ownerActionType: 'USER_SUSPEND',
+        targetCredentialRowId: null,
+        ownerActionTargetId: 'user-2',
+        sessionBindingHash: sessionHash,
+      }),
+    });
+    expect(vi.mocked(generateAuthenticationOptions).mock.lastCall?.[0]).toMatchObject({
+      userVerification: 'required',
+      rpID: 'billok.ru',
+    });
+    expect(vi.mocked(generateAuthenticationOptions).mock.lastCall?.[0].allowCredentials?.map((x) => x.id)).toEqual([
+      'credential-lost',
+      'credential-keep',
+    ]);
+  });
+
+  it('one verified assertion grants exactly one matching operation/target/session, never a different operation', async () => {
+    const { db, proof } = fixture(2, 'USER_SUSPEND');
+    await begin(db, 'USER_SUSPEND', 'user-2');
+    const token = (await finish(db)).approvalToken;
+    expect(proof.ownerActionTargetId).toBe('user-2');
+    expect(db.ownerPasskeyActionProof.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'USER_SUSPEND',
+        targetCredentialRowId: null,
+        ownerActionTargetId: 'user-2',
+        userId: 'owner',
+        sessionBindingHash: sessionHash,
+      }),
+    });
+    const apply = (patch: Partial<Parameters<typeof consumeOwnerPasskeyActionProof>[1]> = {}) =>
+      consumeOwnerPasskeyActionProof(asTx(db), {
+        userId: 'owner',
+        action: 'USER_SUSPEND',
+        targetId: 'user-2',
+        sessionHash,
+        approvalToken: token,
+        now,
+        ...patch,
+      });
+    for (const patch of [
+      { action: 'USER_UNSUSPEND' as const },
+      { action: 'USER_DELETE' as const },
+      { action: 'IMPERSONATE' as const },
+      { targetId: 'user-3' },
+      { sessionHash: otherSession },
+      { userId: 'attacker' },
+    ]) {
+      await expect(apply(patch)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    expect(proof.consumedAt).toBeNull();
+    await expect(apply()).resolves.toBeUndefined();
+    await expect(apply()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.ownerPasskeyActionProof.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed when proof has mixed credential and administrative target fields', async () => {
+    const { db, proof } = fixture(2, 'USER_SUSPEND');
+    const token = (await finish(db)).approvalToken;
+    proof.targetCredentialRowId = 'key-lost';
+    await expect(
+      consumeOwnerPasskeyActionProof(asTx(db), {
+        userId: 'owner',
+        action: 'USER_SUSPEND',
+        targetId: 'user-2',
+        sessionHash,
+        approvalToken: token,
+        now,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.ownerPasskeyActionProof.updateMany).not.toHaveBeenCalled();
   });
 });

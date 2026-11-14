@@ -58,6 +58,15 @@ enum OwnerPasskeyActionType {
   ADD
   RENAME
   REVOKE
+  USER_SUSPEND
+  USER_UNSUSPEND
+  USER_DELETE
+  SYSTEM_INVITE_CREATE
+  SYSTEM_INVITE_REVOKE
+  REGISTRATION_MODE_UPDATE
+  OWNER_SETTING_UPDATE
+  IMPERSONATE
+  ADMIN_EXPORT
 }
 
 // One-time proof bridging a verified WebAuthn assertion to an Auth.js JWT
@@ -96,6 +105,8 @@ model WebAuthnChallenge {
   userId        String?
   // Bind owner signed revocation to one selected credential row.
   targetCredentialRowId String?
+  // 6.12.4.1: non-Passkey actions bind their exact target/object fingerprint.
+  ownerActionTargetId String? @db.VarChar(128)
   // Only for the authenticated owner's one-operation approval ceremony.
   ownerActionType OwnerPasskeyActionType?
   sessionBindingHash String? @db.VarChar(64)
@@ -120,6 +131,7 @@ model OwnerPasskeyActionProof {
   tokenHash             String @unique @db.VarChar(64)
   action                OwnerPasskeyActionType
   targetCredentialRowId String?
+  ownerActionTargetId   String? @db.VarChar(128)
   signerCredentialRowId String
   sessionBindingHash    String @db.VarChar(64)
   sessionSecurityVersion Int

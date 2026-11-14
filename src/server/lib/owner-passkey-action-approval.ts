@@ -14,12 +14,35 @@ export const OWNER_APPROVAL_TICKET_TTL_MS = 2 * 60 * 1000;
 const SECRET = /^[A-Za-z0-9_-]{43}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const digest = (data: string) => createHash('sha256').update(data, 'utf8').digest('hex');
-export type OwnerPasskeyAction = 'ADD' | 'RENAME' | 'REVOKE';
+// This is the ONLY WebAuthn-approved action allowlist. Individual privileged
+// endpoints remain forbidden until they atomically redeem their exact proof.
+export const OWNER_APPROVED_ACTIONS = [
+  'ADD',
+  'RENAME',
+  'REVOKE',
+  'USER_SUSPEND',
+  'USER_UNSUSPEND',
+  'USER_DELETE',
+  'SYSTEM_INVITE_CREATE',
+  'SYSTEM_INVITE_REVOKE',
+  'REGISTRATION_MODE_UPDATE',
+  'OWNER_SETTING_UPDATE',
+  'IMPERSONATE',
+  'ADMIN_EXPORT',
+] as const;
+export type OwnerPasskeyAction = (typeof OWNER_APPROVED_ACTIONS)[number];
 type Env = Readonly<Record<string, string | undefined>>;
 type Store = PrismaClient | Prisma.TransactionClient;
 
+export function isOwnerPasskeyAction(value: unknown): value is OwnerPasskeyAction {
+  return typeof value === 'string' && (OWNER_APPROVED_ACTIONS as readonly string[]).includes(value);
+}
+
 function validateAction(action: unknown): asserts action is OwnerPasskeyAction {
-  if (action !== 'ADD' && action !== 'RENAME' && action !== 'REVOKE') throw new AppError('FORBIDDEN');
+  if (!isOwnerPasskeyAction(action)) throw new AppError('FORBIDDEN');
+}
+function isCredentialAction(action: OwnerPasskeyAction): boolean {
+  return action === 'ADD' || action === 'RENAME' || action === 'REVOKE';
 }
 
 /** Bind an approval to the EXACT Auth.js JWT cookie, including cookie chunks.
@@ -106,11 +129,16 @@ function allowedSigners(
   action: OwnerPasskeyAction,
   target: string | null,
 ) {
-  if (
-    (action === 'ADD' && (target !== null || keys.length >= 3)) ||
-    (action !== 'ADD' && (!target || !keys.some((key) => key.id === target))) ||
-    (action === 'REVOKE' && keys.length < 2)
-  ) {
+  if (isCredentialAction(action)) {
+    if (
+      (action === 'ADD' && (target !== null || keys.length >= 3)) ||
+      (action !== 'ADD' && (!target || !keys.some((key) => key.id === target))) ||
+      (action === 'REVOKE' && keys.length < 2)
+    )
+      throw new AppError('FORBIDDEN');
+  } else if (!target || target.length > 128) {
+    // Every sensitive operation must bind the exact target, including a
+    // canonical fingerprint of request contents for create/update actions.
     throw new AppError('FORBIDDEN');
   }
   const signers = keys.filter((key) => action !== 'REVOKE' || key.id !== target);
@@ -156,7 +184,8 @@ export async function beginOwnerPasskeyActionApproval(input: {
       purpose: 'OWNER_APPROVAL',
       userId: input.userId,
       ownerActionType: input.action,
-      targetCredentialRowId: targetId,
+      targetCredentialRowId: isCredentialAction(input.action) ? targetId : null,
+      ...(!isCredentialAction(input.action) ? { ownerActionTargetId: targetId } : {}),
       sessionBindingHash: input.sessionHash,
       bindingHash,
       challengeHash: digest(options.challenge),
@@ -196,6 +225,12 @@ export async function finishOwnerPasskeyActionApproval(input: {
     throw new AppError('FORBIDDEN');
   }
   validateAction(challenge.ownerActionType);
+  if (
+    (isCredentialAction(challenge.ownerActionType) && challenge.ownerActionTargetId != null) ||
+    (!isCredentialAction(challenge.ownerActionType) &&
+      (challenge.targetCredentialRowId != null || !challenge.ownerActionTargetId))
+  )
+    throw new AppError('FORBIDDEN');
   const signer = await input.db.passkeyCredential.findUnique({
     where: { credentialId: input.response.id },
   });
@@ -246,7 +281,10 @@ export async function finishOwnerPasskeyActionApproval(input: {
   await input.db.$transaction(async (tx) => {
     await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', input.userId);
     const { user, keys } = await ownerStatus(tx, input.userId);
-    const signers = allowedSigners(keys, challenge.ownerActionType!, challenge.targetCredentialRowId);
+    const targetId = isCredentialAction(challenge.ownerActionType!)
+      ? challenge.targetCredentialRowId
+      : challenge.ownerActionTargetId;
+    const signers = allowedSigners(keys, challenge.ownerActionType!, targetId ?? null);
     if (!signers.some((key) => key.id === signer.id)) throw new AppError('FORBIDDEN');
     const current = await tx.passkeyCredential.findUnique({ where: { id: signer.id } });
     if (
@@ -268,6 +306,9 @@ export async function finishOwnerPasskeyActionApproval(input: {
         sessionBindingHash: input.sessionHash,
         ownerActionType: challenge.ownerActionType,
         targetCredentialRowId: challenge.targetCredentialRowId,
+        ...(!isCredentialAction(challenge.ownerActionType!)
+          ? { ownerActionTargetId: challenge.ownerActionTargetId }
+          : {}),
         usedAt: null,
         expiresAt: { gt: now },
       },
@@ -289,6 +330,9 @@ export async function finishOwnerPasskeyActionApproval(input: {
         userId: input.userId,
         action: challenge.ownerActionType!,
         targetCredentialRowId: challenge.targetCredentialRowId,
+        ...(!isCredentialAction(challenge.ownerActionType!)
+          ? { ownerActionTargetId: challenge.ownerActionTargetId }
+          : {}),
         signerCredentialRowId: signer.id,
         tokenHash: digest(approvalToken),
         sessionBindingHash: input.sessionHash,
@@ -307,6 +351,7 @@ export async function finishOwnerPasskeyActionApproval(input: {
           action: challenge.ownerActionType!,
           signerCredentialRowId: signer.id,
           ...(challenge.targetCredentialRowId ? { targetCredentialRowId: challenge.targetCredentialRowId } : {}),
+          ...(challenge.ownerActionTargetId ? { ownerActionTargetId: challenge.ownerActionTargetId } : {}),
           expiresInSeconds: OWNER_APPROVAL_TICKET_TTL_MS / 1000,
         },
       },
@@ -347,7 +392,9 @@ export async function consumeOwnerPasskeyActionProof(
     !proof ||
     proof.userId !== input.userId ||
     proof.action !== input.action ||
-    proof.targetCredentialRowId !== (input.targetId ?? null) ||
+    (isCredentialAction(input.action)
+      ? proof.targetCredentialRowId !== (input.targetId ?? null) || proof.ownerActionTargetId != null
+      : proof.targetCredentialRowId != null || proof.ownerActionTargetId !== input.targetId) ||
     proof.sessionBindingHash !== input.sessionHash ||
     proof.consumedAt ||
     proof.expiresAt <= now
@@ -368,7 +415,8 @@ export async function consumeOwnerPasskeyActionProof(
       id: proof.id,
       userId: input.userId,
       action: input.action,
-      targetCredentialRowId: input.targetId ?? null,
+      targetCredentialRowId: isCredentialAction(input.action) ? (input.targetId ?? null) : null,
+      ...(!isCredentialAction(input.action) ? { ownerActionTargetId: input.targetId } : {}),
       tokenHash: digest(input.approvalToken),
       sessionBindingHash: input.sessionHash,
       sessionSecurityVersion: user.sessionSecurityVersion,

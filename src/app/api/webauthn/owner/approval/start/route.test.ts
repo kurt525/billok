@@ -12,6 +12,21 @@ vi.mock('@/server/lib/owner-access', () => ({ requireOwner: vi.fn().mockResolved
 vi.mock('@/server/lib/owner-passkey-action-approval', () => ({
   beginOwnerPasskeyActionApproval: beginMock,
   ownerSessionFingerprint: sessionFingerprintMock,
+  isOwnerPasskeyAction: (value: unknown) =>
+    [
+      'ADD',
+      'RENAME',
+      'REVOKE',
+      'USER_SUSPEND',
+      'USER_UNSUSPEND',
+      'USER_DELETE',
+      'SYSTEM_INVITE_CREATE',
+      'SYSTEM_INVITE_REVOKE',
+      'REGISTRATION_MODE_UPDATE',
+      'OWNER_SETTING_UPDATE',
+      'IMPERSONATE',
+      'ADMIN_EXPORT',
+    ].includes(value as string),
   OWNER_APPROVAL_BINDING_COOKIE: 'billok-owner-approval',
 }));
 vi.mock('@/server/lib/webauthn-registration', () => ({
@@ -58,6 +73,14 @@ describe('Issue #1 6.10.2.2: approval/start requires logged-in owner', () => {
     expect(response.headers.get('set-cookie')).toMatch(/SameSite=strict/iu);
     expect(response.headers.get('set-cookie')).toMatch(/Secure/u);
   });
+  it('permits explicitly declared user-management confirmation with a specific object', async () => {
+    const response = await POST(createRequest({ action: 'USER_SUSPEND', targetId: 'registered-user-42' }));
+    expect(response.status).toBe(200);
+    expect(beginMock).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'USER_SUSPEND', targetId: 'registered-user-42' }),
+    );
+  });
+
   it('rejects anonymous/impersonated attempts and bad action without generating a challenge', async () => {
     authMock.mockResolvedValueOnce(null);
     expect((await POST(createRequest({ action: 'ADD' }))).status).toBe(403);
