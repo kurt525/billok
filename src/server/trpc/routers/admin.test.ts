@@ -10,15 +10,6 @@ vi.mock('@auth/prisma-adapter', () => ({
 vi.mock('next-auth/providers/credentials', () => ({
   default: vi.fn(),
 }));
-vi.mock('next-auth/providers/google', () => ({
-  default: vi.fn(),
-}));
-vi.mock('next-auth/providers/nodemailer', () => ({
-  default: vi.fn(),
-}));
-vi.mock('bcryptjs', () => ({
-  default: { compare: vi.fn() },
-}));
 vi.mock('nodemailer', () => ({
   default: {
     createTransport: vi.fn().mockReturnValue({
@@ -45,6 +36,10 @@ vi.mock('@/server/auth', () => ({
 // Mock Prisma client
 const mockDb = {
   $queryRaw: vi.fn(),
+  $queryRawUnsafe: vi.fn().mockResolvedValue([]),
+  ownerBootstrap: {
+    findUnique: vi.fn().mockResolvedValue({ userId: 'admin-1', completedAt: new Date() }),
+  },
   // Interactive transactions run their callback against the same mocks
   $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(mockDb)),
   user: {
@@ -94,6 +89,7 @@ const mockDb = {
     findMany: vi.fn().mockResolvedValue([]),
     findUnique: vi.fn(),
     update: vi.fn(),
+    updateMany: vi.fn(),
   },
   activityLog: {
     findMany: vi.fn().mockResolvedValue([]),
@@ -101,6 +97,12 @@ const mockDb = {
 };
 
 vi.mock('@/server/db', () => ({ db: mockDb }));
+const { proofConfirmation } = vi.hoisted(() => ({ proofConfirmation: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@/server/lib/owner-passkey-action-approval', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/lib/owner-passkey-action-approval')>()),
+  consumeOwnerPasskeyActionProof: proofConfirmation,
+}));
+
 vi.mock('@/server/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
@@ -120,40 +122,6 @@ vi.mock('@/server/lib/receipt-cleanup', async (importOriginal) => ({
 vi.mock('@/server/lib/rate-limit', () => ({
   checkRateLimit: vi.fn().mockReturnValue({ allowed: true }),
 }));
-const { mockCreateProviderByName } = vi.hoisted(() => ({ mockCreateProviderByName: vi.fn() }));
-vi.mock('@/server/ai/registry', () => ({
-  getAIProvider: vi.fn().mockResolvedValue({
-    name: 'mock-provider',
-    isAvailable: vi.fn().mockResolvedValue(true),
-  }),
-  createProviderByName: mockCreateProviderByName,
-  isProviderConfigured: vi.fn().mockReturnValue(true),
-  clearProviderCache: vi.fn(),
-}));
-const { mockStartMeridianProxy, mockGetMeridianStartError } = vi.hoisted(() => ({
-  mockStartMeridianProxy: vi.fn(),
-  mockGetMeridianStartError: vi.fn(),
-}));
-vi.mock('@/server/ai/providers/meridian', () => ({
-  startMeridianProxy: mockStartMeridianProxy,
-  getMeridianStartError: mockGetMeridianStartError,
-}));
-const { mockCheckMeridianHealth, mockInvalidateMeridianHealthCache } = vi.hoisted(() => ({
-  mockCheckMeridianHealth: vi.fn(),
-  mockInvalidateMeridianHealthCache: vi.fn(),
-}));
-vi.mock('@/server/lib/auth-health-poller', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/server/lib/auth-health-poller')>()),
-  checkMeridianHealth: mockCheckMeridianHealth,
-  invalidateMeridianHealthCache: mockInvalidateMeridianHealthCache,
-}));
-const { mockSubmitCode } = vi.hoisted(() => ({ mockSubmitCode: vi.fn() }));
-vi.mock('@/server/lib/meridian-login', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/server/lib/meridian-login')>()),
-  submitCode: mockSubmitCode,
-  isLoginInProgress: vi.fn().mockReturnValue(false),
-}));
-
 describe('adminProcedure authorization', () => {
   const originalEnv = process.env;
 
@@ -265,7 +233,6 @@ describe('admin router procedures existence', () => {
     expect(procedures).toContain('getVenmoEnabled');
     expect(procedures).toContain('setVenmoEnabled');
     expect(procedures).toContain('getGlobalActivity');
-    expect(procedures).toContain('getAIStats');
     expect(procedures).toContain('sendTestEmail');
     expect(procedures).toContain('getImpersonationStatus');
   });
@@ -377,15 +344,184 @@ const adminSession = { user: { id: 'admin-1', email: 'admin@example.com' } };
 
 async function callerAs(session: { user: { id: string; email: string } }) {
   const { adminRouter } = await import('./admin');
-  const ctx = { session, db: mockDb, headers: new Headers(), impersonating: null };
+  const ctx = {
+    session,
+    db: mockDb,
+    headers: new Headers({ cookie: 'authjs.session-token=mock-' + session.user.id }),
+    impersonating: null,
+  };
   return adminRouter.createCaller(ctx as unknown as Parameters<typeof adminRouter.createCaller>[0]);
 }
+
+describe('Issue #1 6.12.1: immutable owner ID, never ADMIN_EMAIL authorization', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({
+      userId: 'admin-1',
+      completedAt: new Date('2026-11-13T00:00:00Z'),
+    });
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  test('real owner is authorized even if ADMIN_EMAIL is unset or points elsewhere', async () => {
+    vi.stubEnv('ADMIN_EMAIL', 'ordinary@example.com');
+    const api = await callerAs(adminSession);
+    mockDb.adminAuditLog.findMany.mockResolvedValue([]);
+    await expect(api.getAuditLog({ limit: 1 })).resolves.toMatchObject({ items: [] });
+    expect(mockDb.ownerBootstrap.findUnique).toHaveBeenCalledWith({
+      where: { id: 1 },
+      select: { userId: true, completedAt: true },
+    });
+    vi.stubEnv('ADMIN_EMAIL', '');
+    await expect(api.getAuditLog({ limit: 1 })).resolves.toMatchObject({ items: [] });
+  });
+
+  test('ordinary registered user with matching ADMIN_EMAIL is never an owner', async () => {
+    vi.stubEnv('ADMIN_EMAIL', 'ordinary@example.com');
+    const api = await callerAs({ user: { id: 'ordinary-1', email: 'ordinary@example.com' } });
+    await expect(api.getAuditLog({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.listUsers({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.user.findMany).not.toHaveBeenCalled();
+    expect(mockDb.adminAuditLog.findMany).not.toHaveBeenCalled();
+  });
+
+  test('unfinished, missing or replaced bootstrap ID fails closed for all admin requests', async () => {
+    const api = await callerAs(adminSession);
+    for (const bootstrap of [
+      null,
+      { userId: 'admin-1', completedAt: null },
+      { userId: 'new-owner-id', completedAt: new Date() },
+    ]) {
+      mockDb.ownerBootstrap.findUnique.mockResolvedValueOnce(bootstrap);
+      await expect(api.getAuditLog({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+  });
+
+  test('all sensitive tRPC actions reject an owner whose email is unverified or whose account is suspended', async () => {
+    const api = await callerAs(adminSession);
+    for (const state of [
+      { emailVerified: null, suspendedAt: null, isPlaceholder: false, sessionSecurityVersion: 0 },
+      { emailVerified: new Date(), suspendedAt: new Date(), isPlaceholder: false, sessionSecurityVersion: 0 },
+      { emailVerified: new Date(), suspendedAt: null, isPlaceholder: true, sessionSecurityVersion: 0 },
+      { emailVerified: new Date(), suspendedAt: null, isPlaceholder: false, sessionSecurityVersion: -1 },
+    ]) {
+      mockDb.user.findUnique.mockResolvedValue(state);
+      await expect(api.getAuditLog({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(api.createSystemInvite({ expiresInDays: 7, approvalToken: 'b'.repeat(43) })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      await expect(api.ownerRegisteredUsers({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    expect(mockDb.adminAuditLog.findMany).not.toHaveBeenCalled();
+    expect(mockDb.systemInvite.create).not.toHaveBeenCalled();
+  });
+
+  test('signed impersonation context cannot restore owner access through adminId or adminEmail', async () => {
+    const { adminRouter } = await import('./admin');
+    const ctx = {
+      session: adminSession,
+      db: mockDb,
+      headers: new Headers(),
+      impersonating: {
+        adminId: 'admin-1',
+        adminEmail: 'admin@example.com',
+        targetId: 'ordinary-1',
+        targetEmail: 'ordinary@example.com',
+      },
+    };
+    const api = adminRouter.createCaller(ctx as unknown as Parameters<typeof adminRouter.createCaller>[0]);
+    await expect(api.getAuditLog({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.adminAuditLog.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('admin group totals in group currency', () => {
+  beforeEach(() => {
+    vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
+    vi.clearAllMocks();
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
+    mockDb.group.findMany.mockResolvedValue([
+      {
+        id: 'g-rub',
+        name: 'Ужин',
+        currency: 'RUB',
+        archivedAt: null,
+        createdAt: new Date('2026-10-01T00:00:00Z'),
+        _count: { members: 2, expenses: 2, settlements: 0 },
+        activityLogs: [],
+      },
+    ]);
+    mockDb.group.count.mockResolvedValue(1);
+    mockDb.expense.count.mockResolvedValue(2);
+    mockDb.settlement.count.mockResolvedValue(0);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test('returns group currency and sums stored converted amounts in kopecks', async () => {
+    mockDb.expense.groupBy.mockResolvedValue([
+      {
+        groupId: 'g-rub',
+        currency: 'RUB',
+        _sum: { amount: 10001, baseCurrencyAmount: null },
+        _count: { id: 1, baseCurrencyAmount: 0 },
+      },
+      {
+        groupId: 'g-rub',
+        currency: 'EUR',
+        _sum: { amount: 1000, baseCurrencyAmount: 10725 },
+        _count: { id: 1, baseCurrencyAmount: 1 },
+      },
+    ]);
+    const api = await callerAs(adminSession);
+    const result = await api.listGroups({ limit: 20 });
+    expect(result.groups[0]).toMatchObject({ currency: 'RUB', totalAmount: 20726 });
+    expect(mockDb.expense.groupBy).toHaveBeenCalledWith({
+      by: ['groupId', 'currency'],
+      where: { groupId: { in: ['g-rub'] } },
+      _sum: { amount: true, baseCurrencyAmount: true },
+      _count: { id: true, baseCurrencyAmount: true },
+    });
+  });
+
+  test('reports unavailable total for expenses without a conversion', async () => {
+    mockDb.expense.groupBy.mockResolvedValue([
+      {
+        groupId: 'g-rub',
+        currency: 'EUR',
+        _sum: { amount: 1000, baseCurrencyAmount: null },
+        _count: { id: 1, baseCurrencyAmount: 0 },
+      },
+    ]);
+    const api = await callerAs(adminSession);
+    const result = await api.listGroups({ limit: 20 });
+    expect(result.groups[0]).toMatchObject({ currency: 'RUB', totalAmount: null });
+  });
+});
 
 describe('registration mode', () => {
   beforeEach(() => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.clearAllMocks();
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
   });
 
   afterEach(() => {
@@ -407,7 +543,7 @@ describe('registration mode', () => {
   test.each(['open', 'invite-only', 'closed'] as const)('saves the %s setting', async (mode) => {
     mockDb.systemSetting.upsert.mockResolvedValue({ key: 'registrationMode', value: mode });
     const api = await callerAs(adminSession);
-    expect(await api.setRegistrationMode({ mode })).toEqual({ mode });
+    expect(await api.setRegistrationMode({ mode, approvalToken: 'b'.repeat(43) })).toEqual({ mode });
     expect(mockDb.systemSetting.upsert).toHaveBeenCalledWith({
       where: { key: 'registrationMode' },
       update: { value: mode },
@@ -421,226 +557,59 @@ describe('registration mode', () => {
     );
   });
 
-  test('refuses to save a mode ShareTab does not know', async () => {
+  test('6.12.4.4: all registration mode writes require Passkey; no JWT-only API bypass', async () => {
     const api = await callerAs(adminSession);
-    await expect(api.setRegistrationMode({ mode: 'everyone' as 'open' })).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-    });
-    expect(mockDb.systemSetting.upsert).not.toHaveBeenCalled();
-  });
-});
-
-describe('guest uploads toggle', () => {
-  beforeEach(async () => {
-    vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
-    vi.stubEnv('DISABLE_GUEST_UPLOADS', '');
-    vi.clearAllMocks();
-    const { _resetGuestUploadsCache } = await import('@/server/lib/guest-uploads');
-    _resetGuestUploadsCache();
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  test('reports guest uploads as enabled until an admin saves the setting', async () => {
-    mockDb.systemSetting.findUnique.mockResolvedValue(null);
-    const api = await callerAs(adminSession);
-    expect(await api.getGuestUploadsEnabled()).toEqual({ enabled: true, forcedOffByEnv: false });
-  });
-
-  test('reports the saved value', async () => {
-    mockDb.systemSetting.findUnique.mockResolvedValue({ key: 'guestUploadsEnabled', value: 'false' });
-    const api = await callerAs(adminSession);
-    expect(await api.getGuestUploadsEnabled()).toEqual({ enabled: false, forcedOffByEnv: false });
-  });
-
-  test('reports when DISABLE_GUEST_UPLOADS overrides the saved value', async () => {
-    vi.stubEnv('DISABLE_GUEST_UPLOADS', 'true');
-    mockDb.systemSetting.findUnique.mockResolvedValue(null);
-    const api = await callerAs(adminSession);
-    expect(await api.getGuestUploadsEnabled()).toEqual({ enabled: true, forcedOffByEnv: true });
-  });
-
-  test('saving the setting upserts it and writes an audit entry', async () => {
-    const api = await callerAs(adminSession);
-    expect(await api.setGuestUploadsEnabled({ enabled: false })).toEqual({ enabled: false });
-    expect(mockDb.systemSetting.upsert).toHaveBeenCalledWith({
-      where: { key: 'guestUploadsEnabled' },
-      update: { value: 'false' },
-      create: { key: 'guestUploadsEnabled', value: 'false' },
-    });
-    expect(mockDb.adminAuditLog.create).toHaveBeenCalledWith({
-      data: {
-        adminId: 'admin-1',
-        action: 'GUEST_UPLOADS_SETTING_CHANGED',
-        metadata: { enabled: false },
-      },
-    });
-  });
-
-  test('refuses to save while DISABLE_GUEST_UPLOADS locks the setting', async () => {
-    vi.stubEnv('DISABLE_GUEST_UPLOADS', 'true');
-    const api = await callerAs(adminSession);
-    await expect(api.setGuestUploadsEnabled({ enabled: true })).rejects.toMatchObject({
-      code: 'PRECONDITION_FAILED',
-    });
+    for (const mode of ['open', 'invite-only', 'closed'] as const) {
+      await expect(api.setRegistrationMode({ mode } as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(proofConfirmation).not.toHaveBeenCalled();
     expect(mockDb.systemSetting.upsert).not.toHaveBeenCalled();
     expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
   });
 
-  test('non-admins cannot read or change the setting', async () => {
-    const api = await callerAs({ user: { id: 'user-2', email: 'someone@example.com' } });
-    await expect(api.getGuestUploadsEnabled()).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(api.setGuestUploadsEnabled({ enabled: false })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(mockDb.systemSetting.upsert).not.toHaveBeenCalled();
-  });
-});
-
-describe('testAIProvider', () => {
-  const input = { providerName: 'openai-codex', imageBase64: 'aGVsbG8=', mimeType: 'image/png' as const };
-
-  beforeEach(() => {
-    vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
-    vi.clearAllMocks();
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  test('reports an extraction failure as 503 with the provider message', async () => {
-    // Cloudflare replaces an origin's 502 and 504 bodies with its own HTML
-    // page, which hid the provider's message.
-    const { getHTTPStatusCodeFromError } = await import('@trpc/server/http');
-    mockCreateProviderByName.mockResolvedValue({
-      name: 'openai-codex',
-      isAvailable: vi.fn().mockResolvedValue(true),
-      extractReceipt: vi.fn().mockRejectedValue(new Error('OpenAI Codex request failed (429): usage limit reached')),
-    });
+  test('6.12.4.4: mode change consumes proof for exact selected mode before writing and audit', async () => {
     const api = await callerAs(adminSession);
-
-    const error: unknown = await api.testAIProvider(input).catch((err: unknown) => err);
-
-    expect(error).toMatchObject({ message: 'OpenAI Codex request failed (429): usage limit reached' });
-    expect(getHTTPStatusCodeFromError(error as Parameters<typeof getHTTPStatusCodeFromError>[0])).toBe(503);
-  });
-
-  test('records the failure in the audit log', async () => {
-    mockCreateProviderByName.mockResolvedValue({
-      name: 'openai-codex',
-      isAvailable: vi.fn().mockResolvedValue(true),
-      extractReceipt: vi.fn().mockRejectedValue(new Error('boom')),
-    });
-    const api = await callerAs(adminSession);
-
-    await api.testAIProvider(input).catch(() => undefined);
-
-    expect(mockDb.adminAuditLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        action: 'AI_PROVIDER_TESTED',
-        metadata: expect.objectContaining({ provider: 'openai-codex', success: false, error: 'boom' }),
+    await api.setRegistrationMode({ mode: 'closed', approvalToken: 'b'.repeat(43) });
+    expect(mockDb.$transaction).toHaveBeenCalledTimes(1);
+    expect(mockDb.$queryRawUnsafe).toHaveBeenCalledWith('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', 'admin-1');
+    expect(proofConfirmation).toHaveBeenCalledWith(
+      mockDb,
+      expect.objectContaining({
+        userId: 'admin-1',
+        action: 'REGISTRATION_MODE_UPDATE',
+        targetId: 'registration-mode:v1:closed',
+        approvalToken: 'b'.repeat(43),
+        sessionHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
       }),
-    });
-  });
-});
-
-describe('Meridian login and status', () => {
-  beforeEach(() => {
-    vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
-    vi.clearAllMocks();
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
-    mockGetMeridianStartError.mockReturnValue(null);
+    );
+    expect(proofConfirmation.mock.invocationCallOrder[0]!).toBeLessThan(
+      mockDb.systemSetting.upsert.mock.invocationCallOrder[0]!,
+    );
+    expect(mockDb.systemSetting.upsert.mock.invocationCallOrder[0]!).toBeLessThan(
+      mockDb.adminAuditLog.create.mock.invocationCallOrder[0]!,
+    );
   });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  test('a successful login starts the proxy before the status is re-read', async () => {
-    // The health check caches "not running" for 15s, so the page's status
-    // refetch after the login must not land before the proxy is up.
-    mockSubmitCode.mockResolvedValue({ success: true });
-    let started = false;
-    mockStartMeridianProxy.mockImplementation(async () => {
-      await Promise.resolve();
-      started = true;
-    });
-    const startedWhenInvalidated: boolean[] = [];
-    mockInvalidateMeridianHealthCache.mockImplementation(() => startedWhenInvalidated.push(started));
+  test('6.12.4.4: wrong mode, session, consumed, expired proof never changes registration', async () => {
     const api = await callerAs(adminSession);
-
-    await api.completeMeridianLogin({ code: 'abc#state' });
-
-    expect(mockStartMeridianProxy).toHaveBeenCalledTimes(1);
-    expect(startedWhenInvalidated.at(-1)).toBe(true);
-  });
-
-  test('a login reports why the proxy did not start', async () => {
-    mockSubmitCode.mockResolvedValue({ success: true });
-    mockStartMeridianProxy.mockResolvedValue(undefined);
-    mockGetMeridianStartError.mockReturnValue('Meridian proxy did not answer on port 3457');
-    const api = await callerAs(adminSession);
-
-    const result = await api.completeMeridianLogin({ code: 'abc#state' });
-
-    expect(result).toMatchObject({ success: true, proxyError: 'Meridian proxy did not answer on port 3457' });
-    expect(mockDb.adminAuditLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        action: 'MERIDIAN_LOGIN_COMPLETED',
-        metadata: expect.objectContaining({ proxyError: 'Meridian proxy did not answer on port 3457' }),
-      }),
-    });
-  });
-
-  test('a login does not wait forever for a proxy start that hangs', async () => {
-    vi.useFakeTimers();
-    try {
-      mockSubmitCode.mockResolvedValue({ success: true });
-      mockStartMeridianProxy.mockReturnValue(new Promise(() => undefined));
-      const api = await callerAs(adminSession);
-
-      const login = api.completeMeridianLogin({ code: 'abc#state' });
-      await vi.advanceTimersByTimeAsync(20_000);
-
-      await expect(login).resolves.toMatchObject({ success: true });
-      expect(mockInvalidateMeridianHealthCache).toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
+    for (const failure of ['wrong mode', 'wrong session', 'consumed', 'expired']) {
+      proofConfirmation.mockRejectedValueOnce(new Error(failure));
+      await expect(api.setRegistrationMode({ mode: 'invite-only', approvalToken: 'b'.repeat(43) })).rejects.toThrow(
+        failure,
+      );
     }
+    expect(mockDb.systemSetting.upsert).not.toHaveBeenCalled();
+    expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
   });
 
-  test('a failed login does not start the proxy', async () => {
-    mockSubmitCode.mockResolvedValue({ success: false, error: 'invalid code' });
+  test('refuses to save a mode ShareTab does not know', async () => {
     const api = await callerAs(adminSession);
-
-    await api.completeMeridianLogin({ code: 'abc#state' });
-
-    expect(mockStartMeridianProxy).not.toHaveBeenCalled();
-  });
-
-  test('the status shows why the proxy is not running', async () => {
-    mockCheckMeridianHealth.mockResolvedValue({ status: 'not_running' });
-    mockGetMeridianStartError.mockReturnValue("Cannot find module '@libsql/linux-x64-musl'");
-    const api = await callerAs(adminSession);
-
-    expect(await api.getMeridianAuthStatus()).toMatchObject({
-      status: 'not_running',
-      error: "Cannot find module '@libsql/linux-x64-musl'",
+    await expect(
+      api.setRegistrationMode({ mode: 'everyone' as 'open', approvalToken: 'b'.repeat(43) }),
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
     });
-  });
-
-  test('the status leaves a running proxy alone', async () => {
-    mockCheckMeridianHealth.mockResolvedValue({ status: 'healthy', email: 'me@example.com' });
-    mockGetMeridianStartError.mockReturnValue('an old failure');
-    const api = await callerAs(adminSession);
-
-    const status = await api.getMeridianAuthStatus();
-
-    expect(status).toMatchObject({ status: 'healthy', email: 'me@example.com' });
-    expect(status).not.toHaveProperty('error');
+    expect(mockDb.systemSetting.upsert).not.toHaveBeenCalled();
   });
 });
 
@@ -651,7 +620,12 @@ describe('deleteGroup', () => {
   beforeEach(() => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.clearAllMocks();
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
     mockDb.group.findUnique.mockResolvedValue({ id: 'g1', name: 'Trip' });
     mockDb.$queryRaw.mockResolvedValue([]);
     mockDb.receipt.findMany.mockResolvedValue([{ id: 'r1', imagePath: 'receipts/r1.jpg' }]);
@@ -686,7 +660,12 @@ describe('cleanupExpiredSplits', () => {
   beforeEach(() => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.clearAllMocks();
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
   });
 
   afterEach(() => {
@@ -719,7 +698,12 @@ describe('unused receipts', () => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.stubEnv('UPLOAD_DIR', '/nonexistent-sharetab-uploads');
     vi.clearAllMocks();
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
   });
 
   afterEach(() => {
@@ -764,5 +748,353 @@ describe('unused receipts', () => {
     const api = await callerAs({ user: { id: 'user-1', email: 'user@example.com' } });
     await expect(api.cleanupUnusedReceipts()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(deleteUnusedReceipts).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue #1 6.2: seven-day admin invitations, revocation and usage history', () => {
+  const code = 'invite-secret-to-deliver';
+  const approvalToken = 'b'.repeat(43);
+  const createdAt = new Date('2026-11-10T09:00:00.000Z');
+  const expiresAt = new Date('2026-11-17T09:00:00.000Z');
+  const usedAt = new Date('2026-11-11T09:00:00.000Z');
+  const invite = {
+    id: 'invite-1',
+    code,
+    label: 'Для Анны',
+    createdAt,
+    expiresAt,
+    usedAt: null,
+    usedById: null,
+    revokedAt: null,
+    reservedById: null,
+    reservedUntil: null,
+    usedBy: null,
+  };
+
+  beforeEach(() => {
+    vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
+    vi.clearAllMocks();
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
+    mockDb.systemInvite.create.mockResolvedValue(invite);
+    mockDb.systemInvite.findUnique.mockResolvedValue(invite);
+    mockDb.systemInvite.findMany.mockResolvedValue([invite]);
+    mockDb.systemInvite.updateMany.mockResolvedValue({ count: 1 });
+    mockDb.adminAuditLog.create.mockResolvedValue({ id: 'audit-1' });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test('admin creates a code for manual delivery; exactly seven days, transactional audit without the secret', async () => {
+    mockDb.systemInvite.create.mockImplementationOnce(async ({ data }) => ({ ...invite, expiresAt: data.expiresAt }));
+    const api = await callerAs(adminSession);
+    const before = Date.now();
+    const result = await api.createSystemInvite({ label: 'Для Анны', approvalToken });
+    const after = Date.now();
+    expect(result).toEqual({ id: 'invite-1', code, label: 'Для Анны', expiresAt: expect.any(Date) });
+    expect(mockDb.$transaction).toHaveBeenCalled();
+    const create = mockDb.systemInvite.create.mock.calls.at(-1)![0];
+    expect(create.data.label).toBe('Для Анны');
+    expect(create.data.expiresAt).toBeInstanceOf(Date);
+    expect(create.data.expiresAt.getTime()).toBeGreaterThanOrEqual(before + 7 * 86_400_000);
+    expect(create.data.expiresAt.getTime()).toBeLessThanOrEqual(after + 7 * 86_400_000);
+    expect(mockDb.adminAuditLog.create).toHaveBeenCalledWith({
+      data: {
+        adminId: 'admin-1',
+        action: 'INVITE_CREATED',
+        targetId: invite.id,
+        metadata: { label: 'Для Анны', expiresAt: create.data.expiresAt.toISOString() },
+      },
+    });
+    expect(JSON.stringify(mockDb.adminAuditLog.create.mock.calls)).not.toContain(code);
+    expect(await api.createSystemInvite({ label: 'Другой', expiresInDays: 7, approvalToken })).toHaveProperty(
+      'code',
+      code,
+    );
+  });
+
+  test('admin cannot create timeless, 365-day, zero-day or malformed invites', async () => {
+    const api = await callerAs(adminSession);
+    for (const invalid of [
+      { expiresInDays: 365 },
+      { expiresInDays: 0 },
+      { expiresInDays: null },
+      { label: ' ' },
+      { label: 'x'.repeat(101) },
+      { expiresInDays: 7, allowMultiple: true },
+    ]) {
+      await expect(api.createSystemInvite({ ...(invalid as object), approvalToken } as never)).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+    }
+    expect(mockDb.systemInvite.create).not.toHaveBeenCalled();
+    expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('list is admin-only and distinguishes active, reserved, used, expired and revoked; usage date and recipient persist', async () => {
+    const api = await callerAs(adminSession);
+    const now = new Date();
+    const later = new Date(now.getTime() + 86_400_000);
+    const earlier = new Date(now.getTime() - 86_400_000);
+    mockDb.systemInvite.findMany.mockResolvedValue([
+      { ...invite, id: 'active', expiresAt: later },
+      { ...invite, id: 'reserved', expiresAt: later, reservedById: 'pending-user', reservedUntil: later },
+      {
+        ...invite,
+        id: 'used',
+        usedAt,
+        usedById: 'verified-user',
+        usedBy: { id: 'verified-user', name: 'Анна', email: 'anna@example.ru' },
+      },
+      { ...invite, id: 'expired', expiresAt: earlier },
+      { ...invite, id: 'revoked', revokedAt: earlier },
+    ]);
+    const result = await api.listSystemInvites();
+    expect(result.map(({ id, isActive, isReserved, canRevoke }) => ({ id, isActive, isReserved, canRevoke }))).toEqual([
+      { id: 'active', isActive: true, isReserved: false, canRevoke: true },
+      { id: 'reserved', isActive: false, isReserved: true, canRevoke: true },
+      { id: 'used', isActive: false, isReserved: false, canRevoke: false },
+      { id: 'expired', isActive: false, isReserved: false, canRevoke: false },
+      { id: 'revoked', isActive: false, isReserved: false, canRevoke: false },
+    ]);
+    expect(result[2]).toMatchObject({
+      usedAt,
+      usedBy: { name: 'Анна', email: 'anna@example.ru' },
+    });
+  });
+
+  test('revocation of an unused or reserved code is atomic and audited without leaking the code', async () => {
+    const api = await callerAs(adminSession);
+    const result = await api.revokeSystemInvite({ inviteId: invite.id, approvalToken });
+    expect(result).toEqual({ revoked: true });
+    expect(mockDb.$transaction).toHaveBeenCalled();
+    expect(mockDb.systemInvite.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: invite.id,
+        revokedAt: null,
+        usedAt: null,
+        usedById: null,
+        createdAt: { gt: expect.any(Date) },
+        expiresAt: { gt: expect.any(Date) },
+      },
+      data: { revokedAt: expect.any(Date) },
+    });
+    expect(mockDb.adminAuditLog.create).toHaveBeenCalledWith({
+      data: {
+        adminId: 'admin-1',
+        action: 'INVITE_REVOKED',
+        targetId: invite.id,
+        metadata: { revokedAt: expect.any(String) },
+      },
+    });
+    expect(JSON.stringify(mockDb.adminAuditLog.create.mock.calls)).not.toContain(code);
+  });
+
+  test('used, revoked, expired or concurrently consumed code cannot be revoked again', async () => {
+    const api = await callerAs(adminSession);
+    for (const row of [
+      { ...invite, usedAt, usedById: 'verified-user' },
+      { ...invite, revokedAt: new Date() },
+      { ...invite, expiresAt: new Date(Date.now() - 1000) },
+    ]) {
+      mockDb.systemInvite.findUnique.mockResolvedValueOnce(row);
+      await expect(api.revokeSystemInvite({ inviteId: invite.id, approvalToken })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+    }
+    expect(mockDb.systemInvite.updateMany).not.toHaveBeenCalled();
+    mockDb.systemInvite.updateMany.mockResolvedValueOnce({ count: 0 });
+    await expect(api.revokeSystemInvite({ inviteId: invite.id, approvalToken })).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('6.12.4.3: both mutations reject a JWT without a one-time Passkey token', async () => {
+    const api = await callerAs(adminSession);
+    await expect(api.createSystemInvite({ label: 'Для Анны' } as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(api.revokeSystemInvite({ inviteId: invite.id } as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.systemInvite.create).not.toHaveBeenCalled();
+    expect(mockDb.systemInvite.updateMany).not.toHaveBeenCalled();
+    expect(proofConfirmation).not.toHaveBeenCalled();
+  });
+
+  test('6.12.4.3: grants only canonical 7-day creation label and the exact revoke id', async () => {
+    const { systemInviteCreateApprovalTarget } = await import('@/lib/system-invite-approval-target');
+    const api = await callerAs(adminSession);
+    await api.createSystemInvite({ label: ' Для Анны ', approvalToken });
+    expect(proofConfirmation).toHaveBeenCalledWith(
+      mockDb,
+      expect.objectContaining({
+        userId: 'admin-1',
+        action: 'SYSTEM_INVITE_CREATE',
+        targetId: systemInviteCreateApprovalTarget('Для Анны'),
+        sessionHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        approvalToken,
+      }),
+    );
+    const createLockOrder = mockDb.$queryRawUnsafe.mock.invocationCallOrder[0]!;
+    const proofOrder = proofConfirmation.mock.invocationCallOrder[0]!;
+    const createOrder = mockDb.systemInvite.create.mock.invocationCallOrder[0]!;
+    expect(createLockOrder).toBeLessThan(proofOrder);
+    expect(proofOrder).toBeLessThan(createOrder);
+    expect(mockDb.systemInvite.create.mock.calls[0]![0].data.label).toBe('Для Анны');
+    proofConfirmation.mockClear();
+    await api.revokeSystemInvite({ inviteId: invite.id, approvalToken });
+    expect(proofConfirmation).toHaveBeenCalledWith(
+      mockDb,
+      expect.objectContaining({
+        userId: 'admin-1',
+        action: 'SYSTEM_INVITE_REVOKE',
+        targetId: invite.id,
+        sessionHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        approvalToken,
+      }),
+    );
+    expect(mockDb.$queryRawUnsafe).toHaveBeenCalledWith(
+      'SELECT id FROM "SystemInvite" WHERE id = $1 FOR UPDATE',
+      invite.id,
+    );
+  });
+
+  test('6.12.4.3: another action/label/invite/session or a replay cannot commit an invite', async () => {
+    const api = await callerAs(adminSession);
+    for (const reason of [
+      'wrong action',
+      'different label',
+      'different invite',
+      'different session',
+      'expired',
+      'replay',
+    ]) {
+      proofConfirmation.mockRejectedValueOnce(new Error(reason));
+      await expect(api.createSystemInvite({ label: 'Для Анны', approvalToken })).rejects.toThrow(reason);
+    }
+    expect(mockDb.systemInvite.create).not.toHaveBeenCalled();
+    expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
+    proofConfirmation.mockRejectedValueOnce(new Error('wrong invite target'));
+    await expect(api.revokeSystemInvite({ inviteId: invite.id, approvalToken })).rejects.toThrow('wrong invite target');
+    expect(mockDb.systemInvite.updateMany).not.toHaveBeenCalled();
+    expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('6.12.4.3: a consumed permission cannot be reused for two create or revoke writes', async () => {
+    const api = await callerAs(adminSession);
+    let consumed = false;
+    proofConfirmation.mockImplementation(async () => {
+      if (consumed) throw new Error('already consumed');
+      consumed = true;
+    });
+    await api.createSystemInvite({ label: 'Для Анны', approvalToken });
+    await expect(api.createSystemInvite({ label: 'Для Анны', approvalToken })).rejects.toThrow('already consumed');
+    expect(mockDb.systemInvite.create).toHaveBeenCalledTimes(1);
+    expect(mockDb.adminAuditLog.create).toHaveBeenCalledTimes(1);
+    consumed = false;
+    await api.revokeSystemInvite({ inviteId: invite.id, approvalToken });
+    await expect(api.revokeSystemInvite({ inviteId: invite.id, approvalToken })).rejects.toThrow('already consumed');
+    expect(mockDb.systemInvite.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  test('regular account cannot create, list or revoke a system invite, even knowing an id', async () => {
+    const api = await callerAs({ user: { id: 'ordinary-user', email: 'guest@example.ru' } });
+    await expect(api.createSystemInvite({ label: 'Для Анны', approvalToken })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(api.listSystemInvites()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.revokeSystemInvite({ inviteId: invite.id, approvalToken })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.systemInvite.create).not.toHaveBeenCalled();
+    expect(mockDb.systemInvite.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue 6.12.4.4: public announcement is a value-scoped privileged setting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Older invitation replay tests replace this mock implementation.
+    proofConfirmation.mockReset().mockResolvedValue(undefined);
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
+    vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  test('cannot save or clear public content with only a JWT', async () => {
+    const api = await callerAs(adminSession);
+    await expect(api.setAnnouncement({ message: 'Не подписано' } as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await expect(api.setAnnouncement({ message: '' } as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.systemSetting.upsert).not.toHaveBeenCalled();
+    expect(mockDb.systemSetting.deleteMany).not.toHaveBeenCalled();
+    expect(proofConfirmation).not.toHaveBeenCalled();
+  });
+
+  test('a 500-character announcement has an exact signed fingerprint and atomic audit', async () => {
+    const { announcementApprovalTarget } = await import('@/lib/admin-setting-approval-target');
+    const message = 'Русский текст '.repeat(40).slice(0, 500);
+    const api = await callerAs(adminSession);
+    await api.setAnnouncement({ message, approvalToken: 'b'.repeat(43) });
+    expect(proofConfirmation).toHaveBeenCalledWith(
+      mockDb,
+      expect.objectContaining({
+        action: 'OWNER_SETTING_UPDATE',
+        targetId: await announcementApprovalTarget(message),
+        userId: 'admin-1',
+        sessionHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      }),
+    );
+    expect(mockDb.systemSetting.upsert).toHaveBeenCalledWith({
+      where: { key: 'announcement' },
+      update: { value: message },
+      create: { key: 'announcement', value: message },
+    });
+    expect(proofConfirmation.mock.invocationCallOrder[0]!).toBeLessThan(
+      mockDb.systemSetting.upsert.mock.invocationCallOrder[0]!,
+    );
+    expect(mockDb.systemSetting.upsert.mock.invocationCallOrder[0]!).toBeLessThan(
+      mockDb.adminAuditLog.create.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  test('clearing announcement consumes its own separate one-time permission', async () => {
+    const { announcementApprovalTarget } = await import('@/lib/admin-setting-approval-target');
+    const api = await callerAs(adminSession);
+    await api.setAnnouncement({ message: '', approvalToken: 'b'.repeat(43) });
+    expect(proofConfirmation).toHaveBeenCalledWith(
+      mockDb,
+      expect.objectContaining({
+        action: 'OWNER_SETTING_UPDATE',
+        targetId: await announcementApprovalTarget(''),
+      }),
+    );
+    expect(mockDb.systemSetting.deleteMany).toHaveBeenCalledWith({ where: { key: 'announcement' } });
+    expect(mockDb.adminAuditLog.create).toHaveBeenCalledWith({
+      data: { adminId: 'admin-1', action: 'ANNOUNCEMENT_SET', metadata: { message: null } },
+    });
+  });
+
+  test('rejects wrong target/session and repeated token without writing setting or audit', async () => {
+    const api = await callerAs(adminSession);
+    for (const reason of ['wrong target', 'different action', 'wrong session', 'already used']) {
+      proofConfirmation.mockRejectedValueOnce(new Error(reason));
+      await expect(api.setAnnouncement({ message: 'Тест', approvalToken: 'b'.repeat(43) })).rejects.toThrow(reason);
+    }
+    expect(mockDb.systemSetting.upsert).not.toHaveBeenCalled();
+    expect(mockDb.systemSetting.deleteMany).not.toHaveBeenCalled();
+    expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
   });
 });

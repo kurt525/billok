@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import { PrismaClient } from '../src/generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
-import bcrypt from 'bcryptjs';
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -9,25 +8,23 @@ const prisma = new PrismaClient({ adapter });
 async function main() {
   console.log('Seeding database...');
 
-  const passwordHash = await bcrypt.hash('password123', 12);
-
   // ── Core demo users ─────────────────────────────────────
   const alice = await prisma.user.upsert({
     where: { email: 'alice@example.com' },
     update: {},
-    create: { name: 'Alice Johnson', email: 'alice@example.com', passwordHash },
+    create: { name: 'Alice Johnson', email: 'alice@example.com' },
   });
 
   const bob = await prisma.user.upsert({
     where: { email: 'bob@example.com' },
     update: {},
-    create: { name: 'Bob Smith', email: 'bob@example.com', passwordHash },
+    create: { name: 'Bob Smith', email: 'bob@example.com' },
   });
 
   const charlie = await prisma.user.upsert({
     where: { email: 'charlie@example.com' },
     update: {},
-    create: { name: 'Charlie Brown', email: 'charlie@example.com', passwordHash },
+    create: { name: 'Charlie Brown', email: 'charlie@example.com' },
   });
 
   // ── Dedicated test users (isolated from demo data) ──────
@@ -37,22 +34,16 @@ async function main() {
   const suspendUser = await prisma.user.upsert({
     where: { email: 'suspend-test@example.com' },
     update: {},
-    create: { name: 'Suspend Test User', email: 'suspend-test@example.com', passwordHash },
+    create: { name: 'Suspend Test User', email: 'suspend-test@example.com' },
   });
 
   const deleteUser = await prisma.user.upsert({
     where: { email: 'delete-test@example.com' },
     update: {},
-    create: { name: 'Delete Test User', email: 'delete-test@example.com', passwordHash },
+    create: { name: 'Delete Test User', email: 'delete-test@example.com' },
   });
 
-  await prisma.user.upsert({
-    where: { email: 'pwtest@example.com' },
-    update: {},
-    create: { name: 'Password Test User', email: 'pwtest@example.com', passwordHash },
-  });
-
-  console.log('Created users: Alice, Bob, Charlie + 3 test users (password: password123)');
+  console.log('Created users: Alice, Bob, Charlie + 2 test users (Passkey-only authentication)');
 
   // Check if seed data already exists
   const existingApartment = await prisma.group.findFirst({
@@ -69,7 +60,7 @@ async function main() {
       name: 'Apartment',
       description: 'Monthly shared expenses',
       emoji: '🏠',
-      currency: 'USD',
+      currency: 'RUB',
       members: {
         create: [
           { userId: alice.id, role: 'OWNER' },
@@ -87,7 +78,6 @@ async function main() {
     {
       title: 'Groceries',
       amount: 8547,
-      category: 'Food',
       paidById: alice.id,
       shares: [
         { userId: alice.id, amount: 2849 },
@@ -98,7 +88,6 @@ async function main() {
     {
       title: 'Electric bill',
       amount: 12300,
-      category: 'Utilities',
       paidById: bob.id,
       shares: [
         { userId: alice.id, amount: 4100 },
@@ -109,7 +98,6 @@ async function main() {
     {
       title: 'Internet',
       amount: 7999,
-      category: 'Utilities',
       paidById: alice.id,
       shares: [
         { userId: alice.id, amount: 2667 },
@@ -120,7 +108,6 @@ async function main() {
     {
       title: 'Dinner out',
       amount: 14250,
-      category: 'Food',
       paidById: charlie.id,
       shares: [
         { userId: alice.id, amount: 4750 },
@@ -136,7 +123,6 @@ async function main() {
         groupId: group.id,
         title: exp.title,
         amount: exp.amount,
-        category: exp.category,
         paidById: exp.paidById,
         addedById: exp.paidById,
         splitMode: 'EQUAL',
@@ -153,7 +139,7 @@ async function main() {
       name: 'Japan Trip',
       description: 'Vacation expenses',
       emoji: '✈️',
-      currency: 'USD',
+      currency: 'RUB',
       members: {
         create: [
           { userId: alice.id, role: 'OWNER' },
@@ -168,7 +154,6 @@ async function main() {
       groupId: trip.id,
       title: 'Flight tickets',
       amount: 120000,
-      category: 'Transport',
       paidById: alice.id,
       addedById: alice.id,
       splitMode: 'EQUAL',
@@ -186,7 +171,6 @@ async function main() {
       groupId: trip.id,
       title: 'Hotel (3 nights)',
       amount: 45000,
-      category: 'Accommodation',
       paidById: bob.id,
       addedById: bob.id,
       splitMode: 'EQUAL',
@@ -209,7 +193,7 @@ async function main() {
       name: 'Test Admin Group',
       description: 'For e2e admin tests',
       emoji: '🧪',
-      currency: 'USD',
+      currency: 'RUB',
       members: {
         create: [
           { userId: alice.id, role: 'OWNER' },
@@ -221,7 +205,7 @@ async function main() {
   });
 
   console.log(`Created group: ${testGroup.name} (admin test fixtures)`);
-  console.log('\nSeed complete! Login with any user email and password: password123');
+  console.log('\nSeed complete. Create Passkeys before signing into seeded accounts.');
 }
 
 main()

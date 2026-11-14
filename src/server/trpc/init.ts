@@ -5,7 +5,7 @@ import { cookies } from 'next/headers';
 import { auth } from '../auth';
 import { db } from '../db';
 import { logger } from '../lib/logger';
-import { verifyAndParse } from '../lib/signed-cookie';
+import { currentImpersonationSessionBinding, verifiedImpersonationSession } from '../lib/impersonation-session';
 import { AppError, errorShape } from '../lib/app-error';
 import { LOCALE_HEADER, localeFromHeader } from '@/lib/locale-header';
 import { defaultLocale } from '@/i18n/routing';
@@ -13,41 +13,32 @@ import { defaultLocale } from '@/i18n/routing';
 const IMPERSONATE_COOKIE = 'sharetab-impersonate';
 
 export const createTRPCContext = async (opts?: { req?: Request }) => {
-  const session = await auth();
+  const authenticatedSession = await auth();
+  // The effective identity belongs to this tRPC request only. Never mutate
+  // the original Auth.js result shared with authentication infrastructure.
+  const session = authenticatedSession
+    ? { ...authenticatedSession, ...(authenticatedSession.user ? { user: { ...authenticatedSession.user } } : {}) }
+    : authenticatedSession;
   const headers = opts?.req?.headers ?? new Headers();
 
-  // Check for impersonation cookie
-  interface ImpersonationData {
-    adminId: string;
-    adminEmail: string;
-    targetId: string;
-    targetName: string | null;
-    targetEmail: string;
-    startedAt?: string;
-  }
-  let impersonating: ImpersonationData | null = null;
-
+  let impersonating: ReturnType<typeof verifiedImpersonationSession> = null;
   try {
     const cookieStore = await cookies();
-    const impCookie = cookieStore.get(IMPERSONATE_COOKIE);
-    if (impCookie?.value && session?.user) {
-      const data = verifyAndParse<ImpersonationData>(impCookie.value);
-      // Enforce expiry server-side: a replayed cookie value must not outlive
-      // the 1h browser maxAge. Cookies without startedAt are rejected.
-      const startedAtMs = data?.startedAt ? Date.parse(data.startedAt) : NaN;
-      const expired = !Number.isFinite(startedAtMs) || Date.now() - startedAtMs > 60 * 60 * 1000;
-      if (data && !expired && data.adminId === session.user.id) {
-        impersonating = data;
-        // Swap session user to the impersonated user
-        if (session.user) {
-          session.user.id = data.targetId;
-          session.user.name = data.targetName;
-          session.user.email = data.targetEmail;
+    const raw = cookieStore.get(IMPERSONATE_COOKIE)?.value;
+    if (raw && session?.user?.id && opts?.req) {
+      const binding = await currentImpersonationSessionBinding(opts.req, session.user.id);
+      if (binding) {
+        const data = verifiedImpersonationSession(raw, session.user.id, binding);
+        if (data) {
+          impersonating = data;
+          // The owner JWT remains unchanged; only this tRPC request acts as the
+          // target. All owner-only procedures reject an impersonation context.
+          session.user = { ...session.user, id: data.targetId, name: data.targetName, email: data.targetEmail };
         }
       }
     }
   } catch {
-    // Ignore malformed cookie
+    // Invalid/replayed/expired impersonation data never grants target access.
   }
 
   return { session, db, headers, impersonating, locale: localeFromHeader(headers.get(LOCALE_HEADER)) };

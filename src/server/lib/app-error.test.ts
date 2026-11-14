@@ -2,8 +2,7 @@ import { describe, test, expect } from 'vitest';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import en from '../../../messages/en/errors.json';
-import de from '../../../messages/de/errors.json';
-import ja from '../../../messages/ja/errors.json';
+import ru from '../../../messages/ru/errors.json';
 import { AppError, errorShape, userErrorMessage } from './app-error';
 
 // #266: server errors reached every locale in English
@@ -23,10 +22,10 @@ describe('AppError', () => {
 
 describe('userErrorMessage', () => {
   test("is the error's text in the page's language", () => {
-    expect(userErrorMessage(new AppError('BAD_REQUEST', 'leaveWithBalance'), 'de')).toBe(de.leaveWithBalance);
-    expect(de.leaveWithBalance).not.toBe(en.leaveWithBalance);
-    expect(userErrorMessage(new AppError('BAD_REQUEST', 'sessionFull', { max: 100 }), 'ja')).toBe(
-      ja.sessionFull.replace('{max}', '100'),
+    expect(userErrorMessage(new AppError('BAD_REQUEST', 'leaveWithBalance'), 'ru')).toBe(ru.leaveWithBalance);
+    expect(ru.leaveWithBalance).not.toBe(en.leaveWithBalance);
+    expect(userErrorMessage(new AppError('BAD_REQUEST', 'sessionFull', { max: 100 }), 'ru')).toBe(
+      ru.sessionFull.replace('{max}', '100'),
     );
   });
 
@@ -35,17 +34,17 @@ describe('userErrorMessage', () => {
       code: 'INTERNAL_SERVER_ERROR',
       message: 'Invalid `prisma.user.update()` invocation',
     });
-    expect(userErrorMessage(internal, 'de')).toBe(de.generic.other);
-    expect(userErrorMessage(new TRPCError({ code: 'NOT_FOUND' }), 'de')).toBe(de.generic.notFound);
-    expect(userErrorMessage(new TRPCError({ code: 'UNAUTHORIZED' }), 'en')).toBe(en.generic.unauthorized);
-    expect(userErrorMessage(new TRPCError({ code: 'TOO_MANY_REQUESTS' }), 'en')).toBe(en.generic.tooManyRequests);
+    expect(userErrorMessage(internal, 'ru')).toBe(ru.generic.other);
+    expect(userErrorMessage(new TRPCError({ code: 'NOT_FOUND' }), 'ru')).toBe(ru.generic.notFound);
+    expect(userErrorMessage(new TRPCError({ code: 'UNAUTHORIZED' }), 'ru')).toBe(ru.generic.unauthorized);
+    expect(userErrorMessage(new TRPCError({ code: 'TOO_MANY_REQUESTS' }), 'ru')).toBe(ru.generic.tooManyRequests);
   });
 
   test('input that fails validation gets the general bad-request message, not the validator output', () => {
     const parsed = z.object({ name: z.string() }).safeParse({ name: 1 });
     const invalid = new TRPCError({ code: 'BAD_REQUEST', cause: parsed.error });
     expect(invalid.message).toContain('expected string');
-    expect(userErrorMessage(invalid, 'en')).toBe(en.generic.badRequest);
+    expect(userErrorMessage(invalid, 'ru')).toBe(ru.generic.badRequest);
   });
 });
 
@@ -57,15 +56,44 @@ describe('errorShape', () => {
   };
 
   test('swaps in the translated message and adds the key the client can branch on', () => {
-    const formatted = errorShape(shape, new AppError('NOT_FOUND', 'sessionNotFound'), 'de');
-    expect(formatted.message).toBe(de.sessionNotFound);
+    const formatted = errorShape(shape, new AppError('NOT_FOUND', 'sessionNotFound'), 'ru');
+    expect(formatted.message).toBe(ru.sessionNotFound);
     expect(formatted.data).toEqual({ ...shape.data, messageKey: 'sessionNotFound' });
     expect(formatted.code).toBe(shape.code);
   });
 
+  test('a rejected personal-parts update returns the actual available remainder, without exposing it on other errors', () => {
+    const refusal = new AppError('PRECONDITION_FAILED', 'receiptKnownPartsOverclaimed', undefined, {
+      remainingParts: 2,
+    });
+    const formatted = errorShape(shape, refusal, 'ru');
+    expect(formatted.data).toMatchObject({
+      messageKey: 'receiptKnownPartsOverclaimed',
+      remainingParts: 2,
+    });
+    expect(formatted.message).toBe(ru.receiptKnownPartsOverclaimed);
+    expect(errorShape(shape, new AppError('FORBIDDEN'), 'ru').data).not.toHaveProperty('remainingParts');
+  });
+
   test('an error without a key has a null messageKey', () => {
-    const formatted = errorShape(shape, new TRPCError({ code: 'NOT_FOUND' }), 'en');
-    expect(formatted.message).toBe(en.generic.notFound);
+    const formatted = errorShape(shape, new TRPCError({ code: 'NOT_FOUND' }), 'ru');
+    expect(formatted.message).toBe(ru.generic.notFound);
     expect(formatted.data.messageKey).toBeNull();
+  });
+});
+
+describe('Issue 3.25.4.3: missing and expired receipt links', () => {
+  test('external errors use identical codes, messages and messageKeys regardless of whether a link ever existed', () => {
+    for (const [missing, expired] of [
+      ['sessionNotFound', 'sessionExpired'],
+      ['splitNotFound', 'splitExpired'],
+    ] as const) {
+      const shape = { message: 'Internal', data: { httpStatus: 404, code: 'NOT_FOUND' } };
+      const absent = errorShape(shape, new AppError('NOT_FOUND', missing), 'ru');
+      const old = errorShape(shape, new AppError('NOT_FOUND', expired), 'ru');
+      expect(old).toEqual(absent);
+      expect(old.data.messageKey).toBe(missing);
+      expect(old.message).not.toContain('истёк');
+    }
   });
 });

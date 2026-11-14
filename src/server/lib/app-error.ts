@@ -2,31 +2,14 @@ import { TRPCError } from '@trpc/server';
 import { createTranslator, type AbstractIntlMessages } from 'next-intl';
 import type { Locale } from '@/i18n/routing';
 import en from '../../../messages/en/errors.json';
-import es from '../../../messages/es/errors.json';
-import sv from '../../../messages/sv/errors.json';
-import fr from '../../../messages/fr/errors.json';
-import de from '../../../messages/de/errors.json';
-import ptBR from '../../../messages/pt-BR/errors.json';
-import ja from '../../../messages/ja/errors.json';
-import zhCN from '../../../messages/zh-CN/errors.json';
-import ko from '../../../messages/ko/errors.json';
+import ru from '../../../messages/ru/errors.json';
 
 type ErrorCode = TRPCError['code'];
 // `generic` holds the messages for errors without a key
 export type ErrorKey = Exclude<keyof typeof en, 'generic'>;
 export type ErrorValues = Record<string, string | number>;
 
-const catalogs: Record<Locale, AbstractIntlMessages> = {
-  en,
-  es,
-  sv,
-  fr,
-  de,
-  'pt-BR': ptBR,
-  ja,
-  'zh-CN': zhCN,
-  ko,
-};
+const catalogs: Record<Locale, AbstractIntlMessages> = { ru };
 
 function translate(locale: Locale, key: string, values?: ErrorValues): string {
   // Typed loosely: the keys are checked by ErrorKey, and the catalogs aren't the app's Messages
@@ -47,12 +30,21 @@ function translate(locale: Locale, key: string, values?: ErrorValues): string {
 export class AppError extends TRPCError {
   readonly messageKey: ErrorKey | null;
   readonly messageValues: ErrorValues | undefined;
+  // The nonnegative amount still free at the committed snapshot that rejected
+  // a personal parts edit. Exposed only on that one structured conflict.
+  readonly remainingParts: number | undefined;
 
-  constructor(code: ErrorCode, key?: ErrorKey, values?: ErrorValues, options?: { cause?: unknown }) {
-    super({ code, message: key ? translate('en', key, values) : genericMessage(code, 'en'), cause: options?.cause });
+  constructor(
+    code: ErrorCode,
+    key?: ErrorKey,
+    values?: ErrorValues,
+    options?: { cause?: unknown; remainingParts?: number },
+  ) {
+    super({ code, message: key ? englishMessage(key, values) : englishGeneric(code), cause: options?.cause });
     this.name = 'AppError';
     this.messageKey = key ?? null;
     this.messageValues = values;
+    this.remainingParts = options?.remainingParts;
   }
 }
 
@@ -65,6 +57,18 @@ const GENERIC_KEYS: Partial<Record<ErrorCode, keyof typeof en.generic>> = {
   TOO_MANY_REQUESTS: 'tooManyRequests',
 };
 
+function englishMessage(key: string, values?: ErrorValues): string {
+  const t = createTranslator({ locale: 'en', messages: en }) as unknown as (
+    key: string,
+    values?: ErrorValues,
+  ) => string;
+  return t(key, values);
+}
+
+function englishGeneric(code: ErrorCode): string {
+  return englishMessage(`generic.${GENERIC_KEYS[code] ?? 'other'}`);
+}
+
 function genericMessage(code: ErrorCode, locale: Locale): string {
   return translate(locale, `generic.${GENERIC_KEYS[code] ?? 'other'}`);
 }
@@ -74,10 +78,17 @@ function genericMessage(code: ErrorCode, locale: Locale): string {
  * a key (an unexpected exception, input that failed validation, tRPC's own errors) the
  * general message for its code, never the error's own text.
  */
+function publicErrorKey(error: TRPCError): ErrorKey | null {
+  if (!(error instanceof AppError)) return null;
+  // A guessed receipt link cannot reveal whether it previously existed.
+  if (error.code === 'NOT_FOUND' && error.messageKey === 'sessionExpired') return 'sessionNotFound';
+  if (error.code === 'NOT_FOUND' && error.messageKey === 'splitExpired') return 'splitNotFound';
+  return error.messageKey;
+}
+
 export function userErrorMessage(error: TRPCError, locale: Locale): string {
-  if (error instanceof AppError && error.messageKey) {
-    return translate(locale, error.messageKey, error.messageValues);
-  }
+  const key = publicErrorKey(error);
+  if (key) return translate(locale, key, error instanceof AppError ? error.messageValues : undefined);
   return genericMessage(error.code, locale);
 }
 
@@ -95,6 +106,13 @@ export function errorShape<Shape extends { message: string; data: object }>(
   return {
     ...shape,
     message: userErrorMessage(error, locale),
-    data: { ...shape.data, messageKey: error instanceof AppError ? error.messageKey : null },
+    data: {
+      ...shape.data,
+      messageKey: publicErrorKey(error),
+      // Only a known-original-parts conflict has a numeric remainder.
+      ...(error instanceof AppError && error.remainingParts !== undefined
+        ? { remainingParts: error.remainingParts }
+        : {}),
+    },
   };
 }

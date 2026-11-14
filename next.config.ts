@@ -13,7 +13,8 @@ const nextConfig: NextConfig = {
         headers: [
           { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
-          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+          // Private receipt share tokens appear in the pathname. Never include them in Referer, even to same-origin endpoints.
+          { key: 'Referrer-Policy', value: 'no-referrer' },
           { key: 'X-DNS-Prefetch-Control', value: 'on' },
           { key: 'Permissions-Policy', value: 'camera=(self), microphone=()' },
         ],

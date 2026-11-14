@@ -1,6 +1,6 @@
 import { unlink } from 'fs/promises';
 import { AppError } from './app-error';
-import { Prisma } from '@/generated/prisma/client';
+import { GuestSplitStatus, Prisma } from '@/generated/prisma/client';
 import { logger } from './logger';
 import { resolveUploadPath } from './upload-dir';
 
@@ -111,20 +111,26 @@ async function canOpenReceipt(
 type Db = { $transaction<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> };
 
 /**
- * Deletes up to `batchSize` expired splits (they expire a week after they're made, or
- * when their creator ends them) with the receipts only they used. Returns how many
- * splits were deleted; a caller clearing a backlog goes again until that's none, since
- * a batch is short too when someone else deleted some of its splits first.
+ * Deletes only abandoned CLAIMING drafts past their expiry. FINALIZED receipts,
+ * including items, allocations and payer-verified transfers, are durable history.
+ * Recheck the status at DELETE to protect drafts finalized after selection.
+ * Orphan receipt images are removed only if no group, expense or split uses them.
  */
 export async function deleteExpiredSplits(db: Db, batchSize: number): Promise<number> {
   const { count, imagePaths } = await db.$transaction(async (tx) => {
     const expired = await tx.guestSplit.findMany({
-      where: { expiresAt: { lt: new Date() } },
+      where: { status: GuestSplitStatus.CLAIMING, expiresAt: { lt: new Date() } },
       select: { id: true, receiptId: true },
       take: batchSize,
     });
     if (expired.length === 0) return { count: 0, imagePaths: [] };
-    const { count } = await tx.guestSplit.deleteMany({ where: { id: { in: expired.map((s) => s.id) } } });
+    const { count } = await tx.guestSplit.deleteMany({
+      where: {
+        id: { in: expired.map((s) => s.id) },
+        status: GuestSplitStatus.CLAIMING,
+        expiresAt: { lt: new Date() },
+      },
+    });
     const receiptIds = expired.flatMap((s) => (s.receiptId ? [s.receiptId] : []));
     return { count, imagePaths: await deleteUnusedSplitReceipts(tx, receiptIds) };
   });

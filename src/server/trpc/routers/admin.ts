@@ -1,13 +1,8 @@
 import { z } from 'zod';
+import { requireOwner } from '@/server/lib/owner-access';
 import { AppError } from '@/server/lib/app-error';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
-import {
-  getAIProvidersWithFallback,
-  getConfiguredProviderPriority,
-  isProviderConfigured,
-  createProviderByName,
-} from '@/server/ai/registry';
-import { type AdminAction, type PrismaClient, Prisma } from '@/generated/prisma/client';
+import { type AdminAction, type PrismaClient, GuestSplitStatus, Prisma } from '@/generated/prisma/client';
 import nodemailer from 'nodemailer';
 import fs from 'fs';
 import * as fsp from 'fs/promises';
@@ -21,62 +16,26 @@ import {
   deleteUnusedReceipts,
   removeReceiptFiles,
 } from '@/server/lib/receipt-cleanup';
-import {
-  checkMeridianHealth,
-  invalidateMeridianHealthCache,
-  sendAuthExpiryEmail,
-} from '@/server/lib/auth-health-poller';
-import {
-  startLogin,
-  submitCode,
-  cancelLogin,
-  logout as logoutMeridian,
-  isLoginInProgress,
-} from '@/server/lib/meridian-login';
-import { clearProviderCache } from '@/server/ai/registry';
-import { getMeridianStartError, startMeridianProxy } from '@/server/ai/providers/meridian';
-import {
-  checkOpenAICodexHealth,
-  invalidateOpenAICodexHealthCache,
-  startLogin as startOpenAICodexLogin,
-  submitCode as submitOpenAICodexCode,
-  cancelLogin as cancelOpenAICodexLogin,
-  logout as logoutOpenAICodex,
-  isLoginInProgress as isOpenAICodexLoginInProgress,
-} from '@/server/lib/openai-codex-login';
-
 import { getBuildInfo } from '@/server/lib/build-info';
 import { REGISTRATION_MODES, readRegistrationMode } from '@/server/lib/registration-mode';
-import { isGuestUploadsForcedOff, readGuestUploadsSetting, saveGuestUploadsSetting } from '@/server/lib/guest-uploads';
-
-// How long a successful Meridian login waits for the proxy start attempt.
-const MERIDIAN_LOGIN_START_WAIT_MS = 15_000;
+import { activeSystemInviteWindow, SYSTEM_INVITE_TTL_MS } from '@/server/lib/system-invite-lifetime';
+import { totalsInGroupCurrency } from '@/server/lib/group-expense-totals';
+import { listOwnerRegisteredUsers, changeRegisteredUserSuspension } from '@/server/lib/owner-user-admin';
+import { ownerSessionFingerprint, consumeOwnerPasskeyActionProof } from '@/server/lib/owner-passkey-action-approval';
+import { systemInviteCreateApprovalTarget } from '@/lib/system-invite-approval-target';
+import { registrationModeApprovalTarget, announcementApprovalTarget } from '@/lib/admin-setting-approval-target';
 
 const serverStartTime = new Date();
 const { version: cachedVersion, commitSha: cachedCommitSha } = getBuildInfo();
 
-const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
-  const adminEmail = process.env.ADMIN_EMAIL;
-  // When impersonating, use the real admin email for the check
-  const effectiveEmail = ctx.impersonating ? ctx.impersonating.adminEmail : ctx.user.email;
-  if (!adminEmail || effectiveEmail !== adminEmail) {
-    throw new AppError('FORBIDDEN', 'adminRequired');
-  }
-  // For admin procedures, restore the real admin user context
-  if (ctx.impersonating) {
-    return next({
-      ctx: {
-        ...ctx,
-        user: {
-          ...ctx.user,
-          id: ctx.impersonating.adminId,
-          email: ctx.impersonating.adminEmail,
-        },
-      },
-    });
-  }
+// All admin procedures, including the 6.11 registered-user page,
+// share one owner policy. Impersonation never grants owner authority.
+const adminProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  if (ctx.impersonating) throw new AppError('FORBIDDEN', 'adminRequired');
+  await requireOwner(ctx.db, ctx.user.id);
   return next({ ctx });
 });
+const ownerUsersProcedure = adminProcedure;
 
 export { adminProcedure };
 
@@ -99,6 +58,38 @@ export async function logAdminAction(
 }
 
 export const adminRouter = createTRPCRouter({
+  ownerRegisteredUsers: ownerUsersProcedure
+    .input(
+      z.object({
+        cursor: z.string().max(128).optional(),
+        limit: z.number().int().min(1).max(30).default(20),
+        search: z.string().max(100).optional(),
+        status: z.enum(['all', 'active', 'suspended', 'pending']).default('all'),
+        sortBy: z.enum(['name', 'email', 'createdAt']).default('createdAt'),
+        sortDirection: z.enum(['asc', 'desc']).default('desc'),
+      }),
+    )
+    .query(({ ctx, input }) => listOwnerRegisteredUsers(ctx.db, ctx.user.id, input)),
+
+  ownerSetUserSuspended: ownerUsersProcedure
+    .input(
+      z.object({
+        userId: z.string().min(1).max(128),
+        suspend: z.boolean(),
+        approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      changeRegisteredUserSuspension({
+        db: ctx.db,
+        ownerId: ctx.user.id,
+        userId: input.userId,
+        suspend: input.suspend,
+        approvalToken: input.approvalToken,
+        sessionHash: ownerSessionFingerprint(ctx.headers),
+      }),
+    ),
+
   getImpersonationStatus: publicProcedure.query(({ ctx }) => {
     return {
       isImpersonating: !!ctx.impersonating,
@@ -158,44 +149,8 @@ export const adminRouter = createTRPCRouter({
       // disconnected
     }
 
-    // AI provider info
-    let aiProvider = 'unknown';
-    let aiAvailable = false;
-    let aiStatus: 'available' | 'requires_auth' | 'unavailable' = 'unavailable';
-    const authProvidersNeedingLogin: string[] = [];
-    try {
-      const configured = getConfiguredProviderPriority();
-      const providers = await getAIProvidersWithFallback();
-      aiProvider = configured.join(' -> ');
-      aiAvailable = providers.length > 0;
-
-      // Mark OAuth-backed providers that are configured but not currently usable.
-      if (configured.includes('meridian')) {
-        const meridianHealth = await checkMeridianHealth();
-        if (meridianHealth.status !== 'healthy') {
-          authProvidersNeedingLogin.push('meridian');
-        }
-      }
-
-      if (configured.includes('openai-codex')) {
-        const openAICodexHealth = await checkOpenAICodexHealth();
-        if (openAICodexHealth.status === 'auth_expired' || openAICodexHealth.status === 'not_authenticated') {
-          authProvidersNeedingLogin.push('openai-codex');
-        }
-      }
-
-      aiStatus = authProvidersNeedingLogin.length > 0 ? 'requires_auth' : 'available';
-    } catch {
-      aiProvider = process.env.AI_PROVIDER_PRIORITY ?? 'not configured';
-      aiStatus = 'unavailable';
-    }
-
     return {
       dbStatus,
-      aiProvider,
-      aiAvailable,
-      aiStatus,
-      authProvidersNeedingLogin,
       version: cachedVersion,
       commitSha: cachedCommitSha,
       serverStartTime: serverStartTime.toISOString(),
@@ -304,133 +259,125 @@ export const adminRouter = createTRPCRouter({
       };
     }),
 
-  suspendUser: adminProcedure.input(z.object({ userId: z.string() })).mutation(async ({ ctx, input }) => {
-    if (input.userId === ctx.user.id) {
-      throw new AppError('BAD_REQUEST', 'cannotSuspendYourself');
-    }
-
-    const user = await ctx.db.user.findUnique({
-      where: { id: input.userId },
-      select: { id: true, email: true, suspendedAt: true },
-    });
-
-    if (!user) {
-      throw new AppError('NOT_FOUND', 'userNotFound');
-    }
-
-    if (user.suspendedAt) {
-      throw new AppError('BAD_REQUEST', 'alreadySuspended');
-    }
-
-    await ctx.db.user.update({
-      where: { id: input.userId },
-      data: { suspendedAt: new Date() },
-    });
-
-    await logAdminAction(ctx.db, ctx.user.id, 'USER_SUSPENDED', input.userId, { email: user.email });
-
-    return { suspended: true, userId: input.userId };
-  }),
-
-  unsuspendUser: adminProcedure.input(z.object({ userId: z.string() })).mutation(async ({ ctx, input }) => {
-    const user = await ctx.db.user.findUnique({
-      where: { id: input.userId },
-      select: { id: true, email: true, suspendedAt: true, isPlaceholder: true },
-    });
-
-    if (!user) {
-      throw new AppError('NOT_FOUND', 'userNotFound');
-    }
-
-    if (!user.suspendedAt) {
-      throw new AppError('BAD_REQUEST', 'notSuspended');
-    }
-
-    if (user.isPlaceholder) {
-      throw new AppError('BAD_REQUEST', 'cannotUnsuspend');
-    }
-
-    await ctx.db.user.update({
-      where: { id: input.userId },
-      data: { suspendedAt: null },
-    });
-
-    await logAdminAction(ctx.db, ctx.user.id, 'USER_UNSUSPENDED', input.userId, { email: user.email });
-
-    return { unsuspended: true, userId: input.userId };
-  }),
-
-  deleteUser: adminProcedure.input(z.object({ userId: z.string() })).mutation(async ({ ctx, input }) => {
-    if (input.userId === ctx.user.id) {
-      throw new AppError('BAD_REQUEST', 'cannotDeleteYourself');
-    }
-
-    const user = await ctx.db.user.findUnique({
-      where: { id: input.userId },
-      select: { id: true, email: true },
-    });
-
-    if (!user) {
-      throw new AppError('NOT_FOUND', 'userNotFound');
-    }
-
-    await ctx.db.$transaction(async (tx) => {
-      // Convert to placeholder to preserve financial history, then strip auth data
-      await tx.user.update({
-        where: { id: input.userId },
-        data: {
-          isPlaceholder: true,
-          name: 'Deleted user',
-          placeholderName: 'Deleted user',
-          email: `deleted-${input.userId}@placeholder.local`,
-          passwordHash: null,
-          image: null,
-          venmoUsername: null,
-          suspendedAt: new Date(),
-        },
+  // Legacy admin page must use the exact same transaction+WebAuthn guard as
+  // /admin/users; it must never offer an alternate unauthenticated mutation.
+  suspendUser: adminProcedure
+    .input(z.object({ userId: z.string().min(1).max(128), approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u) }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await changeRegisteredUserSuspension({
+        db: ctx.db,
+        ownerId: ctx.user.id,
+        userId: input.userId,
+        suspend: true,
+        approvalToken: input.approvalToken,
+        sessionHash: ownerSessionFingerprint(ctx.headers),
       });
-      // Remove auth records (sessions, accounts)
-      await tx.account.deleteMany({ where: { userId: input.userId } });
-      await tx.session.deleteMany({ where: { userId: input.userId } });
-      // Transfer ownership before removing memberships
-      const ownedGroups = await tx.groupMember.findMany({
-        where: { userId: input.userId, role: 'OWNER' },
-        select: { groupId: true },
+      return { suspended: result.suspended, userId: result.userId };
+    }),
+
+  unsuspendUser: adminProcedure
+    .input(z.object({ userId: z.string().min(1).max(128), approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u) }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await changeRegisteredUserSuspension({
+        db: ctx.db,
+        ownerId: ctx.user.id,
+        userId: input.userId,
+        suspend: false,
+        approvalToken: input.approvalToken,
+        sessionHash: ownerSessionFingerprint(ctx.headers),
       });
-      const keepMembershipGroupIds: string[] = [];
-      for (const { groupId } of ownedGroups) {
-        const nextOwner = await tx.groupMember.findFirst({
-          where: {
-            groupId,
-            userId: { not: input.userId },
-            user: { isPlaceholder: false, suspendedAt: null },
-          },
-          orderBy: { joinedAt: 'asc' },
-        });
-        if (nextOwner) {
-          await tx.groupMember.update({
-            where: { id: nextOwner.id },
-            data: { role: 'OWNER' },
-          });
-        } else {
-          keepMembershipGroupIds.push(groupId);
-        }
+      return { unsuspended: !result.suspended, userId: result.userId };
+    }),
+
+  deleteUser: adminProcedure
+    .input(z.object({ userId: z.string().min(1).max(128), approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u) }))
+    .mutation(async ({ ctx, input }) => {
+      if (input.userId === ctx.user.id) {
+        throw new AppError('BAD_REQUEST', 'cannotDeleteYourself');
       }
-      // Remove memberships except where user is the sole active owner
-      await tx.groupMember.deleteMany({
-        where: {
-          userId: input.userId,
-          ...(keepMembershipGroupIds.length > 0 ? { groupId: { notIn: keepMembershipGroupIds } } : {}),
-        },
+
+      const sessionHash = ownerSessionFingerprint(ctx.headers);
+      await ctx.db.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', ctx.user.id);
+        await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', input.userId);
+        // Double-check the immutable owner and account under the row lock.
+        await requireOwner(tx, ctx.user.id);
+        const bootstrap = await tx.ownerBootstrap.findUnique({ where: { id: 1 }, select: { userId: true } });
+        if (bootstrap?.userId === input.userId) throw new AppError('FORBIDDEN');
+        const user = await tx.user.findUnique({
+          where: { id: input.userId },
+          select: { id: true, email: true, isPlaceholder: true },
+        });
+        if (!user || user.isPlaceholder) throw new AppError('FORBIDDEN');
+        await consumeOwnerPasskeyActionProof(tx, {
+          userId: ctx.user.id,
+          action: 'USER_DELETE',
+          targetId: input.userId,
+          sessionHash,
+          approvalToken: input.approvalToken,
+        });
+        // Convert to placeholder to preserve financial history, then strip auth data
+        await tx.user.update({
+          where: { id: input.userId },
+          data: {
+            isPlaceholder: true,
+            name: 'Deleted user',
+            placeholderName: 'Deleted user',
+            email: `deleted-${input.userId}@placeholder.local`,
+            image: null,
+            venmoUsername: null,
+            suspendedAt: new Date(),
+          },
+        });
+        // Remove sessions and WebAuthn credentials: deleted accounts must not
+        // authenticate with a previously enrolled passkey.
+        await tx.session.deleteMany({ where: { userId: input.userId } });
+        await tx.passkeyLoginTicket.deleteMany({ where: { userId: input.userId } });
+        await tx.webAuthnChallenge.deleteMany({ where: { userId: input.userId } });
+        await tx.passkeyCredential.deleteMany({ where: { userId: input.userId } });
+        // Transfer ownership before removing memberships
+        const ownedGroups = await tx.groupMember.findMany({
+          where: { userId: input.userId, role: 'OWNER' },
+          select: { groupId: true },
+        });
+        const keepMembershipGroupIds: string[] = [];
+        for (const { groupId } of ownedGroups) {
+          const nextOwner = await tx.groupMember.findFirst({
+            where: {
+              groupId,
+              userId: { not: input.userId },
+              user: { isPlaceholder: false, suspendedAt: null },
+            },
+            orderBy: { joinedAt: 'asc' },
+          });
+          if (nextOwner) {
+            await tx.groupMember.update({
+              where: { id: nextOwner.id },
+              data: { role: 'OWNER' },
+            });
+          } else {
+            keepMembershipGroupIds.push(groupId);
+          }
+        }
+        // Remove memberships except where user is the sole active owner
+        await tx.groupMember.deleteMany({
+          where: {
+            userId: input.userId,
+            ...(keepMembershipGroupIds.length > 0 ? { groupId: { notIn: keepMembershipGroupIds } } : {}),
+          },
+        });
+        await tx.adminAuditLog.create({
+          data: {
+            adminId: ctx.user.id,
+            action: 'USER_DELETED',
+            targetId: input.userId,
+            metadata: { email: user.email },
+          },
+        });
       });
-    });
 
-    await logAdminAction(ctx.db, ctx.user.id, 'USER_DELETED', input.userId, {
-      email: user.email,
-    });
-
-    return { deleted: true, userId: input.userId };
-  }),
+      return { deleted: true, userId: input.userId };
+    }),
 
   listGroups: adminProcedure
     .input(
@@ -487,6 +434,7 @@ export const adminRouter = createTRPCRouter({
           select: {
             id: true,
             name: true,
+            currency: true,
             archivedAt: true,
             createdAt: true,
             _count: {
@@ -523,19 +471,21 @@ export const adminRouter = createTRPCRouter({
       const expenseSums =
         groupIds.length > 0
           ? await ctx.db.expense.groupBy({
-              by: ['groupId'],
+              by: ['groupId', 'currency'],
               where: { groupId: { in: groupIds } },
-              _sum: { amount: true },
+              _sum: { amount: true, baseCurrencyAmount: true },
+              _count: { id: true, baseCurrencyAmount: true },
             })
           : [];
-      const sumByGroup = new Map(expenseSums.map((e) => [e.groupId, e._sum.amount ?? 0]));
+      const totals = totalsInGroupCurrency(groups, expenseSums);
 
       const result = groups.map((g) => ({
         id: g.id,
         name: g.name,
         memberCount: g._count.members,
         expenseCount: g._count.expenses,
-        totalAmount: sumByGroup.get(g.id) ?? 0,
+        currency: g.currency,
+        totalAmount: totals.get(g.id) ?? null,
         lastActivity: g.activityLogs[0]?.createdAt ?? g.createdAt,
         isArchived: g.archivedAt !== null,
         createdAt: g.createdAt,
@@ -572,88 +522,84 @@ export const adminRouter = createTRPCRouter({
     return { deleted: true, groupId: input.groupId };
   }),
 
-  // ─── AI Usage Statistics ─────────────────────────────────
-
-  getAIStats: adminProcedure.query(async ({ ctx }) => {
-    const [total, byStatus, byProvider, last7Days, last30Days] = await Promise.all([
-      ctx.db.receipt.count(),
-      ctx.db.receipt.groupBy({
-        by: ['status'],
-        _count: true,
-      }),
-      ctx.db.receipt.groupBy({
-        by: ['aiProvider'],
-        _count: true,
-        where: { aiProvider: { not: null } },
-      }),
-      ctx.db.receipt.count({
-        where: {
-          createdAt: {
-            gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-          },
-        },
-      }),
-      ctx.db.receipt.count({
-        where: {
-          createdAt: {
-            gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-          },
-        },
-      }),
-    ]);
-
-    return {
-      total,
-      byStatus: Object.fromEntries(byStatus.map((s) => [s.status, s._count])) as Record<string, number>,
-      byProvider: Object.fromEntries(byProvider.map((p) => [p.aiProvider ?? 'unknown', p._count])) as Record<
-        string,
-        number
-      >,
-      last7Days,
-      last30Days,
-    };
-  }),
-
   // ─── Registration Control ───────────────────────────────
 
   getRegistrationMode: adminProcedure.query(async ({ ctx }) => ({ mode: await readRegistrationMode(ctx.db) })),
 
   setRegistrationMode: adminProcedure
     .input(
-      z.object({
+      z.strictObject({
         mode: z.enum(REGISTRATION_MODES),
+        approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await ctx.db.systemSetting.upsert({
-        where: { key: 'registrationMode' },
-        update: { value: input.mode },
-        create: { key: 'registrationMode', value: input.mode },
+      const sessionHash = ownerSessionFingerprint(ctx.headers);
+      return ctx.db.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', ctx.user.id);
+        await requireOwner(tx, ctx.user.id);
+        await consumeOwnerPasskeyActionProof(tx, {
+          userId: ctx.user.id,
+          action: 'REGISTRATION_MODE_UPDATE',
+          targetId: registrationModeApprovalTarget(input.mode),
+          sessionHash,
+          approvalToken: input.approvalToken,
+        });
+        await tx.systemSetting.upsert({
+          where: { key: 'registrationMode' },
+          update: { value: input.mode },
+          create: { key: 'registrationMode', value: input.mode },
+        });
+        await tx.adminAuditLog.create({
+          data: { adminId: ctx.user.id, action: 'REGISTRATION_MODE_CHANGED', metadata: { mode: input.mode } },
+        });
+        return { mode: input.mode };
       });
-
-      await logAdminAction(ctx.db, ctx.user.id, 'REGISTRATION_MODE_CHANGED', null, { mode: input.mode });
-
-      return { mode: input.mode };
     }),
 
   createSystemInvite: adminProcedure
     .input(
-      z.object({
-        label: z.string().max(100).optional(),
-        expiresInDays: z.number().min(1).max(365).optional(),
+      z.strictObject({
+        label: z.string().trim().min(1).max(100).optional(),
+        // Existing clients may still pass 7; other durations and invitations
+        // without an expiry are forbidden for BillOK (Issue #1 6.2).
+        expiresInDays: z.literal(7).optional(),
+        approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const expiresAt = input.expiresInDays ? new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000) : null;
-
-      const invite = await ctx.db.systemInvite.create({
-        data: {
-          ...(input.label !== undefined ? { label: input.label } : {}),
-          expiresAt,
-        },
+      const sessionHash = ownerSessionFingerprint(ctx.headers);
+      const createTarget = systemInviteCreateApprovalTarget(input.label);
+      const expiresAt = new Date(Date.now() + SYSTEM_INVITE_TTL_MS);
+      // The invite and its audit record are committed together. Never log the
+      // bearer code itself: it is returned only to the authenticated admin for
+      // manual delivery and can be viewed later in that admin's invite list.
+      const invite = await ctx.db.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', ctx.user.id);
+        await requireOwner(tx, ctx.user.id);
+        await consumeOwnerPasskeyActionProof(tx, {
+          userId: ctx.user.id,
+          action: 'SYSTEM_INVITE_CREATE',
+          targetId: createTarget,
+          sessionHash,
+          approvalToken: input.approvalToken,
+        });
+        const created = await tx.systemInvite.create({
+          data: {
+            ...(input.label !== undefined ? { label: input.label } : {}),
+            expiresAt,
+          },
+        });
+        await tx.adminAuditLog.create({
+          data: {
+            adminId: ctx.user.id,
+            action: 'INVITE_CREATED',
+            targetId: created.id,
+            metadata: { label: created.label, expiresAt: expiresAt.toISOString() },
+          },
+        });
+        return created;
       });
-
-      await logAdminAction(ctx.db, ctx.user.id, 'INVITE_CREATED', invite.id, { code: invite.code, label: input.label });
 
       return {
         id: invite.id,
@@ -672,41 +618,93 @@ export const adminRouter = createTRPCRouter({
       orderBy: { createdAt: 'desc' },
     });
 
-    return invites.map((inv) => ({
-      id: inv.id,
-      code: inv.code,
-      label: inv.label,
-      usedBy: inv.usedBy ? { name: inv.usedBy.name, email: inv.usedBy.email } : null,
-      usedAt: inv.usedAt,
-      expiresAt: inv.expiresAt,
-      revokedAt: inv.revokedAt,
-      isActive: !inv.revokedAt && !inv.usedAt && (!inv.expiresAt || inv.expiresAt > new Date()),
-      createdAt: inv.createdAt,
-    }));
+    const now = new Date();
+    return invites.map((inv) => {
+      const available =
+        !inv.revokedAt &&
+        !inv.usedAt &&
+        !!inv.expiresAt &&
+        inv.expiresAt > now &&
+        inv.createdAt > activeSystemInviteWindow(now).createdAt.gt;
+      const isReserved = available && !!inv.reservedById && !!inv.reservedUntil && inv.reservedUntil > now;
+      return {
+        id: inv.id,
+        code: inv.code,
+        label: inv.label,
+        usedBy: inv.usedBy ? { name: inv.usedBy.name, email: inv.usedBy.email } : null,
+        usedAt: inv.usedAt,
+        expiresAt: inv.expiresAt,
+        revokedAt: inv.revokedAt,
+        isReserved,
+        isActive: available && !isReserved,
+        // Revocation must remain available while registration is still
+        // awaiting email confirmation: reservation is NOT consumption.
+        canRevoke: available,
+        createdAt: inv.createdAt,
+      };
+    });
   }),
 
-  revokeSystemInvite: adminProcedure.input(z.object({ inviteId: z.string() })).mutation(async ({ ctx, input }) => {
-    const invite = await ctx.db.systemInvite.findUnique({
-      where: { id: input.inviteId },
-    });
-
-    if (!invite) {
-      throw new AppError('NOT_FOUND', 'inviteNotFound');
-    }
-
-    if (invite.revokedAt) {
-      throw new AppError('BAD_REQUEST', 'inviteAlreadyRevoked');
-    }
-
-    await ctx.db.systemInvite.update({
-      where: { id: input.inviteId },
-      data: { revokedAt: new Date() },
-    });
-
-    await logAdminAction(ctx.db, ctx.user.id, 'INVITE_REVOKED', input.inviteId, { code: invite.code });
-
-    return { revoked: true };
-  }),
+  revokeSystemInvite: adminProcedure
+    .input(
+      z.strictObject({
+        inviteId: z.string().min(1).max(128),
+        approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const sessionHash = ownerSessionFingerprint(ctx.headers);
+      return ctx.db.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', ctx.user.id);
+        await tx.$queryRawUnsafe('SELECT id FROM "SystemInvite" WHERE id = $1 FOR UPDATE', input.inviteId);
+        await requireOwner(tx, ctx.user.id);
+        const invite = await tx.systemInvite.findUnique({
+          where: { id: input.inviteId },
+          select: { id: true, usedAt: true, usedById: true, revokedAt: true, createdAt: true, expiresAt: true },
+        });
+        if (!invite) throw new AppError('NOT_FOUND', 'inviteNotFound');
+        if (invite.revokedAt) throw new AppError('BAD_REQUEST', 'inviteAlreadyRevoked');
+        if (invite.usedAt || invite.usedById) throw new AppError('BAD_REQUEST', 'inviteAlreadyUsed');
+        const now = new Date();
+        if (
+          !invite.expiresAt ||
+          invite.expiresAt <= now ||
+          invite.createdAt <= activeSystemInviteWindow(now).createdAt.gt
+        ) {
+          throw new AppError('BAD_REQUEST', 'inviteInvalid');
+        }
+        await consumeOwnerPasskeyActionProof(tx, {
+          userId: ctx.user.id,
+          action: 'SYSTEM_INVITE_REVOKE',
+          targetId: input.inviteId,
+          sessionHash,
+          approvalToken: input.approvalToken,
+        });
+        // Conditional write closes the race with concurrent verification,
+        // cancellation or a second admin revocation. The reservation, if any,
+        // remains invalidated by revokedAt; it cannot be redeemed afterward.
+        const result = await tx.systemInvite.updateMany({
+          where: {
+            id: invite.id,
+            revokedAt: null,
+            usedAt: null,
+            usedById: null,
+            ...activeSystemInviteWindow(now),
+          },
+          data: { revokedAt: now },
+        });
+        if (result.count !== 1) throw new AppError('CONFLICT', 'inviteInvalid');
+        await tx.adminAuditLog.create({
+          data: {
+            adminId: ctx.user.id,
+            action: 'INVITE_REVOKED',
+            targetId: invite.id,
+            metadata: { revokedAt: now.toISOString() },
+          },
+        });
+        return { revoked: true };
+      });
+    }),
 
   // ─── Global Activity Feed ────────────────────────────────
 
@@ -761,67 +759,49 @@ export const adminRouter = createTRPCRouter({
 
   setAnnouncement: adminProcedure
     .input(
-      z.object({
+      z.strictObject({
         message: z.string().max(500).optional(),
+        approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      if (!input.message || input.message.trim() === '') {
-        // Clear announcement
-        await ctx.db.systemSetting.deleteMany({
-          where: { key: 'announcement' },
+      const message = input.message?.trim() ?? '';
+      const targetId = await announcementApprovalTarget(message);
+      const sessionHash = ownerSessionFingerprint(ctx.headers);
+      return ctx.db.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', ctx.user.id);
+        await requireOwner(tx, ctx.user.id);
+        await consumeOwnerPasskeyActionProof(tx, {
+          userId: ctx.user.id,
+          action: 'OWNER_SETTING_UPDATE',
+          targetId,
+          sessionHash,
+          approvalToken: input.approvalToken,
         });
-      } else {
-        await ctx.db.systemSetting.upsert({
-          where: { key: 'announcement' },
-          update: { value: input.message.trim() },
-          create: { key: 'announcement', value: input.message.trim() },
+        if (!message) {
+          await tx.systemSetting.deleteMany({ where: { key: 'announcement' } });
+        } else {
+          await tx.systemSetting.upsert({
+            where: { key: 'announcement' },
+            update: { value: message },
+            create: { key: 'announcement', value: message },
+          });
+        }
+        await tx.adminAuditLog.create({
+          data: { adminId: ctx.user.id, action: 'ANNOUNCEMENT_SET', metadata: { message: message || null } },
         });
-      }
-
-      await logAdminAction(ctx.db, ctx.user.id, 'ANNOUNCEMENT_SET', null, { message: input.message ?? null });
-
-      return { success: true };
+        return { success: true };
+      });
     }),
 
-  // ─── Venmo Payments Toggle ──────────────────────────────
+  // Legacy ShareTab API preserved for compatibility, but BillOK uses RUB and SBP only.
+  // Ignore any persisted Venmo toggle, including on old USD receipts.
+  getVenmoEnabled: publicProcedure.query(() => ({ enabled: false })),
 
-  getVenmoEnabled: publicProcedure.query(async ({ ctx }) => {
-    const setting = await ctx.db.systemSetting.findUnique({
-      where: { key: 'venmoEnabled' },
-    });
-    return { enabled: setting?.value === 'true' };
-  }),
-
-  setVenmoEnabled: adminProcedure.input(z.object({ enabled: z.boolean() })).mutation(async ({ ctx, input }) => {
-    await ctx.db.systemSetting.upsert({
-      where: { key: 'venmoEnabled' },
-      update: { value: String(input.enabled) },
-      create: { key: 'venmoEnabled', value: String(input.enabled) },
-    });
-
-    await logAdminAction(ctx.db, ctx.user.id, 'VENMO_SETTING_CHANGED', null, { enabled: input.enabled });
-
+  setVenmoEnabled: adminProcedure.input(z.object({ enabled: z.boolean() })).mutation(({ input }) => {
+    if (input.enabled) throw new AppError('FORBIDDEN');
+    // Do not rewrite persisted legacy records just to hide a retired feature.
     return { success: true };
-  }),
-
-  // ─── Guest Receipt Uploads Toggle ───────────────────────
-
-  // `enabled` is the saved toggle; DISABLE_GUEST_UPLOADS overrides it.
-  getGuestUploadsEnabled: adminProcedure.query(async ({ ctx }) => {
-    return { enabled: await readGuestUploadsSetting(ctx.db), forcedOffByEnv: isGuestUploadsForcedOff() };
-  }),
-
-  setGuestUploadsEnabled: adminProcedure.input(z.object({ enabled: z.boolean() })).mutation(async ({ ctx, input }) => {
-    // While the env var locks it, a saved value would only take effect later, unseen.
-    if (isGuestUploadsForcedOff()) {
-      throw new AppError('PRECONDITION_FAILED', 'guestUploadsLockedOff');
-    }
-    await saveGuestUploadsSetting(ctx.db, input.enabled);
-
-    await logAdminAction(ctx.db, ctx.user.id, 'GUEST_UPLOADS_SETTING_CHANGED', null, { enabled: input.enabled });
-
-    return { enabled: input.enabled };
   }),
 
   // ─── Email Test ──────────────────────────────────────────
@@ -842,22 +822,22 @@ export const adminRouter = createTRPCRouter({
       },
     });
 
-    const from = process.env.EMAIL_FROM ?? 'ShareTab <noreply@sharetab.local>';
+    const from = process.env.EMAIL_FROM ?? 'BillOK <noreply@billok.ru>';
     const to = ctx.user.email!;
 
     try {
       await transport.sendMail({
         from,
         to,
-        subject: 'ShareTab Test Email',
-        text: `This is a test email from ShareTab admin dashboard.\n\nSent at: ${new Date().toISOString()}\nAdmin: ${ctx.user.email}`,
+        subject: 'Проверка электронной почты BillOK',
+        text: `Это тестовое письмо из панели администратора BillOK.\n\nОтправлено: ${new Date().toISOString()}\nАдминистратор: ${ctx.user.email}`,
         html: `
           <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-            <h2 style="color: #10b981;">ShareTab Test Email</h2>
-            <p>This is a test email from the ShareTab admin dashboard.</p>
+            <h2 style="color: #10b981;">Проверка электронной почты BillOK</h2>
+            <p>Это тестовое письмо из панели администратора BillOK.</p>
             <p style="color: #666; font-size: 14px;">
-              Sent at: ${new Date().toISOString()}<br/>
-              Admin: ${ctx.user.email}
+              Отправлено: ${new Date().toISOString()}<br/>
+              Администратор: ${ctx.user.email}
             </p>
           </div>
         `,
@@ -1013,9 +993,9 @@ export const adminRouter = createTRPCRouter({
 
   getExpiredSplitCount: adminProcedure.query(async ({ ctx }) => {
     const expiredCount = await ctx.db.guestSplit.count({
-      where: { expiresAt: { lt: new Date() } },
+      where: { status: GuestSplitStatus.CLAIMING, expiresAt: { lt: new Date() } },
     });
-    const totalCount = await ctx.db.guestSplit.count();
+    const totalCount = await ctx.db.guestSplit.count({ where: { status: GuestSplitStatus.CLAIMING } });
     return { expiredCount, totalCount };
   }),
 
@@ -1055,284 +1035,6 @@ export const adminRouter = createTRPCRouter({
         limit: input.limit,
         ...(input.afterId !== undefined ? { afterId: input.afterId } : {}),
       });
-    }),
-
-  // ─── Meridian Auth ──────────────────────────────────────────
-
-  getMeridianAuthStatus: adminProcedure.query(async () => {
-    if (!isProviderConfigured('meridian')) {
-      return { status: 'not_applicable' as const };
-    }
-    const health = await checkMeridianHealth();
-    // A proxy that isn't listening has no health to report; show why its
-    // last start failed instead.
-    const startError = health.status === 'not_running' ? getMeridianStartError() : null;
-    return {
-      ...health,
-      ...(startError ? { error: startError } : {}),
-      loginInProgress: isLoginInProgress(),
-    };
-  }),
-
-  startMeridianLogin: adminProcedure.mutation(async ({ ctx }) => {
-    if (!isProviderConfigured('meridian')) {
-      throw new AppError('PRECONDITION_FAILED', 'meridianNotConfigured');
-    }
-
-    try {
-      const url = await startLogin();
-
-      // Send email with login URL
-      await sendAuthExpiryEmail('Re-authentication initiated from admin dashboard', url);
-
-      await logAdminAction(ctx.db, ctx.user.id, 'MERIDIAN_LOGIN_STARTED', null, {
-        url,
-      });
-
-      return { url };
-    } catch (err) {
-      throw err instanceof Error
-        ? new AppError('INTERNAL_SERVER_ERROR', 'detail', { detail: err.message })
-        : new AppError('INTERNAL_SERVER_ERROR', 'loginStartFailed');
-    }
-  }),
-
-  completeMeridianLogin: adminProcedure
-    .input(z.object({ code: z.string().min(1).max(500) }))
-    .mutation(async ({ ctx, input }) => {
-      try {
-        const result = await submitCode(input.code);
-
-        let proxyError: string | null = null;
-        if (result.success) {
-          clearProviderCache();
-          // Wait (bounded) for the proxy start attempt before answering, then
-          // drop the cached health: the page re-reads the status right after
-          // this returns, and a check that lands before the proxy listens
-          // caches "not running" for 15s.
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          await Promise.race([
-            startMeridianProxy(),
-            new Promise<void>((resolve) => {
-              timer = setTimeout(resolve, MERIDIAN_LOGIN_START_WAIT_MS);
-            }),
-          ]);
-          clearTimeout(timer);
-          invalidateMeridianHealthCache();
-          // The login itself succeeded; report a proxy that still can't start.
-          proxyError = getMeridianStartError();
-        }
-
-        await logAdminAction(
-          ctx.db,
-          ctx.user.id,
-          result.success ? 'MERIDIAN_LOGIN_COMPLETED' : 'MERIDIAN_LOGIN_FAILED',
-          null,
-          { success: result.success, error: result.error, ...(proxyError ? { proxyError } : {}) },
-        );
-
-        return { ...result, ...(proxyError ? { proxyError } : {}) };
-      } catch (err) {
-        throw err instanceof Error
-          ? new AppError('INTERNAL_SERVER_ERROR', 'detail', { detail: err.message })
-          : new AppError('INTERNAL_SERVER_ERROR', 'loginCodeFailed');
-      }
-    }),
-
-  cancelMeridianLogin: adminProcedure.mutation(async ({ ctx }) => {
-    cancelLogin();
-    await logAdminAction(ctx.db, ctx.user.id, 'MERIDIAN_LOGIN_FAILED', null, {
-      reason: 'cancelled',
-    });
-    return { cancelled: true };
-  }),
-
-  logoutMeridian: adminProcedure.mutation(async ({ ctx }) => {
-    if (!isProviderConfigured('meridian')) {
-      throw new AppError('PRECONDITION_FAILED', 'meridianNotConfigured');
-    }
-
-    const result = logoutMeridian();
-    if (!result.success) {
-      throw result.error
-        ? new AppError('INTERNAL_SERVER_ERROR', 'detail', { detail: result.error })
-        : new AppError('INTERNAL_SERVER_ERROR', 'meridianLogoutFailed');
-    }
-
-    clearProviderCache();
-    invalidateMeridianHealthCache();
-    await logAdminAction(ctx.db, ctx.user.id, 'MERIDIAN_LOGOUT', null, {
-      reason: 'logged_out',
-    });
-    return { success: true };
-  }),
-
-  getMeridianNotifyPreference: adminProcedure.query(async ({ ctx }) => {
-    const setting = await ctx.db.systemSetting.findUnique({
-      where: { key: 'meridianNotifyInterval' },
-    });
-    return {
-      interval: (setting?.value ?? 'once') as 'once' | '1h' | '6h' | '24h',
-    };
-  }),
-
-  setMeridianNotifyPreference: adminProcedure
-    .input(
-      z.object({
-        interval: z.enum(['once', '1h', '6h', '24h']),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      await ctx.db.systemSetting.upsert({
-        where: { key: 'meridianNotifyInterval' },
-        update: { value: input.interval },
-        create: { key: 'meridianNotifyInterval', value: input.interval },
-      });
-
-      await logAdminAction(ctx.db, ctx.user.id, 'MERIDIAN_NOTIFY_PREFERENCE_CHANGED', null, {
-        interval: input.interval,
-      });
-
-      return { interval: input.interval };
-    }),
-
-  // ─── OpenAI Codex Auth ─────────────────────────────────────
-
-  getOpenAICodexAuthStatus: adminProcedure.query(async () => {
-    if (!isProviderConfigured('openai-codex')) {
-      return { status: 'not_applicable' as const };
-    }
-    const health = await checkOpenAICodexHealth();
-    return {
-      ...health,
-      loginInProgress: isOpenAICodexLoginInProgress(),
-    };
-  }),
-
-  startOpenAICodexLogin: adminProcedure.mutation(async () => {
-    if (!isProviderConfigured('openai-codex')) {
-      throw new AppError('PRECONDITION_FAILED', 'codexNotConfigured');
-    }
-    return { url: await startOpenAICodexLogin() };
-  }),
-
-  completeOpenAICodexLogin: adminProcedure
-    .input(z.object({ code: z.string().min(1).max(1000) }))
-    .mutation(async ({ input }) => {
-      const result = await submitOpenAICodexCode(input.code);
-      if (result.success) {
-        clearProviderCache();
-        invalidateOpenAICodexHealthCache();
-      }
-      return result;
-    }),
-
-  cancelOpenAICodexLogin: adminProcedure.mutation(async () => {
-    cancelOpenAICodexLogin();
-    return { cancelled: true };
-  }),
-
-  logoutOpenAICodex: adminProcedure.mutation(async () => {
-    if (!isProviderConfigured('openai-codex')) {
-      throw new AppError('PRECONDITION_FAILED', 'codexNotConfigured');
-    }
-
-    const result = logoutOpenAICodex();
-    if (!result.success) {
-      throw result.error
-        ? new AppError('INTERNAL_SERVER_ERROR', 'detail', { detail: result.error })
-        : new AppError('INTERNAL_SERVER_ERROR', 'codexLogoutFailed');
-    }
-
-    clearProviderCache();
-    invalidateOpenAICodexHealthCache();
-    return { success: true };
-  }),
-
-  // ─── AI Provider Testing ─────────────────────────────────
-
-  testAIProvider: adminProcedure
-    .input(
-      z.object({
-        providerName: z.string(),
-        imageBase64: z.string().max(10 * 1024 * 1024),
-        mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp', 'image/gif']),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const start = Date.now();
-      let provider;
-      try {
-        provider = await createProviderByName(input.providerName);
-      } catch (err) {
-        const error =
-          err instanceof Error
-            ? new AppError('BAD_REQUEST', 'detail', { detail: err.message })
-            : new AppError('BAD_REQUEST', 'providerCreateFailed');
-        await logAdminAction(ctx.db, ctx.user.id, 'AI_PROVIDER_TESTED', null, {
-          provider: input.providerName,
-          durationMs: Date.now() - start,
-          success: false,
-          error: error.message,
-        });
-        throw error;
-      }
-
-      const available = await provider.isAvailable();
-      if (!available) {
-        const error = new AppError('PRECONDITION_FAILED', 'providerUnavailable', { provider: input.providerName });
-        await logAdminAction(ctx.db, ctx.user.id, 'AI_PROVIDER_TESTED', null, {
-          provider: input.providerName,
-          durationMs: Date.now() - start,
-          success: false,
-          error: error.message,
-        });
-        throw error;
-      }
-
-      const imageBuffer = Buffer.from(input.imageBase64, 'base64');
-      if (imageBuffer.length > 5 * 1024 * 1024) {
-        const error = new AppError('BAD_REQUEST', 'testImageTooLarge');
-        await logAdminAction(ctx.db, ctx.user.id, 'AI_PROVIDER_TESTED', null, {
-          provider: input.providerName,
-          durationMs: Date.now() - start,
-          success: false,
-          error: error.message,
-        });
-        throw error;
-      }
-
-      try {
-        const result = await provider.extractReceipt(imageBuffer, input.mimeType);
-        const durationMs = Date.now() - start;
-
-        await logAdminAction(ctx.db, ctx.user.id, 'AI_PROVIDER_TESTED', null, {
-          provider: input.providerName,
-          durationMs,
-          success: true,
-        });
-
-        return { result, durationMs };
-      } catch (err) {
-        const durationMs = Date.now() - start;
-        // SERVICE_UNAVAILABLE (503): the provider failed, not ShareTab. Not
-        // BAD_GATEWAY: Cloudflare (and proxies set to intercept errors)
-        // replaces a 502 or 504 body with its own HTML page, hiding this
-        // message.
-        const error =
-          err instanceof Error
-            ? new AppError('SERVICE_UNAVAILABLE', 'detail', { detail: err.message })
-            : new AppError('SERVICE_UNAVAILABLE', 'extractionFailed');
-
-        await logAdminAction(ctx.db, ctx.user.id, 'AI_PROVIDER_TESTED', null, {
-          provider: input.providerName,
-          durationMs,
-          success: false,
-          error: error.message,
-        });
-
-        throw error;
-      }
     }),
 });
 

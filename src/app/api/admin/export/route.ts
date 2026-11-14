@@ -1,14 +1,22 @@
 import { auth } from '@/server/auth';
+import { cookies } from 'next/headers';
 import { db } from '@/server/db';
+import { requireOwner } from '@/server/lib/owner-access';
 import { logAdminAction } from '@/server/trpc/routers/admin';
 
 export async function GET() {
-  // Auth check: admin only
+  // Owner privileges are bound to the immutable DB user ID, not email.
   const session = await auth();
-  const adminEmail = process.env.ADMIN_EMAIL;
-
-  if (!session?.user?.email || !adminEmail || session.user.email !== adminEmail) {
-    return new Response('Forbidden', { status: 403 });
+  if (!session?.user?.id) return new Response('Доступ запрещён', { status: 403 });
+  // Auth.js still sees the real owner while impersonating; block owner REST
+  // exports whenever the mode cookie is present (even if forged/expired).
+  if ((await cookies()).get('sharetab-impersonate')) {
+    return new Response('Доступ запрещён', { status: 403 });
+  }
+  try {
+    await requireOwner(db, session.user.id);
+  } catch {
+    return new Response('Доступ запрещён', { status: 403 });
   }
 
   try {
@@ -43,7 +51,6 @@ export async function GET() {
           suspendedAt: true,
           createdAt: true,
           updatedAt: true,
-          // Explicitly exclude passwordHash
         },
       }),
       db.group.findMany(),
@@ -60,13 +67,11 @@ export async function GET() {
           mimeType: true,
           fileSize: true,
           status: true,
-          aiProvider: true,
           extractedData: true,
           groupId: true,
           savedById: true,
           createdAt: true,
           updatedAt: true,
-          // Exclude rawResponse (can be very large)
         },
       }),
       db.receiptItem.findMany(),
@@ -110,11 +115,11 @@ export async function GET() {
     return new Response(json, {
       headers: {
         'Content-Type': 'application/json',
-        'Content-Disposition': `attachment; filename="sharetab-export-${timestamp}.json"`,
+        'Content-Disposition': `attachment; filename="billok-export-${timestamp}.json"`,
       },
     });
   } catch (error) {
     console.error('Export failed:', error);
-    return new Response('Internal Server Error', { status: 500 });
+    return new Response('Внутренняя ошибка сервера', { status: 500 });
   }
 }

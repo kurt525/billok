@@ -1,9 +1,9 @@
 /**
- * Case-insensitive user lookup by email. Auth.js lowercases OAuth and
- * magic-link emails, while password sign-ups store the casing the user typed,
+ * Case-insensitive user lookup by email for registration and existing
+ * temporary password users; spelling must not create duplicate accounts,
  * so every lookup that should find "the account for this address" ignores
  * case: the Auth.js adapter, password login, registration's duplicate check,
- * and the OIDC and Google sign-in policies.
+ * and account email identity validation.
  */
 
 import type { PrismaClient } from '@/generated/prisma/client';

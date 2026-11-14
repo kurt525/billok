@@ -5,11 +5,14 @@ import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
-import { formatCents } from '@/lib/money';
+import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
+import { GUEST_PRESENCE_HEARTBEAT_MS } from '@/lib/guest-presence';
+import { guestPresenceSummary } from '@/lib/guest-presence-summary';
+import { formatCents, centsToDecimal, isValidMoneyInput, parseToCents, MAX_MONEY_CENTS } from '@/lib/money';
 import { copyToClipboard } from '@/lib/clipboard';
 import {
   canAdoptAnswer,
-  claimPollInterval,
+  claimLivePollInterval,
   getStoredClaimIdentity,
   isSessionLost,
   joinKeyFor,
@@ -48,13 +51,19 @@ import {
   type SaveReload,
 } from '@/lib/claim-save';
 import { calculateClaimTotals, groupSizeWeights } from '@/lib/split-calculator';
-import { Button } from '@/components/ui/button';
+import { guestPortionAssignments, guestPortionProgress } from '@/lib/guest-portions';
+import { aggregateReceiptPaymentGroups } from '@/lib/receipt-payment-groups';
+import { guestKnownPartsBalance } from '@/lib/guest-known-parts';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import {
   Check,
+  Copy,
   Loader2,
   Users,
   Receipt,
@@ -69,8 +78,18 @@ import {
 import { toast } from 'sonner';
 import { Link } from '@/i18n/navigation';
 import { buildVenmoPayUrl, isValidVenmoHandle } from '@/lib/venmo';
-import { getInitials, guestAvatarColor } from '@/lib/avatar';
+import { getInitials } from '@/lib/avatar';
+import { guestVisualColorStyle, guestVisualColorBorder } from '@/lib/guest-visual-color';
+import { organizerPersonIndex, guestReceiptRoleFlags } from '@/lib/guest-receipt-roles';
+import { GuestReceiptRoles } from '@/components/guest-receipt-roles';
+import { GuestAccountStatus } from '@/components/guest-account-status';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { ConfirmDialog } from '@/components/confirm-dialog';
+import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
+import { GuestSbpReimbursementDetails } from '@/components/guest-sbp-reimbursement-details';
+import { GuestPaymentDeclaration } from '@/components/guest-payment-declaration';
+import { GuestPayerPaymentReview } from '@/components/guest-payer-payment-review';
+import { GuestPaymentGroupsEditor } from '@/components/guest-payment-groups-editor';
 
 // How one claim save attempt ended: the answer's conflicts when stored, the server's message
 // when refused
@@ -98,16 +117,108 @@ function removePersonalLinkFromAddressBar() {
   window.history.replaceState(null, '', window.location.pathname + window.location.search);
 }
 
+/** 3.5: shown to signed-in organizers only. Never equate joined with online. */
+function OrganizerPresence({
+  people,
+  presence,
+  organizerPersonId,
+}: {
+  people: { id: string; name: string; hasJoined: boolean; isRegistered: boolean }[];
+  presence: { personId: string; status: 'not-joined' | 'joined' | 'online' | 'offline' }[];
+  organizerPersonId?: string | undefined;
+}) {
+  const t = useTranslations('split.claim');
+  const ta = useTranslations('split.accountStatus');
+  const counters = guestPresenceSummary(people, presence, organizerPersonId);
+  const statusById = new Map(presence.map((entry) => [entry.personId, entry.status]));
+  const label = {
+    'not-joined': t('presenceNotJoined'),
+    joined: t('presenceJoined'),
+    online: t('presenceOnline'),
+    offline: t('presenceOffline'),
+  };
+  return (
+    <Card className="w-full min-w-0 max-w-full" data-testid="organizer-presence">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">{t('presenceTitle')}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <dl
+          className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4"
+          data-testid="organizer-presence-counters"
+          aria-label={t('presenceCountersTitle')}
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {(
+            [
+              ['invited', t('presenceInvited'), counters.invited],
+              ['waiting', t('presenceWaiting'), counters.waiting],
+              ['joined', t('presenceJoinedCount'), counters.joined],
+              ['online', t('presenceOnlineCount'), counters.online],
+            ] as const
+          ).map(([kind, label, value]) => (
+            <div
+              key={kind}
+              className="min-w-0 rounded-lg border bg-muted/40 p-2"
+              data-testid={'presence-count-' + kind}
+            >
+              <dt className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{label}</dt>
+              <dd className="text-xl font-semibold tabular-nums" data-testid={'presence-count-' + kind + '-value'}>
+                {value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+        {people.map((person) => {
+          const status = statusById.get(person.id) ?? 'not-joined';
+          return (
+            <div
+              key={person.id}
+              className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2"
+              data-testid={'presence-person-' + person.id}
+            >
+              <span className="min-w-0 flex-1 font-medium [overflow-wrap:anywhere]">{person.name}</span>
+              <GuestAccountStatus
+                isRegistered={person.isRegistered}
+                registeredLabel={ta('registered')}
+                guestLabel={ta('guest')}
+              />
+              <span
+                className="text-sm text-muted-foreground [overflow-wrap:anywhere]"
+                data-testid={'presence-status-' + person.id}
+              >
+                {label[status]}
+              </span>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function ClaimPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = use(params);
   const locale = useLocale();
   const t = useTranslations('split.claim');
+  const tr = useTranslations('split.roles');
+  const ta = useTranslations('split.accountStatus');
   const tv = useTranslations('split.venmo');
   const tc = useTranslations('common');
 
   // --- State ---
   const [name, setName] = useState('');
   const [groupSize, setGroupSize] = useState(1);
+  // Fixed slot selection is separate from a human's editable display name.
+  const [selectedGuestSlotId, setSelectedGuestSlotId] = useState<string | null>(null);
+  // Only the owner of this device's personToken can edit these tips.
+  const [personalTipDraft, setPersonalTipDraft] = useState<string | null>(null);
+  const [portionDrafts, setPortionDrafts] = useState<Record<number, string>>({});
+  const [knownPartsDrafts, setKnownPartsDrafts] = useState<Record<number, string>>({});
+  const [finalizationOrganizerEmail, setFinalizationOrganizerEmail] = useState('');
+  const [presenceConnectionLost, setPresenceConnectionLost] = useState(false);
+  const presenceDeviceId = useRef<string | null>(null);
   // People are tracked by id, not index: someone's index changes when anyone listed before them
   // is removed, on any device. Indexes are looked up in the session as last loaded (below).
   // This device's person, once it joined or resumed
@@ -154,8 +265,24 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const [saving, setSaving] = useState(false);
   const [showImage, setShowImage] = useState(false);
   const [editingPersonId, setEditingPersonId] = useState<string | null>(null);
+  const [creatorGuestLink, setCreatorGuestLink] = useState<{
+    personId: string;
+    name: string;
+    url: string;
+    rotationCount: number;
+  } | null>(null);
+  const [rotateLinkFor, setRotateLinkFor] = useState<{ personId: string; name: string } | null>(null);
+  // Reuse the same request key after a lost response, otherwise a second click
+  // could accidentally invalidate the already minted replacement link.
+  const pendingRotation = useRef<{ personId: string; requestKey: string } | null>(null);
   const [editingName, setEditingName] = useState('');
   const [editingGroupSize, setEditingGroupSize] = useState(1);
+  const [receiptItemEdit, setReceiptItemEdit] = useState<{
+    itemIndex: number;
+    name: string;
+    quantity: string;
+    price: string;
+  } | null>(null);
   const [splittingItemIdx, setSplittingItemIdx] = useState<number | null>(null);
   const [splitQty, setSplitQty] = useState('');
   const [removeFor, setRemoveFor] = useState<{ id: string; name: string } | null>(null);
@@ -165,6 +292,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const { data: authSession } = useSession();
 
   // --- tRPC ---
+  const [liveStreamConnected, setLiveStreamConnected] = useState(false);
   const venmoSetting = trpc.admin.getVenmoEnabled.useQuery();
   const profile = trpc.auth.getProfile.useQuery(undefined, {
     enabled: !!authSession?.user && !!venmoSetting.data?.enabled,
@@ -178,13 +306,189 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const session = trpc.guest.getSession.useQuery(
     { token },
     {
+      // 3.16: SSE delivers receipt changes, but online/offline presence lives
+      // in separate guestPresence rows. Keep polling for organizer/delegate
+      // presence while a healthy SSE stream avoids duplicate reads for guests.
+      refetchOnWindowFocus: 'always',
+      refetchOnReconnect: 'always',
       refetchInterval: (query) =>
-        claimPollInterval({
+        claimLivePollInterval({
           finalized: query.state.data?.status === 'FINALIZED',
           error: query.state.error && { httpStatus: query.state.error.data?.httpStatus },
+          sseConnected: liveStreamConnected,
+          // Null is the guest view; undefined (loading) retains fallback.
+          presenceVisible: query.state.data?.presence !== null,
         }),
     },
   );
+
+  // SSE carries only a change signal. The tRPC query is the source of truth.
+  // A ready event on every re-connection rechecks changes missed while offline.
+  const refreshLiveSession = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    refreshLiveSession.current = () => void utils.guest.getSession.invalidate({ token });
+  }, [token, utils]);
+  useEffect(() => {
+    if (session.data?.status === 'FINALIZED' || session.error?.data?.httpStatus === 404) return;
+    if (typeof EventSource === 'undefined') return;
+    // Possessing only an invitation/share URL is NOT sufficient to receive
+    // live notifications. An authenticated creator or a verified guest with
+    // this device's personal token may establish a receipt-scoped SSE ticket.
+    if (!identity && !authSession?.user?.id) return;
+    const url = '/api/guest/' + encodeURIComponent(token) + '/events';
+    const credential = identity ? { personId: identity.personId, personToken: identity.personToken } : {};
+    const controller = new AbortController();
+    let closed = false;
+    let stopped = false;
+    let attempts = 0;
+    let events: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let renewalTimer: ReturnType<typeof setTimeout> | null = null;
+    const refresh = () => refreshLiveSession.current();
+    const retry = () => {
+      if (closed || stopped || controller.signal.aborted) return;
+      setLiveStreamConnected(false);
+      events?.close();
+      events = null;
+      if (renewalTimer) clearTimeout(renewalTimer);
+      renewalTimer = null;
+      if (retryTimer) clearTimeout(retryTimer);
+      // Reissue credentials over POST on each reconnect; an expired cookie
+      // never becomes an unbounded bearer credential.
+      retryTimer = setTimeout(() => void connect(), Math.min(30_000, 2000 * 2 ** Math.min(attempts++, 4)));
+    };
+    const connect = async () => {
+      if (closed || stopped || controller.signal.aborted) return;
+      try {
+        const ticket = await fetch(url, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(credential),
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!ticket.ok) {
+          // Invalid/rotated credentials: keep polling instead of leaking SSE.
+          return retry();
+        }
+        if (closed || stopped || controller.signal.aborted) return;
+        events?.close();
+        const source = new EventSource(url);
+        events = source;
+        source.addEventListener('ready', () => {
+          attempts = 0;
+          setLiveStreamConnected(true);
+          refresh();
+          // Refresh short-lived HttpOnly authorization while this tab stays
+          // open, without putting any personal token into a GET URL.
+          if (renewalTimer) clearTimeout(renewalTimer);
+          renewalTimer = setTimeout(() => {
+            source.close();
+            void connect();
+          }, 4 * 60_000);
+        });
+        source.addEventListener('changed', refresh);
+        source.addEventListener('gone', () => {
+          stopped = true;
+          setLiveStreamConnected(false);
+          source.close();
+          refresh();
+        });
+        source.onerror = retry;
+      } catch {
+        retry();
+      }
+    };
+    void connect();
+    return () => {
+      closed = true;
+      controller.abort();
+      events?.close();
+      if (retryTimer) clearTimeout(retryTimer);
+      if (renewalTimer) clearTimeout(renewalTimer);
+      setLiveStreamConnected(false);
+    };
+  }, [token, identity, authSession?.user?.id, session.data?.status, session.error?.data?.httpStatus]);
+
+  // A creator-only explicit POST fetches the sensitive guest bearer secret;
+  // the common getSession query never exposes it. Copy must be triggered by
+  // a separate gesture to work in mobile browsers after this async request.
+  const getGuestPersonalLink = trpc.guest.getGuestPersonalLink.useMutation({
+    onSuccess: (result) => {
+      const url = new URL(window.location.origin + window.location.pathname);
+      url.hash = personalLinkHash(result.personToken);
+      const event = utils.guest.getSession
+        .getData({ token })
+        ?.personalLinkEvents?.find((item) => item.personId === result.personId);
+      setCreatorGuestLink({
+        personId: result.personId,
+        name: result.name,
+        url: url.toString(),
+        rotationCount: event?.rotationCount ?? 0,
+      });
+    },
+    onError: (error) => {
+      setCreatorGuestLink(null);
+      toast.error(localizedTrpcError(error, tc('errors.generic')));
+    },
+  });
+
+  const rotateGuestPersonalLink = trpc.guest.rotateGuestPersonalLink.useMutation({
+    onSuccess: async (result) => {
+      const url = new URL(window.location.origin + window.location.pathname);
+      url.hash = personalLinkHash(result.personToken);
+      setCreatorGuestLink({
+        personId: result.personId,
+        name: result.name,
+        url: url.toString(),
+        rotationCount: result.rotationCount,
+      });
+      pendingRotation.current = null;
+      setRotateLinkFor(null);
+      await utils.guest.getSession.invalidate({ token });
+      toast.success(t('creatorGuestLinkRotated'));
+    },
+    onError: (error) => {
+      // A lost rotation answer is retried with the same idempotency key.
+      // Do not expose or assert that the old link remains valid.
+      toast.error(localizedTrpcError(error, tc('errors.generic')));
+    },
+  });
+
+  const setMyItemParts = trpc.guest.setMyItemParts.useMutation({
+    // After a response is lost, React Query retries the SAME mutation
+    // variables (and saveKey), never inventing another operation. Server
+    // deduplication handles a successful commit followed by a lost answer.
+    retry: (failures, error) =>
+      failures < 2 && (error.data?.httpStatus === 503 || error.data?.httpStatus === undefined),
+    retryDelay: (attempt) => Math.min(2000, 250 * 2 ** attempt),
+    onSuccess: async (_result, variables) => {
+      await utils.guest.getSession.invalidate({ token });
+      setPortionDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[variables.itemIndex];
+        return next;
+      });
+      toast.success(t('partsSaved'));
+    },
+    onError: (error) => {
+      // A concurrent saved edit can consume the remaining original pieces
+      // while this phone still shows the prior count. Reload the authoritative
+      // balance before allowing another attempt.
+      void utils.guest.getSession.invalidate({ token });
+      toast.error(localizedTrpcError(error, tc('errors.generic')));
+    },
+  });
+
+  const setPersonalTip = trpc.guest.setPersonalTip.useMutation({
+    onSuccess: async () => {
+      await utils.guest.getSession.invalidate({ token });
+      setPersonalTipDraft(null);
+      toast.success(t('personalTipSaved'));
+    },
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
+  });
   // The payer's Venmo handle follows the session (falling back to the creator's profile) until the
   // creator edits it, so a handle saved after this page loaded still shows
   const venmoHandle =
@@ -202,13 +506,46 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // null while this device's person isn't in the session as loaded: they just joined (the
   // session is loaded again right away), or someone removed them (checked below)
   const myPersonIndex = myPersonId === null ? null : (indexById.get(myPersonId) ?? null);
-  // Claiming for: the person picked, while they're still in the split, otherwise this device's person
-  const personIndex = (activePersonId === null ? undefined : indexById.get(activePersonId)) ?? myPersonIndex;
+  // A guest may allocate only for themselves. The authenticated creator may
+  // also allocate on an ungrouped receipt; a group representative may change
+  // portions only for members of their current validated payment group.
+  const hasPaymentGroups =
+    session.data?.people.some((person) => person.paymentGroupRepresentativeId !== undefined) ?? false;
+  const myPerson = myPersonIndex === null ? null : session.data?.people[myPersonIndex];
+  const canEditFor = (targetId: string) => {
+    if (!hasPaymentGroups) return targetId === myPersonId || (!!personToken && !!session.data?.isCreator);
+    if (myPersonId === targetId) return true;
+    return (
+      !!myPersonId &&
+      myPerson?.paymentGroupRepresentativeId === myPersonId &&
+      session.data?.people.some(
+        (person) => person.id === targetId && person.paymentGroupRepresentativeId === myPersonId,
+      ) === true
+    );
+  };
+  const selectedIndex = activePersonId === null ? undefined : indexById.get(activePersonId);
+  const selectedId = selectedIndex === undefined ? null : (session.data?.people[selectedIndex]?.id ?? null);
+  const personIndex = selectedId && canEditFor(selectedId) ? selectedIndex! : myPersonIndex;
   const activeId = personIndex === null ? null : (session.data?.people[personIndex]?.id ?? null);
+
+  // 3.6.1: when the verified BillOK owner joins after a guest named Илья,
+  // the server changes only that guest's label. Inform the holder on their
+  // next session poll; never alter their token, person ID or assigned shares.
+  // This also reports a creator's later correction of the guest's name.
+  useEffect(() => {
+    if (!identity || !session.data) return;
+    const current = session.data.people.find((person) => person.id === identity.personId);
+    const stored = getStoredClaimIdentity(token);
+    if (!current || !stored || stored.personToken !== identity.personToken || stored.name === current.name) return;
+    setStoredClaimIdentity(token, { name: current.name, personToken: identity.personToken });
+    toast.info(t('nameChangedNotice', { name: current.name }));
+  }, [identity, session.data, token, t]);
 
   function setIdentity(next: { personId: string; personToken: string } | null) {
     identityRef.current = next;
     setIdentityState(next);
+    setPersonalTipDraft(null);
+    setPortionDrafts({});
   }
 
   // This device's person is gone (removed here or on another device): back to the join form.
@@ -228,9 +565,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     onSuccess: () => {
       setEditingPersonId(null);
       setEditingName('');
+      void utils.guest.getSession.invalidate({ token });
       toast.success(t('nameUpdated'));
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
 
   const removePerson = trpc.guest.removePerson.useMutation({
@@ -253,7 +591,100 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       }
       toast.success(t('personRemoved'));
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
+  });
+
+  const { mutateAsync: sendPresenceHeartbeat } = trpc.guest.heartbeatPresence.useMutation();
+  const myPresenceReady =
+    !!identity?.personId &&
+    !!session.data?.people.some((person) => person.id === identity.personId && person.hasJoined);
+  // No heartbeat from hidden tabs: only a visible connected page counts as online.
+  // One stable device ID per open tab; reloading creates a new device, while
+  // a second tab keeps its own heartbeat. TTL resolves lost network/closed pages.
+  useEffect(() => {
+    if (!identity?.personId || !identity.personToken || !myPresenceReady || session.data?.status !== 'CLAIMING') {
+      return;
+    }
+    if (presenceDeviceId.current === null) presenceDeviceId.current = newRequestKey();
+    const deviceId = presenceDeviceId.current;
+    let disposed = false;
+    let sending = false;
+    const beat = async () => {
+      if (disposed || document.visibilityState === 'hidden') return;
+      if (!navigator.onLine) {
+        setPresenceConnectionLost(true);
+        return;
+      }
+      if (sending) return;
+      sending = true;
+      try {
+        await sendPresenceHeartbeat({
+          token,
+          personId: identity.personId,
+          personToken: identity.personToken,
+          deviceId,
+        });
+        if (!disposed) setPresenceConnectionLost(false);
+      } catch {
+        if (!disposed) setPresenceConnectionLost(true);
+      } finally {
+        sending = false;
+      }
+    };
+    const onOffline = () => setPresenceConnectionLost(true);
+    const intervalId = window.setInterval(() => void beat(), GUEST_PRESENCE_HEARTBEAT_MS);
+    document.addEventListener('visibilitychange', beat);
+    window.addEventListener('online', beat);
+    window.addEventListener('offline', onOffline);
+    void beat();
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', beat);
+      window.removeEventListener('online', beat);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, [token, identity?.personId, identity?.personToken, myPresenceReady, session.data?.status, sendPresenceHeartbeat]);
+
+  // The creator corrects receipt positions, never participant payment amounts.
+  // The same server update triggers a recheck for the editing device; other
+  // active devices see the changed item and all derived totals on their poll.
+  const updateClaimReceiptItem = trpc.guest.updateClaimReceiptItem.useMutation({
+    onSuccess: async () => {
+      setReceiptItemEdit(null);
+      await utils.guest.getSession.invalidate({ token });
+      toast.success(t('itemCorrectionSaved'));
+    },
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
+  });
+  const setKnownItemParts = trpc.guest.setKnownItemParts.useMutation({
+    onSuccess: async (_result, variables) => {
+      setKnownPartsDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[variables.itemIndex];
+        return next;
+      });
+      await utils.guest.getSession.invalidate({ token });
+      toast.success(t('knownPartsSaved'));
+    },
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
+  });
+
+  const setFinalizationOrganizer = trpc.guest.setFinalizationOrganizer.useMutation({
+    onSuccess: async () => {
+      setFinalizationOrganizerEmail('');
+      await utils.guest.getSession.invalidate({ token });
+      toast.success(t('finalizationOrganizerSaved'));
+    },
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
+  });
+
+  const confirmSessionParts = trpc.guest.confirmSessionParts.useMutation({
+    onSuccess: async () => {
+      await utils.guest.getSession.invalidate({ token });
+      toast.success(t('partsConfirmationSaved'));
+    },
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
   });
 
   const finalizeSession = trpc.guest.finalizeSession.useMutation({
@@ -261,7 +692,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       session.refetch();
       toast.success(t('splitFinalized'));
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
 
   const splitClaimItem = trpc.guest.splitClaimItem.useMutation({
@@ -269,6 +700,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       const splitIdx = variables.itemIndex;
       setSplittingItemIdx(null);
       setSplitQty('');
+      setPortionDrafts({});
       // Remap claimed item indices: items after the split point shift +1 (Finding #4).
       // Only invalidate the split item itself; preserve unsaved edits for other items.
       setClaimEdits((prev) => {
@@ -284,7 +716,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         return next;
       });
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
 
   const autoRejoinAttempted = useRef(false);
@@ -297,6 +729,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const linkedToken = useRef<string | null>(null);
   // The person a personal link names, waiting for the user to confirm it's them
   const [linkOffer, setLinkOffer] = useState<ClaimIdentity | null>(null);
+  // A temporary failed lookup must not discard the only recovery credential.
+  const [linkRecoveryFailed, setLinkRecoveryFailed] = useState(false);
   // A personal link the user accepted, while it's looked up again: the card may have been open
   // while its person was removed
   const confirmedLinkToken = useRef<string | null>(null);
@@ -304,6 +738,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // storage: a stored pending key could be read and redeemed for the person before this device
   // holds their token. A reload therefore can't replay a lost join.
   const pendingJoin = useRef<PendingJoin | null>(null);
+  const autoCreatorJoinAttempted = useRef(false);
   // The token this device stored when the join or resume in flight was sent. Tabs of one browser
   // share the stored identity, so another tab may become someone else before the answer comes
   // back; see canAdoptAnswer (#213).
@@ -312,6 +747,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // Become this person on this device, and remember it for the next visit. Also settles any
   // pending personal link, so its card can't come back later and switch this device again.
   function adoptIdentity(adopted: ClaimIdentity) {
+    setLinkRecoveryFailed(false);
     setLinkOffer(null);
     linkedToken.current = null;
     confirmedLinkToken.current = null;
@@ -354,7 +790,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       adoptIdentity(data);
       toast.success(t('joinedSession'));
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
     onSettled: () => {
       joinInFlight.current = false;
     },
@@ -369,7 +805,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       const fromLink = variables.personToken === linkedToken.current;
       // The link got a definite answer (someone holds its token, or nobody does), so it can
       // leave the address bar. After an error it stays, so a reload can try it again.
-      if (fromLink) removePersonalLinkFromAddressBar();
+      if (fromLink) {
+        removePersonalLinkFromAddressBar();
+        setLinkRecoveryFailed(false);
+      }
       const outcome = resumeOutcome({
         found: data !== null,
         fromLink,
@@ -400,21 +839,51 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     },
     onError: (error, variables) => {
       if (variables.personToken !== linkedToken.current) return;
-      toast.error(error.message);
+      // No definite server answer: leave the #me credential in the URL.
+      setLinkRecoveryFailed(true);
+      toast.error(localizedTrpcError(error, tc('errors.generic')));
       if (variables.personToken === confirmedLinkToken.current) {
-        // Accepting failed: keep the card and the link, so the user can accept again (on a
-        // fresh device nothing else would bring the link back)
+        // A failed acceptance retains its confirmation card.
         confirmedLinkToken.current = null;
         return;
       }
       setLinkOffer(null);
-      setTimeout(resumeStoredIdentity, 0);
+      // Never silently replace this credential with another stored identity.
     },
     onSettled: () => {
       joinInFlight.current = false;
     },
   });
-  const joining = joinSession.isPending || resumeSession.isPending;
+  const joinGuestSlot = trpc.guest.joinGuestSlot.useMutation({
+    onSuccess: (data) => {
+      const stored = getStoredClaimIdentity(token);
+      if (
+        stored &&
+        !canAdoptAnswer({
+          personToken: data.personToken,
+          storedAtStart: storedWhenSent.current,
+          storedNow: stored.personToken,
+        })
+      ) {
+        toast.warning(t('continuingAs', { name: stored.name }));
+        setTimeout(resumeStoredIdentity, 0);
+        return;
+      }
+      adoptIdentity(data);
+      toast.success(t('guestPlaceJoined'));
+    },
+    onError: (error) => {
+      // The server differentiates an occupied slot from a duplicate display
+      // name and localizes both. Do not guess from the error text.
+      toast.error(localizedTrpcError(error, tc('errors.generic')));
+      setSelectedGuestSlotId(null);
+      void utils.guest.getSession.invalidate({ token });
+    },
+    onSettled: () => {
+      joinInFlight.current = false;
+    },
+  });
+  const joining = joinSession.isPending || joinGuestSlot.isPending || resumeSession.isPending;
 
   // Resume whoever this device is stored as: when a personal link doesn't work out, or when an
   // answer came back for a token that's no longer stored. Called on the next tick from
@@ -451,11 +920,48 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     resumeStoredIdentity();
   }
 
+  function retryPendingPersonalLink() {
+    const pending = linkedToken.current;
+    if (!pending || joinInFlight.current) return;
+    joinInFlight.current = true;
+    storedWhenSent.current = getStoredClaimIdentity(token)?.personToken;
+    setLinkRecoveryFailed(false);
+    resumeSession.mutate({ token, personToken: pending });
+  }
+
+  function abandonPendingPersonalLink() {
+    if (joinInFlight.current) return;
+    linkedToken.current = null;
+    confirmedLinkToken.current = null;
+    setLinkRecoveryFailed(false);
+    setLinkOffer(null);
+    removePersonalLinkFromAddressBar();
+    resumeStoredIdentity();
+  }
+
   // A join sends the token this device stored (so the server returns that person, e.g. when
   // resuming failed and they typed their name, which someone may have changed) and a join key.
   // The join key is kept (in memory) until this device becomes someone, and reused only to retry
   // the same name, so a join whose response was lost (e.g. a network drop) is replayed as the
   // same person. The server mints new people's tokens itself.
+  function startGuestSlotJoin(input: { slotId: string; name: string }) {
+    if (joinInFlight.current) return;
+    joinInFlight.current = true;
+    const stored = getStoredClaimIdentity(token);
+    storedWhenSent.current = stored?.personToken;
+    // The retry key is scoped to *both* the name and selected slot. Changing
+    // either after a failed network request starts a fresh join attempt.
+    const pending = joinKeyFor(input.name + '|' + input.slotId, pendingJoin.current);
+    pendingJoin.current = pending;
+    joinGuestSlot.mutate({
+      token,
+      slotId: input.slotId,
+      name: input.name,
+      joinKey: pending.joinKey,
+      ...(stored ? { personToken: stored.personToken } : {}),
+    });
+  }
+
   function startJoin(input: { name: string; groupSize?: number }) {
     if (joinInFlight.current) return;
     joinInFlight.current = true;
@@ -499,6 +1005,27 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     storedWhenSent.current = getStoredClaimIdentity(token)?.personToken;
     resumeSession.mutate({ token, personToken });
   }, [session.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The creator is already account-bound by 3.7.1. After changing browser or
+  // losing localStorage, recover their server-bound creator row without
+  // occupying any guest place. Do not override a personal link in progress.
+  useEffect(() => {
+    if (
+      autoCreatorJoinAttempted.current ||
+      !session.data?.receiptData.guestSlotsMode ||
+      !session.data.isCreator ||
+      !authSession?.user ||
+      identity ||
+      joinInFlight.current ||
+      getStoredClaimIdentity(token)?.personToken ||
+      linkedToken.current
+    )
+      return;
+    const creatorId = session.data.receiptData.organizerPersonId;
+    if (!creatorId) return;
+    autoCreatorJoinAttempted.current = true;
+    startGuestSlotJoin({ slotId: creatorId, name: authSession.user.name || session.data.people[0]?.name || '' });
+  }, [session.data, authSession, identity]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Someone on another device may remove this device's person. Their id missing from the session
   // as loaded doesn't prove it, so ask the server by token (see needsMembershipCheck).
@@ -588,6 +1115,21 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     );
   }, [session.data]);
 
+  const knownPartsBalance = useMemo(() => {
+    if (!session.data) return { progressByItem: {}, overclaimed: false, hasRemaining: false };
+    try {
+      return guestKnownPartsBalance({
+        items: session.data.items,
+        people: session.data.people,
+        assignments: session.data.assignments,
+        knownPartsByItem: session.data.receiptData.knownPartsByItem,
+      });
+    } catch {
+      return { progressByItem: {}, overclaimed: true, hasRemaining: true };
+    }
+  }, [session.data]);
+  const knownPartsReady = !knownPartsBalance.overclaimed && !knownPartsBalance.hasRemaining;
+
   // Which items are claimed by anyone (for sorting unclaimed first)
   const claimedByAnyone = useMemo(() => {
     if (!session.data) return new Set<number>();
@@ -601,8 +1143,25 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     return [...unclaimed, ...claimed];
   }, [session.data, claimedByAnyone]);
 
-  // Calculate per-person totals using the full local claims Map merged with server assignments.
-  // Tax and tip are prorated over every item, so unclaimed items keep their share (#264).
+  // All devices must agree on accounted money: local unsubmitted drafts
+  // affect the personal preview only, not the shared saved allocation summary.
+  const savedSplitTotals = useMemo(() => {
+    if (!session.data) return { people: [], unclaimed: null };
+    return calculateClaimTotals({
+      items: session.data.items,
+      assignments: guestPortionAssignments(session.data.assignments, session.data.people),
+      tax: session.data.receiptData.tax,
+      tip: session.data.receiptData.tip,
+      peopleCount: session.data.people.length,
+      balanceAcrossItems: session.data.receiptData.roundingBalanced === true,
+      organizerIndex: session.data.people.findIndex(
+        (person) => person.id === session.data.receiptData.organizerPersonId,
+      ),
+      ...groupSizeWeights(session.data.people),
+    });
+  }, [session.data]);
+
+  // This device's per-person preview may additionally show unsaved taps.
   const splitTotals = useMemo(() => {
     if (!session.data) return { people: [], unclaimed: null };
 
@@ -637,33 +1196,42 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         .map(([itemIndex, persons]) => ({
           itemIndex,
           personIndices: Array.from(persons),
+          partsByPersonId: serverAssignments.find((a) => a.itemIndex === itemIndex)?.partsByPersonId,
         }));
 
       return calculateClaimTotals({
         items: session.data.items,
-        assignments: mergedAssignments,
+        assignments: guestPortionAssignments(mergedAssignments, session.data.people),
         tax: session.data.receiptData.tax,
         tip: session.data.receiptData.tip,
         peopleCount: session.data.people.length,
+        balanceAcrossItems: session.data.receiptData.roundingBalanced === true,
+        organizerIndex: session.data.people.findIndex(
+          (person) => person.id === session.data.receiptData.organizerPersonId,
+        ),
         ...weightsParam,
       });
     }
 
-    return calculateClaimTotals({
-      items: session.data.items,
-      assignments: serverAssignments,
-      tax: session.data.receiptData.tax,
-      tip: session.data.receiptData.tip,
-      peopleCount: session.data.people.length,
-      ...weightsParam,
-    });
-  }, [session.data, baseClaimsMap, localEdits, pendingByIndex]);
+    return savedSplitTotals;
+  }, [session.data, baseClaimsMap, localEdits, pendingByIndex, savedSplitTotals]);
 
   // --- Handlers ---
   function handleJoin() {
-    const trimmed = name.trim();
+    const trimmed = (name || (session.data?.receiptData.guestSlotsMode ? authSession?.user?.name : '') || '').trim();
     if (!trimmed) {
       toast.error(t('pleaseEnterName'));
+      return;
+    }
+    if (session.data?.receiptData.guestSlotsMode) {
+      const selected = session.data.people.find(
+        (person) => person.id === selectedGuestSlotId && person.guestSlotNumber && !person.hasJoined,
+      );
+      if (!selected) {
+        toast.error(t('guestPlaceSelectionRequired'));
+        return;
+      }
+      startGuestSlotJoin({ slotId: selected.id, name: trimmed });
       return;
     }
     startJoin({ name: trimmed, ...(groupSize > 1 ? { groupSize } : {}) });
@@ -681,10 +1249,22 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     });
   }
 
+  async function copyReimbursementAmount(amountCents: number) {
+    // Only called from the finalized card of this device's own non-payer
+    // identity. Copy a RUB decimal without currency signs or grouping so a
+    // banking app can accept it; keep calculations in integer kopecks.
+    const value = centsToDecimal(amountCents).replace('.', ',');
+    if (await copyToClipboard(value)) {
+      toast.success(t('reimbursementAmountCopied'));
+    } else {
+      toast.error(t('reimbursementAmountCopyFailed'));
+    }
+  }
+
   async function copyLink() {
-    // The plain share link; never carry a #fragment, which could hold a personal token
-    const url = new URL(window.location.href);
-    url.hash = '';
+    // Construct the public share link from the origin and pathname only.
+    // Neither a private personal-link fragment nor arbitrary query parameters belong in it.
+    const url = new URL(window.location.origin + window.location.pathname);
     if (await copyToClipboard(url.toString())) {
       toast.success(t('linkCopied'));
     } else {
@@ -916,6 +1496,26 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     );
   }
 
+  // Failed first contact is not evidence that the receipt expired. Retain
+  // the #me link and keep retrying getSession in the ordinary poll cycle.
+  if (session.error && !session.data && session.error.data?.httpStatus !== 404) {
+    return (
+      <div className="mx-auto max-w-lg space-y-4 py-16 text-center" data-testid="claim-network-retry">
+        <p className="font-semibold">{t('sessionTemporaryUnavailable')}</p>
+        <p className="text-sm text-muted-foreground">{t('sessionRetryHint')}</p>
+        <Button
+          type="button"
+          className="min-h-12"
+          disabled={session.isFetching}
+          onClick={() => void session.refetch()}
+          data-testid="claim-retry-load"
+        >
+          {session.isFetching ? t('loadingSession') : t('personalLinkRecoveryRetry')}
+        </Button>
+      </div>
+    );
+  }
+
   // --- Error state ---
   if (session.error && isSessionLost(session.data !== undefined, session.error.data?.httpStatus)) {
     return (
@@ -938,21 +1538,250 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   }
 
   const data = session.data!;
+  const creatorIndex = organizerPersonIndex(data.people, data.receiptData.organizerPersonId);
+  const roleMarks = (index: number) => (
+    <GuestReceiptRoles
+      {...guestReceiptRoleFlags(index, creatorIndex, data.paidByIndex, data.people.length)}
+      creatorLabel={tr('creator')}
+      payerLabel={tr('payer')}
+    />
+  );
+  const accountMark = (index: number) => {
+    const person = data.people[index];
+    return person ? (
+      <GuestAccountStatus
+        isRegistered={person.isRegistered}
+        registeredLabel={ta('registered')}
+        guestLabel={ta('guest')}
+      />
+    ) : null;
+  };
+  const creatorGuestLinkControls = (
+    person: { id: string; name: string; hasJoined: boolean; guestSlotNumber?: number; personalLinkReady?: boolean },
+    idx: number,
+  ) => {
+    if (!data.isCreator || !data.receiptData.guestSlotsMode || person.guestSlotNumber === undefined) return null;
+    if (!person.hasJoined || !person.personalLinkReady) {
+      return (
+        <span className="w-full text-xs text-muted-foreground" data-testid={'creator-guest-link-pending-' + idx}>
+          {person.hasJoined ? t('creatorGuestLinkPending') : t('creatorGuestLinkUnjoined')}
+        </span>
+      );
+    }
+    const lastRotation = data.personalLinkEvents?.find((entry) => entry.personId === person.id);
+    // A second creator device may have rotated the link. Never display an
+    // earlier revealed URL after the server announces the newer generation.
+    const opened =
+      creatorGuestLink?.personId === person.id && creatorGuestLink.rotationCount === (lastRotation?.rotationCount ?? 0)
+        ? creatorGuestLink
+        : null;
+    const confirmingRotation = rotateLinkFor?.personId === person.id;
+    return (
+      <div className="w-full min-w-0 space-y-2" data-testid={'creator-guest-link-controls-' + idx}>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="min-h-11 w-full min-w-0 whitespace-normal text-sm"
+          disabled={getGuestPersonalLink.isPending}
+          onClick={() => {
+            setCreatorGuestLink(null);
+            getGuestPersonalLink.mutate({ token, personId: person.id });
+          }}
+          data-testid={'creator-guest-link-open-' + idx}
+        >
+          <Link2 className="mr-2 h-4 w-4 shrink-0" />
+          {t('creatorGuestLinkOpen')}
+        </Button>
+        {lastRotation && (
+          <p className="text-xs text-muted-foreground" data-testid={'creator-guest-link-event-' + idx}>
+            {t('creatorGuestLinkRotationEvent', { count: lastRotation.rotationCount, date: lastRotation.rotatedAt })}
+          </p>
+        )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="min-h-11 w-full min-w-0 whitespace-normal text-sm"
+          disabled={rotateGuestPersonalLink.isPending}
+          onClick={() => {
+            setCreatorGuestLink(null);
+            pendingRotation.current = null;
+            setRotateLinkFor({ personId: person.id, name: person.name });
+          }}
+          data-testid={'creator-guest-link-rotate-' + idx}
+        >
+          {t('creatorGuestLinkRotate')}
+        </Button>
+        {confirmingRotation && (
+          <div className="min-w-0 space-y-2 rounded-lg border p-3" data-testid={'creator-guest-link-confirm-' + idx}>
+            <p className="text-sm">{t('creatorGuestLinkRotateWarning', { name: person.name })}</p>
+            <div className="flex min-w-0 flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                className="min-h-11 min-w-0 whitespace-normal"
+                disabled={rotateGuestPersonalLink.isPending}
+                onClick={() => {
+                  const attempt =
+                    pendingRotation.current?.personId === person.id
+                      ? pendingRotation.current
+                      : { personId: person.id, requestKey: newRequestKey() };
+                  pendingRotation.current = attempt;
+                  rotateGuestPersonalLink.mutate({
+                    token,
+                    personId: person.id,
+                    requestKey: attempt.requestKey,
+                  });
+                }}
+                data-testid={'creator-guest-link-rotate-confirm-' + idx}
+              >
+                {t('creatorGuestLinkRotateConfirm')}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="min-h-11 min-w-0 whitespace-normal"
+                disabled={rotateGuestPersonalLink.isPending}
+                onClick={() => {
+                  pendingRotation.current = null;
+                  setRotateLinkFor(null);
+                }}
+                data-testid={'creator-guest-link-rotate-cancel-' + idx}
+              >
+                {t('cancelButton')}
+              </Button>
+            </div>
+          </div>
+        )}
+        {opened && (
+          <div className="min-w-0 space-y-2" data-testid={'creator-guest-link-reveal-' + idx}>
+            <Input
+              readOnly
+              value={opened.url}
+              className="h-11 min-w-0 w-full text-sm"
+              aria-label={t('creatorGuestLinkOpen')}
+              data-testid={'creator-guest-link-url-' + idx}
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="min-h-11 w-full min-w-0 whitespace-normal"
+              onClick={async () => {
+                if (await copyToClipboard(opened.url)) toast.success(t('creatorGuestLinkCopied'));
+                else toast.error(tc('actions.copyFailed'));
+              }}
+              data-testid={'creator-guest-link-copy-' + idx}
+            >
+              <Copy className="mr-2 h-4 w-4 shrink-0" />
+              {t('creatorGuestLinkCopy')}
+            </Button>
+            <p className="text-xs text-muted-foreground">{t('creatorGuestLinkWarning')}</p>
+          </div>
+        )}
+      </div>
+    );
+  };
   const currency = data.receiptData.currency;
+  // Finalized total includes personal tips, not just the restaurant subtotal.
+  const finalizedTotal = data.summary?.reduce((sum, person) => sum + person.total, 0) ?? data.receiptData.total;
+  const finalizedPersonalTips = data.summary?.reduce((sum, person) => sum + person.tip, 0) ?? 0;
+  // The payer must see a single reimbursement per group. Every diner still
+  // retains their own receipt allocation and voluntary tip in the summary.
+  const finalizedPaymentGroups = (() => {
+    if (!hasPaymentGroups || !data.summary || currency !== 'RUB') return null;
+    try {
+      return aggregateReceiptPaymentGroups(data.people, data.paidByIndex, data.summary, data.receiptData.total).groups;
+    } catch {
+      return null;
+    }
+  })();
+  const payerSummary = data.summary?.find((person) => person.personIndex === data.paidByIndex);
+  const summaryReconciled =
+    currency === 'RUB' &&
+    data.receiptData.tax === 0 &&
+    data.receiptData.tip === 0 &&
+    data.summary?.every((person) => Number.isSafeInteger(person.total) && person.total >= 0) &&
+    finalizedTotal === data.receiptData.total + finalizedPersonalTips;
+  const payerReimbursements =
+    summaryReconciled && myPersonIndex === data.paidByIndex && payerSummary
+      ? hasPaymentGroups
+        ? (finalizedPaymentGroups
+            ?.filter((group) => group.totalCents > 0)
+            .map((group) => {
+              const representativeIndex = data.people.findIndex((person) => person.id === group.representativeId);
+              return {
+                personIndex: representativeIndex,
+                name: data.people[representativeIndex]?.name ?? '',
+                total: group.totalCents,
+                memberNames: group.memberIndices.map((index) => data.people[index]!.name),
+              };
+            }) ?? null)
+        : data.summary!.filter((person) => person.personIndex !== data.paidByIndex && person.total > 0)
+      : null;
+  const payerReimbursementTotal = payerReimbursements?.reduce((sum, person) => sum + person.total, 0) ?? 0;
+  const myPaymentGroup = finalizedPaymentGroups?.find(
+    (group) => myPersonIndex !== null && group.memberIndices.includes(myPersonIndex),
+  );
+  const canDeclareGroupPayment = !myPaymentGroup || myPaymentGroup.representativeId === myPersonId;
+  const personalReimbursement =
+    summaryReconciled && myPersonIndex !== null && myPersonIndex !== data.paidByIndex
+      ? hasPaymentGroups
+        ? myPaymentGroup && myPaymentGroup.totalCents > 0
+          ? { personIndex: myPersonIndex, name: data.people[myPersonIndex]!.name, total: myPaymentGroup.totalCents }
+          : null
+        : data.summary!.find((person) => person.personIndex === myPersonIndex && person.total > 0)
+      : null;
+  // Ungrouped receipts preserve the historical personal-tip contract:
+  // switching the dish claimant never changes whose tip is being edited.
+  // Only the responsible person of an actual payment group can edit a
+  // group member's own tip through the existing personal token.
+  const tipTargetIndex =
+    hasPaymentGroups && personIndex !== null && activeId && canEditFor(activeId) ? personIndex : myPersonIndex;
+  const tipTarget = tipTargetIndex === null ? null : data.people[tipTargetIndex];
+  const savedPersonalTip = tipTarget?.tipCents ?? 0;
+  const personalTipValue = personalTipDraft ?? centsToDecimal(savedPersonalTip);
+  const personalTipCents = parseToCents(personalTipValue);
+  const personalTipIsValid =
+    isValidMoneyInput(personalTipValue) &&
+    personalTipCents >= 0 &&
+    personalTipCents <= MAX_MONEY_CENTS &&
+    !/[.,]\d{3,}/.test(personalTipValue);
 
-  // This person's own link for their other devices (joined or finalized view), with the
-  // warning shown before anything is sent
-  const personalLinkButton = personToken && (
-    <Button type="button" variant="outline" size="sm" onClick={sharePersonalLink} data-testid="personal-link-btn">
+  // 3.8.1: a fixed guest slot gets its own recovery link only after the
+  // server confirms its first real saved action. Legacy named receipts and
+  // the account-bound creator (not a guest slot) keep existing behavior.
+  const myFixedSlot = myPersonIndex === null ? null : data.people[myPersonIndex];
+  const personalLinkAvailable =
+    !data.receiptData.guestSlotsMode ||
+    (myFixedSlot != null && (myFixedSlot.guestSlotNumber === undefined || myFixedSlot.personalLinkReady === true));
+  const personalLinkButton = personToken && personalLinkAvailable && (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={sharePersonalLink}
+      className="min-h-11 w-full min-w-0 max-w-full whitespace-normal [overflow-wrap:anywhere] text-center leading-tight sm:w-auto"
+      data-testid="personal-link-btn"
+    >
       <MonitorSmartphone className="mr-2 h-4 w-4" />
       {t('continueOnAnotherDevice')}
     </Button>
   );
-  const personalLinkHint = personToken && (
-    <p className="text-xs text-muted-foreground" data-testid="personal-link-hint">
-      {t('personalLinkHint')}
-    </p>
-  );
+  const personalLinkHint =
+    personToken && !personalLinkAvailable ? (
+      <p className="text-xs text-muted-foreground" data-testid="personal-link-pending">
+        {t('personalLinkAfterSave')}
+      </p>
+    ) : (
+      personToken && (
+        <p className="text-xs text-muted-foreground" data-testid="personal-link-hint">
+          {t('personalLinkHint')}
+        </p>
+      )
+    );
 
   // Asks before this device becomes the person a personal link names. If this device joined
   // as someone else, says so: continuing replaces them here, and only their own personal link
@@ -993,11 +1822,45 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     </Card>
   );
 
+  // A failed lookup does not mean that the person or link is invalid. Never
+  // remove the fragment for a transient network error.
+  const linkRetryCard = linkRecoveryFailed && !linkOffer && (
+    <Card className="border-primary/40" data-testid="personal-link-retry">
+      <CardContent className="space-y-3 py-4">
+        <p className="text-sm">{t('personalLinkRecoveryTemporaryFailure')}</p>
+        <div className="flex min-w-0 flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            className="min-h-11 min-w-0 whitespace-normal"
+            disabled={joining}
+            onClick={retryPendingPersonalLink}
+            data-testid="personal-link-retry-btn"
+          >
+            {t('personalLinkRecoveryRetry')}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="min-h-11 min-w-0 whitespace-normal"
+            disabled={joining}
+            onClick={abandonPendingPersonalLink}
+            data-testid="personal-link-abandon"
+          >
+            {t('personalLinkRecoveryCancel')}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
   // --- Finalized state ---
   if (data.status === 'FINALIZED') {
     return (
       <div className="space-y-6 pb-8">
         {linkOfferCard}
+        {linkRetryCard}
         <div className="text-center space-y-2 pt-4">
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
             <Check className="h-8 w-8 text-primary" />
@@ -1006,17 +1869,170 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           <p className="text-muted-foreground">{t('sessionFinalizedDescription')}</p>
         </div>
 
-        {/* Total */}
+        {/* The finalized settlement must distinguish the original food bill
+            from everyone's individual voluntary tips. For the RUB manual flow
+            this is also the amount the sole payer passes on to the waiter. */}
         <Card className="bg-primary/5 border-primary/20">
-          <CardContent className="py-4">
-            <div className="flex justify-between items-center">
-              <span className="font-semibold text-lg">{t('totalBill')}</span>
-              <span className="text-2xl font-bold text-primary">
-                {formatCents(data.receiptData.total, currency, locale)}
+          <CardContent className="space-y-3 py-4">
+            {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0 && (
+              <>
+                <div className="flex min-w-0 justify-between gap-3 text-sm">
+                  <span>{t('dishesTotal')}</span>
+                  <span className="shrink-0 tabular-nums" data-testid="finalized-food-total">
+                    {formatCents(data.receiptData.total, currency, locale)}
+                  </span>
+                </div>
+                <div className="flex min-w-0 justify-between gap-3 text-sm">
+                  <span>{t('tipForWaiter')}</span>
+                  <span className="shrink-0 tabular-nums" data-testid="finalized-waiter-tip-total">
+                    {formatCents(finalizedPersonalTips, currency, locale)}
+                  </span>
+                </div>
+                <Separator />
+              </>
+            )}
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+              <span className="font-semibold text-lg">
+                {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0
+                  ? t('totalWithTips')
+                  : t('totalBill')}
+              </span>
+              <span className="text-2xl font-bold text-primary" data-testid="finalized-bill-total">
+                {formatCents(finalizedTotal, currency, locale)}
               </span>
             </div>
           </CardContent>
         </Card>
+
+        {payerReimbursements && payerSummary && (
+          <Card data-testid="guest-payer-reimbursements">
+            <CardContent className="space-y-3 py-4">
+              <h3 className="font-semibold">{t('payerReimbursementsTitle')}</h3>
+              <p className="text-xs text-muted-foreground">{t('payerReimbursementsNote')}</p>
+              {payerReimbursements.map((person) => (
+                <div key={person.personIndex} className="flex min-w-0 justify-between gap-3 text-sm">
+                  <span className="min-w-0 [overflow-wrap:anywhere]">{person.name}</span>
+                  <span
+                    className="shrink-0 tabular-nums"
+                    data-testid={'guest-payer-reimbursement-' + person.personIndex}
+                  >
+                    {formatCents(person.total, currency, locale)}
+                  </span>
+                  {'memberNames' in person && person.memberNames && person.memberNames.length > 1 && (
+                    <span
+                      className="w-full break-words text-xs text-muted-foreground"
+                      data-testid={'guest-payer-group-members-' + person.personIndex}
+                    >
+                      {t('paymentGroupMembers', { names: person.memberNames.join(', ') })}
+                    </span>
+                  )}
+                </div>
+              ))}
+              <Separator />
+              <div className="flex min-w-0 justify-between gap-3 text-sm">
+                <span>{t('payerOwnShare')}</span>
+                <span className="shrink-0 tabular-nums" data-testid="guest-payer-own-share">
+                  {formatCents(payerSummary.total, currency, locale)}
+                </span>
+              </div>
+              <div className="flex min-w-0 justify-between gap-3 font-semibold">
+                <span>{t('payerFromOthers')}</span>
+                <span className="shrink-0 tabular-nums" data-testid="guest-payer-reimbursement-total">
+                  {formatCents(payerReimbursementTotal, currency, locale)}
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {payerReimbursements && payerSummary && myPersonId && personToken && (
+          <GuestPayerPaymentReview
+            key={`payer-review:${personToken}`}
+            token={token}
+            personId={myPersonId}
+            personToken={personToken}
+            people={data.people}
+          />
+        )}
+
+        {payerReimbursements && payerSummary && myPersonId && personToken && (
+          <GuestPayerSbpForm
+            key={`payer-sbp:${personToken}`}
+            token={token}
+            personId={myPersonId}
+            personToken={personToken}
+          />
+        )}
+
+        {/* The participant's own receipt amount is not a verified SBP payment.
+            The payer's personal token sees the payer summary instead. */}
+        {personalReimbursement && (
+          <Card data-testid="guest-personal-reimbursement">
+            <CardContent className="space-y-2 py-4">
+              <p className="text-sm font-medium">
+                {t('personalReimbursementTo', {
+                  name: data.people[data.paidByIndex]?.name ?? t('personFallback', { index: data.paidByIndex + 1 }),
+                })}
+              </p>
+              {myPaymentGroup?.grouped && (
+                <div className="min-w-0 space-y-1" data-testid="guest-group-reimbursement-detail">
+                  <p className="text-sm font-semibold">{t('paymentGroupTotal')}</p>
+                  <p className="break-words text-xs text-muted-foreground">
+                    {t('paymentGroupMembers', {
+                      names: myPaymentGroup.memberIndices.map((index) => data.people[index]!.name).join(', '),
+                    })}
+                  </p>
+                  {myPaymentGroup.members.map((member) => (
+                    <p key={member.personId} className="flex min-w-0 flex-wrap justify-between gap-2 text-xs">
+                      <span className="min-w-0 break-words">{data.people[member.personIndex]!.name}</span>
+                      <span className="tabular-nums">{formatCents(member.amountCents, currency, locale)}</span>
+                    </p>
+                  ))}
+                </div>
+              )}
+              <p
+                className="min-w-0 max-w-full select-text text-2xl font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
+                data-testid="guest-personal-reimbursement-amount"
+              >
+                {formatCents(personalReimbursement.total, currency, locale)}
+              </p>
+              {canDeclareGroupPayment && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 w-full"
+                  onClick={() => copyReimbursementAmount(personalReimbursement.total)}
+                  data-testid="guest-copy-reimbursement-amount"
+                >
+                  <Copy className="mr-2 size-4" aria-hidden="true" />
+                  {t('copyReimbursementAmount')}
+                </Button>
+              )}
+              {canDeclareGroupPayment && myPersonId && personToken && (
+                <GuestSbpReimbursementDetails
+                  key={`reimbursement-details:${personToken}`}
+                  token={token}
+                  personId={myPersonId}
+                  personToken={personToken}
+                  payerName={
+                    data.people[data.paidByIndex]?.name ?? t('personFallback', { index: data.paidByIndex + 1 })
+                  }
+                />
+              )}
+              {myPersonId && personToken && (
+                <GuestPaymentDeclaration
+                  key={`payment-declaration:${personToken}`}
+                  token={token}
+                  personId={myPersonId}
+                  personToken={personToken}
+                  canDeclare={canDeclareGroupPayment}
+                  amountLabel={formatCents(personalReimbursement.total, currency, locale)}
+                />
+              )}
+              <p className="text-xs text-muted-foreground">{t('personalReimbursementNote')}</p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Venmo handle */}
         {venmoSetting.data?.enabled &&
@@ -1049,21 +2065,50 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           <div className="space-y-3">
             <h3 className="font-semibold text-base">{t('perPersonTotals')}</h3>
             {data.summary.map((person: { name: string; total: number; personIndex: number }) => (
-              <Card key={person.personIndex}>
+              <Card
+                key={person.personIndex}
+                className="border-l-4"
+                style={{ borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex) }}
+              >
                 <CardContent className="py-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
+                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
                       <Avatar className="h-8 w-8">
-                        <AvatarFallback className={`text-xs font-semibold ${guestAvatarColor(person.personIndex)}`}>
+                        <AvatarFallback
+                          className="text-xs font-semibold"
+                          style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
+                        >
                           {getInitials(person.name)}
                         </AvatarFallback>
                       </Avatar>
-                      <span className="font-medium">{person.name}</span>
+                      <span className="flex min-w-0 flex-wrap items-center gap-1 font-medium">
+                        <span>{person.name}</span>
+                        {roleMarks(person.personIndex)}
+                        {accountMark(person.personIndex)}
+                      </span>
                     </div>
-                    <span className="text-lg font-bold text-primary">
+                    <span
+                      data-testid={'finalized-person-total-' + person.personIndex}
+                      className="min-w-0 text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
+                    >
                       {formatCents(person.total, currency, locale)}
                     </span>
                   </div>
+                  {'roundingCorrectionCents' in person &&
+                    typeof person.roundingCorrectionCents === 'number' &&
+                    person.roundingCorrectionCents > 0 && (
+                      <div
+                        className="mt-2 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
+                        data-testid={'guest-finalized-rounding-correction-' + person.personIndex}
+                      >
+                        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                          {t('organizerRoundingCorrection')}
+                        </span>
+                        <span className="shrink-0 tabular-nums">
+                          {formatCents(person.roundingCorrectionCents, currency, locale)}
+                        </span>
+                      </div>
+                    )}
                   {venmoSetting.data?.enabled &&
                     currency === 'USD' &&
                     isValidVenmoHandle(venmoHandle) &&
@@ -1073,7 +2118,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         href={buildVenmoPayUrl(
                           venmoHandle,
                           person.total,
-                          `ShareTab: ${data.receiptData.merchantName ?? 'Bill split'}`,
+                          `BillOK: ${data.receiptData.merchantName ?? 'Разделение чека'}`,
                         )!}
                         target="_blank"
                         rel="noopener noreferrer"
@@ -1091,11 +2136,22 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
         {/* Actions */}
         <div className="space-y-3">
-          <Button className="w-full" nativeButton={false} render={<Link href={`/split/${token}`} />}>
+          <Link
+            href={'/split/' + token}
+            className={buttonVariants({
+              className: 'min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center leading-tight',
+            })}
+            data-testid="guest-view-summary-link"
+          >
             <ArrowRight className="mr-2 h-4 w-4" />
             {t('viewSummary')}
-          </Button>
-          <Button variant="outline" className="w-full" onClick={copyResultLink} data-testid="copy-link-btn">
+          </Link>
+          <Button
+            variant="outline"
+            className="min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center leading-tight"
+            onClick={copyResultLink}
+            data-testid="copy-link-btn"
+          >
             <Link2 className="mr-2 h-4 w-4" />
             {t('copyLink')}
           </Button>
@@ -1178,16 +2234,87 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             <CardContent>
               <div className="flex flex-wrap gap-2">
                 {data.people.map((person, idx) => (
-                  <div key={person.id} className="flex items-center gap-2 rounded-full bg-muted px-3 py-1.5">
-                    <Avatar className="h-6 w-6">
-                      <AvatarFallback className={`text-[10px] font-semibold ${guestAvatarColor(idx)}`}>
-                        {getInitials(person.name)}
-                      </AvatarFallback>
-                    </Avatar>
-                    <span className="text-sm font-medium">
-                      {person.name}
-                      {person.groupSize > 1 && ` (×${person.groupSize})`}
-                    </span>
+                  <div
+                    key={person.id}
+                    className="flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-2xl bg-muted px-3 py-1.5"
+                    data-testid={'invited-person-' + idx}
+                  >
+                    {data.isCreator && data.status === 'CLAIMING' && editingPersonId === person.id ? (
+                      <form
+                        className="flex min-w-0 w-full flex-wrap items-center gap-2"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          if (!editingName.trim()) return;
+                          // The authenticated receipt creator can correct guest
+                          // labels even before joining their own personal slot.
+                          editPersonName.mutate({ token, targetId: person.id, newName: editingName.trim() });
+                        }}
+                      >
+                        <Input
+                          value={editingName}
+                          maxLength={MAX_GUEST_NAME_LENGTH}
+                          onChange={(event) => setEditingName(event.target.value)}
+                          autoComplete="off"
+                          className="h-11 min-w-0 flex-1 text-base"
+                          aria-label={t('editName')}
+                          data-testid={'creator-edit-name-input-' + idx}
+                          autoFocus
+                        />
+                        <Button
+                          type="submit"
+                          size="sm"
+                          variant="ghost"
+                          className="size-11 shrink-0 p-0"
+                          disabled={!editingName.trim() || editPersonName.isPending}
+                          aria-label={t('saveName')}
+                          data-testid={'creator-save-name-' + idx}
+                        >
+                          <Check className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="size-11 shrink-0 p-0"
+                          onClick={() => setEditingPersonId(null)}
+                          aria-label={t('cancelButton')}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </form>
+                    ) : (
+                      <>
+                        <Avatar className="h-6 w-6 shrink-0">
+                          <AvatarFallback
+                            className="text-[10px] font-semibold"
+                            style={guestVisualColorStyle(data.people[idx], idx)}
+                          >
+                            {getInitials(person.name)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">
+                          {person.name}
+                          {person.groupSize > 1 && ' (×' + person.groupSize + ')'}
+                        </span>
+                        {roleMarks(idx)}
+                        {accountMark(idx)}
+                        {data.isCreator && data.status === 'CLAIMING' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingPersonId(person.id);
+                              setEditingName(person.name);
+                            }}
+                            className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                            aria-label={t('editName')}
+                            data-testid={'creator-edit-person-' + idx}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                        )}
+                      </>
+                    )}
+                    {creatorGuestLinkControls(person, idx)}
                   </div>
                 ))}
               </div>
@@ -1196,6 +2323,59 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         )}
 
         {linkOfferCard}
+        {linkRetryCard}
+
+        {/* A registered, explicitly appointed organizer can finish the receipt
+            without claiming any food or creating a fictitious guest. */}
+        {data.canFinalize && (
+          <Card className="min-w-0" data-testid="finalization-organizer-no-claim">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">{t('finalizationOrganizerNoClaimTitle')}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">{t('finalizationOrganizerNoClaimHint')}</p>
+              {!data.partsConfirmed && allItemsClaimed && knownPartsReady && (
+                <Button
+                  type="button"
+                  className="min-h-11 w-full whitespace-normal"
+                  disabled={confirmSessionParts.isPending}
+                  data-testid="guest-confirm-parts-btn"
+                  onClick={() => confirmSessionParts.mutate({ token })}
+                >
+                  {t('confirmPartsComplete')}
+                </Button>
+              )}
+              {data.partsConfirmed && allItemsClaimed && knownPartsReady && (
+                <Button
+                  type="button"
+                  className="min-h-11 w-full whitespace-normal"
+                  disabled={finalizeSession.isPending}
+                  data-testid="finalize-btn"
+                  onClick={() => setConfirmFinalize(true)}
+                >
+                  {t('finalizeSplit')}
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        )}
+        <ConfirmDialog
+          open={confirmFinalize}
+          onOpenChange={setConfirmFinalize}
+          title={t('finalizeTitle')}
+          description={t('finalizeDescription')}
+          confirmLabel={t('finalizeSplit')}
+          destructive={false}
+          onConfirm={() => data.canFinalize && finalizeSession.mutate({ token })}
+        />
+
+        {data.presence && (
+          <OrganizerPresence
+            people={data.people}
+            presence={data.presence}
+            organizerPersonId={data.receiptData.organizerPersonId}
+          />
+        )}
 
         {/* Join form */}
         <Card data-testid="claim-join-form">
@@ -1209,7 +2389,12 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               </label>
               <Input
                 id="name-input"
-                placeholder={t('enterName')}
+                maxLength={MAX_GUEST_NAME_LENGTH}
+                autoComplete="off"
+                className="h-11 min-w-0 text-base"
+                placeholder={
+                  data.receiptData.guestSlotsMode && authSession?.user?.name ? authSession.user.name : t('enterName')
+                }
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => {
@@ -1219,27 +2404,68 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 data-testid="claim-name-input"
               />
             </div>
-            <div className="space-y-2">
-              <label htmlFor="group-size" className="text-sm font-medium">
-                {t('groupSize')}
-              </label>
-              <div className="flex items-center gap-2">
-                <Input
-                  id="group-size"
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={groupSize}
-                  onChange={(e) => setGroupSize(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-                  className="w-20"
-                  data-testid="group-size-input"
-                />
-                <span className="text-xs text-muted-foreground">{t('groupSizeHint')}</span>
+            {!data.receiptData.guestSlotsMode && (
+              <div className="space-y-2">
+                <label htmlFor="group-size" className="text-sm font-medium">
+                  {t('groupSize')}
+                </label>
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <Input
+                    id="group-size"
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={20}
+                    value={groupSize}
+                    onChange={(e) => setGroupSize(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+                    className="h-11 w-20 shrink-0 text-base"
+                    data-testid="group-size-input"
+                  />
+                  <span className="text-xs text-muted-foreground">{t('groupSizeHint')}</span>
+                </div>
               </div>
-            </div>
-            {/* Join as a listed person nobody has joined as yet (e.g. the payer); people who
-                already joined can only be rejoined from the device holding their token. */}
-            {data.people.some((person) => !person.hasJoined) && (
+            )}
+            {data.receiptData.guestSlotsMode && (
+              <div className="min-w-0 space-y-3" data-testid="guest-slot-choice">
+                <p className="text-sm font-semibold">{t('chooseGuestPlace')}</p>
+                <div className="grid min-w-0 grid-cols-1 gap-2">
+                  {data.people
+                    .filter((person) => person.guestSlotNumber !== undefined)
+                    .map((person) => (
+                      <button
+                        key={person.id}
+                        type="button"
+                        disabled={person.hasJoined || joining}
+                        aria-pressed={selectedGuestSlotId === person.id}
+                        onClick={() => setSelectedGuestSlotId(person.id)}
+                        className={
+                          'flex min-h-12 w-full min-w-0 items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left ' +
+                          (selectedGuestSlotId === person.id ? 'border-primary bg-primary/10 ' : '') +
+                          (person.hasJoined ? 'opacity-60 ' : 'hover:bg-muted')
+                        }
+                        data-testid={'guest-slot-option-' + person.guestSlotNumber}
+                      >
+                        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{person.name}</span>
+                        {roleMarks(data.people.findIndex((entry) => entry.id === person.id))}
+                        {accountMark(data.people.findIndex((entry) => entry.id === person.id))}
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {person.hasJoined ? t('guestPlaceTaken') : t('guestPlaceFree')}
+                        </span>
+                      </button>
+                    ))}
+                </div>
+                {data.people
+                  .filter((person) => person.guestSlotNumber !== undefined)
+                  .every((person) => person.hasJoined) && (
+                  <p className="text-sm text-muted-foreground" data-testid="no-free-guest-slots">
+                    {t('noGuestPlacesLeft')}
+                  </p>
+                )}
+              </div>
+            )}
+            {/* Legacy named-person receipts retain their legacy joining buttons.
+                Fixed slots require explicit selection by stable personId. */}
+            {!data.receiptData.guestSlotsMode && data.people.some((person) => !person.hasJoined) && (
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground">{t('orJoinAs')}</p>
                 <div className="flex flex-wrap gap-2">
@@ -1253,15 +2479,20 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           setName(person.name);
                           startJoin({ name: person.name });
                         }}
-                        className="flex items-center gap-2 rounded-full bg-muted px-3 py-1.5 hover:bg-muted/80 transition-colors disabled:opacity-50"
+                        className="flex min-h-11 min-w-0 max-w-full items-center gap-2 rounded-2xl bg-muted px-3 py-2 text-left transition-colors hover:bg-muted/80 disabled:opacity-50"
                         data-testid={`rejoin-person-${idx}`}
                       >
-                        <Avatar className="h-6 w-6">
-                          <AvatarFallback className={`text-[10px] font-semibold ${guestAvatarColor(idx)}`}>
+                        <Avatar className="h-6 w-6 shrink-0">
+                          <AvatarFallback
+                            className="text-[10px] font-semibold"
+                            style={guestVisualColorStyle(data.people[idx], idx)}
+                          >
                             {getInitials(person.name)}
                           </AvatarFallback>
                         </Avatar>
-                        <span className="text-sm font-medium">{person.name}</span>
+                        <span className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">{person.name}</span>
+                        {roleMarks(idx)}
+                        {accountMark(idx)}
                       </button>
                     ),
                   )}
@@ -1269,9 +2500,17 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               </div>
             )}
             <Button
-              className="w-full"
+              className="min-h-11 w-full text-base"
               onClick={handleJoin}
-              disabled={!name.trim() || joining}
+              disabled={
+                !(name.trim() || (data.receiptData.guestSlotsMode && authSession?.user?.name)) ||
+                joining ||
+                (data.receiptData.guestSlotsMode === true &&
+                  !data.people.some(
+                    (person) =>
+                      person.id === selectedGuestSlotId && person.guestSlotNumber !== undefined && !person.hasJoined,
+                  ))
+              }
               data-testid="claim-join-btn"
             >
               {joining ? (
@@ -1286,6 +2525,22 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 </>
               )}
             </Button>
+            {data.receiptData.guestSlotsMode && authSession?.user && (
+              <Button
+                variant="ghost"
+                type="button"
+                className="min-h-11 w-full whitespace-normal"
+                disabled={joining}
+                onClick={() => {
+                  const creatorId = data.receiptData.organizerPersonId ?? data.people[0]?.id;
+                  if (!creatorId) return;
+                  startGuestSlotJoin({ slotId: creatorId, name: authSession.user.name || name || '' });
+                }}
+                data-testid="resume-registered-slot"
+              >
+                {t('recoverRegisteredPlace')}
+              </Button>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -1299,7 +2554,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       ? new Set<number>()
       : withEdits(baseClaimsMap.get(personIndex) ?? new Set<number>(), localEdits.get(personIndex));
   return (
-    <div className="space-y-6 pb-24">
+    <div className="w-full min-w-0 max-w-full space-y-6 pb-[calc(10rem+env(safe-area-inset-bottom))]">
       {/* Header */}
       <div className="text-center space-y-1 pt-4">
         <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
@@ -1327,6 +2582,66 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         {personalLinkButton}
       </div>
       {personalLinkHint}
+
+      {/* Personal tips belong to this device's identity, never the person selected
+          for editing dish claims. Individual tips are included when finalizing. */}
+      {tipTarget && myPersonId && personToken && (
+        <Card data-testid="personal-tip-card">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">
+              {tipTarget.id === myPersonId ? t('personalTipTitle') : t('paymentGroupTipFor', { name: tipTarget.name })}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              {tipTarget.id === myPersonId ? t('personalTipDescription') : t('paymentGroupDisclaimer')}
+            </p>
+            {tipTarget.id !== myPersonId && (
+              <p className="text-sm font-medium" data-testid="payment-group-tip-target">
+                {t('paymentGroupTipFor', { name: tipTarget.name })}
+              </p>
+            )}
+            <form
+              className="flex flex-wrap items-end gap-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!personalTipIsValid || personalTipCents === savedPersonalTip || setPersonalTip.isPending) return;
+                setPersonalTip.mutate({ token, personId: tipTarget.id, personToken, tipCents: personalTipCents });
+              }}
+            >
+              <div className="min-w-0 flex-1 space-y-1">
+                <label htmlFor="personal-tip-amount" className="text-sm font-medium">
+                  {t('personalTipAmount')}
+                </label>
+                <Input
+                  id="personal-tip-amount"
+                  type="text"
+                  inputMode="decimal"
+                  className="h-11 min-w-0 text-base"
+                  value={personalTipValue}
+                  onChange={(event) => setPersonalTipDraft(event.target.value)}
+                  aria-invalid={!personalTipIsValid}
+                  data-testid="personal-tip-input"
+                />
+              </div>
+              <Button
+                type="submit"
+                className="min-h-11"
+                disabled={!personalTipIsValid || personalTipCents === savedPersonalTip || setPersonalTip.isPending}
+                data-testid="personal-tip-save"
+              >
+                {setPersonalTip.isPending ? t('saving') : t('personalTipSave')}
+              </Button>
+            </form>
+            {!personalTipIsValid && (
+              <p className="text-sm text-destructive" role="alert">
+                {t('personalTipInvalid')}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">{t('personalTipPendingTotals')}</p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Receipt image viewer */}
       {data.receiptImagePath && (
@@ -1360,6 +2675,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         </>
       )}
 
+      {data.isCreator && <GuestPaymentGroupsEditor token={token} people={data.people} paidByIndex={data.paidByIndex} />}
+
       {/* People in session */}
       <Card>
         <CardHeader className="pb-2">
@@ -1373,24 +2690,29 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             {data.people.map((person, idx) => (
               <div
                 key={person.id}
-                className={`flex items-center gap-2 rounded-lg px-3 py-2 ${
+                className={`flex min-w-0 flex-wrap items-center gap-2 rounded-lg border-l-4 px-3 py-2 ${
                   idx === myPersonIndex ? 'bg-primary/10 ring-1 ring-primary' : 'bg-muted'
                 }`}
+                style={{ borderLeftColor: guestVisualColorBorder(person, idx) }}
+                data-testid={'guest-color-person-' + idx}
               >
                 <Avatar className="h-6 w-6 shrink-0">
-                  <AvatarFallback className={`text-[10px] font-semibold ${guestAvatarColor(idx)}`}>
+                  <AvatarFallback
+                    className="text-[10px] font-semibold"
+                    style={guestVisualColorStyle(data.people[idx], idx)}
+                  >
                     {getInitials(person.name)}
                   </AvatarFallback>
                 </Avatar>
                 {editingPersonId === person.id ? (
                   <form
-                    className="flex flex-1 items-center gap-1"
+                    className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
                     onSubmit={(e) => {
                       e.preventDefault();
-                      if (!editingName.trim() || !personToken) return;
+                      if (!editingName.trim() || (!data.isCreator && !personToken)) return;
                       editPersonName.mutate({
                         token,
-                        personToken,
+                        ...(personToken ? { personToken } : {}),
                         targetId: person.id,
                         newName: editingName.trim(),
                         groupSize: editingGroupSize,
@@ -1399,19 +2721,22 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                   >
                     <Input
                       value={editingName}
+                      maxLength={MAX_GUEST_NAME_LENGTH}
+                      autoComplete="off"
                       onChange={(e) => setEditingName(e.target.value)}
-                      className="h-7 text-sm flex-1"
+                      className="h-11 min-w-[7rem] flex-1 text-base"
                       autoFocus
                       aria-label={t('editName')}
                       data-testid={`edit-name-input-${idx}`}
                     />
                     <Input
                       type="number"
+                      inputMode="numeric"
                       min={1}
                       max={20}
                       value={editingGroupSize}
                       onChange={(e) => setEditingGroupSize(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-                      className="h-7 w-14 text-sm"
+                      className="h-11 w-16 min-w-0 text-base"
                       aria-label={t('groupSize')}
                       data-testid={`edit-group-size-${idx}`}
                     />
@@ -1419,7 +2744,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       type="submit"
                       size="sm"
                       variant="ghost"
-                      className="h-7 px-2"
+                      className="size-11 shrink-0 p-0"
                       disabled={editPersonName.isPending}
                       aria-label={t('saveName')}
                       title={t('saveName')}
@@ -1430,7 +2755,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                       type="button"
                       size="sm"
                       variant="ghost"
-                      className="h-7 px-2"
+                      className="size-11 shrink-0 p-0"
                       onClick={() => setEditingPersonId(null)}
                       aria-label={t('cancelButton')}
                       title={t('cancelButton')}
@@ -1440,39 +2765,47 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                   </form>
                 ) : (
                   <>
-                    <span className="flex-1 text-sm font-medium">
+                    <span className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">
                       {person.name}
                       {person.groupSize > 1 && (
                         <span data-testid={`group-badge-${idx}`}>{` (×${person.groupSize})`}</span>
                       )}
                       {idx === myPersonIndex && ` ${t('you')}`}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingPersonId(person.id);
-                        setEditingName(person.name);
-                        setEditingGroupSize(person.groupSize ?? 1);
-                      }}
-                      className="text-muted-foreground hover:text-foreground p-1"
-                      aria-label={t('editName')}
-                      data-testid={`edit-person-${idx}`}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                    {data.people.length > 1 && (
+                    {roleMarks(idx)}
+                    {accountMark(idx)}
+                    {(data.isCreator || person.id === myPersonId) && data.status === 'CLAIMING' && (
                       <button
                         type="button"
-                        onClick={() => setRemoveFor({ id: person.id, name: person.name })}
-                        className="text-muted-foreground hover:text-destructive p-1"
-                        aria-label={t('removePerson')}
-                        data-testid={`remove-person-${idx}`}
+                        onClick={() => {
+                          setEditingPersonId(person.id);
+                          setEditingName(person.name);
+                          setEditingGroupSize(person.groupSize ?? 1);
+                        }}
+                        className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                        aria-label={t('editName')}
+                        data-testid={'edit-person-' + idx}
                       >
-                        <X className="h-3.5 w-3.5" />
+                        <Pencil className="h-3.5 w-3.5" />
                       </button>
                     )}
+                    {data.people.length > 1 &&
+                      !!personToken &&
+                      (data.isCreator || person.id === myPersonId) &&
+                      (!hasPaymentGroups || data.isCreator) && (
+                        <button
+                          type="button"
+                          onClick={() => setRemoveFor({ id: person.id, name: person.name })}
+                          className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-destructive"
+                          aria-label={t('removePerson')}
+                          data-testid={`remove-person-${idx}`}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                   </>
                 )}
+                {creatorGuestLinkControls(person, idx)}
               </div>
             ))}
           </div>
@@ -1482,14 +2815,25 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       {/* Claim as selector */}
       <div className="space-y-2">
         <p className="text-sm font-medium">{t('claimingFor')}</p>
+        {activeId && activeId !== myPersonId && (
+          <p className="text-xs font-medium" data-testid="payment-group-edit-target">
+            {t('paymentGroupEditFor', { name: data.people[personIndex!]?.name ?? '' })}
+          </p>
+        )}
         <div className="flex flex-wrap gap-2">
           {data.people.map((person, idx) => (
             <button
               key={person.id}
               type="button"
-              onClick={() => setActivePersonId(person.id)}
+              onClick={() => {
+                if (!canEditFor(person.id)) return;
+                setActivePersonId(person.id);
+                setPersonalTipDraft(null);
+                setPortionDrafts({});
+              }}
+              disabled={!canEditFor(person.id)}
               data-testid={`switch-person-${idx}`}
-              className={`flex items-center gap-2 rounded-full px-3 py-1.5 transition-colors ${
+              className={`flex min-h-11 min-w-0 max-w-full items-center gap-2 rounded-2xl px-3 py-1.5 transition-colors ${
                 idx === personIndex
                   ? 'bg-primary text-primary-foreground ring-2 ring-primary'
                   : 'bg-muted hover:bg-muted/80'
@@ -1497,23 +2841,26 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             >
               <Avatar className="h-6 w-6">
                 <AvatarFallback
-                  className={`text-[10px] font-semibold ${idx === personIndex ? 'bg-primary-foreground/20 text-primary-foreground' : guestAvatarColor(idx)}`}
+                  className="text-[10px] font-semibold"
+                  style={guestVisualColorStyle(data.people[idx], idx)}
                 >
                   {getInitials(person.name)}
                 </AvatarFallback>
               </Avatar>
-              <span className="text-sm font-medium">
+              <span className="min-w-0 text-left text-sm font-medium [overflow-wrap:anywhere]">
                 {person.name}
                 {person.groupSize > 1 && ` (×${person.groupSize})`}
                 {idx === myPersonIndex && ` ${t('you')}`}
               </span>
+              {roleMarks(idx)}
+              {accountMark(idx)}
             </button>
           ))}
         </div>
       </div>
 
       {/* Items to claim */}
-      <div className="space-y-3">
+      <div className="w-full min-w-0 max-w-full space-y-3">
         <h3 className="font-semibold text-base">
           {t('tapToClaim')}
           {hasUnsavedChanges && (
@@ -1525,6 +2872,22 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         {sortedItemIndices.map((idx, sortPosition) => {
           const item = data.items[idx]!;
           const isClaimed = activeClaims.has(idx);
+          const savedOriginal = data.receiptData.knownPartsByItem?.[String(idx)] ?? null;
+          const savedPortionProgress = guestPortionProgress(
+            data.assignments.find((assignment) => assignment.itemIndex === idx) ?? {
+              itemIndex: idx,
+              personIndices: [],
+            },
+            data.people,
+            savedOriginal,
+          );
+          const originalDraft = knownPartsDrafts[idx] ?? (savedOriginal === null ? '' : String(savedOriginal));
+          const parsedOriginal = /^\d+$/.test(originalDraft) ? Number(originalDraft) : NaN;
+          const originalIsValid =
+            Number.isSafeInteger(parsedOriginal) &&
+            parsedOriginal >= 1 &&
+            parsedOriginal <= 10000 &&
+            parsedOriginal >= savedPortionProgress.countedParts;
           // Find other claimants from server state
           const otherClaimants =
             data.assignments.find((a) => a.itemIndex === idx)?.personIndices.filter((pi) => pi !== personIndex) ?? [];
@@ -1534,7 +2897,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             sortPosition > 0 && claimedByAnyone.has(idx) && !claimedByAnyone.has(sortedItemIndices[sortPosition - 1]!);
 
           return (
-            <div key={idx}>
+            <div key={idx} className="w-full min-w-0 max-w-full">
               {isFirstClaimed && (
                 <div className="flex items-center gap-2 py-1">
                   <div className="flex-1 h-px bg-border" />
@@ -1553,7 +2916,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                     toggleClaim(idx);
                   }
                 }}
-                className={`cursor-pointer transition-all ${
+                className={`w-full min-w-0 max-w-full cursor-pointer transition-all ${
                   isClaimed ? 'ring-2 ring-primary bg-primary/5' : 'hover:bg-muted/50'
                 }`}
                 onClick={() => toggleClaim(idx)}
@@ -1579,24 +2942,257 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           {item.quantity > 1 && <span className="text-muted-foreground ml-1">x{item.quantity}</span>}
                         </span>
                         <div className="flex items-center gap-1 shrink-0">
-                          {item.quantity > 1 && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSplittingItemIdx(idx);
-                                setSplitQty('1');
-                              }}
-                              className="text-muted-foreground hover:text-foreground p-1"
-                              aria-label={t('splitItem')}
-                              data-testid={`split-claim-item-${idx}`}
-                            >
-                              <Scissors className="h-3.5 w-3.5" />
-                            </button>
-                          )}
+                          {item.quantity > 1 &&
+                            !!personToken &&
+                            (data.isCreator ||
+                              (myPersonIndex !== null &&
+                                !data.assignments.some(
+                                  (assignment) =>
+                                    assignment.itemIndex === idx &&
+                                    assignment.personIndices.some((index) => index !== myPersonIndex),
+                                ))) && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSplittingItemIdx(idx);
+                                  setSplitQty('1');
+                                }}
+                                className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                                aria-label={t('splitItem')}
+                                data-testid={`split-claim-item-${idx}`}
+                              >
+                                <Scissors className="h-3.5 w-3.5" />
+                              </button>
+                            )}
                           <span className="font-semibold">{formatCents(item.totalPrice, currency, locale)}</span>
                         </div>
                       </div>
+
+                      {/* The original is optional and must never be inferred from item.quantity.
+                          All phones see the same saved consumed/remaining totals. */}
+                      <div
+                        className="mt-1 space-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]"
+                        data-testid={'guest-claimed-parts-progress-' + idx}
+                      >
+                        <p>{t('partsCounted', { count: savedPortionProgress.countedParts })}</p>
+                        <p
+                          className={
+                            savedPortionProgress.remainingParts !== null && savedPortionProgress.remainingParts < 0
+                              ? 'text-destructive'
+                              : ''
+                          }
+                        >
+                          {savedPortionProgress.remainingParts === null
+                            ? t('partsUnknownOriginal')
+                            : savedPortionProgress.remainingParts < 0
+                              ? t('knownPartsOverclaimed', { count: -savedPortionProgress.remainingParts })
+                              : t('knownPartsRemaining', { count: savedPortionProgress.remainingParts })}
+                        </p>
+                      </div>
+                      {/* 3.15: editing the receipt is a creator-only correction
+                          of existing line data. It never edits guest claims,
+                          phone/bank details or creates an expense outside it. */}
+                      {data.isCreator && data.status === 'CLAIMING' && (
+                        <div
+                          className="mt-2 min-w-0 space-y-2"
+                          data-testid={'receipt-item-correction-' + idx}
+                          onClick={(event) => event.stopPropagation()}
+                          onKeyDown={(event) => event.stopPropagation()}
+                        >
+                          {receiptItemEdit?.itemIndex !== idx ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="min-h-11 min-w-11"
+                              data-testid={'receipt-item-edit-' + idx}
+                              onClick={() =>
+                                setReceiptItemEdit({
+                                  itemIndex: idx,
+                                  name: item.name,
+                                  quantity: String(item.quantity),
+                                  price: centsToDecimal(item.unitPrice),
+                                })
+                              }
+                            >
+                              <Pencil className="mr-1 h-4 w-4" />
+                              {t('itemCorrectionEdit')}
+                            </Button>
+                          ) : (
+                            <Dialog open onOpenChange={(open) => !open && setReceiptItemEdit(null)}>
+                              <DialogContent className="min-w-0 max-w-[calc(100%-1rem)] sm:max-w-sm">
+                                <form
+                                  className="min-w-0 space-y-2"
+                                  data-testid={'receipt-item-edit-form-' + idx}
+                                  onSubmit={(event) => {
+                                    event.preventDefault();
+                                    if (!receiptItemEdit) return;
+                                    const qty = Number(receiptItemEdit.quantity);
+                                    const price = parseToCents(receiptItemEdit.price);
+                                    if (
+                                      !receiptItemEdit.name.trim() ||
+                                      !Number.isSafeInteger(qty) ||
+                                      qty < 1 ||
+                                      qty > 200 ||
+                                      !isValidMoneyInput(receiptItemEdit.price) ||
+                                      price < 1 ||
+                                      price * qty > MAX_MONEY_CENTS ||
+                                      updateClaimReceiptItem.isPending
+                                    )
+                                      return;
+                                    updateClaimReceiptItem.mutate({
+                                      token,
+                                      itemIndex: idx,
+                                      name: receiptItemEdit.name.trim(),
+                                      quantity: qty,
+                                      unitPrice: price,
+                                    });
+                                  }}
+                                >
+                                  <DialogTitle>{t('itemCorrectionTitle')}</DialogTitle>
+                                  <DialogDescription>{t('itemCorrectionHint')}</DialogDescription>
+                                  <label htmlFor={'receipt-item-name-' + idx} className="block text-xs font-medium">
+                                    {t('itemCorrectionName')}
+                                  </label>
+                                  <Input
+                                    id={'receipt-item-name-' + idx}
+                                    className="min-h-11 min-w-0 text-base"
+                                    maxLength={160}
+                                    value={receiptItemEdit.name}
+                                    onChange={(event) =>
+                                      setReceiptItemEdit((previous) =>
+                                        previous ? { ...previous, name: event.target.value } : null,
+                                      )
+                                    }
+                                    data-testid={'receipt-item-name-' + idx}
+                                  />
+                                  <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2">
+                                    <div className="min-w-0 space-y-1">
+                                      <label htmlFor={'receipt-item-qty-' + idx} className="block text-xs font-medium">
+                                        {t('itemCorrectionQuantity')}
+                                      </label>
+                                      <Input
+                                        id={'receipt-item-qty-' + idx}
+                                        className="min-h-11 min-w-0 text-base"
+                                        type="number"
+                                        inputMode="numeric"
+                                        min={1}
+                                        max={200}
+                                        value={receiptItemEdit.quantity}
+                                        onChange={(event) =>
+                                          setReceiptItemEdit((previous) =>
+                                            previous ? { ...previous, quantity: event.target.value } : null,
+                                          )
+                                        }
+                                        data-testid={'receipt-item-qty-' + idx}
+                                      />
+                                    </div>
+                                    <div className="min-w-0 space-y-1">
+                                      <label
+                                        htmlFor={'receipt-item-price-' + idx}
+                                        className="block text-xs font-medium"
+                                      >
+                                        {t('itemCorrectionPrice')}
+                                      </label>
+                                      <Input
+                                        id={'receipt-item-price-' + idx}
+                                        className="min-h-11 min-w-0 text-base"
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={receiptItemEdit.price}
+                                        onChange={(event) =>
+                                          setReceiptItemEdit((previous) =>
+                                            previous ? { ...previous, price: event.target.value } : null,
+                                          )
+                                        }
+                                        data-testid={'receipt-item-price-' + idx}
+                                      />
+                                    </div>
+                                  </div>
+                                  <div className="flex min-w-0 flex-wrap gap-2">
+                                    <Button
+                                      type="submit"
+                                      className="min-h-11 min-w-11 whitespace-normal"
+                                      disabled={updateClaimReceiptItem.isPending}
+                                      data-testid={'receipt-item-save-' + idx}
+                                    >
+                                      {updateClaimReceiptItem.isPending ? t('saving') : t('itemCorrectionSave')}
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      className="min-h-11 min-w-11"
+                                      onClick={() => setReceiptItemEdit(null)}
+                                      data-testid={'receipt-item-cancel-' + idx}
+                                    >
+                                      {t('cancelButton')}
+                                    </Button>
+                                  </div>
+                                </form>
+                              </DialogContent>
+                            </Dialog>
+                          )}
+                        </div>
+                      )}
+                      {data.isCreator && (
+                        <div
+                          className="mt-2 space-y-1 rounded-md border p-2 text-xs"
+                          data-testid={'guest-known-parts-editor-' + idx}
+                          onClick={(event) => event.stopPropagation()}
+                          onKeyDown={(event) => event.stopPropagation()}
+                        >
+                          <label htmlFor={'guest-original-parts-' + idx} className="block font-medium">
+                            {t('knownPartsLabel')}
+                          </label>
+                          <p className="text-muted-foreground">{t('knownPartsHint')}</p>
+                          <div className="flex min-w-0 flex-wrap items-center gap-2">
+                            <Input
+                              id={'guest-original-parts-' + idx}
+                              type="number"
+                              inputMode="numeric"
+                              min={1}
+                              max={10000}
+                              step={1}
+                              className="h-11 w-24 min-w-0 text-base"
+                              data-testid={'guest-known-parts-input-' + idx}
+                              value={originalDraft}
+                              onChange={(event) =>
+                                setKnownPartsDrafts((prev) => ({
+                                  ...prev,
+                                  [idx]: event.target.value,
+                                }))
+                              }
+                              disabled={setKnownItemParts.isPending}
+                            />
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="min-h-11 min-w-11"
+                              data-testid={'guest-known-parts-save-' + idx}
+                              disabled={
+                                setKnownItemParts.isPending || !originalIsValid || parsedOriginal === savedOriginal
+                              }
+                              onClick={() =>
+                                setKnownItemParts.mutate({ token, itemIndex: idx, totalParts: parsedOriginal })
+                              }
+                            >
+                              {t('knownPartsSave')}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="min-h-11 min-w-11"
+                              data-testid={'guest-known-parts-clear-' + idx}
+                              disabled={setKnownItemParts.isPending || savedOriginal === null}
+                              onClick={() => setKnownItemParts.mutate({ token, itemIndex: idx, totalParts: null })}
+                            >
+                              {t('knownPartsClear')}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Split form */}
                       {splittingItemIdx === idx &&
@@ -1605,18 +3201,19 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           const validQty = Number.isSafeInteger(parsed) && parsed >= 1 && parsed < item.quantity;
                           return (
                             <div
-                              className="flex items-center gap-2 mt-2"
+                              className="mt-2 flex min-w-0 flex-wrap items-center gap-2"
                               onClick={(e) => e.stopPropagation()}
                               onKeyDown={(e) => e.stopPropagation()}
                             >
                               <span className="text-xs text-muted-foreground">{t('splitOff')}</span>
                               <Input
                                 type="number"
+                                inputMode="numeric"
                                 min={1}
                                 max={item.quantity - 1}
                                 value={splitQty}
                                 onChange={(e) => setSplitQty(e.target.value)}
-                                className="w-16 h-7 text-xs"
+                                className="h-11 w-20 min-w-0 text-base"
                                 aria-label={t('splitOff')}
                                 data-testid={`split-qty-input-${idx}`}
                               />
@@ -1626,7 +3223,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                               <Button
                                 type="button"
                                 size="sm"
-                                className="h-7 text-xs"
+                                className="min-h-11 min-w-11 text-sm"
                                 // Not while a save is in flight or parked: splitting shifts the item
                                 // indexes its changes are keyed by, and a parked save is sent again as it
                                 // was
@@ -1648,7 +3245,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                                 type="button"
                                 variant="ghost"
                                 size="sm"
-                                className="h-7 text-xs"
+                                className="min-h-11 min-w-11 text-sm"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setSplittingItemIdx(null);
@@ -1660,20 +3257,114 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           );
                         })()}
 
+                      {/* The representative may edit portions of their own group
+                          without altering other people's shares or original totals. */}
+                      {myPersonIndex !== null &&
+                        personIndex !== null &&
+                        activeId !== null &&
+                        canEditFor(activeId) &&
+                        personToken &&
+                        data.assignments.some(
+                          (assignment) =>
+                            assignment.itemIndex === idx && assignment.personIndices.includes(personIndex),
+                        ) &&
+                        (() => {
+                          const savedAssignment = data.assignments.find((assignment) => assignment.itemIndex === idx)!;
+                          const savedParts =
+                            savedAssignment.partsByPersonId?.[activeId] ?? data.people[personIndex]?.groupSize ?? 1;
+                          const value = portionDrafts[idx] ?? String(savedParts);
+                          const parsed = /^\d+$/.test(value) ? Number(value) : NaN;
+                          const valid =
+                            Number.isSafeInteger(parsed) &&
+                            parsed >= 1 &&
+                            parsed <= 10000 &&
+                            !hasUnsavedChanges &&
+                            !saving &&
+                            !anyParked;
+                          const progress = guestPortionProgress(savedAssignment, data.people);
+                          const original = data.receiptData.knownPartsByItem?.[String(idx)] ?? null;
+                          const projectedParts = progress.countedParts - savedParts + parsed;
+                          const respectsOriginal = original === null || projectedParts <= original;
+                          return (
+                            <div
+                              className="mt-3 min-w-0 space-y-1 rounded-lg border p-2"
+                              data-testid={'personal-parts-' + idx}
+                              onClick={(event) => event.stopPropagation()}
+                              onKeyDown={(event) => event.stopPropagation()}
+                            >
+                              <p className="text-xs text-muted-foreground">{t('partsPersonalHint')}</p>
+                              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                <Input
+                                  type="number"
+                                  inputMode="numeric"
+                                  min={1}
+                                  max={10000}
+                                  step={1}
+                                  className="h-11 w-24 min-w-0 text-base"
+                                  data-testid={'personal-parts-input-' + idx}
+                                  aria-label={t('partsPersonalLabel')}
+                                  value={value}
+                                  onChange={(event) =>
+                                    setPortionDrafts((prev) => ({ ...prev, [idx]: event.target.value }))
+                                  }
+                                />
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  className="min-h-11 min-w-11"
+                                  data-testid={'personal-parts-save-' + idx}
+                                  disabled={
+                                    !valid || !respectsOriginal || parsed === savedParts || setMyItemParts.isPending
+                                  }
+                                  onClick={() => {
+                                    if (
+                                      !valid ||
+                                      !respectsOriginal ||
+                                      !activeId ||
+                                      !personToken ||
+                                      setMyItemParts.isPending
+                                    )
+                                      return;
+                                    setMyItemParts.mutate({
+                                      token,
+                                      personId: activeId,
+                                      personToken,
+                                      itemIndex: idx,
+                                      parts: parsed,
+                                      saveKey: newRequestKey(),
+                                    });
+                                  }}
+                                >
+                                  {t('partsSave')}
+                                </Button>
+                              </div>
+                              <p
+                                className="text-xs text-muted-foreground"
+                                data-testid={'personal-parts-counted-' + idx}
+                              >
+                                {t('partsCounted', { count: progress.countedParts })}
+                              </p>
+                            </div>
+                          );
+                        })()}
+
                       {/* Other claimants */}
                       {otherClaimants.length > 0 && (
-                        <div className="flex items-center gap-1 mt-1">
+                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
                           <span className="text-xs text-muted-foreground">{t('alsoClaimedBy')}</span>
                           <div className="flex -space-x-1">
                             {otherClaimants.map((pi) => (
                               <Avatar key={pi} className="h-5 w-5 border-2 border-background">
-                                <AvatarFallback className={`text-[8px] font-semibold ${guestAvatarColor(pi)}`}>
+                                <AvatarFallback
+                                  className="text-[8px] font-semibold"
+                                  style={guestVisualColorStyle(data.people[pi], pi)}
+                                >
                                   {getInitials(data.people[pi]?.name ?? '?')}
                                 </AvatarFallback>
                               </Avatar>
                             ))}
                           </div>
-                          <span className="text-xs text-muted-foreground">
+                          <span className="min-w-0 flex-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
                             {otherClaimants.map((pi) => data.people[pi]?.name ?? '?').join(', ')}
                           </span>
                         </div>
@@ -1687,9 +3378,89 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         })}
       </div>
 
+      {data.isCreator && data.status === 'CLAIMING' && (
+        <Card className="w-full min-w-0 max-w-full" data-testid="finalization-organizer-panel">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">{t('finalizationOrganizerTitle')}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">{t('finalizationOrganizerHint')}</p>
+            {data.hasFinalizationOrganizer && (
+              <p className="text-sm" data-testid="finalization-organizer-active">
+                {t('finalizationOrganizerActive')}
+              </p>
+            )}
+            <label htmlFor="finalization-organizer-email" className="block text-sm font-medium">
+              {t('finalizationOrganizerEmail')}
+            </label>
+            <Input
+              id="finalization-organizer-email"
+              type="email"
+              inputMode="email"
+              autoComplete="off"
+              className="h-11 min-w-0 text-base"
+              value={finalizationOrganizerEmail}
+              onChange={(event) => setFinalizationOrganizerEmail(event.target.value)}
+              data-testid="finalization-organizer-email"
+            />
+            <div className="flex min-w-0 flex-wrap gap-2">
+              <Button
+                type="button"
+                className="min-h-11 min-w-11"
+                disabled={
+                  setFinalizationOrganizer.isPending ||
+                  !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(finalizationOrganizerEmail.trim())
+                }
+                data-testid="finalization-organizer-appoint"
+                onClick={() =>
+                  setFinalizationOrganizer.mutate({
+                    token,
+                    email: finalizationOrganizerEmail.trim().toLowerCase(),
+                  })
+                }
+              >
+                {t('finalizationOrganizerAppoint')}
+              </Button>
+              {data.hasFinalizationOrganizer && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 min-w-11"
+                  disabled={setFinalizationOrganizer.isPending}
+                  data-testid="finalization-organizer-revoke"
+                  onClick={() => setFinalizationOrganizer.mutate({ token, email: null })}
+                >
+                  {t('finalizationOrganizerRevoke')}
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {data.presence && (
+        <OrganizerPresence
+          people={data.people}
+          presence={data.presence}
+          organizerPersonId={data.receiptData.organizerPersonId}
+        />
+      )}
+      {presenceConnectionLost && (
+        <p className="text-sm text-destructive" role="status" data-testid="presence-connection-lost">
+          {t('presenceConnectionLost')}
+        </p>
+      )}
+
+      <p
+        className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground [overflow-wrap:anywhere]"
+        data-testid="guest-parts-preliminary"
+      >
+        {t('partsPreliminary')}
+      </p>
+
       {/* Per-person totals */}
       {(splitTotals.people.length > 0 || splitTotals.unclaimed) && (
-        <div className="space-y-3">
+        <div className="w-full min-w-0 max-w-full space-y-3">
           <h3 className="font-semibold text-base">{t('perPersonTotals')}</h3>
           {splitTotals.people.map((person) => {
             const personName =
@@ -1700,34 +3471,57 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             return (
               <Card
                 key={person.personIndex}
-                className={isActive ? 'ring-2 ring-primary' : ''}
+                className={isActive ? 'border-l-4 ring-2 ring-primary' : 'border-l-4'}
+                style={{ borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex) }}
                 data-testid={`person-total-${person.personIndex}`}
               >
                 <CardContent className="py-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
+                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
                       <Avatar className="h-8 w-8">
-                        <AvatarFallback className={`text-xs font-semibold ${guestAvatarColor(person.personIndex)}`}>
+                        <AvatarFallback
+                          className="text-xs font-semibold"
+                          style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
+                        >
                           {getInitials(personName)}
                         </AvatarFallback>
                       </Avatar>
-                      <span className="font-medium">
+                      <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
                         {personName}
                         {isMe && ` ${t('you')}`}
                       </span>
+                      {roleMarks(person.personIndex)}
+                      {accountMark(person.personIndex)}
                     </div>
-                    <span className="text-lg font-bold text-primary">
+                    <span className="min-w-0 text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]">
                       {formatCents(person.total, currency, locale)}
                     </span>
                   </div>
-                  {(person.tax > 0 || person.tip > 0) && (
-                    <div className="ml-11 mt-1 flex gap-3 text-xs text-muted-foreground">
-                      <span>{t('items', { amount: formatCents(person.itemTotal, currency, locale) })}</span>
+                  {(person.tax > 0 || person.tip > 0 || !!person.roundingCorrectionCents) && (
+                    <div className="ml-11 mt-1 flex min-w-0 flex-wrap gap-3 text-xs text-muted-foreground">
+                      <span>
+                        {t('items', {
+                          amount: formatCents(
+                            person.itemTotal - (person.roundingCorrectionCents ?? 0),
+                            currency,
+                            locale,
+                          ),
+                        })}
+                      </span>
                       {person.tax > 0 && (
                         <span>{t('taxAmount', { amount: formatCents(person.tax, currency, locale) })}</span>
                       )}
                       {person.tip > 0 && (
                         <span>{t('tipAmount', { amount: formatCents(person.tip, currency, locale) })}</span>
+                      )}
+                      {!!person.roundingCorrectionCents && (
+                        <span
+                          className="min-w-0 [overflow-wrap:anywhere]"
+                          data-testid={'guest-preview-rounding-correction-' + person.personIndex}
+                        >
+                          {t('organizerRoundingCorrection')}:{' '}
+                          {formatCents(person.roundingCorrectionCents, currency, locale)}
+                        </span>
                       )}
                     </div>
                   )}
@@ -1737,22 +3531,24 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           })}
           {/* Items nobody has claimed yet, with their share of tax and tip, so the totals above don't look final */}
           {splitTotals.unclaimed && (
-            <Card data-testid="unclaimed-total">
-              <CardContent className="py-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
+            <Card className="w-full min-w-0 max-w-full" data-testid="unclaimed-total">
+              <CardContent className="min-w-0 py-3">
+                <div className="flex min-w-0 max-w-full flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 max-w-full flex-wrap items-center gap-3">
                     <div
-                      className="h-8 w-8 rounded-full border-2 border-dashed border-muted-foreground/40"
+                      className="h-8 w-8 shrink-0 rounded-full border-2 border-dashed border-muted-foreground/40"
                       aria-hidden="true"
                     />
-                    <span className="font-medium text-muted-foreground">{t('unclaimed')}</span>
+                    <span className="min-w-0 font-medium text-muted-foreground [overflow-wrap:anywhere]">
+                      {t('unclaimed')}
+                    </span>
                   </div>
-                  <span className="text-lg font-bold text-muted-foreground">
+                  <span className="min-w-0 text-lg font-bold text-muted-foreground [overflow-wrap:anywhere]">
                     {formatCents(splitTotals.unclaimed.total, currency, locale)}
                   </span>
                 </div>
                 {(splitTotals.unclaimed.tax > 0 || splitTotals.unclaimed.tip > 0) && (
-                  <div className="ml-11 mt-1 flex gap-3 text-xs text-muted-foreground">
+                  <div className="ml-11 mt-1 flex flex-wrap gap-3 text-xs text-muted-foreground">
                     <span>
                       {t('items', { amount: formatCents(splitTotals.unclaimed.itemTotal, currency, locale) })}
                     </span>
@@ -1774,6 +3570,71 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         </div>
       )}
 
+      {/* 3.15: one server-backed source for every visible kopeck.
+          No external expense, payment or guessed unconsumed pieces. */}
+      <Card
+        data-testid="claim-allocation-summary"
+        data-sync-mode={liveStreamConnected ? 'sse' : 'fallback'}
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">{t('distributedBillTotal')}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+            <span>{t('allocatedNow')}</span>
+            <span className="font-semibold tabular-nums" data-testid="claim-allocated-total">
+              {formatCents(
+                savedSplitTotals.people.reduce((sum, entry) => sum + entry.total, 0),
+                currency,
+                locale,
+              )}
+            </span>
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+            <span>{t('remainingToAllocate')}</span>
+            <span className="font-semibold tabular-nums" data-testid="claim-unallocated-total">
+              {formatCents(savedSplitTotals.unclaimed?.total ?? 0, currency, locale)}
+            </span>
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t pt-2">
+            <span className="font-semibold">{t('totalBill')}</span>
+            <span className="font-bold tabular-nums" data-testid="claim-distributed-total">
+              {formatCents(data.receiptData.total, currency, locale)}
+            </span>
+          </div>
+          <p className="text-muted-foreground" data-testid="claim-distribution-status">
+            {!allItemsClaimed
+              ? t('distributionIncomplete')
+              : data.partsConfirmed
+                ? t('distributionConfirmed')
+                : t('distributionComplete')}
+          </p>
+        </CardContent>
+      </Card>
+
+      {!knownPartsReady && (
+        <p
+          className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-destructive [overflow-wrap:anywhere]"
+          data-testid="guest-known-parts-not-reconciled"
+        >
+          {knownPartsBalance.overclaimed ? t('knownPartsOverLimit') : t('knownPartsNotFullyClaimed')}
+        </p>
+      )}
+
+      {/* Non-interactive approval state belongs to the scrollable content, not
+          the fixed action bar. On short Android viewports it otherwise makes
+          the bar cover the personal-tip save button. */}
+      {!data.partsConfirmed && (
+        <p
+          className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground [overflow-wrap:anywhere]"
+          data-testid="guest-parts-awaiting-confirmation"
+        >
+          {t('partsAwaitingConfirmation')}
+        </p>
+      )}
+
       {/* CTA */}
       <div className="text-center">
         <Link href="/split" className="text-sm font-medium text-primary hover:underline">
@@ -1785,16 +3646,36 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         </Link>
       </div>
 
-      {/* Save button - sticky bottom */}
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-background border-t">
-        <div className="mx-auto max-w-lg">
-          {/* Finalize button -- only when no unsaved changes and all items claimed */}
-          {!hasAnyUnsavedChanges &&
+      {/* Save button - fixed above interactive dish rows. Keep below the z-50 header/dialogs. */}
+      <div
+        className="fixed inset-x-0 bottom-0 z-40 isolate box-border w-screen min-w-0 max-w-[100vw] max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
+        data-testid="claim-actions"
+      >
+        <div className="mx-auto w-full min-w-0 max-w-lg">
+          {/* The registered receipt creator explicitly approves the current
+              claims; guests can still submit their own portions, but cannot
+              approve completeness for the creator. */}
+          {data.canFinalize && !data.partsConfirmed && allItemsClaimed && knownPartsReady && (
+            <Button
+              variant="outline"
+              className="mb-2 min-h-12 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere]"
+              data-testid="guest-confirm-parts-btn"
+              disabled={confirmSessionParts.isPending || hasAnyUnsavedChanges || saving || anyParked}
+              onClick={() => confirmSessionParts.mutate({ token })}
+            >
+              {t('confirmPartsComplete')}
+            </Button>
+          )}
+          {/* Finalize button -- only after creator approval, with no unsaved changes */}
+          {data.canFinalize &&
+            !hasAnyUnsavedChanges &&
             personToken &&
             myPersonId !== null &&
             myPersonIndex !== null &&
             !finalizeSession.isPending &&
-            allItemsClaimed && (
+            allItemsClaimed &&
+            knownPartsReady &&
+            data.partsConfirmed && (
               <Button
                 variant="outline"
                 className="w-full h-12 mb-2"
@@ -1812,7 +3693,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             </Button>
           )}
           <Button
-            className="w-full h-14"
+            className="min-h-14 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center leading-tight"
             onClick={saveClaims}
             disabled={saving || splitClaimItem.isPending || !hasUnsavedChanges}
             data-testid="save-claims-btn"
@@ -1863,6 +3744,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         confirmLabel={t('finalizeSplit')}
         destructive={false}
         onConfirm={() =>
+          data.canFinalize &&
           personToken &&
           myPersonId !== null &&
           finalizeSession.mutate({

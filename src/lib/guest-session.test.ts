@@ -5,7 +5,10 @@ import {
   canAdoptAnswer,
   canStoreClaimIdentity,
   claimPollInterval,
+  claimLivePollInterval,
   isGuestSessionToken,
+  normalizeGuestName,
+  hasDuplicateGuestNames,
   isSessionLost,
   joinKeyFor,
   needsMembershipCheck,
@@ -16,9 +19,30 @@ import {
   shouldRetryResume,
 } from './guest-session';
 
-const TOKEN = '11111111-1111-4111-8111-111111111111';
+const TOKEN = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const OTHER = '22222222-2222-4222-8222-222222222222';
 const THIRD = '33333333-3333-4333-8333-333333333333';
+
+describe('Issue 3.6: Unicode-safe display names per receipt', () => {
+  test('trims and compares case-insensitively, without changing distinct names', () => {
+    expect(normalizeGuestName(' Алексей ')).toBe(normalizeGuestName('алексей'));
+    expect(normalizeGuestName('АЛЕКСЕЙ')).toBe(normalizeGuestName('Алексей'));
+    expect(normalizeGuestName('Алексей П.')).not.toBe(normalizeGuestName('Алексей'));
+  });
+
+  test('treats composed, decomposed and compatibility Unicode spellings as the same name', () => {
+    expect(normalizeGuestName('Cafe\u0301')).toBe(normalizeGuestName('CAFÉ'));
+    expect(normalizeGuestName('Ａｌｅｘ')).toBe(normalizeGuestName('alex'));
+    expect(normalizeGuestName('Ёж')).toBe(normalizeGuestName('Е\u0308ж'));
+  });
+
+  test('detects collisions without merging separate diners or separate receipts', () => {
+    expect(hasDuplicateGuestNames([' Алексей ', 'алексей'])).toBe(true);
+    expect(hasDuplicateGuestNames(['Alex', 'Ａｌｅｘ'])).toBe(true);
+    expect(hasDuplicateGuestNames(['Алексей', 'Алексей П.'])).toBe(false);
+    expect(hasDuplicateGuestNames(['Алексей', 'Иван'])).toBe(false);
+  });
+});
 
 describe('personal link fragment', () => {
   test('round-trips a person token', () => {
@@ -43,7 +67,8 @@ describe('newRequestKey', () => {
   test('makes a lowercase version 4 UUID that the server accepts', () => {
     const key = newRequestKey();
     expect(key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    expect(isGuestSessionToken(key)).toBe(true);
+    // Idempotency request keys are UUIDs, NOT access credentials.
+    expect(isGuestSessionToken(key)).toBe(false);
   });
 
   test('makes a different key each time', () => {
@@ -208,6 +233,43 @@ describe('claimPollInterval', () => {
     expect(claimPollInterval({ finalized: false, error: { httpStatus: 429 } })).toBe(CLAIM_POLL_RETRY_MS);
     expect(claimPollInterval({ finalized: false, error: { httpStatus: 500 } })).toBe(CLAIM_POLL_RETRY_MS);
     expect(claimPollInterval({ finalized: false, error: { httpStatus: undefined } })).toBe(CLAIM_POLL_RETRY_MS);
+  });
+});
+
+describe('Issue 3.16: live SSE does not freeze creator presence (3.5, 3.12)', () => {
+  const base = { finalized: false, error: null };
+
+  test('an SSE-connected guest uses server notifications instead of duplicate polling', () => {
+    expect(claimLivePollInterval({ ...base, sseConnected: true, presenceVisible: false })).toBe(false);
+  });
+
+  test('the organizer/delegate keeps receiving online/offline presence even with SSE connected', () => {
+    expect(claimLivePollInterval({ ...base, sseConnected: true, presenceVisible: true })).toBe(CLAIM_POLL_MS);
+  });
+
+  test('both guest and creator restore fallback reads when SSE disconnects', () => {
+    for (const presenceVisible of [true, false]) {
+      expect(claimLivePollInterval({ ...base, sseConnected: false, presenceVisible })).toBe(CLAIM_POLL_MS);
+    }
+  });
+
+  test('a transient query error retries even when SSE reports connected; finalization still stops', () => {
+    expect(
+      claimLivePollInterval({
+        finalized: false,
+        error: { httpStatus: 500 },
+        sseConnected: true,
+        presenceVisible: false,
+      }),
+    ).toBe(CLAIM_POLL_RETRY_MS);
+    expect(
+      claimLivePollInterval({
+        finalized: true,
+        error: null,
+        sseConnected: true,
+        presenceVisible: true,
+      }),
+    ).toBe(false);
   });
 });
 

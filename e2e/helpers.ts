@@ -1,7 +1,6 @@
+import { authedPasskeyContext, loginWithPasskey } from './passkey-auth';
 import { type BrowserContext, type Page, request } from '@playwright/test';
 import { claimStorageKey } from '../src/lib/guest-session';
-
-const BASE = process.env.BASE_URL || 'http://localhost:3001';
 
 // Demo users from seed.ts
 export const users = {
@@ -14,18 +13,14 @@ export const users = {
 export const testUsers = {
   suspend: { email: 'suspend-test@example.com', password: 'password123', name: 'Suspend Test User' },
   delete: { email: 'delete-test@example.com', password: 'password123', name: 'Delete Test User' },
-  password: { email: 'pwtest@example.com', password: 'password123', name: 'Password Test User' },
 };
 
 /**
  * Login as a user via the UI.
  */
-export async function login(page: Page, email: string, password: string) {
-  await page.goto('/en/login');
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(password);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await page.waitForURL(/\/en\/dashboard$/, { timeout: 15000 });
+export async function login(page: Page, email: string, _legacyTestPassword?: string) {
+  void _legacyTestPassword;
+  await loginWithPasskey(page, email);
 }
 
 /**
@@ -50,15 +45,9 @@ export function uniqueEmail(prefix = 'test') {
 /**
  * Get an authenticated API request context for a user.
  */
-export async function authedContext(email: string, password: string) {
-  const ctx = await request.newContext({ baseURL: BASE });
-  const csrfRes = await ctx.get('/api/auth/csrf');
-  const { csrfToken } = await csrfRes.json();
-  await ctx.post('/api/auth/callback/credentials', {
-    form: { email, password, csrfToken },
-    maxRedirects: 0,
-  });
-  return ctx;
+export async function authedContext(email: string, _legacyTestPassword?: string) {
+  void _legacyTestPassword;
+  return authedPasskeyContext(email);
 }
 
 /**

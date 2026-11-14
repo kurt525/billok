@@ -126,6 +126,54 @@ test.each(['list', 'listArchived'] as const)(
   },
 );
 
+describe('Issue 3.2: independent groups, no artificial list cap, private membership', () => {
+  test.each(['list', 'listArchived'] as const)(
+    '%s returns every matching group including results after the previous 200-group cutoff',
+    async (procedure) => {
+      const groups = Array.from({ length: 225 }, (_, i) => ({ id: 'owned-' + i, name: 'Group ' + i }));
+      mockDb.group.findMany.mockResolvedValue(groups);
+      const listed = await (await caller('owner'))[procedure]();
+      expect(listed).toHaveLength(225);
+      expect(listed.at(-1)?.id).toBe('owned-224');
+      const query = mockDb.group.findMany.mock.calls[0]![0];
+      expect(query).not.toHaveProperty('take');
+      expect(query.where.members.some).toEqual({ userId: 'owner', removedAt: null });
+    },
+  );
+
+  test('a signed-in user can create successive groups without a per-user quota', async () => {
+    mockDb.group.create.mockImplementation(async ({ data }: { data: { name: string } }) => ({
+      id: 'g-' + data.name,
+      ...data,
+    }));
+    const owner = await caller('owner');
+    for (let i = 0; i < 3; i++) {
+      const created = await owner.create({ name: 'Own ' + i });
+      expect(created.id).toBe('g-Own ' + i);
+    }
+    expect(mockDb.group.create).toHaveBeenCalledTimes(3);
+    for (const [index, [query]] of mockDb.group.create.mock.calls.entries()) {
+      expect(query.data.members.create).toEqual({ userId: 'owner', role: 'OWNER' });
+      expect(query.data.name).toBe('Own ' + index);
+    }
+  });
+
+  test('another signed-in user can create their own group but never open or change a foreign one', async () => {
+    mockDb.group.create.mockResolvedValue({ id: 'other-group' });
+    await (await caller('outsider')).create({ name: 'My own group' });
+    expect(mockDb.group.create.mock.calls[0]![0].data.members.create.userId).toBe('outsider');
+
+    mockDb.groupMember.findUnique.mockResolvedValue(null);
+    const outsider = await caller('outsider');
+    await expect(outsider.get({ groupId: 'g1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(outsider.update({ groupId: 'g1', name: 'Hijacked' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.group.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('group and placeholder names are trimmed', () => {
   test('create refuses a group name that is only whitespace', async () => {
     const api = await caller();
@@ -1516,5 +1564,56 @@ describe('archiving a group', () => {
     await expect(api.archive({ groupId: 'g1' })).resolves.toMatchObject({ id: 'g1' });
     expect(mockDb.expense.findMany).not.toHaveBeenCalled();
     expect(mockDb.activityLog.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('RUB-only group API', () => {
+  test('creates a group in RUB when the currency is omitted', async () => {
+    mockDb.group.create.mockResolvedValue({ id: 'g2', currency: 'RUB' });
+    const api = await caller();
+    await api.create({ name: 'Поездка' });
+    expect(mockDb.group.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        name: 'Поездка',
+        currency: 'RUB',
+        members: { create: { userId: 'owner', role: 'OWNER' } },
+      }),
+    });
+  });
+
+  test('accepts an explicit lowercase rub and stores RUB', async () => {
+    mockDb.group.create.mockResolvedValue({ id: 'g2', currency: 'RUB' });
+    const api = await caller();
+    await api.create({ name: 'Поездка', currency: 'rub' });
+    expect(mockDb.group.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ name: 'Поездка', currency: 'RUB' }),
+    });
+  });
+
+  test.each(['USD', 'eur', 'GBP'])('refuses currency %s when creating a group', async (currency) => {
+    const api = await caller();
+    await expect(api.create({ name: 'Поездка', currency })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.group.create).not.toHaveBeenCalled();
+  });
+
+  test.each(['USD', 'RUB'])('refuses any currency argument %s when updating a group', async (currency) => {
+    const api = await caller();
+    const invalidPayload = { groupId: 'g1', currency } as unknown as Parameters<typeof api.update>[0];
+    await expect(api.update(invalidPayload)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.group.update).not.toHaveBeenCalled();
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('updates allowed fields without modifying currency or querying conversion-related tables', async () => {
+    mockDb.group.update.mockResolvedValue({ id: 'g1', currency: 'RUB', name: 'Новое название' });
+    const api = await caller();
+    await api.update({ groupId: 'g1', name: 'Новое название', description: 'Общие покупки', simplifyDebts: true });
+    expect(mockDb.group.update).toHaveBeenCalledWith({
+      where: { id: 'g1' },
+      data: { name: 'Новое название', description: 'Общие покупки', simplifyDebts: true },
+    });
+    expect(mockDb.expense.count).not.toHaveBeenCalled();
+    expect(mockDb.settlement.count).not.toHaveBeenCalled();
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
   });
 });

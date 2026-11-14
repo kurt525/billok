@@ -108,7 +108,6 @@ jobs:
           AUTH_SECRET: ${{ steps.auth.outputs.secret }}
           AUTH_TRUST_HOST: "true"
           ADMIN_EMAIL: alice@example.com
-          AI_PROVIDER_PRIORITY: mock
         run: npm run build
 
       - name: Run tests
@@ -127,12 +126,7 @@ jobs:
           REGISTER_RATE_LIMIT_MAX: "1000"
           GUEST_RATE_LIMIT_MAX: "1000"
           ADMIN_EMAIL: alice@example.com
-          AI_PROVIDER_PRIORITY: mock
-          EMAIL_SERVER_HOST: localhost
-          EMAIL_SERVER_PORT: "2525"
         run: |
-          # Start a dummy SMTP server for magic link tests (accepts all mail, delivers nothing)
-          node scripts/mock-smtp.mjs 2525 &
           npm run start &
           npx wait-on http://localhost:3000/api/health --timeout 30000
           npx playwright test

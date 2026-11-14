@@ -16,7 +16,6 @@
   "inviteCodeRequired": "É necessário um código de convite para se registrar.",
   "inviteCodeInvalid": "Código de convite inválido ou expirado.",
   "emailTaken": "Não foi possível criar a conta. Tente outro e-mail ou entre.",
-  "noPasswordToChange": "A conta usa OAuth ou link mágico — não há senha para alterar",
   "wrongPassword": "A senha atual está incorreta",
   "userNotFound": "Usuário não encontrado",
   "groupNotFound": "Grupo não encontrado",

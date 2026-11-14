@@ -1,40 +1,28 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useRef } from 'react';
+import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
-import { TRPCClientError } from '@trpc/client';
 import { Link, useRouter } from '@/i18n/navigation';
 import { trpc } from '@/lib/trpc';
-import { localeHeaders } from '@/lib/locale-header';
 import { formatCents, centsToDecimal, parseToCents } from '@/lib/money';
+import { parseReceiptQuantity } from '@/lib/receipt-quantity';
 import { calculateSplitTotals } from '@/lib/split-calculator';
 import { canStoreClaimIdentity, setStoredClaimIdentity } from '@/lib/guest-session';
-import { loadingMessageKeys, randomLoadingMessageIndex } from '@/lib/loading-messages';
+import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { Button } from '@/components/ui/button';
+import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import {
-  Camera,
-  Loader2,
-  Plus,
-  Trash2,
-  Check,
-  Users,
-  ArrowLeft,
-  ArrowRight,
-  Share2,
-  Pencil,
-  Image as ImageIcon,
-  RefreshCw,
-  Scissors,
-} from 'lucide-react';
+import { Plus, Trash2, Check, Users, ArrowLeft, ArrowRight, Share2, Pencil, Scissors } from 'lucide-react';
 import { toast } from 'sonner';
 import { chipLabels, getInitials } from '@/lib/avatar';
 
-type Step = 'upload' | 'processing' | 'people' | 'assign';
+type Step = 'people' | 'assign';
 
 type GuestItem = {
   name: string;
@@ -53,27 +41,44 @@ type ExtractedData = {
   currency: string;
 };
 
-// The server refuses guest uploads with 403 (upload) or FORBIDDEN (scan).
-class GuestUploadsDisabledError extends Error {}
+export default function GuestSplitPage() {
+  const { status } = useSession();
+  const t = useTranslations('split');
 
-function isGuestUploadsRefusal(err: unknown): boolean {
-  return err instanceof GuestUploadsDisabledError || (err instanceof TRPCClientError && err.data?.code === 'FORBIDDEN');
+  if (status === 'loading') return <LoadingSpinner />;
+  if (status !== 'authenticated') {
+    return (
+      <div className="space-y-4 text-center" data-testid="manual-split-sign-in-required">
+        <h1 className="text-2xl font-bold">{t('upload.title')}</h1>
+        <p className="text-sm text-muted-foreground">{t('manual.signInRequired')}</p>
+        <Link
+          href="/login?callbackUrl=%2Fsplit"
+          className="inline-flex min-h-12 items-center justify-center rounded-md bg-primary px-6 text-base font-medium text-primary-foreground"
+        >
+          {t('manual.signInButton')}
+        </Link>
+      </div>
+    );
+  }
+  return <AuthenticatedGuestSplitPage />;
 }
 
-export default function GuestSplitPage() {
+function AuthenticatedGuestSplitPage() {
+  const { data: currentUser } = useSession();
   const router = useRouter();
   const locale = useLocale();
   const t = useTranslations('split');
   const tc = useTranslations('common');
-  const [step, setStep] = useState<Step>('upload');
-  const [receiptId, setReceiptId] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
-  const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
+  const [step, setStep] = useState<Step>('people');
+  // The shared-link flow is the default; legacy direct allocation stays
+  // separate so previously accepted operations still work.
+  const [workflow, setWorkflow] = useState<'invite' | 'manual'>('invite');
+  const [guestCount, setGuestCount] = useState(2);
+  const [payerGuestSlot, setPayerGuestSlot] = useState(0);
 
   // Data
   const [items, setItems] = useState<GuestItem[]>([]);
-  const [extracted, setExtracted] = useState<ExtractedData | null>(null);
+  const [receiptName, setReceiptName] = useState('');
   const [people, setPeople] = useState<string[]>(['']); // start with one empty name
   // Stable keys for the (removable) person rows so deleting a row doesn't
   // re-key the rows below it. Kept in lockstep with `people`.
@@ -81,11 +86,6 @@ export default function GuestSplitPage() {
   const [personKeys, setPersonKeys] = useState<number[]>([0]);
   const [assignments, setAssignments] = useState<Record<number, Set<number>>>({}); // itemIdx -> Set<personIdx>
   const [paidByIndex, setPaidByIndex] = useState(0);
-  const [tipOverride, setTipOverride] = useState('');
-  const [imagePath, setImagePath] = useState<string | null>(null);
-  const [showImage, setShowImage] = useState(false);
-  const [correctionHint, setCorrectionHint] = useState('');
-  const [showRescan, setShowRescan] = useState(false);
 
   // Editing
   const [editingItem, setEditingItem] = useState<number | null>(null);
@@ -98,112 +98,8 @@ export default function GuestSplitPage() {
   const [splitQuantity, setSplitQuantity] = useState('');
 
   // tRPC
-  const utils = trpc.useUtils();
-  const processReceipt = trpc.guest.processReceipt.useMutation();
-  const uploadStatus = trpc.guest.getUploadStatus.useQuery();
-  const uploadsDisabled = uploadStatus.data?.allowed === false;
   const createSplit = trpc.guest.createSplit.useMutation();
   const createClaimSession = trpc.guest.createClaimSession.useMutation();
-
-  // Each scan starts its loading messages at a random one
-  function startProcessing() {
-    setLoadingMsgIdx(randomLoadingMessageIndex());
-    setStep('processing');
-  }
-
-  // Rotate loading messages
-  useEffect(() => {
-    if (step !== 'processing') return;
-    const interval = setInterval(() => {
-      setLoadingMsgIdx((i) => (i + 1) % loadingMessageKeys.length);
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [step]);
-
-  // Replaces the items (and their assignments) with a finished scan's, along with the receipt's
-  // totals and image. Read through the client, not a cached query, so a rescan's items can't come
-  // from the cache.
-  async function loadScannedItems(id: string) {
-    const { receipt, items: dbItems } = await utils.client.guest.getReceiptItems.query({ receiptId: id });
-    setItems(
-      dbItems.map((i) => ({
-        name: i.name,
-        quantity: i.quantity,
-        unitPrice: i.unitPrice,
-        totalPrice: i.totalPrice,
-      })),
-    );
-    setAssignments({});
-    if (receipt.extractedData) {
-      setExtracted(receipt.extractedData);
-    }
-    if (receipt.imagePath) {
-      setImagePath(receipt.imagePath);
-    }
-  }
-
-  // Guest uploads were turned off after this page loaded (or the session
-  // ended or the account was suspended). Refetch so the notice replaces the
-  // upload buttons; if they were turned back on meanwhile, show no error.
-  async function showGuestUploadsDisabled() {
-    const { data } = await uploadStatus.refetch();
-    setErrorMessage(data?.allowed === false ? t('upload.guestDisabledTitle') : '');
-  }
-
-  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setUploading(true);
-    setErrorMessage('');
-
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const res = await fetch('/api/upload?guest=true', {
-        method: 'POST',
-        body: formData,
-        headers: localeHeaders(),
-      });
-
-      if (res.status === 403) throw new GuestUploadsDisabledError();
-
-      if (!res.ok) {
-        let message = t('upload.uploadFailed');
-        try {
-          const data = await res.json();
-          message = data.error ?? message;
-        } catch {}
-        throw new Error(message);
-      }
-
-      const data = await res.json();
-      setReceiptId(data.receiptId);
-      setImagePath(data.imagePath);
-      startProcessing();
-      setUploading(false);
-
-      // Start AI processing
-      const result = await processReceipt.mutateAsync({ receiptId: data.receiptId });
-      setExtracted({
-        ...(result.merchantName !== undefined ? { merchantName: result.merchantName } : {}),
-        ...(result.date !== undefined ? { date: result.date } : {}),
-        subtotal: result.subtotal,
-        tax: result.tax,
-        tip: result.tip,
-        total: result.total,
-        currency: result.currency,
-      });
-      await loadScannedItems(data.receiptId);
-      setStep('people');
-    } catch (err) {
-      setUploading(false);
-      if (isGuestUploadsRefusal(err)) await showGuestUploadsDisabled();
-      else setErrorMessage(err instanceof Error ? err.message : t('upload.uploadFailed'));
-      setStep('upload');
-    }
-  }
 
   function removePerson(idx: number) {
     setPeople((p) => p.filter((_, i) => i !== idx));
@@ -285,8 +181,8 @@ export default function GuestSplitPage() {
       toast.error(t('assign.validationPricePositive'));
       return;
     }
-    const quantity = parseInt(editValues.quantity);
-    if (!Number.isInteger(quantity) || quantity < 1) {
+    const quantity = parseReceiptQuantity(editValues.quantity);
+    if (quantity === null) {
       toast.error(t('assign.validationQtyPositive'));
       return;
     }
@@ -320,7 +216,11 @@ export default function GuestSplitPage() {
   function handleAddItem(e: React.FormEvent) {
     e.preventDefault();
     const totalPrice = parseToCents(newItem.totalPrice);
-    const quantity = parseInt(newItem.quantity) || 1;
+    const quantity = parseReceiptQuantity(newItem.quantity);
+    if (quantity === null) {
+      toast.error(t('assign.validationQtyPositive'));
+      return;
+    }
     if (!newItem.name || totalPrice <= 0) return;
     setItems((prev) => [
       ...prev,
@@ -377,13 +277,22 @@ export default function GuestSplitPage() {
     setSplittingIndex(null);
   }
 
-  // Calculate totals
-  const parsedTip = parseFloat(tipOverride);
-  const tip = tipOverride !== '' && isFinite(parsedTip) ? Math.round(parsedTip * 100) : (extracted?.tip ?? 0);
-  const currency = extracted?.currency ?? 'USD';
+  // BillOK manual receipts: no photo, OCR provider, or external currency lookup.
+  const subtotal = items.reduce((sum, item) => sum + item.totalPrice, 0);
+  const extracted: ExtractedData = {
+    merchantName: receiptName.trim() || t('manual.defaultTitle'),
+    subtotal,
+    tax: 0,
+    tip: 0,
+    total: subtotal,
+    currency: 'RUB',
+  };
 
-  const getPerPersonTotals = useCallback(() => {
-    if (!extracted || items.length === 0) return [];
+  // Calculate totals
+  const currency = 'RUB';
+
+  const getPerPersonTotals = () => {
+    if (items.length === 0) return [];
     const assignmentList = Object.entries(assignments)
       .filter(([, s]) => s.size > 0)
       .map(([itemIdx, personSet]) => ({
@@ -394,11 +303,11 @@ export default function GuestSplitPage() {
     return calculateSplitTotals({
       items,
       assignments: assignmentList,
-      tax: extracted.tax,
-      tip,
+      tax: 0,
+      tip: 0,
       peopleCount: people.length,
     });
-  }, [items, assignments, extracted, tip, people.length]);
+  };
 
   const perPersonTotals = step === 'assign' ? getPerPersonTotals() : [];
   const validPeople = people.filter((n) => n.trim().length > 0);
@@ -409,7 +318,7 @@ export default function GuestSplitPage() {
   const allAssigned = assignedCount === items.length && items.length > 0;
 
   async function handleCreateSplit() {
-    if (!extracted || !allAssigned || validPeople.length < 1) return;
+    if (!allAssigned || validPeople.length < 1) return;
 
     // Build index mapping from unfiltered people → filtered validPeople
     const indexMap = new Map<number, number>();
@@ -434,42 +343,42 @@ export default function GuestSplitPage() {
 
     try {
       const result = await createSplit.mutateAsync({
-        receiptId: receiptId ?? undefined,
-        receiptData: { ...extracted, tip },
+        receiptData: extracted,
         items,
         people: validPeople.map((n) => ({ name: n })),
         assignments: assignmentList,
         paidByIndex: remappedPaidBy,
-        tipOverride:
-          tipOverride !== '' && isFinite(parseFloat(tipOverride))
-            ? Math.round(parseFloat(tipOverride) * 100)
-            : undefined,
       });
       router.push(`/split/${result.shareToken}`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t('assign.createSplitFailed'));
+    } catch (error) {
+      toast.error(
+        localizedTrpcError(error as { message: string; data?: { code?: string } }, t('assign.createSplitFailed')),
+      );
     }
   }
 
   async function handleShareForClaiming() {
-    if (!extracted || validPeople.length < 1) return;
-
-    // `validPeople.length < 1` already returned above, so index 0 always
-    // exists; the `?? ""` is unreachable but keeps the type `string`.
-    const fallbackName = validPeople[0] ?? '';
+    if (items.length === 0 || (workflow === 'manual' && validPeople.length < 1)) return;
 
     try {
-      const result = await createClaimSession.mutateAsync({
-        receiptId: receiptId ?? undefined,
-        receiptData: { ...extracted, tip },
-        items,
-        people: validPeople,
-        // Whoever scans the receipt is taken to be the payer, and joins the session as them
-        creatorName: people[paidByIndex]?.trim() || fallbackName,
-        paidByName: people[paidByIndex]?.trim() || fallbackName,
-        // Without storage the creator joins by name on the claim page, as before
-        joinCreator: canStoreClaimIdentity(),
-      });
+      const result = await createClaimSession.mutateAsync(
+        workflow === 'invite'
+          ? {
+              receiptData: extracted,
+              items,
+              guestCount,
+              ...(payerGuestSlot > 0 ? { paidByGuestSlot: payerGuestSlot } : {}),
+              joinCreator: true,
+            }
+          : {
+              receiptData: extracted,
+              items,
+              people: validPeople,
+              creatorName: people[paidByIndex]?.trim() || validPeople[0]!,
+              paidByName: people[paidByIndex]?.trim() || validPeople[0]!,
+              joinCreator: canStoreClaimIdentity(),
+            },
+      );
       if (result.creator) {
         setStoredClaimIdentity(result.shareToken, {
           name: result.creator.name,
@@ -477,8 +386,10 @@ export default function GuestSplitPage() {
         });
       }
       router.push(`/split/${result.shareToken}/claim`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t('assign.createSessionFailed'));
+    } catch (error) {
+      toast.error(
+        localizedTrpcError(error as { message: string; data?: { code?: string } }, t('assign.createSessionFailed')),
+      );
     }
   }
 
@@ -487,273 +398,196 @@ export default function GuestSplitPage() {
   const labels = chipLabels(people);
 
   return (
-    <div className="space-y-6 pb-24">
-      {/* Step: Upload */}
-      {step === 'upload' && (
-        <div className="space-y-6">
-          <div className="text-center space-y-2 pt-8">
-            <h1 className="text-3xl font-bold tracking-tight">{t('upload.title')}</h1>
-            {!uploadsDisabled && <p className="text-muted-foreground">{t('upload.subtitle')}</p>}
-          </div>
-
-          {errorMessage && !uploadsDisabled && (
-            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{errorMessage}</div>
-          )}
-
-          {uploadsDisabled ? (
-            <div className="space-y-4 rounded-2xl border p-8 text-center" data-testid="guest-uploads-disabled">
-              <p className="text-lg font-semibold">{t('upload.guestDisabledTitle')}</p>
-              <p className="text-sm text-muted-foreground">{t('upload.guestDisabledDescription')}</p>
-              <Button
-                nativeButton={false}
-                render={<Link href={`/login?callbackUrl=${encodeURIComponent('/split')}`} />}
-              >
-                {t('upload.signIn')}
-              </Button>
-            </div>
-          ) : (
-            <>
-              {/* Camera capture button - mobile optimized */}
-              <label
-                className="flex flex-col items-center gap-4 rounded-2xl bg-primary p-8 text-primary-foreground cursor-pointer active:scale-[0.98] transition-transform"
-                data-testid="guest-snap-upload"
-              >
-                <div className="rounded-full bg-primary-foreground/20 p-4">
-                  <Camera className="h-10 w-10" />
-                </div>
-                <span className="text-xl font-semibold">{t('upload.snapBill')}</span>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,image/heic"
-                  capture="environment"
-                  onChange={handleFileUpload}
-                  disabled={uploading}
-                  className="hidden"
-                />
-              </label>
-
-              <div className="relative flex items-center justify-center">
-                <span className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t" />
-                </span>
-                <span className="relative bg-background px-4 text-sm text-muted-foreground uppercase">
-                  {t('upload.or')}
-                </span>
-              </div>
-
-              {/* Gallery upload */}
-              <label
-                className="flex flex-col items-center gap-4 rounded-2xl border-2 border-dashed border-muted-foreground/25 p-8 cursor-pointer hover:border-primary/50 transition-colors active:scale-[0.98]"
-                data-testid="guest-gallery-upload"
-              >
-                <div className="rounded-full bg-muted p-4">
-                  <ImageIcon className="h-8 w-8 text-muted-foreground" />
-                </div>
-                <span className="text-lg font-medium text-muted-foreground">{t('upload.chooseGallery')}</span>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,image/heic"
-                  onChange={handleFileUpload}
-                  disabled={uploading}
-                  className="hidden"
-                  data-testid="guest-file-input"
-                />
-              </label>
-
-              {uploading && (
-                <div className="flex items-center justify-center gap-2 text-muted-foreground">
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  {t('upload.uploading')}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Step: Processing */}
-      {step === 'processing' && (
-        <div className="flex flex-col items-center justify-center gap-6 py-20" data-testid="guest-processing">
-          <Loader2 className="h-12 w-12 animate-spin text-primary" />
-          <div className="text-center space-y-2 max-w-xs">
-            <p className="font-semibold text-lg">{t('processing.title')}</p>
-            <p className="text-sm text-muted-foreground animate-fade-in">
-              {tc(loadingMessageKeys[loadingMsgIdx] ?? loadingMessageKeys[0])}
-            </p>
-          </div>
-        </div>
-      )}
-
+    <div className={step === 'assign' ? 'space-y-6 pb-56' : 'space-y-6 pb-32'}>
       {/* Step: People */}
       {step === 'people' && (
         <div className="space-y-6">
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" aria-label={tc('actions.back')} onClick={() => setStep('upload')}>
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <h2 className="text-xl font-bold" data-testid="guest-people-step">
-              {t('people.title')}
-            </h2>
+          <h1 className="text-2xl font-bold" data-testid="manual-split-title">
+            {t('upload.title')}
+          </h1>
+          <h2 className="text-xl font-semibold" data-testid="guest-people-step">
+            {t('people.title')}
+          </h2>
+
+          <p className="text-sm text-muted-foreground">{t('manual.subtitle')}</p>
+          <div className="space-y-2">
+            <Label htmlFor="manual-receipt-name">{t('manual.receiptName')}</Label>
+            <Input
+              id="manual-receipt-name"
+              value={receiptName}
+              onChange={(e) => setReceiptName(e.target.value)}
+              placeholder={t('manual.defaultTitle')}
+              className="h-12"
+              data-testid="manual-receipt-name"
+            />
           </div>
 
-          <p className="text-sm text-muted-foreground">{t('people.subtitle')}</p>
-
-          {/* Person list */}
-          <div className="space-y-3">
-            {people.map((name, idx) => (
-              <div key={personKeys[idx] ?? idx} className="flex items-center gap-2">
-                <Avatar className="h-10 w-10 shrink-0">
-                  <AvatarFallback className="text-sm bg-primary/10 text-primary">
-                    {name.trim() ? initials(name) : `P${idx + 1}`}
-                  </AvatarFallback>
-                </Avatar>
+          <div className="grid grid-cols-2 gap-2" role="group" aria-label={t('people.workflowLabel')}>
+            <Button
+              type="button"
+              variant={workflow === 'invite' ? 'default' : 'outline'}
+              className="min-h-12 min-w-0 whitespace-normal text-sm"
+              onClick={() => setWorkflow('invite')}
+              data-testid="workflow-invite"
+            >
+              {t('people.workflowInvite')}
+            </Button>
+            <Button
+              type="button"
+              variant={workflow === 'manual' ? 'default' : 'outline'}
+              className="min-h-12 min-w-0 whitespace-normal text-sm"
+              onClick={() => setWorkflow('manual')}
+              data-testid="workflow-manual"
+            >
+              {t('people.workflowManual')}
+            </Button>
+          </div>
+          {workflow === 'invite' ? (
+            <div className="min-w-0 space-y-4" data-testid="guest-count-form">
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">{t('people.creatorAlwaysIncluded')}</p>
+                <p className="min-w-0 font-semibold [overflow-wrap:anywhere]" data-testid="invite-creator-name">
+                  {currentUser?.user?.name || t('people.creatorProfileName')}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="guest-count">{t('people.guestCountLabel')}</Label>
                 <Input
-                  value={name}
-                  onChange={(e) => updatePersonName(idx, e.target.value)}
-                  placeholder={t('people.personPlaceholder', { index: idx + 1 })}
-                  className="h-12 text-base"
-                  data-testid={`person-input-${idx}`}
+                  id="guest-count"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={99}
+                  step={1}
+                  value={guestCount}
+                  onChange={(event) => {
+                    const numeric = Number(event.target.value);
+                    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 99) return;
+                    setGuestCount(numeric);
+                    setPayerGuestSlot((old) => (old > numeric ? 0 : old));
+                  }}
+                  className="h-12 w-full text-base"
+                  data-testid="guest-count-input"
                 />
-                {people.length > 1 && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={t('people.removePerson')}
-                    onClick={() => removePerson(idx)}
-                    className="shrink-0 text-muted-foreground hover:text-destructive"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                <p className="text-xs text-muted-foreground">{t('people.guestCountHint')}</p>
+              </div>
+              <div
+                className="max-h-56 min-w-0 space-y-2 overflow-y-auto rounded-lg border p-2"
+                data-testid="guest-slot-preview"
+              >
+                {Array.from({ length: guestCount }, (_, index) => (
+                  <div key={index} className="min-w-0 rounded-md bg-muted px-3 py-2 text-sm">
+                    {t('people.guestPlace', { index: index + 1 })}
+                  </div>
+                ))}
+                {guestCount === 0 && (
+                  <p className="px-2 py-3 text-sm text-muted-foreground">{t('people.noAdditionalGuests')}</p>
                 )}
               </div>
-            ))}
-          </div>
+              <div className="space-y-2">
+                <Label htmlFor="invite-payer">{t('people.whoPaid')}</Label>
+                <select
+                  id="invite-payer"
+                  value={payerGuestSlot}
+                  onChange={(event) => setPayerGuestSlot(Number(event.target.value))}
+                  className="flex h-12 w-full min-w-0 rounded-md border border-input bg-background px-3 py-1 text-base"
+                  data-testid="invite-payer"
+                >
+                  <option value={0}>{t('people.creatorPayer')}</option>
+                  {Array.from({ length: guestCount }, (_, index) => (
+                    <option key={index} value={index + 1}>
+                      {t('people.guestPlace', { index: index + 1 })}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Person list */}
+              <div className="space-y-3">
+                {people.map((name, idx) => (
+                  <div key={personKeys[idx] ?? idx} className="flex min-w-0 items-center gap-2">
+                    <Avatar className="h-10 w-10 shrink-0">
+                      <AvatarFallback className="text-sm bg-primary/10 text-primary">
+                        {name.trim() ? initials(name) : `P${idx + 1}`}
+                      </AvatarFallback>
+                    </Avatar>
+                    <Input
+                      value={name}
+                      maxLength={MAX_GUEST_NAME_LENGTH}
+                      onChange={(e) => updatePersonName(idx, e.target.value)}
+                      placeholder={t('people.personPlaceholder', { index: idx + 1 })}
+                      className="h-12 min-w-0 flex-1 text-base"
+                      autoComplete="off"
+                      data-testid={`person-input-${idx}`}
+                    />
+                    {people.length > 1 && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={t('people.removePerson')}
+                        onClick={() => removePerson(idx)}
+                        className="shrink-0 text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
 
-          <Button
-            variant="outline"
-            className="w-full h-12"
-            onClick={() => {
-              setPeople((p) => [...p, '']);
-              setPersonKeys((keys) => [...keys, personKeyCounter.current++]);
-            }}
-            data-testid="add-person-btn"
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            {t('people.addPerson')}
-          </Button>
+              <Button
+                variant="outline"
+                className="w-full h-12"
+                onClick={() => {
+                  setPeople((p) => [...p, '']);
+                  setPersonKeys((keys) => [...keys, personKeyCounter.current++]);
+                }}
+                data-testid="add-person-btn"
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                {t('people.addPerson')}
+              </Button>
 
-          {/* Who paid? */}
-          <div className="space-y-2">
-            <Label htmlFor="who-paid">{t('people.whoPaid')}</Label>
-            <select
-              id="who-paid"
-              value={paidByIndex}
-              onChange={(e) => setPaidByIndex(parseInt(e.target.value))}
-              className="flex h-12 w-full rounded-md border border-input bg-background px-3 py-1 text-base shadow-sm"
-            >
-              {people.map((name, idx) => (
-                <option key={idx} value={idx}>
-                  {name.trim() || t('people.personPlaceholder', { index: idx + 1 })}
-                </option>
-              ))}
-            </select>
-          </div>
+              {/* Who paid? */}
+              <div className="space-y-2">
+                <Label htmlFor="who-paid">{t('people.whoPaid')}</Label>
+                <select
+                  id="who-paid"
+                  value={paidByIndex}
+                  onChange={(e) => setPaidByIndex(parseInt(e.target.value))}
+                  className="flex h-12 w-full rounded-md border border-input bg-background px-3 py-1 text-base shadow-sm"
+                >
+                  {people.map((name, idx) => (
+                    <option key={idx} value={idx}>
+                      {name.trim() || t('people.personPlaceholder', { index: idx + 1 })}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
 
           {/* Next button - sticky bottom */}
-          <div className="fixed bottom-0 left-0 right-0 p-4 bg-background border-t">
+          <div className="fixed right-0 bottom-0 left-0 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
             <div className="mx-auto max-w-lg space-y-3">
               <Button
                 className="w-full h-14 text-lg"
-                disabled={validPeople.length < 1}
+                disabled={workflow === 'manual' && validPeople.length < 1}
                 onClick={() => setStep('assign')}
                 data-testid="next-assign-btn"
               >
                 {t('people.nextAssign')}
                 <ArrowRight className="ml-2 h-5 w-5" />
               </Button>
-              {!showRescan ? (
-                <Button variant="outline" className="w-full" onClick={() => setShowRescan(true)}>
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                  {t('people.rescanCorrections')}
-                </Button>
-              ) : (
-                <Card>
-                  <CardContent className="space-y-3 pt-4">
-                    <p className="text-sm text-muted-foreground">{t('people.rescanDescription')}</p>
-                    <textarea
-                      placeholder={t('people.rescanPlaceholder')}
-                      value={correctionHint}
-                      onChange={(e) => setCorrectionHint(e.target.value)}
-                      rows={3}
-                      className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    />
-                    <div className="flex gap-2">
-                      <Button
-                        className="flex-1"
-                        onClick={() => {
-                          if (!correctionHint.trim() || !receiptId) return;
-                          startProcessing();
-                          setShowRescan(false);
-                          processReceipt.mutate(
-                            { receiptId, correctionHint: correctionHint.trim() },
-                            {
-                              onSuccess: async (data) => {
-                                setExtracted({
-                                  ...(data.merchantName !== undefined ? { merchantName: data.merchantName } : {}),
-                                  ...(data.date !== undefined ? { date: data.date } : {}),
-                                  subtotal: data.subtotal,
-                                  tax: data.tax,
-                                  tip: data.tip,
-                                  total: data.total,
-                                  currency: data.currency,
-                                });
-                                try {
-                                  await loadScannedItems(receiptId);
-                                  setStep('people');
-                                } catch (err) {
-                                  // Shown on the upload step, as when a first scan's items fail to load
-                                  setErrorMessage(err instanceof Error ? err.message : t('upload.uploadFailed'));
-                                  setStep('upload');
-                                }
-                              },
-                              onError: (err) => {
-                                if (isGuestUploadsRefusal(err)) {
-                                  void showGuestUploadsDisabled().then(() => {
-                                    setStep('upload');
-                                  });
-                                  return;
-                                }
-                                setErrorMessage(err.message);
-                                setStep('people');
-                              },
-                            },
-                          );
-                        }}
-                        disabled={!correctionHint.trim()}
-                      >
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                        {t('people.rescan')}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          setShowRescan(false);
-                          setCorrectionHint('');
-                        }}
-                      >
-                        {t('people.cancel')}
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
             </div>
           </div>
         </div>
       )}
 
       {/* Step: Assign */}
-      {step === 'assign' && extracted && (
+      {step === 'assign' && (
         <div className="space-y-4" data-testid="guest-assign-step">
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="icon" aria-label={tc('actions.back')} onClick={() => setStep('people')}>
@@ -761,30 +595,6 @@ export default function GuestSplitPage() {
             </Button>
             <h2 className="text-xl font-bold">{t('assign.title')}</h2>
           </div>
-
-          {/* Receipt image toggle */}
-          {imagePath && (
-            <Button type="button" variant="outline" size="sm" onClick={() => setShowImage(!showImage)}>
-              <ImageIcon className="mr-2 h-4 w-4" />
-              {showImage ? t('assign.hideReceipt') : t('assign.viewReceipt')}
-            </Button>
-          )}
-
-          {showImage && imagePath && (
-            <Card>
-              <CardContent className="py-3">
-                {/* eslint-disable-next-line @next/next/no-img-element -- user-uploaded
-                    receipt photo with unknown natural dimensions; next/image would need
-                    either server-side dimension probing or a fill+aspect-ratio layout
-                    change, out of scope here */}
-                <img
-                  src={`/api/uploads/${imagePath}`}
-                  alt={t('assign.receiptImageAlt')}
-                  className="mx-auto max-h-[400px] rounded-md object-contain"
-                />
-              </CardContent>
-            </Card>
-          )}
 
           {/* Receipt summary */}
           <Card>
@@ -796,85 +606,92 @@ export default function GuestSplitPage() {
                 <span className="text-muted-foreground">{t('assign.subtotal')}</span>
                 <span>{formatCents(extracted.subtotal, currency, locale)}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('assign.tax')}</span>
-                <span>{formatCents(extracted.tax, currency, locale)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('assign.tip')}</span>
-                <span>{formatCents(tip, currency, locale)}</span>
-              </div>
               <Separator />
               <div className="flex justify-between font-semibold">
                 <span>{t('assign.total')}</span>
-                <span>{formatCents(extracted.subtotal + extracted.tax + tip, currency, locale)}</span>
+                <span>{formatCents(extracted.subtotal, currency, locale)}</span>
               </div>
             </CardContent>
           </Card>
 
-          {/* Tip override */}
-          <div className="space-y-2">
-            <Label htmlFor="guest-tip">{t('assign.tipOverrideLabel')}</Label>
-            <Input
-              id="guest-tip"
-              type="number"
-              step="0.01"
-              min="0"
-              placeholder={t('assign.tipDetected', { amount: formatCents(extracted.tip, currency, locale) })}
-              value={tipOverride}
-              onChange={(e) => setTipOverride(e.target.value)}
-              className="h-12"
-            />
-          </div>
-
           {/* Quick actions */}
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={assignAllToEveryone} data-testid="guest-split-all-btn">
-              <Users className="mr-2 h-4 w-4" />
-              {t('assign.splitAllEqually')}
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setAddingItem(true)} data-testid="guest-add-item-btn">
+          <div className="flex flex-wrap gap-2">
+            {workflow === 'manual' && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="min-h-11 whitespace-normal"
+                onClick={assignAllToEveryone}
+                data-testid="guest-split-all-btn"
+              >
+                <Users className="mr-2 h-4 w-4" />
+                {t('assign.splitAllEqually')}
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="min-h-11 whitespace-normal"
+              onClick={() => setAddingItem(true)}
+              data-testid="guest-add-item-btn"
+            >
               <Plus className="mr-2 h-4 w-4" />
               {t('assign.addItem')}
             </Button>
           </div>
 
+          {items.length === 0 && !addingItem && (
+            <p
+              className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground"
+              data-testid="manual-no-items"
+            >
+              {t('manual.addFirstItem')}
+            </p>
+          )}
+
           {/* Add new item form */}
           {addingItem && (
             <Card className="border-primary/50">
               <CardContent className="py-3">
-                <form onSubmit={handleAddItem} className="space-y-2">
+                <form onSubmit={handleAddItem} className="min-w-0 space-y-2" data-testid="manual-item-entry-form">
                   <Input
                     placeholder={t('assign.itemNamePlaceholder')}
                     value={newItem.name}
                     onChange={(e) => setNewItem((p) => ({ ...p, name: e.target.value }))}
                     required
-                    className="h-12"
+                    className="h-12 min-w-0 scroll-mt-4 text-base"
                   />
-                  <div className="flex gap-2">
+                  <div className="grid min-w-0 grid-cols-2 gap-2">
                     <Input
                       type="number"
+                      inputMode="numeric"
                       placeholder={t('assign.qtyPlaceholder')}
                       value={newItem.quantity}
                       onChange={(e) => setNewItem((p) => ({ ...p, quantity: e.target.value }))}
-                      className="w-20 h-12"
+                      className="h-12 min-w-0 scroll-mt-4 text-base"
                       min="1"
                     />
                     <Input
-                      type="number"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       placeholder={t('assign.pricePlaceholder')}
                       value={newItem.totalPrice}
                       onChange={(e) => setNewItem((p) => ({ ...p, totalPrice: e.target.value }))}
-                      className="flex-1 h-12"
+                      className="h-12 min-w-0 scroll-mt-4 text-base"
                       required
                     />
                   </div>
-                  <div className="flex gap-2">
-                    <Button type="submit" size="sm" data-testid="guest-add-item-submit">
+                  <div className="flex min-w-0 flex-wrap gap-2">
+                    <Button type="submit" size="sm" className="min-h-11 min-w-11" data-testid="guest-add-item-submit">
                       {t('assign.add')}
                     </Button>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => setAddingItem(false)}>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="min-h-11 min-w-11"
+                      onClick={() => setAddingItem(false)}
+                    >
                       {t('assign.cancel')}
                     </Button>
                   </div>
@@ -883,224 +700,249 @@ export default function GuestSplitPage() {
             </Card>
           )}
 
-          {/* Items with assignment */}
-          <div className="space-y-2">
-            <Label>{t('assign.tapToAssign', { assigned: assignedCount, total: items.length })}</Label>
-            {items.map((item, itemIdx) => {
-              const assigned = assignments[itemIdx] ?? new Set();
-              const isEditing = editingItem === itemIdx;
+          {workflow === 'manual' && (
+            <>
+              {/* Items with assignment */}
+              <div className="space-y-2">
+                <Label>{t('assign.tapToAssign', { assigned: assignedCount, total: items.length })}</Label>
+                {items.map((item, itemIdx) => {
+                  const assigned = assignments[itemIdx] ?? new Set();
+                  const isEditing = editingItem === itemIdx;
 
-              return (
-                <Card
-                  key={itemIdx}
-                  className={assigned.size === 0 ? 'border-amber-300' : ''}
-                  data-testid={`guest-item-card-${itemIdx}`}
-                >
-                  <CardContent className="py-3">
-                    {isEditing ? (
-                      <div className="mb-2 space-y-2">
-                        <Input
-                          value={editValues.name}
-                          onChange={(e) => setEditValues((p) => ({ ...p, name: e.target.value }))}
-                          placeholder={t('assign.itemNamePlaceholder')}
-                          className="h-12"
-                        />
-                        <div className="flex gap-2">
-                          <Input
-                            type="number"
-                            value={editValues.quantity}
-                            onChange={(e) => setEditValues((p) => ({ ...p, quantity: e.target.value }))}
-                            className="w-20 h-12"
-                            placeholder={t('assign.qtyPlaceholder')}
-                            min="1"
-                          />
-                          <Input
-                            type="number"
-                            step="0.01"
-                            value={editValues.totalPrice}
-                            onChange={(e) => setEditValues((p) => ({ ...p, totalPrice: e.target.value }))}
-                            className="flex-1 h-12"
-                            placeholder={t('assign.pricePlaceholder')}
-                          />
-                        </div>
-                        <div className="flex gap-1">
-                          <Button type="button" size="sm" onClick={saveEdit}>
-                            {t('assign.save')}
-                          </Button>
-                          <Button type="button" variant="ghost" size="sm" onClick={() => setEditingItem(null)}>
-                            {t('assign.cancel')}
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="mb-2 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{item.name}</span>
-                          {item.quantity > 1 && <span className="text-xs text-muted-foreground">x{item.quantity}</span>}
-                          <button
-                            type="button"
-                            onClick={() => startEditing(itemIdx)}
-                            className="text-muted-foreground hover:text-foreground p-1"
-                            aria-label={t('assign.editItem', { name: item.name })}
-                            title={t('assign.editItem', { name: item.name })}
-                          >
-                            <Pencil className="h-3 w-3" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => deleteItem(itemIdx)}
-                            className="text-muted-foreground hover:text-destructive p-1"
-                            aria-label={t('assign.removeItem', { name: item.name })}
-                            title={t('assign.removeItem', { name: item.name })}
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                          {item.quantity > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSplittingIndex(itemIdx);
-                                setSplitQuantity('1');
-                              }}
-                              className="text-muted-foreground hover:text-foreground p-1"
-                              title={t('assign.split')}
-                              aria-label={t('assign.split') + ` ${item.name}`}
-                              data-testid={`guest-split-btn-${itemIdx}`}
-                            >
-                              <Scissors className="h-3 w-3" />
-                            </button>
-                          )}
-                        </div>
-                        <span className="font-semibold">{formatCents(item.totalPrice, currency, locale)}</span>
-                      </div>
-                    )}
-                    {/* Inline split form */}
-                    {splittingIndex === itemIdx &&
-                      (() => {
-                        const parsed = Number(splitQuantity);
-                        const validQty = Number.isSafeInteger(parsed) && parsed >= 1 && parsed < item.quantity;
-                        return (
-                          <div className="mb-2 flex items-center gap-2">
-                            <span className="text-xs text-muted-foreground">{t('assign.splitOff')}</span>
+                  return (
+                    <Card
+                      key={itemIdx}
+                      className={assigned.size === 0 ? 'border-amber-300' : ''}
+                      data-testid={`guest-item-card-${itemIdx}`}
+                    >
+                      <CardContent className="py-3">
+                        {isEditing ? (
+                          <div className="mb-2 min-w-0 space-y-2" data-testid="guest-edit-item-form">
                             <Input
-                              type="number"
-                              min={1}
-                              max={item.quantity - 1}
-                              value={splitQuantity}
-                              onChange={(e) => setSplitQuantity(e.target.value)}
-                              className="w-16 h-7 text-xs"
-                              data-testid={`guest-split-qty-${itemIdx}`}
+                              value={editValues.name}
+                              onChange={(e) => setEditValues((p) => ({ ...p, name: e.target.value }))}
+                              placeholder={t('assign.itemNamePlaceholder')}
+                              className="h-12"
                             />
-                            <span className="text-xs text-muted-foreground">
-                              {t('assign.splitOfTotal', { total: item.quantity })}
-                            </span>
-                            <Button
-                              type="button"
-                              size="sm"
-                              className="h-7 text-xs"
-                              disabled={!validQty}
-                              onClick={() => handleSplitItem(itemIdx)}
-                              data-testid={`guest-split-submit-${itemIdx}`}
-                            >
-                              {t('assign.split')}
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 text-xs"
-                              onClick={() => setSplittingIndex(null)}
-                            >
-                              {t('assign.cancel')}
-                            </Button>
+                            <div className="grid min-w-0 grid-cols-2 gap-2">
+                              <Input
+                                type="number"
+                                inputMode="numeric"
+                                value={editValues.quantity}
+                                onChange={(e) => setEditValues((p) => ({ ...p, quantity: e.target.value }))}
+                                className="h-12 min-w-0"
+                                placeholder={t('assign.qtyPlaceholder')}
+                                min="1"
+                              />
+                              <Input
+                                type="text"
+                                inputMode="decimal"
+                                value={editValues.totalPrice}
+                                onChange={(e) => setEditValues((p) => ({ ...p, totalPrice: e.target.value }))}
+                                className="h-12 min-w-0"
+                                placeholder={t('assign.pricePlaceholder')}
+                              />
+                            </div>
+                            <div className="flex min-w-0 flex-wrap gap-2">
+                              <Button type="button" size="sm" className="min-h-11" onClick={saveEdit}>
+                                {t('assign.save')}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="min-h-11"
+                                onClick={() => setEditingItem(null)}
+                              >
+                                {t('assign.cancel')}
+                              </Button>
+                            </div>
                           </div>
-                        );
-                      })()}
-                    {/* Person toggle buttons */}
-                    <div className="flex flex-wrap gap-1.5">
-                      {people.map((name, personIdx) => {
-                        if (!name.trim()) return null;
-                        const isAssigned = assigned.has(personIdx);
-                        return (
-                          <button
-                            key={personIdx}
-                            type="button"
-                            onClick={() => toggleAssignment(itemIdx, personIdx)}
-                            className={`flex max-w-full items-center gap-1 rounded-full px-3 py-1.5 text-sm transition-colors min-h-[36px] ${
-                              isAssigned
-                                ? 'bg-primary text-primary-foreground'
-                                : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                            }`}
-                          >
-                            <Avatar className="h-5 w-5">
-                              <AvatarFallback className="text-[9px]">{initials(name)}</AvatarFallback>
-                            </Avatar>
-                            <span
-                              data-testid="chip-label"
-                              className="min-w-0 text-left [overflow-wrap:anywhere]"
-                              title={name.trim()}
-                            >
-                              {labels[personIdx]}
-                            </span>
-                            {isAssigned && <Check className="h-3 w-3" />}
-                          </button>
-                        );
-                      })}
-                    </div>
+                        ) : (
+                          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex min-w-0 flex-wrap items-center gap-1">
+                              <span className="min-w-0 break-words font-medium">{item.name}</span>
+                              {item.quantity > 1 && (
+                                <span className="text-xs text-muted-foreground">x{item.quantity}</span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => startEditing(itemIdx)}
+                                className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
+                                aria-label={t('assign.editItem', { name: item.name })}
+                                title={t('assign.editItem', { name: item.name })}
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => deleteItem(itemIdx)}
+                                className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-destructive"
+                                aria-label={t('assign.removeItem', { name: item.name })}
+                                title={t('assign.removeItem', { name: item.name })}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                              {item.quantity > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSplittingIndex(itemIdx);
+                                    setSplitQuantity('1');
+                                  }}
+                                  className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
+                                  title={t('assign.split')}
+                                  aria-label={t('assign.split') + ` ${item.name}`}
+                                  data-testid={`guest-split-btn-${itemIdx}`}
+                                >
+                                  <Scissors className="h-3 w-3" />
+                                </button>
+                              )}
+                            </div>
+                            <span className="font-semibold">{formatCents(item.totalPrice, currency, locale)}</span>
+                          </div>
+                        )}
+                        {/* Inline split form */}
+                        {splittingIndex === itemIdx &&
+                          (() => {
+                            const parsed = Number(splitQuantity);
+                            const validQty = Number.isSafeInteger(parsed) && parsed >= 1 && parsed < item.quantity;
+                            return (
+                              <div className="mb-2 flex flex-wrap items-center gap-2">
+                                <span className="text-xs text-muted-foreground">{t('assign.splitOff')}</span>
+                                <Input
+                                  type="number"
+                                  min={1}
+                                  max={item.quantity - 1}
+                                  value={splitQuantity}
+                                  onChange={(e) => setSplitQuantity(e.target.value)}
+                                  inputMode="numeric"
+                                  className="h-11 w-20 text-base"
+                                  data-testid={`guest-split-qty-${itemIdx}`}
+                                />
+                                <span className="text-xs text-muted-foreground">
+                                  {t('assign.splitOfTotal', { total: item.quantity })}
+                                </span>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  className="min-h-11"
+                                  disabled={!validQty}
+                                  onClick={() => handleSplitItem(itemIdx)}
+                                  data-testid={`guest-split-submit-${itemIdx}`}
+                                >
+                                  {t('assign.split')}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="min-h-11"
+                                  onClick={() => setSplittingIndex(null)}
+                                >
+                                  {t('assign.cancel')}
+                                </Button>
+                              </div>
+                            );
+                          })()}
+                        {/* Person toggle buttons */}
+                        <div className="flex flex-wrap gap-1.5">
+                          {people.map((name, personIdx) => {
+                            if (!name.trim()) return null;
+                            const isAssigned = assigned.has(personIdx);
+                            return (
+                              <button
+                                key={personIdx}
+                                type="button"
+                                onClick={() => toggleAssignment(itemIdx, personIdx)}
+                                className={`flex min-h-11 max-w-full items-center gap-1 rounded-full px-3 py-2 text-sm transition-colors ${
+                                  isAssigned
+                                    ? 'bg-primary text-primary-foreground'
+                                    : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                                }`}
+                              >
+                                <Avatar className="h-5 w-5">
+                                  <AvatarFallback className="text-[9px]">{initials(name)}</AvatarFallback>
+                                </Avatar>
+                                <span
+                                  data-testid="chip-label"
+                                  className="min-w-0 text-left [overflow-wrap:anywhere]"
+                                  title={name.trim()}
+                                >
+                                  {labels[personIdx]}
+                                </span>
+                                {isAssigned && <Check className="h-3 w-3" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+
+              {/* Per-person summary */}
+              {perPersonTotals.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">{t('assign.perPersonTotals')}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-1">
+                    {perPersonTotals.map((pt) => (
+                      <div key={pt.personIndex} className="flex justify-between text-sm">
+                        <span>
+                          {people[pt.personIndex]?.trim() ||
+                            t('people.personPlaceholder', { index: pt.personIndex + 1 })}
+                        </span>
+                        <span className="font-medium">{formatCents(pt.total, currency, locale)}</span>
+                      </div>
+                    ))}
                   </CardContent>
                 </Card>
-              );
-            })}
-          </div>
-
-          {/* Per-person summary */}
-          {perPersonTotals.length > 0 && (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">{t('assign.perPersonTotals')}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1">
-                {perPersonTotals.map((pt) => (
-                  <div key={pt.personIndex} className="flex justify-between text-sm">
-                    <span>
-                      {people[pt.personIndex]?.trim() || t('people.personPlaceholder', { index: pt.personIndex + 1 })}
-                    </span>
-                    <span className="font-medium">{formatCents(pt.total, currency, locale)}</span>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
+              )}
+            </>
           )}
-
-          {/* Next button - sticky bottom */}
-          <div className="fixed bottom-0 left-0 right-0 p-4 bg-background border-t">
-            <div className="mx-auto max-w-lg space-y-3">
-              <Button
-                className="w-full h-14 text-lg"
-                disabled={!allAssigned || createSplit.isPending}
-                onClick={handleCreateSplit}
-                data-testid="create-split-btn"
-              >
-                {createSplit.isPending
-                  ? t('assign.creatingSplit')
-                  : !allAssigned
-                    ? t('assign.assignAllItems', { remaining: items.length - assignedCount })
-                    : t('assign.createSplitButton')}
-                {allAssigned && !createSplit.isPending && <Share2 className="ml-2 h-5 w-5" />}
-              </Button>
-              <Button
-                variant="outline"
-                className="w-full h-12"
-                disabled={validPeople.length < 1 || createClaimSession.isPending}
-                onClick={handleShareForClaiming}
-                data-testid="share-for-claiming-btn"
-              >
-                {createClaimSession.isPending ? t('assign.creatingSession') : t('assign.shareForClaiming')}
-                {!createClaimSession.isPending && <Users className="ml-2 h-5 w-5" />}
-              </Button>
-              <p className="text-xs text-center text-muted-foreground">{t('assign.shareHint')}</p>
+          {/* The persistent finalization bar must not cover item fields when the keyboard is open. */}
+          {!addingItem && splittingIndex === null && editingItem === null && (
+            <div
+              data-testid="guest-assign-actions"
+              className="fixed right-0 bottom-0 left-0 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] [@media(max-height:640px)]:max-h-24"
+            >
+              <div className="mx-auto max-w-lg space-y-3">
+                {workflow === 'manual' && (
+                  <Button
+                    className="w-full h-14 text-lg"
+                    disabled={!allAssigned || createSplit.isPending}
+                    onClick={handleCreateSplit}
+                    data-testid="create-split-btn"
+                  >
+                    {createSplit.isPending
+                      ? t('assign.creatingSplit')
+                      : !allAssigned
+                        ? t('assign.assignAllItems', { remaining: items.length - assignedCount })
+                        : t('assign.createSplitButton')}
+                    {allAssigned && !createSplit.isPending && <Share2 className="ml-2 h-5 w-5" />}
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  className="w-full h-12"
+                  disabled={
+                    items.length === 0 ||
+                    (workflow === 'manual' && validPeople.length < 1) ||
+                    createClaimSession.isPending
+                  }
+                  onClick={handleShareForClaiming}
+                  data-testid="share-for-claiming-btn"
+                >
+                  {createClaimSession.isPending ? t('assign.creatingSession') : t('assign.shareForClaiming')}
+                  {!createClaimSession.isPending && <Users className="ml-2 h-5 w-5" />}
+                </Button>
+                <p className="text-xs text-center text-muted-foreground">{t('assign.shareHint')}</p>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>

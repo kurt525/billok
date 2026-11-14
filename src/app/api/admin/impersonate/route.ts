@@ -1,8 +1,10 @@
 import { cookies } from 'next/headers';
 import { auth } from '@/server/auth';
 import { db } from '@/server/db';
+import { requireOwner } from '@/server/lib/owner-access';
 import { logAdminAction } from '@/server/trpc/routers/admin';
-import { signPayload, verifyAndParse } from '@/server/lib/signed-cookie';
+import { signPayload } from '@/server/lib/signed-cookie';
+import { currentImpersonationSessionBinding, verifiedImpersonationSession } from '@/server/lib/impersonation-session';
 
 const COOKIE_NAME = 'sharetab-impersonate';
 
@@ -13,21 +15,36 @@ const COOKIE_NAME = 'sharetab-impersonate';
  */
 export async function POST(req: Request) {
   const session = await auth();
-  const adminEmail = process.env.ADMIN_EMAIL;
-
-  if (!session?.user?.id || !adminEmail || session.user.email !== adminEmail) {
-    return Response.json({ error: 'Forbidden' }, { status: 403 });
+  if (!session?.user?.id) return Response.json({ error: 'Доступ запрещён' }, { status: 403 });
+  try {
+    await requireOwner(db, session.user.id);
+  } catch {
+    return Response.json({ error: 'Доступ запрещён' }, { status: 403 });
   }
 
-  const body = await req.json();
-  const targetUserId = body.userId;
+  const cookieStore = await cookies();
+  // Never start another impersonation while the mode cookie is present.
+  if (cookieStore.get(COOKIE_NAME)) return Response.json({ error: 'Доступ запрещён' }, { status: 403 });
+  const binding = await currentImpersonationSessionBinding(req, session.user.id);
+  if (!binding) return Response.json({ error: 'Доступ запрещён' }, { status: 403 });
 
-  if (!targetUserId || typeof targetUserId !== 'string') {
-    return Response.json({ error: 'userId is required' }, { status: 400 });
+  const body: unknown = await req.json().catch(() => null);
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    Array.isArray(body) ||
+    Object.keys(body).length !== 1 ||
+    typeof (body as { userId?: unknown }).userId !== 'string'
+  ) {
+    return Response.json({ error: 'Не указан пользователь' }, { status: 400 });
+  }
+  const targetUserId = (body as { userId: string }).userId;
+  if (!targetUserId || targetUserId.length > 128) {
+    return Response.json({ error: 'Не указан пользователь' }, { status: 400 });
   }
 
   if (targetUserId === session.user.id) {
-    return Response.json({ error: 'Cannot impersonate yourself' }, { status: 400 });
+    return Response.json({ error: 'Нельзя войти от собственного имени' }, { status: 400 });
   }
 
   const targetUser = await db.user.findUnique({
@@ -36,7 +53,7 @@ export async function POST(req: Request) {
   });
 
   if (!targetUser) {
-    return Response.json({ error: 'User not found' }, { status: 404 });
+    return Response.json({ error: 'Пользователь не найден' }, { status: 404 });
   }
 
   const impersonationData = JSON.stringify({
@@ -46,13 +63,13 @@ export async function POST(req: Request) {
     targetName: targetUser.name,
     targetEmail: targetUser.email,
     startedAt: new Date().toISOString(),
+    sessionBinding: binding,
   });
 
-  const cookieStore = await cookies();
   cookieStore.set(COOKIE_NAME, signPayload(impersonationData), {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    sameSite: 'strict',
     path: '/',
     maxAge: 60 * 60, // 1 hour max
   });
@@ -76,20 +93,22 @@ export async function POST(req: Request) {
  * DELETE /api/admin/impersonate
  * Clears the impersonation cookie.
  */
-export async function DELETE() {
+export async function DELETE(req: Request) {
   const session = await auth();
-  const adminEmail = process.env.ADMIN_EMAIL;
-
-  if (!session?.user?.id || !adminEmail || session.user.email !== adminEmail) {
-    return Response.json({ error: 'Forbidden' }, { status: 403 });
+  if (!session?.user?.id) return Response.json({ error: 'Доступ запрещён' }, { status: 403 });
+  try {
+    await requireOwner(db, session.user.id);
+  } catch {
+    return Response.json({ error: 'Доступ запрещён' }, { status: 403 });
   }
 
   const cookieStore = await cookies();
   const raw = cookieStore.get(COOKIE_NAME)?.value;
 
-  if (raw) {
-    const data = verifyAndParse<{ targetId?: string; targetEmail?: string; targetName?: string }>(raw);
-    if (data?.targetId) {
+  const binding = await currentImpersonationSessionBinding(req, session.user.id);
+  if (raw && binding) {
+    const data = verifiedImpersonationSession(raw, session.user.id, binding);
+    if (data) {
       await logAdminAction(db, session.user.id, 'IMPERSONATION_ENDED', data.targetId, {
         targetEmail: data.targetEmail,
         targetName: data.targetName,
@@ -97,6 +116,7 @@ export async function DELETE() {
     }
   }
 
+  // Clearing the cookie never changes or issues an Auth.js session.
   cookieStore.delete(COOKIE_NAME);
   return Response.json({ success: true });
 }

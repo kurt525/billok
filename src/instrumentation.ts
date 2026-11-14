@@ -7,9 +7,6 @@ export async function register() {
 
       const { logger } = await import('@/server/lib/logger');
       logger.info('app.startup', { version, commitSha });
-
-      const { startPoller } = await import('@/server/lib/auth-health-poller');
-      startPoller();
     } catch (error) {
       // Isolate startup failures so the app can still boot (Finding #23).
       // Use console.error as logger may not be available if the import itself failed.

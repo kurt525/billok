@@ -43,13 +43,11 @@ npm run dev
 npm run db:seed
 ```
 
-This creates three demo users you can log in with:
-
-| Email               | Password    |
-| ------------------- | ----------- |
-| alice@example.com   | password123 |
-| bob@example.com     | password123 |
-| charlie@example.com | password123 |
+This creates three **test data** accounts (Alice, Bob and Charlie).
+Seeding does not enable email/password, Magic Link, Google, or OIDC sign-in.
+BillOK accounts must be activated by email confirmation and a verified Passkey.
+For isolated signed WebAuthn test fixtures see `e2e/seed-mobile-auth-journey.ts`
+and the self-hosted `BillOK CI` workflow.
 
 ## Running Tests
 
@@ -59,7 +57,7 @@ This creates three demo users you can log in with:
 npm test
 ```
 
-Runs over 1,100 fast Vitest tests (under 10 seconds). Tests sit next to the code they cover (`src/**/*.test.ts`, plus `docker/**/*.test.mjs` for the Docker build scripts): money and split math, balance computation, rate limiting, exchange rates, sign-in, OIDC and Google policy, guest sessions, AI providers, and the admin, auth, balances, expenses, guest, groups, and receipts routers.
+Runs over 1,100 fast Vitest tests (under 10 seconds). Tests sit next to the code they cover (`src/**/*.test.ts`, plus `docker/**/*.test.mjs` for the Docker build scripts): money and split math, balance computation, rate limiting, verified Passkey-only sign-in, guest sessions, and the admin, auth, balances, expenses, guest, groups, and receipts routers.
 
 ### E2E tests
 
@@ -69,15 +67,14 @@ npm run dev:full   # in one terminal
 BASE_URL=http://localhost:3000 npx playwright test   # in another
 ```
 
-Tip: set `AUTH_RATE_LIMIT_MAX=9999`, `AUTH_IP_RATE_LIMIT_MAX=9999`, `REGISTER_RATE_LIMIT_MAX=9999`, and `GUEST_RATE_LIMIT_MAX=9999` in `.env` to lift the per-email and per-IP limits during test runs (the global guest caps and the fixed guest limits still apply). Every local request counts against one IP, because Next.js adds an `x-forwarded-for` header to local requests.
+Tip: set `REGISTER_RATE_LIMIT_MAX=9999`, and `GUEST_RATE_LIMIT_MAX=9999` in `.env` to lift the per-email and per-IP limits during test runs (the global guest caps and the fixed guest limits still apply). Every local request counts against one IP, because Next.js adds an `x-forwarded-for` header to local requests.
 
-The full suite also expects the settings CI uses. In `.env`, for the server: `ADMIN_EMAIL=alice@example.com` (the admin tests sign in as the seeded Alice), `AI_PROVIDER_PRIORITY=mock` (deterministic receipt scans), and `EMAIL_SERVER_HOST=localhost` with `EMAIL_SERVER_PORT=2525`, with `node scripts/mock-smtp.mjs 2525` running (it accepts all mail and delivers nothing). Playwright doesn't read `.env`, and the two magic-link tests that send mail skip unless the test process itself sees `EMAIL_SERVER_HOST` (the other magic-link tests fail unless the server has it), so pass it on the command line too:
-
-```bash
-EMAIL_SERVER_HOST=localhost BASE_URL=http://localhost:3000 npx playwright test
-```
-
-See the "Run tests" step in `.github/workflows/test.yml`.
+The active `BillOK CI` is `.github/workflows/billok-ci.yml`. Its Mobile Chromium
+job creates an isolated disposable PostgreSQL database, a loopback TLS SMTP
+mailbox, and real P-256/WebAuthn test credentials. The SMTP mailbox is used
+only for email confirmation and Passkey recovery, **never for login**.
+The historical `.github/workflows/test.yml` is an inherited workflow;
+its broader retirement belongs to Issue #1 section 8.2.
 
 ### Linting
 
@@ -132,7 +129,7 @@ Routers live in `src/server/trpc/routers/`. Add your procedure there and wire it
 - **One concern per PR** — bug fixes, features, and refactors should be separate PRs.
 - **Describe what and why** — the PR description should explain the motivation, not just restate the diff.
 - **Add tests** — new logic should have unit tests where possible; new user flows should have e2e coverage.
-- **Pass CI** — the required `test` check runs `npm audit --omit=dev --audit-level=high`, `npm run format:check`, `npm run lint`, `npx tsc --noEmit`, `npm test`, `npm run build`, and the Playwright e2e suite. Run the first six locally before opening a PR. If you change `docker/`, the entrypoint, `prisma/` SQL, or dependencies, also run `npm run test:docker` (the Docker Fresh Install check; `DOCKER_HOST=ssh://user@host` works if you have no local Docker).
+- **Pass CI** — the required `BillOK CI` on the self-hosted runner runs Vitest, Code quality/types, Coverage regression, Mobile Chromium and mobile PWA tests; check the full five-job result. Run the first six locally before opening a PR. If you change `docker/`, the entrypoint, `prisma/` SQL, or dependencies, also run `npm run test:docker` (the Docker Fresh Install check; `DOCKER_HOST=ssh://user@host` works if you have no local Docker).
 - **Document upgrade steps** — if a change needs anything from operators on upgrade (a manual command, a new required variable, a behavior they must know about), add it under **Upgrading** in the README, since build releases only list commit titles.
 - **Conventional commits** — use prefixes like `feat:`, `fix:`, `chore:`, `docs:`, `refactor:` in commit messages.
 

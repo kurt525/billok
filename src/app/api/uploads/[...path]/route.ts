@@ -30,7 +30,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ pat
   try {
     fullPath = resolveUploadPath(filePath);
   } catch {
-    return new Response('Forbidden', { status: 403 });
+    return new Response('Доступ запрещён', { status: 403 });
   }
 
   // Verify receipt ownership
@@ -41,7 +41,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ pat
   });
 
   if (!receipt) {
-    return new Response('Not found', { status: 404 });
+    return new Response('Не найдено', { status: 404 });
   }
 
   if (receipt.isGuest) {
@@ -56,11 +56,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ pat
     const isUploader = receipt.uploadedById === session.user.id;
     const isGroupMember = receipt.group?.members.some((m: { userId: string }) => m.userId === session.user.id) ?? false;
     if (!isUploader && !isGroupMember) {
-      return new Response('Forbidden', { status: 403 });
+      return new Response('Доступ запрещён', { status: 403 });
     }
   } else {
     // Unauthenticated user trying to access non-guest receipt
-    return new Response('Unauthorized', { status: 401 });
+    return new Response('Требуется вход', { status: 401 });
   }
 
   try {
@@ -76,6 +76,6 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ pat
       },
     });
   } catch {
-    return new Response('Not found', { status: 404 });
+    return new Response('Не найдено', { status: 404 });
   }
 }

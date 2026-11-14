@@ -7,6 +7,12 @@ import { checkTokenRateLimit, peekTokenRateLimit } from './rate-limit';
 const WRITE_LIMIT_PER_PERSON = 30;
 /** Saves of one kind per share token per minute, everyone combined: three for each of the 100 people a session holds. */
 const WRITE_LIMIT_PER_SESSION = 300;
+/** Private status reads have a separate budget: SSE hints, mobile resumes and
+ * six-width regression reloads must not be counted as receipt mutations.
+ * Bound both person and receipt, including attempts with invented tokens.
+ */
+const PAYMENT_STATUS_READ_LIMIT_PER_PERSON = 120;
+const PAYMENT_STATUS_READ_LIMIT_PER_SESSION = 3000;
 /**
  * getSession calls per share token per minute. The claim page polls every 3 s (20 a minute), so
  * 100 open pages make 2000; the rest covers extra tabs and the reloads after each save.
@@ -15,7 +21,21 @@ const READ_LIMIT_PER_SESSION = 3000;
 const WINDOW_MS = 60 * 1000;
 
 /** The claim-session changes that take a person token, each budgeted separately. */
-export type ClaimWriteAction = 'claim' | 'edit-name' | 'remove-person' | 'split-item';
+export type ClaimWriteAction =
+  | 'claim'
+  | 'edit-name'
+  | 'remove-person'
+  | 'split-item'
+  | 'personal-tip'
+  | 'personal-parts'
+  | 'payer-sbp-read'
+  | 'payer-sbp-write'
+  | 'payer-sbp-reimbursement'
+  | 'payment-declaration-read'
+  | 'payment-declaration-write'
+  | 'guest-push-subscription'
+  | 'payer-payment-review'
+  | 'payer-payment-verify';
 
 /**
  * Rate limit for the claim-session changes that take a person token: claimItems,
@@ -42,10 +62,31 @@ export function checkClaimWriteRateLimit(action: ClaimWriteAction, token: string
   // JSON-encoded so a token containing ':' can't land on another pair's key
   const personKey = `guest-${action}-person:${JSON.stringify([token, personToken])}`;
 
-  if (!peekTokenRateLimit(sessionKey, WRITE_LIMIT_PER_SESSION).allowed) return false;
-  if (!checkTokenRateLimit(personKey, WRITE_LIMIT_PER_PERSON, WINDOW_MS).allowed) return false;
+  // The read-only payment status is refreshed through SSE and fallback polling.
+  // It must not inherit the 30/min quota intended for financial writes.
+  const isPaymentStatusRead = action === 'payment-declaration-read';
+  const sessionLimit = isPaymentStatusRead ? PAYMENT_STATUS_READ_LIMIT_PER_SESSION : WRITE_LIMIT_PER_SESSION;
+  const personLimit = isPaymentStatusRead ? PAYMENT_STATUS_READ_LIMIT_PER_PERSON : WRITE_LIMIT_PER_PERSON;
+
+  if (!peekTokenRateLimit(sessionKey, sessionLimit).allowed) return false;
+  if (!checkTokenRateLimit(personKey, personLimit, WINDOW_MS).allowed) return false;
   // Synchronous since the peek, so the session budget still has room
-  checkTokenRateLimit(sessionKey, WRITE_LIMIT_PER_SESSION, WINDOW_MS);
+  checkTokenRateLimit(sessionKey, sessionLimit, WINDOW_MS);
+  return true;
+}
+
+/**
+ * 3.5: a heartbeat every 15 seconds, per person's token across all its tabs.
+ * Separate budget from actual claim writes; 100 concurrent guests must not
+ * starve each other's presence on a busy restaurant receipt.
+ */
+export function checkGuestPresenceHeartbeatLimit(token: string, personToken: string): boolean {
+  const sessionKey = `guest-presence:${token}`;
+  const personKey = `guest-presence-person:${JSON.stringify([token, personToken])}`;
+  const maxPerSession = 1000;
+  if (!peekTokenRateLimit(sessionKey, maxPerSession).allowed) return false;
+  if (!checkTokenRateLimit(personKey, 12, WINDOW_MS).allowed) return false;
+  checkTokenRateLimit(sessionKey, maxPerSession, WINDOW_MS);
   return true;
 }
 
