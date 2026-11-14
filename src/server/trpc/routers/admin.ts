@@ -23,6 +23,7 @@ import { totalsInGroupCurrency } from '@/server/lib/group-expense-totals';
 import { listOwnerRegisteredUsers, changeRegisteredUserSuspension } from '@/server/lib/owner-user-admin';
 import { ownerSessionFingerprint, consumeOwnerPasskeyActionProof } from '@/server/lib/owner-passkey-action-approval';
 import { systemInviteCreateApprovalTarget } from '@/lib/system-invite-approval-target';
+import { registrationModeApprovalTarget, announcementApprovalTarget } from '@/lib/admin-setting-approval-target';
 
 const serverStartTime = new Date();
 const { version: cachedVersion, commitSha: cachedCommitSha } = getBuildInfo();
@@ -527,20 +528,33 @@ export const adminRouter = createTRPCRouter({
 
   setRegistrationMode: adminProcedure
     .input(
-      z.object({
+      z.strictObject({
         mode: z.enum(REGISTRATION_MODES),
+        approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await ctx.db.systemSetting.upsert({
-        where: { key: 'registrationMode' },
-        update: { value: input.mode },
-        create: { key: 'registrationMode', value: input.mode },
+      const sessionHash = ownerSessionFingerprint(ctx.headers);
+      return ctx.db.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', ctx.user.id);
+        await requireOwner(tx, ctx.user.id);
+        await consumeOwnerPasskeyActionProof(tx, {
+          userId: ctx.user.id,
+          action: 'REGISTRATION_MODE_UPDATE',
+          targetId: registrationModeApprovalTarget(input.mode),
+          sessionHash,
+          approvalToken: input.approvalToken,
+        });
+        await tx.systemSetting.upsert({
+          where: { key: 'registrationMode' },
+          update: { value: input.mode },
+          create: { key: 'registrationMode', value: input.mode },
+        });
+        await tx.adminAuditLog.create({
+          data: { adminId: ctx.user.id, action: 'REGISTRATION_MODE_CHANGED', metadata: { mode: input.mode } },
+        });
+        return { mode: input.mode };
       });
-
-      await logAdminAction(ctx.db, ctx.user.id, 'REGISTRATION_MODE_CHANGED', null, { mode: input.mode });
-
-      return { mode: input.mode };
     }),
 
   createSystemInvite: adminProcedure
@@ -745,27 +759,39 @@ export const adminRouter = createTRPCRouter({
 
   setAnnouncement: adminProcedure
     .input(
-      z.object({
+      z.strictObject({
         message: z.string().max(500).optional(),
+        approvalToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      if (!input.message || input.message.trim() === '') {
-        // Clear announcement
-        await ctx.db.systemSetting.deleteMany({
-          where: { key: 'announcement' },
+      const message = input.message?.trim() ?? '';
+      const targetId = await announcementApprovalTarget(message);
+      const sessionHash = ownerSessionFingerprint(ctx.headers);
+      return ctx.db.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', ctx.user.id);
+        await requireOwner(tx, ctx.user.id);
+        await consumeOwnerPasskeyActionProof(tx, {
+          userId: ctx.user.id,
+          action: 'OWNER_SETTING_UPDATE',
+          targetId,
+          sessionHash,
+          approvalToken: input.approvalToken,
         });
-      } else {
-        await ctx.db.systemSetting.upsert({
-          where: { key: 'announcement' },
-          update: { value: input.message.trim() },
-          create: { key: 'announcement', value: input.message.trim() },
+        if (!message) {
+          await tx.systemSetting.deleteMany({ where: { key: 'announcement' } });
+        } else {
+          await tx.systemSetting.upsert({
+            where: { key: 'announcement' },
+            update: { value: message },
+            create: { key: 'announcement', value: message },
+          });
+        }
+        await tx.adminAuditLog.create({
+          data: { adminId: ctx.user.id, action: 'ANNOUNCEMENT_SET', metadata: { message: message || null } },
         });
-      }
-
-      await logAdminAction(ctx.db, ctx.user.id, 'ANNOUNCEMENT_SET', null, { message: input.message ?? null });
-
-      return { success: true };
+        return { success: true };
+      });
     }),
 
   // Legacy ShareTab API preserved for compatibility, but BillOK uses RUB and SBP only.

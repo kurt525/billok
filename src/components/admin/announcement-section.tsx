@@ -1,6 +1,9 @@
 'use client';
 
 import { useState, useRef } from 'react';
+import { toast } from 'sonner';
+import { approveOwnerPrivilegedAction } from '@/lib/owner-admin-approval';
+import { announcementApprovalTarget } from '@/lib/admin-setting-approval-target';
 import { useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
@@ -19,6 +22,7 @@ export function AnnouncementSection() {
   });
 
   const [draft, setDraft] = useState('');
+  const [approving, setApproving] = useState(false);
   const lastSyncedRef = useRef<string | null>(null);
 
   // Sync draft from server data without useEffect
@@ -27,6 +31,24 @@ export function AnnouncementSection() {
     lastSyncedRef.current = serverMessage;
     if (serverMessage && draft !== serverMessage) {
       setDraft(serverMessage);
+    }
+  }
+
+  async function saveWithPasskey(value: string, clear = false) {
+    if (approving || setAnnouncement.isPending) return;
+    setApproving(true);
+    try {
+      const message = value.trim();
+      const approvalToken = await approveOwnerPrivilegedAction(
+        'OWNER_SETTING_UPDATE',
+        await announcementApprovalTarget(message),
+      );
+      await setAnnouncement.mutateAsync({ message, approvalToken });
+      if (clear) setDraft('');
+    } catch {
+      toast.error('Изменение объявления не подтверждено через Passkey');
+    } finally {
+      setApproving(false);
     }
   }
 
@@ -54,6 +76,9 @@ export function AnnouncementSection() {
             onChange={(e) => setDraft(e.target.value)}
             maxLength={500}
           />
+          <p className="text-xs text-muted-foreground">
+            Публикация и удаление объявления требуют подтверждения Passkey владельца.
+          </p>
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
             <span
               className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]"
@@ -68,11 +93,8 @@ export function AnnouncementSection() {
                   size="sm"
                   data-testid="admin-announcement-clear"
                   className="min-h-11 min-w-11 max-w-full whitespace-normal [overflow-wrap:anywhere]"
-                  disabled={setAnnouncement.isPending}
-                  onClick={() => {
-                    setAnnouncement.mutate({ message: '' });
-                    setDraft('');
-                  }}
+                  disabled={approving || setAnnouncement.isPending}
+                  onClick={() => void saveWithPasskey('', true)}
                 >
                   {t('announcement.clear')}
                 </Button>
@@ -81,8 +103,8 @@ export function AnnouncementSection() {
                 size="sm"
                 data-testid="admin-announcement-save"
                 className="min-h-11 min-w-11 max-w-full whitespace-normal [overflow-wrap:anywhere]"
-                disabled={setAnnouncement.isPending || draft.trim() === (announcement.data?.message ?? '')}
-                onClick={() => setAnnouncement.mutate({ message: draft.trim() })}
+                disabled={approving || setAnnouncement.isPending || draft.trim() === (announcement.data?.message ?? '')}
+                onClick={() => void saveWithPasskey(draft)}
               >
                 {setAnnouncement.isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
                 {t('announcement.save')}

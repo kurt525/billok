@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { approveOwnerPrivilegedAction } from '@/lib/owner-admin-approval';
 import { systemInviteCreateApprovalTarget } from '@/lib/system-invite-approval-target';
+import { registrationModeApprovalTarget, type RegistrationSettingMode } from '@/lib/admin-setting-approval-target';
 import { useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
@@ -39,6 +40,7 @@ export function RegistrationControlSection() {
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<{ id: string; codePreview: string } | null>(null);
   const [approvingInvite, setApprovingInvite] = useState(false);
+  const [approvingMode, setApprovingMode] = useState(false);
 
   const currentMode = regMode.data?.mode ?? 'open';
 
@@ -59,6 +61,22 @@ export function RegistrationControlSection() {
       variant: 'destructive' as const,
     },
   };
+
+  async function setModeWithPasskey(mode: RegistrationSettingMode) {
+    if (approvingMode || setMode.isPending || currentMode === mode) return;
+    setApprovingMode(true);
+    try {
+      const approvalToken = await approveOwnerPrivilegedAction(
+        'REGISTRATION_MODE_UPDATE',
+        registrationModeApprovalTarget(mode),
+      );
+      await setMode.mutateAsync({ mode, approvalToken });
+    } catch {
+      toast.error('Изменение режима регистрации не подтверждено через Passkey');
+    } finally {
+      setApprovingMode(false);
+    }
+  }
 
   async function createWithPasskey() {
     if (approvingInvite || createInvite.isPending || revokeInvite.isPending) return;
@@ -119,8 +137,8 @@ export function RegistrationControlSection() {
                   variant={currentMode === mode ? 'default' : 'outline'}
                   size="sm"
                   className="min-h-11 min-w-11 max-w-full whitespace-normal [overflow-wrap:anywhere]"
-                  disabled={setMode.isPending || currentMode === mode}
-                  onClick={() => setMode.mutate({ mode })}
+                  disabled={approvingMode || setMode.isPending || currentMode === mode}
+                  onClick={() => void setModeWithPasskey(mode)}
                 >
                   {setMode.isPending && setMode.variables?.mode === mode ? (
                     <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -129,6 +147,7 @@ export function RegistrationControlSection() {
                 </Button>
               ))}
             </div>
+            <p className="text-xs text-muted-foreground">Смена режима регистрации подтверждается Passkey владельца.</p>
           </CardContent>
         </Card>
 

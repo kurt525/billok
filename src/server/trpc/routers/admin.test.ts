@@ -543,7 +543,7 @@ describe('registration mode', () => {
   test.each(['open', 'invite-only', 'closed'] as const)('saves the %s setting', async (mode) => {
     mockDb.systemSetting.upsert.mockResolvedValue({ key: 'registrationMode', value: mode });
     const api = await callerAs(adminSession);
-    expect(await api.setRegistrationMode({ mode })).toEqual({ mode });
+    expect(await api.setRegistrationMode({ mode, approvalToken: 'b'.repeat(43) })).toEqual({ mode });
     expect(mockDb.systemSetting.upsert).toHaveBeenCalledWith({
       where: { key: 'registrationMode' },
       update: { value: mode },
@@ -557,9 +557,56 @@ describe('registration mode', () => {
     );
   });
 
+  test('6.12.4.4: all registration mode writes require Passkey; no JWT-only API bypass', async () => {
+    const api = await callerAs(adminSession);
+    for (const mode of ['open', 'invite-only', 'closed'] as const) {
+      await expect(api.setRegistrationMode({ mode } as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(proofConfirmation).not.toHaveBeenCalled();
+    expect(mockDb.systemSetting.upsert).not.toHaveBeenCalled();
+    expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('6.12.4.4: mode change consumes proof for exact selected mode before writing and audit', async () => {
+    const api = await callerAs(adminSession);
+    await api.setRegistrationMode({ mode: 'closed', approvalToken: 'b'.repeat(43) });
+    expect(mockDb.$transaction).toHaveBeenCalledTimes(1);
+    expect(mockDb.$queryRawUnsafe).toHaveBeenCalledWith('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', 'admin-1');
+    expect(proofConfirmation).toHaveBeenCalledWith(
+      mockDb,
+      expect.objectContaining({
+        userId: 'admin-1',
+        action: 'REGISTRATION_MODE_UPDATE',
+        targetId: 'registration-mode:v1:closed',
+        approvalToken: 'b'.repeat(43),
+        sessionHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      }),
+    );
+    expect(proofConfirmation.mock.invocationCallOrder[0]!).toBeLessThan(
+      mockDb.systemSetting.upsert.mock.invocationCallOrder[0]!,
+    );
+    expect(mockDb.systemSetting.upsert.mock.invocationCallOrder[0]!).toBeLessThan(
+      mockDb.adminAuditLog.create.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  test('6.12.4.4: wrong mode, session, consumed, expired proof never changes registration', async () => {
+    const api = await callerAs(adminSession);
+    for (const failure of ['wrong mode', 'wrong session', 'consumed', 'expired']) {
+      proofConfirmation.mockRejectedValueOnce(new Error(failure));
+      await expect(api.setRegistrationMode({ mode: 'invite-only', approvalToken: 'b'.repeat(43) })).rejects.toThrow(
+        failure,
+      );
+    }
+    expect(mockDb.systemSetting.upsert).not.toHaveBeenCalled();
+    expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
+  });
+
   test('refuses to save a mode ShareTab does not know', async () => {
     const api = await callerAs(adminSession);
-    await expect(api.setRegistrationMode({ mode: 'everyone' as 'open' })).rejects.toMatchObject({
+    await expect(
+      api.setRegistrationMode({ mode: 'everyone' as 'open', approvalToken: 'b'.repeat(43) }),
+    ).rejects.toMatchObject({
       code: 'BAD_REQUEST',
     });
     expect(mockDb.systemSetting.upsert).not.toHaveBeenCalled();
@@ -967,5 +1014,87 @@ describe('Issue #1 6.2: seven-day admin invitations, revocation and usage histor
     });
     expect(mockDb.systemInvite.create).not.toHaveBeenCalled();
     expect(mockDb.systemInvite.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue 6.12.4.4: public announcement is a value-scoped privileged setting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Older invitation replay tests replace this mock implementation.
+    proofConfirmation.mockReset().mockResolvedValue(undefined);
+    mockDb.user.findUnique.mockResolvedValue({
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
+    vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  test('cannot save or clear public content with only a JWT', async () => {
+    const api = await callerAs(adminSession);
+    await expect(api.setAnnouncement({ message: 'Не подписано' } as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await expect(api.setAnnouncement({ message: '' } as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.systemSetting.upsert).not.toHaveBeenCalled();
+    expect(mockDb.systemSetting.deleteMany).not.toHaveBeenCalled();
+    expect(proofConfirmation).not.toHaveBeenCalled();
+  });
+
+  test('a 500-character announcement has an exact signed fingerprint and atomic audit', async () => {
+    const { announcementApprovalTarget } = await import('@/lib/admin-setting-approval-target');
+    const message = 'Русский текст '.repeat(40).slice(0, 500);
+    const api = await callerAs(adminSession);
+    await api.setAnnouncement({ message, approvalToken: 'b'.repeat(43) });
+    expect(proofConfirmation).toHaveBeenCalledWith(
+      mockDb,
+      expect.objectContaining({
+        action: 'OWNER_SETTING_UPDATE',
+        targetId: await announcementApprovalTarget(message),
+        userId: 'admin-1',
+        sessionHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      }),
+    );
+    expect(mockDb.systemSetting.upsert).toHaveBeenCalledWith({
+      where: { key: 'announcement' },
+      update: { value: message },
+      create: { key: 'announcement', value: message },
+    });
+    expect(proofConfirmation.mock.invocationCallOrder[0]!).toBeLessThan(
+      mockDb.systemSetting.upsert.mock.invocationCallOrder[0]!,
+    );
+    expect(mockDb.systemSetting.upsert.mock.invocationCallOrder[0]!).toBeLessThan(
+      mockDb.adminAuditLog.create.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  test('clearing announcement consumes its own separate one-time permission', async () => {
+    const { announcementApprovalTarget } = await import('@/lib/admin-setting-approval-target');
+    const api = await callerAs(adminSession);
+    await api.setAnnouncement({ message: '', approvalToken: 'b'.repeat(43) });
+    expect(proofConfirmation).toHaveBeenCalledWith(
+      mockDb,
+      expect.objectContaining({
+        action: 'OWNER_SETTING_UPDATE',
+        targetId: await announcementApprovalTarget(''),
+      }),
+    );
+    expect(mockDb.systemSetting.deleteMany).toHaveBeenCalledWith({ where: { key: 'announcement' } });
+    expect(mockDb.adminAuditLog.create).toHaveBeenCalledWith({
+      data: { adminId: 'admin-1', action: 'ANNOUNCEMENT_SET', metadata: { message: null } },
+    });
+  });
+
+  test('rejects wrong target/session and repeated token without writing setting or audit', async () => {
+    const api = await callerAs(adminSession);
+    for (const reason of ['wrong target', 'different action', 'wrong session', 'already used']) {
+      proofConfirmation.mockRejectedValueOnce(new Error(reason));
+      await expect(api.setAnnouncement({ message: 'Тест', approvalToken: 'b'.repeat(43) })).rejects.toThrow(reason);
+    }
+    expect(mockDb.systemSetting.upsert).not.toHaveBeenCalled();
+    expect(mockDb.systemSetting.deleteMany).not.toHaveBeenCalled();
+    expect(mockDb.adminAuditLog.create).not.toHaveBeenCalled();
   });
 });

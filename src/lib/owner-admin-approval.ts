@@ -3,7 +3,8 @@ import type { PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/brow
 
 export type OwnerUserAction = 'USER_SUSPEND' | 'USER_UNSUSPEND' | 'USER_DELETE';
 export type OwnerInviteAction = 'SYSTEM_INVITE_CREATE' | 'SYSTEM_INVITE_REVOKE';
-export type OwnerPrivilegedAction = OwnerUserAction | OwnerInviteAction;
+export type OwnerSettingAction = 'REGISTRATION_MODE_UPDATE' | 'OWNER_SETTING_UPDATE';
+export type OwnerPrivilegedAction = OwnerUserAction | OwnerInviteAction | OwnerSettingAction;
 
 /**
  * Issue 6.12.4.2: the browser NEVER fabricates an administrative proof.
