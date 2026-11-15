@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
 import { auth } from '@/server/auth';
+import { readBoundedJson } from '@/server/lib/read-bounded-json';
 import { db } from '@/server/db';
 import { requireOwner } from '@/server/lib/owner-access';
 import { logAdminAction } from '@/server/trpc/routers/admin';
@@ -29,7 +30,7 @@ export async function POST(req: Request) {
   const binding = await currentImpersonationSessionBinding(req, session.user.id);
   if (!binding) return Response.json({ error: 'Доступ запрещён' }, { status: 403 });
 
-  const body: unknown = await req.json().catch(() => null);
+  const body = await readBoundedJson(req, 1024);
   if (
     !body ||
     typeof body !== 'object' ||

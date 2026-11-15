@@ -154,6 +154,31 @@ test.use({
   hasTouch: true,
 });
 
+test('6.12.6: live middleware rejects CSRF Origin/Forwarded spoofing before WebAuthn or admin data', async ({
+  request,
+}) => {
+  const payload = { approvalToken: 'x'.repeat(43) };
+  for (const path of [
+    '/api/admin/export',
+    '/api/admin/impersonate',
+    '/api/webauthn/owner/approval/start',
+    '/api/trpc/auth.updateProfile',
+  ]) {
+    const foreign = await request.post(path, {
+      headers: { Origin: 'https://attacker.invalid', 'Content-Type': 'application/json' },
+      data: payload,
+    });
+    expect(foreign.status(), path).toBe(403);
+    expect(await foreign.text(), path).toContain('Недоверенный источник');
+  }
+  const forwarded = await request.post('/api/admin/export', {
+    headers: { 'X-Forwarded-Host': 'attacker.invalid', 'Content-Type': 'application/json' },
+    data: payload,
+  });
+  expect(forwarded.status()).toBe(403);
+  expect(await forwarded.text()).toContain('Недоверенный источник');
+});
+
 test('ADMIN_EMAIL-matched account cannot impersonate or export without sole owner User.id', async ({ page }) => {
   test.setTimeout(60_000);
   // On disposable CI ADMIN_EMAIL intentionally equals Alice; the finished

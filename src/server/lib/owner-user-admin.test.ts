@@ -64,6 +64,8 @@ function fixture() {
       }),
     },
     passkeyCredential: { deleteMany: vi.fn() },
+    ownerPasskeyActionProof: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+    passkeyRecoveryRequest: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
     passkeyLoginTicket: { deleteMany: vi.fn().mockResolvedValue({ count: 2 }) },
     webAuthnChallenge: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
     session: { deleteMany: vi.fn().mockResolvedValue({ count: 3 }) },

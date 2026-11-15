@@ -72,7 +72,9 @@ function fixture(count = 3, action: 'RENAME' | 'REVOKE' = 'RENAME') {
         proof.consumedAt = now;
         return { count: 1 };
       }),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
+    passkeyRecoveryRequest: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
     adminAuditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-1' }) },
     webAuthnChallenge: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
     passkeyLoginTicket: { deleteMany: vi.fn().mockResolvedValue({ count: 2 }) },

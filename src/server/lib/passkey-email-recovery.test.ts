@@ -110,6 +110,7 @@ function fixture() {
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       create: vi.fn().mockResolvedValue({ id: 'new-credential-row' }),
     },
+    ownerPasskeyActionProof: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
     passkeyLoginTicket: { deleteMany: vi.fn().mockResolvedValue({ count: 2 }) },
     session: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
     adminAuditLog: { create: vi.fn().mockResolvedValue({ id: 'audit' }) },

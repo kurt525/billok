@@ -1,4 +1,5 @@
 import { auth } from '@/server/auth';
+import { readBoundedJson } from '@/server/lib/read-bounded-json';
 import { cookies } from 'next/headers';
 import { db } from '@/server/db';
 import { requireOwner } from '@/server/lib/owner-access';
@@ -28,7 +29,7 @@ export async function POST(req: Request) {
     return new Response('Доступ запрещён', { status: 403 });
   }
 
-  const body: unknown = await req.json().catch(() => null);
+  const body = await readBoundedJson(req, 512);
   if (
     !body ||
     typeof body !== 'object' ||

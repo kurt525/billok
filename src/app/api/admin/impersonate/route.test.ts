@@ -160,6 +160,15 @@ describe('Issue 6.12.3: privileged impersonation REST boundary', () => {
     expect(state.impersonation).toBeNull();
   });
 
+  test('6.12.6: oversized JSON, even without reliable Content-Length, never creates a mode cookie', async () => {
+    const { POST } = await import('./route');
+    const tooLarge = request({ ...approved(target), injected: 'x'.repeat(1500) });
+    expect((await POST(tooLarge)).status).toBe(400);
+    expect(transaction).not.toHaveBeenCalled();
+    expect(proof).not.toHaveBeenCalled();
+    expect(state.impersonation).toBeNull();
+  });
+
   test('6.12.4.5: JWT-only impersonation cannot create cookie or audit', async () => {
     const { POST } = await import('./route');
     expect((await POST(request({ userId: target }))).status).toBe(400);

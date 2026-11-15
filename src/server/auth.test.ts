@@ -20,7 +20,7 @@ vi.mock('./lib/passkey-login', () => ({ consumePasskeyLoginTicket: consumeTicket
 
 interface AuthConfig {
   providers: { id: string; [key: string]: unknown }[];
-  session: { strategy: string };
+  session: { strategy: string; maxAge: number };
   adapter?: unknown;
   callbacks: {
     jwt: (input: {
@@ -87,7 +87,7 @@ describe('Issue #1 6.9: no hidden provider can be enabled by configuration', () 
     const config = await loadAuth(externalEnv);
     expect(config.providers.map((p) => p.id)).toEqual(['passkey']);
     expect(config.adapter).toBeUndefined();
-    expect(config.session).toEqual({ strategy: 'jwt' });
+    expect(config.session).toEqual({ strategy: 'jwt', maxAge: 12 * 60 * 60 });
     expect(config.providers.find((p) => p.id === 'passkey')).toBeDefined();
     expect(JSON.stringify(config.providers)).not.toContain('fake-smtp-secret');
     expect(JSON.stringify(config.providers)).not.toContain('fake-client');

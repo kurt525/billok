@@ -149,6 +149,20 @@ describe('Issue 6.12.4.5: each administrative JSON export needs an exact one-tim
     expect((await POST(request())).status).toBe(500);
   });
 
+  test('6.12.6: streaming or oversized administrative body cannot reach DB or consume proof', async () => {
+    const { POST } = await import('./route');
+    const tooLarge = new Request('https://billok.ru/api/admin/export', {
+      method: 'POST',
+      headers: { cookie: 'authjs.session-token=verified-owner-jwt', 'content-type': 'application/json' },
+      body: JSON.stringify({ approvalToken: token, injected: 'x'.repeat(513) }),
+    });
+    expect((await POST(tooLarge)).status).toBe(403);
+    expect(models.user!.findMany).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+    expect(proof).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+
   test('signed token cannot be replayed to obtain two exports', async () => {
     const { POST } = await import('./route');
     let consumed = false;

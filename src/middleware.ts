@@ -3,6 +3,8 @@ import type { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
 import createIntlMiddleware from 'next-intl/middleware';
 import { routing } from '@/i18n/routing';
+import { trustedApiMutation } from '@/lib/api-request-security';
+import { readBillokWebAuthnRelyingParty } from '@/server/lib/webauthn-relying-party';
 import { hasLocalePrefix, stripLocalePrefix } from '@/lib/locale-paths';
 
 const intlMiddleware = createIntlMiddleware(routing);
@@ -14,6 +16,38 @@ function isPublicPage(pathname: string): boolean {
 
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
+  // Apply the same configured-origin check to tRPC and every WebAuthn/admin
+  // mutation before routing. Never use Host/Forwarded to choose the origin.
+  if (pathname.startsWith('/api/')) {
+    if (!pathname.startsWith('/api/auth/')) {
+      try {
+        const rp = readBillokWebAuthnRelyingParty(process.env);
+        if (
+          !trustedApiMutation(
+            {
+              method: request.method,
+              pathname,
+              headers: request.headers,
+              search: request.nextUrl.search,
+            },
+            rp.origin,
+          )
+        ) {
+          return new NextResponse('Недоверенный источник запроса', {
+            status: 403,
+            headers: { 'Cache-Control': 'no-store' },
+          });
+        }
+      } catch {
+        return new NextResponse('Ошибка настроек безопасности', { status: 403 });
+      }
+    }
+    const response = NextResponse.next();
+    if (/^\/api\/(?:admin|webauthn)/u.test(pathname)) {
+      response.headers.set('Cache-Control', 'no-store');
+    }
+    return response;
+  }
 
   // Next-intl internally rewrites /login to /ru/login. That internal request
   // passes through middleware again: redirecting it to /login creates a 308 loop.
@@ -56,5 +90,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!api|_next|_vercel|favicon\\.png|icon\\.svg|icons|manifest\\.json|.*\\..*).*)'],
+  matcher: ['/api/:path*', '/((?!api|_next|_vercel|favicon\\.png|icon\\.svg|icons|manifest\\.json|.*\\..*).*)'],
 };

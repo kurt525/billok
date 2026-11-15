@@ -8,7 +8,9 @@ import { issueAuthSessionNonce } from './lib/impersonation-session';
 // A verified, short-lived WebAuthn ticket is the ONLY credential accepted.
 // No additional identity provider, adapter or external account linking exists.
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  session: { strategy: 'jwt' },
+  // Do not leave verified Passkey sessions at Auth.js' 30-day default.
+  // Old JWTs are independently invalidated by sessionSecurityVersion.
+  session: { strategy: 'jwt', maxAge: 12 * 60 * 60 },
   pages: { signIn: '/login', error: '/login' },
   providers: [
     // Only a previously VERIFIED WebAuthn assertion can mint this short-lived,

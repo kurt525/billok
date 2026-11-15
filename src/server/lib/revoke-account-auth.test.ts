@@ -8,6 +8,8 @@ function fixture(count = 1) {
     user: { updateMany: vi.fn().mockResolvedValue({ count }) },
     webAuthnChallenge: { deleteMany: vi.fn().mockResolvedValue({ count: 2 }) },
     passkeyLoginTicket: { deleteMany: vi.fn().mockResolvedValue({ count: 3 }) },
+    ownerPasskeyActionProof: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    passkeyRecoveryRequest: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     session: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
   };
   const db = {
@@ -28,6 +30,16 @@ describe('Issue #1 6.8.1.1 — internal account recovery revocation', () => {
     for (const action of [tx.webAuthnChallenge.deleteMany, tx.passkeyLoginTicket.deleteMany, tx.session.deleteMany]) {
       expect(action).toHaveBeenCalledWith({ where: { userId: 'user-1' } });
     }
+    expect(tx.ownerPasskeyActionProof.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', consumedAt: null },
+    });
+    expect(tx.passkeyRecoveryRequest.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', consumedAt: null },
+      data: { consumedAt: expect.any(Date) },
+    });
+    expect(tx.user.updateMany.mock.invocationCallOrder[0]!).toBeLessThan(
+      tx.ownerPasskeyActionProof.deleteMany.mock.invocationCallOrder[0]!,
+    );
     expect(db.$transaction).toHaveBeenCalledTimes(1);
   });
 
@@ -39,6 +51,8 @@ describe('Issue #1 6.8.1.1 — internal account recovery revocation', () => {
     expect(tx.webAuthnChallenge.deleteMany).not.toHaveBeenCalled();
     expect(tx.passkeyLoginTicket.deleteMany).not.toHaveBeenCalled();
     expect(tx.session.deleteMany).not.toHaveBeenCalled();
+    expect(tx.ownerPasskeyActionProof.deleteMany).not.toHaveBeenCalled();
+    expect(tx.passkeyRecoveryRequest.updateMany).not.toHaveBeenCalled();
   });
 
   it('rejects blank account IDs before starting a transaction', async () => {

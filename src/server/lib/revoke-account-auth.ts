@@ -35,6 +35,15 @@ export async function revokeAccountAuthenticationStateInTransaction(
   // that were already associated with the account.
   await tx.webAuthnChallenge.deleteMany({ where: { userId } });
   await tx.passkeyLoginTicket.deleteMany({ where: { userId } });
+  // An already signed but unconsumed owner approval MUST NOT survive a key
+  // revocation, suspension or recovery. Leave consumed proofs for the audit.
+  await tx.ownerPasskeyActionProof.deleteMany({ where: { userId, consumedAt: null } });
+  // Invalidate all other pending email-based recovery flows for this account,
+  // retaining their records to prevent replay and preserve security history.
+  await tx.passkeyRecoveryRequest.updateMany({
+    where: { userId, consumedAt: null },
+    data: { consumedAt: new Date() },
+  });
   // NextAuth currently uses JWT, but invalidate old DB-backed sessions too.
   await tx.session.deleteMany({ where: { userId } });
   return { revoked: true };
