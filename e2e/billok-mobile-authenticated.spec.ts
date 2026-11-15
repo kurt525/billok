@@ -1,5 +1,5 @@
 import { authedPasskeyContext, signedQaAssertion } from './passkey-auth';
-import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
 import { auditMobileViewport, auditMobileTarget } from './billok-mobile-viewport-audit';
 import { createTestGroup, trpcMutation, trpcQuery, trpcResult, users } from './helpers';
 import { systemInviteCreateApprovalTarget } from '@/lib/system-invite-approval-target';
@@ -123,12 +123,12 @@ async function signInAsOwnerAdmin(page: Page) {
 // owner recovery suite exclusively tests CTAP2 browser button flows using keys
 // #0–#2 AFTER this suite. Never install a counter-incrementing CTAP2 authenticator
 // for the shared API key here: it would invalidate subsequent QA logins.
-async function approveQaOwnerInvitation(
-  page: Page,
-  action: 'SYSTEM_INVITE_CREATE' | 'SYSTEM_INVITE_REVOKE',
+async function approveQaOwnerAction(
+  context: APIRequestContext,
+  action: 'SYSTEM_INVITE_CREATE' | 'SYSTEM_INVITE_REVOKE' | 'IMPERSONATE',
   targetId: string,
 ) {
-  const started = await page.request.post('/api/webauthn/owner/approval/start', {
+  const started = await context.post('/api/webauthn/owner/approval/start', {
     data: { action, targetId },
   });
   expect(started.ok(), 'WebAuthn start rejected: ' + (await started.text())).toBe(true);
@@ -139,7 +139,7 @@ async function approveQaOwnerInvitation(
     challenge: options.challenge,
     rpId: options.rpId,
   });
-  const finished = await page.request.post('/api/webauthn/owner/approval/finish', { data: signed });
+  const finished = await context.post('/api/webauthn/owner/approval/finish', { data: signed });
   expect(finished.ok(), 'WebAuthn signature rejected: ' + (await finished.text())).toBe(true);
   const { approvalToken } = (await finished.json()) as { approvalToken: string };
   expect(approvalToken).toMatch(/^[A-Za-z0-9_-]{43}$/u);
@@ -162,10 +162,16 @@ test('ADMIN_EMAIL-matched account cannot impersonate or export without sole owne
   try {
     await page.context().addCookies((await ordinary.storageState()).cookies);
     await page.goto('/dashboard', { waitUntil: 'networkidle' });
+    // GET export is intentionally disabled for everyone. A signed-form POST
+    // by this non-owner is still denied by immutable ownerId.
     const exportResponse = await ordinary.get('/api/admin/export');
-    expect(exportResponse.status()).toBe(403);
+    expect(exportResponse.status()).toBe(405);
+    const deniedExport = await ordinary.post('/api/admin/export', {
+      data: { approvalToken: 'b'.repeat(43) },
+    });
+    expect(deniedExport.status()).toBe(403);
     const impersonation = await ordinary.post('/api/admin/impersonate', {
-      data: { userId: 'billok-owner' },
+      data: { userId: 'billok-owner', approvalToken: 'b'.repeat(43) },
     });
     expect(impersonation.status()).toBe(403);
     const adminQuery = await ordinary.get(
@@ -685,8 +691,8 @@ test('mobile invitation management keeps registration controls accessible at six
   // creation now requires a signed WebAuthn assertion. Preserve the six-width
   // UI audit by creating the disposable invite using a REAL server-verified
   // QA WebAuthn signature rather than bypassing the security gate.
-  const createApproval = await approveQaOwnerInvitation(
-    page,
+  const createApproval = await approveQaOwnerAction(
+    page.request,
     'SYSTEM_INVITE_CREATE',
     systemInviteCreateApprovalTarget(label),
   );
@@ -761,7 +767,7 @@ test('mobile invitation management keeps registration controls accessible at six
   // Revoke the same disposable code with a DIFFERENT freshly signed approval.
   // The mobile revoke dialog's real CTAP2 click path is covered by the owner
   // recovery Chromium suite, after this shared-key layout suite finishes.
-  const revokeApproval = await approveQaOwnerInvitation(page, 'SYSTEM_INVITE_REVOKE', inviteId);
+  const revokeApproval = await approveQaOwnerAction(page.request, 'SYSTEM_INVITE_REVOKE', inviteId);
   const revokeResponse = await trpcMutation(page.request, 'admin.revokeSystemInvite', {
     inviteId,
     approvalToken: revokeApproval,
@@ -2129,11 +2135,21 @@ test('Issue 6.12.3: real Passkey owner impersonation cannot access owner APIs', 
     expect(ordinarySession.user?.id).toBeTruthy();
     expect(ownerSession.user?.id).not.toBe(ordinarySession.user?.id);
 
-    const start = await owner.post('/api/admin/impersonate', { data: { userId: ordinarySession.user!.id! } });
+    const targetId = ordinarySession.user!.id!;
+    // A real signed WebAuthn proof for the exact target is mandatory.
+    const approvalToken = await approveQaOwnerAction(owner, 'IMPERSONATE', targetId);
+    const start = await owner.post('/api/admin/impersonate', { data: { userId: targetId, approvalToken } });
     expect(start.status(), await start.text()).toBe(200);
     const current = await trpcResult(await trpcQuery(owner, 'admin.getImpersonationStatus'));
     expect(current).toMatchObject({ isImpersonating: true, targetEmail: 'alice@example.com' });
-    expect((await owner.get('/api/admin/export')).status()).toBe(403);
+    expect((await owner.get('/api/admin/export')).status()).toBe(405);
+    expect(
+      (
+        await owner.post('/api/admin/export', {
+          data: { approvalToken: 'b'.repeat(43) },
+        })
+      ).status(),
+    ).toBe(403);
     const audit = await trpcQuery(owner, 'admin.getAuditLog', { limit: 1 });
     expect(audit.status()).toBe(403);
     const underlying = (await (await owner.get('/api/auth/session')).json()) as { user?: { id?: string } };

@@ -45,7 +45,9 @@ async function signSensitiveOwnerAction(
   expect(start.status()).toBe(200);
   const { options } = (await start.json()) as { options: { challenge: string; rpId: string } };
   const finish = await context.post('/api/webauthn/owner/approval/finish', {
-    data: signedQaAssertion({ email, credentialIndex: 0, challenge: options.challenge, rpId: options.rpId }),
+    // Browser has already signed with CTAP2 key #0. Use untouched #1 for
+    // the API assertion to avoid regressing the monotonic sign counter.
+    data: signedQaAssertion({ email, credentialIndex: 1, challenge: options.challenge, rpId: options.rpId }),
   });
   expect(finish.status()).toBe(200);
   const { approvalToken } = (await finish.json()) as { approvalToken: string };
@@ -92,6 +94,11 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
     const managedEmail = 'owner-users-target@mail.ru';
     const managedSession = await authedPasskeyContext(managedEmail, 0);
     try {
+      const managedIdentity = (await (await managedSession.get('/api/auth/session')).json()) as {
+        user?: { id?: string };
+      };
+      const managedId = managedIdentity.user?.id;
+      expect(managedId, 'Use actual DB userId rather than the fixture alias').toBeTruthy();
       // Issue 6.12.4.3: no system invitation may be created or revoked
       // with only the signed owner JWT; the mobile UI performs a real CTAP2
       // WebAuthn ceremony for BOTH operations.
@@ -152,7 +159,7 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
 
       // Sign the exact person to impersonate; the cookie must be tied to
       // this signed-in owner session and cleared before resuming key lifecycle.
-      const chosenId = 'owner-users-target';
+      const chosenId = managedId!;
       const modeApproval = await signSensitiveOwnerAction(oldSession, 'IMPERSONATE', chosenId);
       const modeBegin = await oldSession.post('/api/admin/impersonate', {
         data: { userId: chosenId, approvalToken: modeApproval },
