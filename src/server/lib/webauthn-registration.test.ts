@@ -158,6 +158,18 @@ describe('Issue #1 6.3.2: first WebAuthn credential requires confirmed email and
     expect(db.webAuthnChallenge.create).not.toHaveBeenCalled();
   });
 
+  it.each(['bad@example.com', 'bad@example.net', 'bad@dоmain.ru', 'bad@xn--abc.ru', 'bad@company.su.evil.com'])(
+    '6.14.6: forbidden email %s cannot begin first Passkey enrollment',
+    async (email) => {
+      const { db } = fakeDb();
+      db.user.findUnique.mockReset().mockResolvedValue({ ...user, email });
+      await expect(
+        beginFirstPasskeyRegistration({ db: requireDb(db), userId: user.id, bindingSecret: secret, env }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.webAuthnChallenge.create).not.toHaveBeenCalled();
+    },
+  );
+
   it('refuses unverified accounts and never creates an enrollment challenge', async () => {
     const { db } = fakeDb();
     db.user.findUnique.mockReset().mockResolvedValue({ ...user, emailVerified: null });

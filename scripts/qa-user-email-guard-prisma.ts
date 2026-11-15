@@ -20,13 +20,21 @@ async function main(): Promise<void> {
   const suffix = randomUUID();
   const id = 'qa-email-guard-' + suffix;
   const normal = 'initial-' + suffix + '@qa.billok.ru';
+  const suId = id + '-su';
+  const suEmail = 'Validated-' + suffix + '@Deep.QA.Billok.SU';
   try {
     const user = await db.user.create({ data: { id, email: normal } });
     assert.equal(user.email, normal);
+    const suUser = await db.user.create({ data: { id: suId, email: suEmail } });
+    assert.equal(suUser.email, suEmail, 'direct Prisma accepts a permitted .su subdomain');
     for (const [index, email] of [
       'blocked@example.com',
+      'blocked@example.net',
+      'blocked@example.org',
       'bad@domain.ru.evil.com',
+      'bad@company.su.evil.com',
       'bad@dоmain.ru',
+      'bad@xn--.ru',
       'bad@domain.su.',
     ].entries()) {
       await assert.rejects(
@@ -42,9 +50,14 @@ async function main(): Promise<void> {
       () => db.user.create({ data: { email: normal.toUpperCase() } }),
       'Case-insensitive unique index accepted duplicate account',
     );
+    await assert.rejects(
+      () => db.user.create({ data: { email: suEmail.toLowerCase() } }),
+      'Case-insensitive unique index accepted a .su duplicate account',
+    );
     assert.equal((await db.user.findUniqueOrThrow({ where: { id } })).email, normal);
+    assert.equal((await db.user.findUniqueOrThrow({ where: { id: suId } })).email, suEmail);
   } finally {
-    await db.user.deleteMany({ where: { id } });
+    await db.user.deleteMany({ where: { id: { in: [id, suId] } } });
     assert.equal(await db.user.count(), baseline, 'Disposable Prisma QA rows leaked');
     await db.$disconnect();
   }

@@ -19,7 +19,8 @@ BEGIN
   -- A-label and mixed-case addresses with permitted terminal zones.
   FOREACH good IN ARRAY ARRAY[
     'user@company.ru', 'user+tag@sub.company.su',
-    'User@Sub.Company.RU', 'user@xn--d1acufc.ru',
+    'nested@deep.qa.billok.su', 'User@Sub.Company.RU',
+    'USER@EXAMPLE.SU', 'user@xn--d1acufc.ru',
     'placeholder-1234567890@placeholder.billok.ru',
     'user@domain--ru.ru'
   ] LOOP
@@ -36,7 +37,10 @@ BEGIN
     'user@company.ru.evil.com', 'user@domain.su.',
     'user@domain..ru', 'user@.ru', 'user@domain.ru@evil.ru',
     'user name@domain.ru', 'user@dоmain.ru', 'user@ab--cd.ru',
-    'user@domain.ru' || chr(10), 'user@domain.ru' || chr(13)
+    'user@xn--.ru', 'user@domain.ru' || chr(10),
+    'user@domain.ru' || chr(13), 'user@domain.ru' || chr(9),
+    'user@company.su.evil.com', 'user@company.su.'
+
   ] LOOP
     IF public.billok_user_email_ru_su_allowed(bad) THEN
       RAISE EXCEPTION 'Guard function accepted invalid address: %', bad;

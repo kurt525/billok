@@ -298,17 +298,43 @@ describe('auth.register invite-only email confirmation', () => {
     expect(signupGate).not.toHaveBeenCalled();
   });
 
-  test.each(['ada@example.com', 'ada@mail.ru.evil.com', 'ada@mail.рф'])(
-    'rejects a registration email outside the permitted .ru/.su zones: %s',
-    async (email) => {
-      mockDb.systemSetting.findUnique.mockResolvedValue(null);
-      const api = await caller();
-      await expect(api.register({ name: 'Ada', email, inviteCode: 'valid' })).rejects.toMatchObject({
-        code: 'BAD_REQUEST',
-      });
-      expect(signupGate).not.toHaveBeenCalled();
-    },
-  );
+  test.each([
+    'ada@example.com',
+    'ada@example.net',
+    'ada@example.org',
+    'ada@mail.ru.evil.com',
+    'ada@mail.рф',
+    'ada@dоmain.ru',
+    'ada@xn--abc.ru',
+    'ada@xn--.su',
+    'ada@domain.ru.',
+    'ada@domain.su.evil.com',
+  ])('6.14.6: public API rejects non-permitted email or invalid IDN: %s', async (email) => {
+    mockDb.systemSetting.findUnique.mockResolvedValue(null);
+    const api = await caller();
+    await expect(api.register({ name: 'Ada', email, inviteCode: 'valid' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(signupGate).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['Ada@MAIL.RU', 'ada@mail.ru'],
+    ['Ada@SUB.COMPANY.SU', 'ada@sub.company.su'],
+    ['Ada@deep.sub.company.ru', 'ada@deep.sub.company.ru'],
+    ['ada@xn--d1acufc.ru', 'ada@xn--d1acufc.ru'],
+  ])('6.14.6: public registration accepts and canonicalizes %s', async (given, canonical) => {
+    stubEnv(EMAIL_ENV);
+    mockDb.systemSetting.findUnique.mockResolvedValue(null);
+    mockDb.$queryRaw.mockResolvedValue([]);
+    const api = await caller();
+    const result = await api.register({ name: 'Ada', email: given, inviteCode: 'valid' });
+    expect(result).toEqual({ email: canonical, verificationRequired: true });
+    expect(signupGate).toHaveBeenCalledWith(expect.objectContaining({ email: canonical }));
+    expect(mockDb.securityEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: 'AUTH_REGISTRATION_SUBMITTED', outcome: 'ALLOWED' }),
+    });
+  });
 
   test('fails closed when SMTP is not configured before creating a pending account', async () => {
     mockDb.systemSetting.findUnique.mockResolvedValue(null);

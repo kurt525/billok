@@ -3,6 +3,7 @@ import { Prisma, type PrismaClient } from '@/generated/prisma/client';
 import { AppError } from './app-error';
 import { readRegistrationEmailConfig } from './auth-config';
 import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
+import { registrationEmailProofHash } from './registration-email-proof';
 import { issueRegistrationVerification } from './registration-verification-issue';
 import { SYSTEM_INVITE_TTL_MS, activeSystemInviteWindow } from './system-invite-lifetime';
 import { EMAIL_VERIFICATION_TOKEN_TTL_MS } from './email-verification-token';
@@ -254,6 +255,8 @@ export async function canRetryOwnerInitialPasskey(
     request.consumedAt &&
     request.expiresAt > now &&
     account?.emailVerified &&
+    request.emailHash &&
+    registrationEmailProofHash(account.email) === request.emailHash &&
     isAllowedRegistrationEmailDomain(account.email) &&
     !account.suspendedAt &&
     account.passkeyCredentials.length === 0,

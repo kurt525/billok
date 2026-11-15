@@ -7,6 +7,7 @@ import {
   sendOwnerBootstrapConfirmation,
 } from './owner-bootstrap';
 import { issueRegistrationVerification } from './registration-verification-issue';
+import { registrationEmailProofHash } from './registration-email-proof';
 
 vi.mock('./registration-verification-issue', () => ({ issueRegistrationVerification: vi.fn() }));
 const now = new Date('2026-11-11T12:00:00.000Z');
@@ -104,6 +105,27 @@ describe('Issue #1 6.3.2.2.2: local-only first owner without a password', () => 
     expect(() => readOwnerBootstrapConfiguration({ ...env, ...patch })).toThrow();
   });
 
+  it.each(['owner@mail.ru', 'owner@deep.qa.company.su', 'owner@xn--d1acufc.ru'])(
+    '6.14.6: valid, canonical owner address accepted: %s',
+    (email) => {
+      expect(readOwnerBootstrapConfiguration({ ...env, ADMIN_EMAIL: email }).email).toBe(email);
+    },
+  );
+
+  it.each([
+    'owner@example.com',
+    'owner@example.net',
+    'owner@example.org',
+    'owner@company.рф',
+    'owner@dоmain.ru',
+    'owner@xn--abc.ru',
+    'owner@xn--.su',
+    'owner@mail.ru.evil.com',
+    'OWNER@MAIL.RU',
+  ])('6.14.6: owner bootstrap refuses prohibited or non-canonical email: %s', (email) => {
+    expect(() => readOwnerBootstrapConfiguration({ ...env, ADMIN_EMAIL: email })).toThrow();
+  });
+
   it('creates the only owner atomically, unverified and without password, with private 7-day invite and audit', async () => {
     const { db, tx } = database();
     const result = await createInitialOwner({ db, env, now });
@@ -175,6 +197,7 @@ describe('Issue #1 6.3.2.2.2: local-only first owner without a password', () => 
     tx.emailVerificationRequest.findUnique.mockResolvedValue({
       userId: user.id,
       consumedAt: now,
+      emailHash: registrationEmailProofHash(user.email),
       expiresAt: new Date(now.getTime() + 90_000),
     });
     expect(await canRetryOwnerInitialPasskey(db, user.id, 'tokenhash', now)).toBe(true);
@@ -182,6 +205,27 @@ describe('Issue #1 6.3.2.2.2: local-only first owner without a password', () => 
     expect(await canRetryOwnerInitialPasskey(db, user.id, 'tokenhash', new Date(now.getTime() + 90_000))).toBe(false);
     user.passkeyCredentials.push({ id: 'first-key' });
     expect(await canRetryOwnerInitialPasskey(db, user.id, 'tokenhash', now)).toBe(false);
+  });
+
+  it('6.14.6: owner cannot retry Passkey with a proof for a replaced email', async () => {
+    const { db, tx, user } = database();
+    await createInitialOwner({ db, env, now });
+    user.emailVerified = now;
+    tx.emailVerificationRequest.findUnique.mockResolvedValue({
+      userId: user.id,
+      consumedAt: now,
+      emailHash: registrationEmailProofHash('first@mail.ru'),
+      expiresAt: new Date(now.getTime() + 90_000),
+    });
+    expect(await canRetryOwnerInitialPasskey(db, user.id, 'old-proof', now)).toBe(false);
+    tx.emailVerificationRequest.findUnique.mockResolvedValue({
+      userId: user.id,
+      consumedAt: now,
+      emailHash: null,
+      expiresAt: new Date(now.getTime() + 90_000),
+    });
+    expect(await canRetryOwnerInitialPasskey(db, user.id, 'legacy-proof', now)).toBe(false);
+    expect(user.passkeyCredentials).toHaveLength(0);
   });
 
   it('does not log email confirmation as delivered if SMTP fails', async () => {

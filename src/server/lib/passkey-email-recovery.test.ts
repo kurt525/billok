@@ -155,6 +155,24 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
     } as Awaited<ReturnType<typeof verifyRegistrationResponse>>);
   });
 
+  it.each([
+    'lost@example.com',
+    'lost@example.net',
+    'lost@company.рф',
+    'lost@company.su.evil.com',
+    'lost@dоmain.ru',
+    'lost@xn--abc.ru',
+    'lost@xn--.su',
+  ])('6.14.6: recovery is non-enumerating for prohibited email: %s', async (email) => {
+    const { db } = fixture();
+    await expect(requestPasskeyRecovery({ db: client(db), email, env, now })).resolves.toEqual({
+      requested: true,
+    });
+    expect(db.user.findUnique).not.toHaveBeenCalled();
+    expect(db.passkeyRecoveryRequest.create).not.toHaveBeenCalled();
+    expect(sendRussianPasskeyRecoveryEmail).not.toHaveBeenCalled();
+  });
+
   it('never reveals missing accounts or sends email to unknown addresses', async () => {
     const { db } = fixture();
     db.user.findUnique.mockResolvedValue(null);
