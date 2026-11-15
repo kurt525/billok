@@ -1,6 +1,7 @@
 import { Prisma, type PrismaClient } from '@/generated/prisma/client';
 import { AppError } from './app-error';
 import { requireOwner } from './owner-access';
+import { decodeOwnerUserCursor, encodeOwnerUserCursor, ownerUserCursorScope } from './owner-user-cursor';
 import { revokeAccountAuthenticationStateInTransaction } from './revoke-account-auth';
 import { consumeOwnerPasskeyActionProof } from './owner-passkey-action-approval';
 
@@ -44,6 +45,14 @@ export async function listOwnerRegisteredUsers(
       { email: { contains: search, mode: 'insensitive' } },
     ];
   }
+  const cursorScope = ownerUserCursorScope('ownerRegisteredUsers', {
+    search: search ?? '',
+    status: input.status,
+    sortBy: input.sortBy,
+    sortDirection: input.sortDirection,
+    limit: input.limit,
+  });
+  const cursorId = input.cursor ? decodeOwnerUserCursor(input.cursor, ownerId, cursorScope) : undefined;
   const orderBy: Prisma.UserOrderByWithRelationInput[] =
     input.sortBy === 'name'
       ? [{ name: { sort: input.sortDirection, nulls: 'last' } }, { id: input.sortDirection }]
@@ -52,7 +61,7 @@ export async function listOwnerRegisteredUsers(
     db.user.findMany({
       where,
       take: input.limit + 1,
-      ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
       orderBy,
       select: { id: true, name: true, email: true, createdAt: true, suspendedAt: true, emailVerified: true },
     }),
@@ -74,7 +83,7 @@ export async function listOwnerRegisteredUsers(
       isOwner: user.id === ownerId,
     })),
     totalCount,
-    nextCursor: more ? page.at(-1)?.id : undefined,
+    nextCursor: more && page.at(-1)?.id ? encodeOwnerUserCursor(page.at(-1)!.id, ownerId, cursorScope) : undefined,
   };
 }
 

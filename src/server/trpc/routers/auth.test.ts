@@ -26,7 +26,9 @@ vi.mock('../../lib/registration-resend-eligibility', () => ({ findPendingRegistr
 vi.mock('../../lib/registration-resend-delivery', () => ({ deliverPendingVerificationResend: resendDelivery }));
 const mockDb = {
   systemSetting: { findUnique: vi.fn() },
-  systemInvite: { findUnique: vi.fn() },
+  systemInvite: { findUnique: vi.fn(), findFirst: vi.fn(), updateMany: vi.fn() },
+  securityEvent: { create: vi.fn() },
+  securityAlertDelivery: { create: vi.fn() },
   user: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
   ownerBootstrap: { findUnique: vi.fn() },
   passkeyCredential: { findMany: vi.fn() },
@@ -53,6 +55,9 @@ beforeEach(() => {
   mockDb.ownerBootstrap.findUnique.mockResolvedValue(null);
   mockDb.passkeyCredential.findMany.mockResolvedValue([]);
   cleanupGate.mockResolvedValue(undefined);
+  mockDb.systemInvite.findFirst.mockResolvedValue({ id: 'invite-valid' });
+  mockDb.systemInvite.updateMany.mockResolvedValue({ count: 1 });
+  mockDb.securityAlertDelivery.create.mockRejectedValue(new Error('QA disables alert email'));
   confirmationGate.mockResolvedValue(true);
   signupGate.mockResolvedValue({ email: 'ada@mail.ru', expiresAt: new Date('2026-11-01T12:30:00Z') });
   resendLimiter.mockReturnValue(true);
@@ -299,17 +304,88 @@ describe('auth.register invite-only email confirmation', () => {
     expect(cleanupGate).not.toHaveBeenCalled();
   });
 
-  test('still rejects emails that already exist with different letter case', async () => {
+  test('6.13.3: an existing email (even in different case) gets the same result as a new account', async () => {
     stubEnv(EMAIL_ENV);
     mockDb.systemSetting.findUnique.mockResolvedValue(null);
     mockDb.$queryRaw.mockResolvedValue([{ id: 'bob' }]);
     mockDb.user.findMany.mockResolvedValue([{ id: 'bob', email: 'Bob@mail.ru' }]);
     const api = await caller();
-    await expect(api.register({ name: 'Mallory', email: 'bob@mail.ru', inviteCode: 'valid' })).rejects.toMatchObject({
-      code: 'CONFLICT',
+    await expect(api.register({ name: 'Mallory', email: 'bob@mail.ru', inviteCode: 'valid' })).resolves.toEqual({
+      email: 'bob@mail.ru',
+      verificationRequired: true,
     });
     expect(signupGate).not.toHaveBeenCalled();
     expect(cleanupGate).toHaveBeenCalledExactlyOnceWith(mockDb);
+    expect(mockDb.systemInvite.updateMany).toHaveBeenCalledExactlyOnceWith({
+      where: expect.objectContaining({ id: 'invite-valid', usedAt: null, usedById: null, revokedAt: null }),
+      data: { reservedById: 'bob', reservedUntil: expect.any(Date) },
+    });
+  });
+
+  test('6.13.3: invalid invite cannot distinguish whether the email already exists', async () => {
+    stubEnv(EMAIL_ENV);
+    mockDb.systemSetting.findUnique.mockResolvedValue(null);
+    mockDb.systemInvite.findFirst.mockResolvedValue(null);
+    const api = await caller();
+    for (const found of [[], [{ id: 'existing', email: 'ada@mail.ru' }]]) {
+      mockDb.$queryRaw.mockResolvedValue(found.map((u) => ({ id: u.id })));
+      mockDb.user.findMany.mockResolvedValue(found);
+      await expect(api.register({ name: 'Ada', email: 'ada@mail.ru', inviteCode: 'invalid' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+    }
+    expect(mockDb.$queryRaw).not.toHaveBeenCalled();
+    expect(signupGate).not.toHaveBeenCalled();
+  });
+
+  test('6.13.3: invalid invite enumeration is audited without revealing email or account IDs', async () => {
+    stubEnv(EMAIL_ENV);
+    mockDb.systemSetting.findUnique.mockResolvedValue(null);
+    mockDb.systemInvite.findFirst.mockResolvedValue(null);
+    const api = await caller();
+    await expect(api.register({ name: 'Ada', email: 'private@mail.ru', inviteCode: 'bad-code' })).rejects.toMatchObject(
+      { code: 'FORBIDDEN' },
+    );
+    expect(mockDb.securityEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'AUTH_REGISTRATION_PROBE',
+        outcome: 'DENIED',
+        actorId: null,
+        targetFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      }),
+    });
+    const saved = JSON.stringify(mockDb.securityEvent.create.mock.calls);
+    expect(saved).not.toContain('private@mail.ru');
+    expect(saved).not.toContain('bad-code');
+  });
+
+  test('6.13.3: a known email reserves the same invitation, blocking second-probe detection', async () => {
+    stubEnv(EMAIL_ENV);
+    mockDb.systemSetting.findUnique.mockResolvedValue(null);
+    mockDb.$queryRaw.mockResolvedValue([{ id: 'known-user' }]);
+    mockDb.user.findMany.mockResolvedValue([{ id: 'known-user', email: 'known@mail.ru' }]);
+    const api = await caller();
+    const first = await api.register({ name: 'Ada', email: 'known@mail.ru', inviteCode: 'secret-invite' });
+    expect(first).toEqual({ email: 'known@mail.ru', verificationRequired: true });
+    expect(mockDb.systemInvite.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        id: 'invite-valid',
+        code: 'secret-invite',
+        usedAt: null,
+        usedById: null,
+        revokedAt: null,
+      }),
+      data: { reservedById: 'known-user', reservedUntil: expect.any(Date) },
+    });
+    expect(signupGate).not.toHaveBeenCalled();
+
+    // As with a real newly created pending signup, code is now unavailable
+    // for a second email. Never disclose why it is unavailable.
+    mockDb.systemInvite.findFirst.mockResolvedValue(null);
+    await expect(
+      api.register({ name: 'Ada', email: 'attacker@mail.ru', inviteCode: 'secret-invite' }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(signupGate).not.toHaveBeenCalled();
   });
 
   test.each(['ada@mail.ru', 'ada@mail.su'])(
@@ -341,7 +417,7 @@ describe('auth.register invite-only email confirmation', () => {
     },
   );
 
-  test('keeps concurrent invite rejection and unique email conflict errors distinct from mail failures', async () => {
+  test('6.13.3: invalid invite and email collisions cannot reveal account existence or SMTP details', async () => {
     stubEnv(EMAIL_ENV);
     mockDb.systemSetting.findUnique.mockResolvedValue({ value: 'invite-only' });
     mockDb.$queryRaw.mockResolvedValue([]);
@@ -352,8 +428,9 @@ describe('auth.register invite-only email confirmation', () => {
       message: 'Invalid or expired invite code.',
     });
     signupGate.mockRejectedValueOnce(new AppError('CONFLICT', 'emailTaken'));
-    await expect(api.register({ name: 'Ada', email: 'ada@mail.ru', inviteCode: 'valid' })).rejects.toMatchObject({
-      code: 'CONFLICT',
+    await expect(api.register({ name: 'Ada', email: 'ada@mail.ru', inviteCode: 'valid' })).resolves.toEqual({
+      email: 'ada@mail.ru',
+      verificationRequired: true,
     });
     signupGate.mockRejectedValueOnce(new Error('secret SMTP detail'));
     await expect(api.register({ name: 'Ada', email: 'ada@mail.ru', inviteCode: 'valid' })).rejects.toMatchObject({

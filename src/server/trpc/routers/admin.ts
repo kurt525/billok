@@ -21,6 +21,7 @@ import { REGISTRATION_MODES, readRegistrationMode } from '@/server/lib/registrat
 import { activeSystemInviteWindow, SYSTEM_INVITE_TTL_MS } from '@/server/lib/system-invite-lifetime';
 import { totalsInGroupCurrency } from '@/server/lib/group-expense-totals';
 import { listOwnerRegisteredUsers, changeRegisteredUserSuspension } from '@/server/lib/owner-user-admin';
+import { decodeOwnerUserCursor, encodeOwnerUserCursor, ownerUserCursorScope } from '@/server/lib/owner-user-cursor';
 import { ownerSessionFingerprint, consumeOwnerPasskeyActionProof } from '@/server/lib/owner-passkey-action-approval';
 import { systemInviteCreateApprovalTarget } from '@/lib/system-invite-approval-target';
 import { registrationModeApprovalTarget, announcementApprovalTarget } from '@/lib/admin-setting-approval-target';
@@ -61,7 +62,7 @@ export const adminRouter = createTRPCRouter({
   ownerRegisteredUsers: ownerUsersProcedure
     .input(
       z.object({
-        cursor: z.string().max(128).optional(),
+        cursor: z.string().max(512).optional(),
         limit: z.number().int().min(1).max(30).default(20),
         search: z.string().max(100).optional(),
         status: z.enum(['all', 'active', 'suspended', 'pending']).default('all'),
@@ -189,7 +190,7 @@ export const adminRouter = createTRPCRouter({
   listUsers: adminProcedure
     .input(
       z.object({
-        cursor: z.string().optional(),
+        cursor: z.string().max(512).optional(),
         limit: z.number().int().min(1).max(100).default(20),
         search: z.string().max(200).optional(),
         sortBy: z.enum(['name', 'email', 'groupCount', 'createdAt']).default('createdAt'),
@@ -242,11 +243,19 @@ export const adminRouter = createTRPCRouter({
           break;
       }
 
+      const cursorScope = ownerUserCursorScope('listUsers', {
+        search: input.search ?? '',
+        sortBy: input.sortBy,
+        sortDirection: input.sortDirection,
+        status: input.status,
+        limit: input.limit,
+      });
+      const cursorId = input.cursor ? decodeOwnerUserCursor(input.cursor, ctx.user.id, cursorScope) : undefined;
       const isFirstPage = !input.cursor;
       const [users, ...counts] = await Promise.all([
         ctx.db.user.findMany({
           take: input.limit + 1,
-          ...(input.cursor ? { cursor: { id: input.cursor } } : {}),
+          ...(cursorId ? { cursor: { id: cursorId } } : {}),
           where,
           select: {
             id: true,
@@ -268,7 +277,7 @@ export const adminRouter = createTRPCRouter({
       let nextCursor: string | undefined;
       if (users.length > input.limit) {
         const next = users.pop();
-        nextCursor = next?.id;
+        nextCursor = next?.id ? encodeOwnerUserCursor(next.id, ctx.user.id, cursorScope) : undefined;
       }
 
       return {

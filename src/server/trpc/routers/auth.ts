@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { AppError } from '@/server/lib/app-error';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
 import { checkRateLimit, parsePositiveInt } from '../../lib/rate-limit';
@@ -10,6 +11,9 @@ import { readRegistrationMode } from '../../lib/registration-mode';
 import { runRegistrationCleanupIfDue } from '../../lib/registration-cleanup-trigger';
 import { confirmRegistrationEmail } from '../../lib/registration-email-confirmation';
 import { findUsersByEmail } from '../../lib/user-email';
+import { activeSystemInviteWindow } from '../../lib/system-invite-lifetime';
+import { EMAIL_VERIFICATION_TOKEN_TTL_MS } from '../../lib/email-verification-token';
+import { recordOwnerSecurityEvent } from '../../lib/security-event-audit';
 import { isAllowedRegistrationEmailDomain } from '../../lib/registration-email-domain';
 import { createAndDeliverPendingInviteRegistration } from '../../lib/registration-invite-delivery';
 import {
@@ -48,11 +52,26 @@ export const authRouter = createTRPCRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      // Rate limit: 10 registrations per hour per IP (fall back to global key)
+      // IP, global and hashed-email limits apply BEFORE any account lookup.
+      // Never store raw email in the limiter or security journal.
       const ip = getClientIp(ctx.headers);
+      const emailHash = createHash('sha256')
+        .update('billok-registration-probe:' + input.email.trim().toLowerCase())
+        .digest('hex');
+      const auditProbe = async () =>
+        recordOwnerSecurityEvent({
+          db: ctx.db,
+          action: 'AUTH_REGISTRATION_PROBE',
+          outcome: 'DENIED',
+          targetFingerprint: emailHash,
+        });
       const maxRegAttempts = parsePositiveInt(process.env.REGISTER_RATE_LIMIT_MAX, 10);
-      const { allowed } = checkRateLimit(`register:${ip}`, maxRegAttempts, 60 * 60 * 1000);
-      if (!allowed) {
+      if (
+        !checkRateLimit('register:global', 600, 60 * 60 * 1000).allowed ||
+        !checkRateLimit('register:' + ip, maxRegAttempts, 60 * 60 * 1000).allowed ||
+        !checkRateLimit('register:email:' + emailHash, 20, 60 * 60 * 1000).allowed
+      ) {
+        await auditProbe();
         throw new AppError('TOO_MANY_REQUESTS', 'registerRateLimited');
       }
 
@@ -79,11 +98,53 @@ export const authRouter = createTRPCRouter({
         throw new AppError('SERVICE_UNAVAILABLE', 'registrationEmailUnavailable');
       }
 
-      // Cleanup and user lookup are reused; both precede the transactional
-      // reservation, which is the authoritative concurrent invite check.
+      // Validate the invitation BEFORE looking up the email, so invalid code
+      // + known email and invalid code + unknown email respond identically.
+      const now = new Date();
+      const eligible = await ctx.db.systemInvite.findFirst({
+        where: {
+          code: input.inviteCode,
+          usedAt: null,
+          usedById: null,
+          revokedAt: null,
+          ...activeSystemInviteWindow(now),
+          OR: [{ reservedUntil: null }, { reservedUntil: { lte: now } }],
+        },
+        select: { id: true },
+      });
+      if (!eligible) {
+        await auditProbe();
+        throw new AppError('FORBIDDEN', 'inviteCodeInvalid');
+      }
+
+      // Reserve the same single-use code for a known email as for a new
+      // pending signup, without creating a second account, sending a new
+      // confirmation or changing the existing user's status. Otherwise a
+      // caller with an invite could probe again with their own email and
+      // infer account existence from the code remaining available.
+      const reserveWithoutSignup = async (existingUserId: string) => {
+        await ctx.db.systemInvite.updateMany({
+          where: {
+            id: eligible.id,
+            code: input.inviteCode!,
+            usedAt: null,
+            usedById: null,
+            revokedAt: null,
+            ...activeSystemInviteWindow(new Date()),
+            OR: [{ reservedUntil: null }, { reservedUntil: { lte: new Date() } }],
+          },
+          data: {
+            reservedById: existingUserId,
+            reservedUntil: new Date(Date.now() + EMAIL_VERIFICATION_TOKEN_TTL_MS),
+          },
+        });
+      };
+      const acknowledgement = { email: input.email, verificationRequired: true as const };
       await runRegistrationCleanupIfDue(ctx.db);
-      if ((await findUsersByEmail(ctx.db, input.email)).length > 0) {
-        throw new AppError('CONFLICT', 'emailTaken');
+      const existing = await findUsersByEmail(ctx.db, input.email);
+      if (existing.length) {
+        await reserveWithoutSignup(existing[0]!.id);
+        return acknowledgement;
       }
 
       let pending: Awaited<ReturnType<typeof createAndDeliverPendingInviteRegistration>>;
@@ -96,14 +157,19 @@ export const authRouter = createTRPCRouter({
           ...emailConfig,
         });
       } catch (error) {
+        if (error instanceof AppError && error.code === 'CONFLICT') {
+          // A concurrent account creation won a different invite; make this
+          // invite no more revealing than the primary existing-email path.
+          const winner = await findUsersByEmail(ctx.db, input.email);
+          if (winner.length) await reserveWithoutSignup(winner[0]!.id);
+          return acknowledgement;
+        }
         if (error instanceof AppError) throw error;
-        // Do not expose SMTP details in API errors.
         throw new AppError('SERVICE_UNAVAILABLE', 'registrationEmailUnavailable');
       }
-
-      // The user has no active session: the invite is redeemed only after the
-      // link is confirmed through auth.confirmEmail.
-      return { email: pending.email, verificationRequired: true as const };
+      // Do not reveal whether email was delivered or the account was reused.
+      void pending;
+      return acknowledgement;
     }),
 
   // A POST mutation prevents mail scanners from consuming links on GET.

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { requireRegisteredOwner, listOwnerRegisteredUsers, changeRegisteredUserSuspension } from './owner-user-admin';
 import { consumeOwnerPasskeyActionProof } from './owner-passkey-action-approval';
+import { decodeOwnerUserCursor, encodeOwnerUserCursor, ownerUserCursorScope } from './owner-user-cursor';
 
 vi.mock('./owner-passkey-action-approval', () => ({
   consumeOwnerPasskeyActionProof: vi.fn().mockResolvedValue(undefined),
@@ -107,18 +108,27 @@ describe('Issue #1 6.11: registered user management is owner-only', () => {
 
   it('excludes guest/placeholder records, paginates without duplicate boundary records, marks only real owner', async () => {
     const { db } = fixture();
+    const scope = ownerUserCursorScope('ownerRegisteredUsers', {
+      search: 'mail.ru',
+      status: 'all',
+      sortBy: 'createdAt',
+      sortDirection: 'desc',
+      limit: 2,
+    });
+    const opaqueCursor = encodeOwnerUserCursor('old-row', 'owner-id', scope);
     const data = await listOwnerRegisteredUsers(asDb(db), 'owner-id', {
       limit: 2,
       status: 'all',
       sortBy: 'createdAt',
       sortDirection: 'desc',
       search: 'mail.ru',
-      cursor: 'old-row',
+      cursor: opaqueCursor,
     });
     expect(data.users).toHaveLength(2);
     expect(data.users[0]).toMatchObject({ isOwner: true, status: 'active' });
     expect(data.users[1]).toMatchObject({ isOwner: false, status: 'active' });
-    expect(data.nextCursor).toBe('member-id');
+    expect(data.nextCursor).not.toContain('member-id');
+    expect(decodeOwnerUserCursor(data.nextCursor!, 'owner-id', scope)).toBe('member-id');
     expect(db.user.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         take: 3,
