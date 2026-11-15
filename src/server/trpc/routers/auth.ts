@@ -14,7 +14,10 @@ import { findUsersByEmail } from '../../lib/user-email';
 import { activeSystemInviteWindow } from '../../lib/system-invite-lifetime';
 import { EMAIL_VERIFICATION_TOKEN_TTL_MS } from '../../lib/email-verification-token';
 import { recordOwnerSecurityEvent } from '../../lib/security-event-audit';
-import { isAllowedRegistrationEmailDomain } from '../../lib/registration-email-domain';
+import {
+  isAllowedRegistrationEmailDomain,
+  normalizeAllowedRegistrationEmail,
+} from '../../lib/registration-email-domain';
 import { createAndDeliverPendingInviteRegistration } from '../../lib/registration-invite-delivery';
 import {
   allowRegistrationVerificationResend,
@@ -47,7 +50,10 @@ export const authRouter = createTRPCRouter({
     .input(
       z.strictObject({
         name: z.string().trim().min(1).max(100),
-        email: z.string().email(),
+        email: z
+          .string()
+          .email()
+          .transform((value) => normalizeAllowedRegistrationEmail(value) ?? value),
         inviteCode: z.string().trim().max(128).optional(),
       }),
     )

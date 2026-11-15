@@ -388,6 +388,28 @@ describe('auth.register invite-only email confirmation', () => {
     expect(signupGate).not.toHaveBeenCalled();
   });
 
+  test('6.14.1: canonicalizes mixed-case email before account lookup, invite and SMTP delivery', async () => {
+    stubEnv(EMAIL_ENV);
+    mockDb.systemSetting.findUnique.mockResolvedValue(null);
+    mockDb.$queryRaw.mockResolvedValue([]);
+    signupGate.mockResolvedValue({ email: 'ada+news@sub.mail.ru', expiresAt: new Date('2026-11-01T12:30:00Z') });
+    const api = await caller();
+    const response = await api.register({
+      name: 'Ada',
+      email: 'AdA+News@Sub.Mail.RU',
+      inviteCode: 'valid',
+    });
+    expect(response).toEqual({ email: 'ada+news@sub.mail.ru', verificationRequired: true });
+    expect(signupGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Ada',
+        email: 'ada+news@sub.mail.ru',
+        inviteCode: 'valid',
+      }),
+    );
+    expect(mockDb.$queryRaw).toHaveBeenCalledWith(expect.anything(), 'ada+news@sub.mail.ru');
+  });
+
   test.each(['ada@mail.ru', 'ada@mail.su'])(
     'sends only a pending confirmation response for %s; never signs in',
     async (email) => {
