@@ -42,7 +42,7 @@ test.describe('Receipt Scanning UI', () => {
 
 test.describe('Additional UI Tests', () => {
   test('7.1.4 — register and auto-login', async ({ page }) => {
-    const email = `autoreg-${Date.now()}@test.com`;
+    const email = `autoreg-${Date.now()}@qa.billok.ru`;
     await page.goto('/en/register');
     await page.getByLabel('Name').fill('Auto Login User');
     await page.getByLabel('Email').fill(email);
@@ -54,7 +54,7 @@ test.describe('Additional UI Tests', () => {
   });
 
   test('7.2.3 — empty state for new user', async ({ page }) => {
-    const email = `empty-${Date.now()}@test.com`;
+    const email = `empty-${Date.now()}@qa.billok.ru`;
     await page.goto('/en/register');
     await page.getByLabel('Name').fill('Empty State User');
     await page.getByLabel('Email').fill(email);

@@ -107,7 +107,7 @@ jobs:
           NEXTAUTH_SECRET: ${{ steps.auth.outputs.secret }}
           AUTH_SECRET: ${{ steps.auth.outputs.secret }}
           AUTH_TRUST_HOST: "true"
-          ADMIN_EMAIL: alice@example.com
+          ADMIN_EMAIL: alice@qa.billok.ru
         run: npm run build
 
       - name: Run tests
@@ -125,7 +125,7 @@ jobs:
           AUTH_IP_RATE_LIMIT_MAX: "10000"
           REGISTER_RATE_LIMIT_MAX: "1000"
           GUEST_RATE_LIMIT_MAX: "1000"
-          ADMIN_EMAIL: alice@example.com
+          ADMIN_EMAIL: alice@qa.billok.ru
         run: |
           npm run start &
           npx wait-on http://localhost:3000/api/health --timeout 30000

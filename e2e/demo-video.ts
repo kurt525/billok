@@ -27,7 +27,7 @@ async function main() {
     // ── Scene 1: Login ──
     await page.goto('/login');
     await page.waitForTimeout(800);
-    await page.getByLabel('Email').fill('alice@example.com');
+    await page.getByLabel('Email').fill('alice@qa.billok.ru');
     await page.waitForTimeout(300);
     await page.getByLabel('Password').fill('password123');
     await page.waitForTimeout(300);

@@ -25,7 +25,7 @@ test.describe('Balances & Settlements', () => {
 
     test('4.3.3 — new user sees empty dashboard', async ({ page }) => {
       // Register fresh user
-      const email = `empty-${Date.now()}@test.com`;
+      const email = `empty-${Date.now()}@qa.billok.ru`;
       await page.goto('/en/register');
       await page.getByLabel('Name').fill('Empty User');
       await page.getByLabel('Email').fill(email);

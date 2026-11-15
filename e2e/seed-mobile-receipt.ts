@@ -4,16 +4,10 @@
  */
 import { PrismaClient } from '../src/generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { assertDisposableQaDatabase } from '../scripts/qa-fixture-database';
 
 async function main() {
-  if (process.env.BILLOK_QA_FIXTURES !== '1') {
-    throw new Error('Receipt fixture creation requires BILLOK_QA_FIXTURES=1');
-  }
-  const url = process.env.DATABASE_URL ?? '';
-  const parsed = new URL(url);
-  if (!['127.0.0.1', 'localhost'].includes(parsed.hostname) || parsed.pathname !== '/billokqa') {
-    throw new Error('Receipt fixture requires a local disposable billokqa database');
-  }
+  const url = assertDisposableQaDatabase(process.env);
   const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
   try {
     const bob = await db.user.findUniqueOrThrow({ where: { email: 'bob@qa.billok.ru' } });

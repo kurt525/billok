@@ -29,10 +29,10 @@ test.describe('Admin page access control', () => {
 
 test.describe('Admin page UI', () => {
   // These tests only run when ADMIN_EMAIL matches alice
-  // The dev environment should have ADMIN_EMAIL=alice@example.com for these to pass
+  // The dev environment should have ADMIN_EMAIL=alice@qa.billok.ru for these to pass
 
   test('admin user can view the admin page with system health section', async ({ page }) => {
-    // Set up: alice should be the admin user (ADMIN_EMAIL=alice@example.com)
+    // Set up: alice should be the admin user (ADMIN_EMAIL=alice@qa.billok.ru)
     await login(page, users.alice.email, users.alice.password);
 
     await page.goto('/en/admin');
@@ -63,7 +63,7 @@ test.describe('Admin page UI', () => {
     await expect(page.getByRole('heading', { name: 'User Management' })).toBeVisible();
 
     // Should show users table with at least alice's email
-    await expect(page.getByText('alice@example.com')).toBeVisible();
+    await expect(page.getByText('alice@qa.billok.ru')).toBeVisible();
   });
 
   test('admin page shows group overview section', async ({ page }) => {

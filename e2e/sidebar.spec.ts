@@ -8,7 +8,7 @@ test.describe('Sidebar', () => {
 
   test('sidebar shows user info, settings, sign out, and theme toggle', async ({ page }) => {
     await expect(page.getByText('Alice Johnson').first()).toBeVisible();
-    await expect(page.getByText('alice@example.com')).toBeVisible();
+    await expect(page.getByText('alice@qa.billok.ru')).toBeVisible();
     await expect(page.getByText('Settings').first()).toBeVisible();
     await expect(page.getByText('Sign out').first()).toBeVisible();
   });

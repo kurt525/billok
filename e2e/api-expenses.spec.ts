@@ -48,7 +48,7 @@ test.describe('Expenses API', () => {
     const privateGroupId = (await createRes.json()).result?.data?.json?.id;
     createdGroupIds.push(privateGroupId);
 
-    const charlie = await authedContext('charlie@example.com', 'password123');
+    const charlie = await authedContext('charlie@qa.billok.ru', 'password123');
     const res = await trpcMutation(charlie, 'expenses.create', {
       groupId: privateGroupId,
       title: 'Intruder',

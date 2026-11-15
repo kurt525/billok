@@ -168,7 +168,7 @@ jobs:
             npx tsx scripts/qa-user-uuidv4-postgres.ts
           echo 'BILLOK_USER_UUIDV4_POSTGRES=PASS'
           # Create only disposable fixtures for authenticated mobile flows.
-          npm run db:seed
+          BILLOK_QA_FIXTURES=1 npm run db:seed
           BILLOK_QA_FIXTURES=1 npx tsx e2e/seed-mobile-receipt.ts > "$RUNNER_TEMP/billok-mobile-receipt.env"
           cat "$RUNNER_TEMP/billok-mobile-receipt.env" >> "$GITHUB_ENV"
       - name: Verify legacy password database purge on disposable QA PostgreSQL

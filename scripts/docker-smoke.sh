@@ -22,7 +22,7 @@ cd "$(dirname "$0")/.."
 
 CONTAINER="sharetab-smoke-$$-$RANDOM"
 FAILED=true
-ADMIN_EMAIL="smoke-admin@example.com"
+ADMIN_EMAIL="smoke-admin@qa.billok.ru"
 ADMIN_PASSWORD=$(openssl rand -hex 16)
 
 # ── Output ─────────────────────────────────────────────────────
@@ -124,11 +124,11 @@ wait_healthy "first start"
 db -c 'SELECT count(*) FROM "User"' -c 'SELECT count(*) FROM "GuestSplit"'
 
 section "Emails are unique ignoring case"
-add_user ci-1 'CI@Example.com'
-if add_user ci-2 'ci@example.com'; then
+add_user ci-1 'CI@qa.billok.ru'
+if add_user ci-2 'ci@qa.billok.ru'; then
   fail "A case variant of an existing email was accepted."
 fi
-add_user ci-3 'other@example.com'
+add_user ci-3 'other@qa.billok.ru'
 db -c "DELETE FROM \"User\" WHERE id LIKE 'ci-%'"
 
 section "Restart, and prisma db push keeps the email index"
@@ -145,15 +145,15 @@ fi
 section "Existing case-variant duplicates don't block startup"
 # An install from before the index, with case-variant duplicates.
 db -c 'DROP INDEX "User_email_lower_key"'
-add_user dup-1 'Dup@Example.com'
-add_user dup-2 'dup@example.com'
+add_user dup-1 'Dup@qa.billok.ru'
+add_user dup-2 'dup@qa.billok.ru'
 docker restart "$CONTAINER" >/dev/null
 wait_healthy "restart with duplicates"
 # Not `docker logs | grep -q`: grep -q exits at the first match, docker logs
 # then dies of SIGPIPE writing the rest, and pipefail fails the pipeline, so
 # the check failed at random.
 startup_log=$(docker logs "$CONTAINER" 2>&1)
-if ! grep -qF "more than one account uses each of these addresses in different letter cases: dup@example.com" <<<"$startup_log"; then
+if ! grep -qF "more than one account uses each of these addresses in different letter cases: dup@qa.billok.ru" <<<"$startup_log"; then
   fail "No warning about the duplicate emails in the startup log."
 fi
 if [[ "$(has_email_index)" != "f" ]]; then

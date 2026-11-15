@@ -6,15 +6,12 @@ import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../src/generated/prisma/client';
+import { assertDisposableQaDatabase } from '../scripts/qa-fixture-database';
 import { hashEmailVerificationToken } from '../src/server/lib/email-verification-token';
 import { SYSTEM_INVITE_TTL_MS } from '../src/server/lib/system-invite-lifetime';
 
 async function main() {
-  if (process.env.BILLOK_QA_FIXTURES !== '1') throw new Error('QA fixture opt-in is required');
-  const url = new URL(process.env.DATABASE_URL ?? '');
-  if (!['localhost', '127.0.0.1'].includes(url.hostname) || url.pathname !== '/billokqa') {
-    throw new Error('Refusing to change a non-disposable database');
-  }
+  const url = assertDisposableQaDatabase(process.env);
 
   const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: url.toString() }) });
   const unique = randomBytes(8).toString('hex');

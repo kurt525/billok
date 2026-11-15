@@ -60,7 +60,7 @@ test.describe('Groups Search & Filter', () => {
   test('search input hidden when user has no groups', async ({ page }) => {
     // Register a fresh user with no groups
     await page.goto('/en/register');
-    const email = `search-test-${Date.now()}@test.com`;
+    const email = `search-test-${Date.now()}@qa.billok.ru`;
     await page.getByLabel('Name').fill('Search Tester');
     await page.getByLabel('Email').fill(email);
     await page.getByLabel('Password').fill('testpass123');

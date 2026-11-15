@@ -39,7 +39,7 @@ export async function register(page: Page, name: string, email: string, password
  * Generate a unique email for test isolation.
  */
 export function uniqueEmail(prefix = 'test') {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@test.com`;
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@qa.billok.ru`;
 }
 
 /**

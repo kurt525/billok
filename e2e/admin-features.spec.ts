@@ -160,7 +160,7 @@ test.describe('Registration control', () => {
 
       // Fill in registration without invite code
       await page.getByLabel('Name').fill('No Code User');
-      await page.getByLabel('Email').fill('nocode@test.com');
+      await page.getByLabel('Email').fill('nocode@qa.billok.ru');
       await page.getByLabel('Password').fill('password123');
       await page.getByLabel('Invite Code').fill('invalid-code-123');
       await page.getByRole('button', { name: 'Create account' }).click();
@@ -195,7 +195,7 @@ test.describe('Registration control', () => {
     const invite = (await createRes.json()).result.data.json;
 
     try {
-      const testEmail = `invite-test-${Date.now()}@test.com`;
+      const testEmail = `invite-test-${Date.now()}@qa.billok.ru`;
 
       await page.goto('/en/register');
       await page.getByLabel('Name').fill('Invited User');
@@ -396,8 +396,8 @@ test.describe('User impersonation', () => {
     const ctx = await authedContext(users.alice.email, users.alice.password);
 
     // Get Bob's user ID
-    const listData = await trpcResult(await trpcQuery(ctx, 'admin.listUsers', { search: 'bob@example.com' }));
-    const bob = listData.users.find((u: { email: string }) => u.email === 'bob@example.com');
+    const listData = await trpcResult(await trpcQuery(ctx, 'admin.listUsers', { search: 'bob@qa.billok.ru' }));
+    const bob = listData.users.find((u: { email: string }) => u.email === 'bob@qa.billok.ru');
     expect(bob).toBeDefined();
 
     // Start impersonation
@@ -407,7 +407,7 @@ test.describe('User impersonation', () => {
     expect(startRes.ok()).toBe(true);
     const startBody = await startRes.json();
     expect(startBody.success).toBe(true);
-    expect(startBody.impersonating.email).toBe('bob@example.com');
+    expect(startBody.impersonating.email).toBe('bob@qa.billok.ru');
 
     // Check impersonation status
     const statusData = await trpcResult(await trpcQuery(ctx, 'admin.getImpersonationStatus'));
@@ -429,8 +429,8 @@ test.describe('User impersonation', () => {
       has: page.getByRole('heading', { name: 'User Management' }),
     });
     await expect(userSection).toBeVisible({ timeout: 30000 });
-    await userSection.getByPlaceholder('Search by name or email...').fill('bob@example.com');
-    const bobRow = userSection.locator('table').first().locator('tr', { hasText: 'bob@example.com' }).first();
+    await userSection.getByPlaceholder('Search by name or email...').fill('bob@qa.billok.ru');
+    const bobRow = userSection.locator('table').first().locator('tr', { hasText: 'bob@qa.billok.ru' }).first();
     await expect(bobRow).toBeVisible({ timeout: 15000 });
     await bobRow.getByLabel(/^Impersonate /).click();
 

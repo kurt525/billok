@@ -27,7 +27,7 @@ async function trpcQuery(ctx: Awaited<ReturnType<typeof request.newContext>>, pr
 
 test.describe('Edge Cases & Security', () => {
   test('9.1 — money stored as cents ($12.99 = 1299)', async () => {
-    const ctx = await authedContext('alice@example.com', 'password123');
+    const ctx = await authedContext('alice@qa.billok.ru', 'password123');
 
     // Create group
     const groupRes = await trpcMutation(ctx, 'groups.create', { name: 'Cents Test' });
@@ -53,7 +53,7 @@ test.describe('Edge Cases & Security', () => {
   });
 
   test('9.2 — large amount ($100,000.00 = 10000000 cents)', async () => {
-    const ctx = await authedContext('alice@example.com', 'password123');
+    const ctx = await authedContext('alice@qa.billok.ru', 'password123');
 
     const groupRes = await trpcMutation(ctx, 'groups.create', { name: 'Large Amount Test' });
     const groupId = (await groupRes.json()).result?.data?.json?.id;
@@ -76,7 +76,7 @@ test.describe('Edge Cases & Security', () => {
   });
 
   test('9.3 — zero amount expense fails validation', async () => {
-    const ctx = await authedContext('alice@example.com', 'password123');
+    const ctx = await authedContext('alice@qa.billok.ru', 'password123');
 
     const groupRes = await trpcMutation(ctx, 'groups.create', { name: 'Zero Test' });
     const groupId = (await groupRes.json()).result?.data?.json?.id;
@@ -98,7 +98,7 @@ test.describe('Edge Cases & Security', () => {
   });
 
   test('9.4 — empty shares array fails validation', async () => {
-    const ctx = await authedContext('alice@example.com', 'password123');
+    const ctx = await authedContext('alice@qa.billok.ru', 'password123');
 
     const groupRes = await trpcMutation(ctx, 'groups.create', { name: 'Empty Shares Test' });
     const groupId = (await groupRes.json()).result?.data?.json?.id;
@@ -120,7 +120,7 @@ test.describe('Edge Cases & Security', () => {
   });
 
   test('9.5 — XSS in group name rendered as text', async ({ page }) => {
-    await login(page, 'alice@example.com', 'password123');
+    await login(page, 'alice@qa.billok.ru', 'password123');
     await page.goto('/en/groups/new');
     await page.getByLabel('Group name').fill('<img src=x onerror="alert(1)">');
     await page.getByRole('button', { name: 'Create Group' }).click();
@@ -132,7 +132,7 @@ test.describe('Edge Cases & Security', () => {
   });
 
   test("9.6 — SQL injection in name doesn't break DB", async () => {
-    const ctx = await authedContext('alice@example.com', 'password123');
+    const ctx = await authedContext('alice@qa.billok.ru', 'password123');
     const res = await trpcMutation(ctx, 'groups.create', {
       name: '\'; DROP TABLE "User";--',
     });
@@ -148,7 +148,7 @@ test.describe('Edge Cases & Security', () => {
   });
 
   test('9.8 — upload generates UUID filename', async () => {
-    const ctx = await authedContext('alice@example.com', 'password123');
+    const ctx = await authedContext('alice@qa.billok.ru', 'password123');
     const res = await ctx.post('/api/upload', {
       multipart: {
         file: {
@@ -182,7 +182,7 @@ test.describe('Edge Cases & Security', () => {
   });
 
   test('1.3.4 — session token in cookie after login', async ({ page }) => {
-    await login(page, 'alice@example.com', 'password123');
+    await login(page, 'alice@qa.billok.ru', 'password123');
     const cookies = await page.context().cookies();
     const sessionCookie = cookies.find(
       (c) => c.name === 'authjs.session-token' || c.name === '__Secure-authjs.session-token',

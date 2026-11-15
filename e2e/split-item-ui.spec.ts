@@ -171,7 +171,7 @@ test.describe('Split Item UI', () => {
     const data = await trpcResult(itemsRes);
     const groupRes = await trpcQuery(ctx, 'groups.get', { groupId });
     const groupData = await trpcResult(groupRes);
-    const aliceId = groupData.members.find((m: { user: { email: string } }) => m.user.email === 'alice@example.com')
+    const aliceId = groupData.members.find((m: { user: { email: string } }) => m.user.email === 'alice@qa.billok.ru')
       .user.id;
     const firstItemId = data.items[0]?.id;
 
