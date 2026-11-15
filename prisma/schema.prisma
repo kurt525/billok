@@ -180,7 +180,11 @@ model PasskeyRecoveryRequest {
 // ─── CORE MODELS ───────────────────────────────────────────
 
 model User {
-  id              String    @id @default(cuid())
+  // Issue #1 6.13.1: cryptographically random RFC 4122 UUIDv4. Created by
+  // Prisma on first INSERT and never regenerated on update/recovery.
+  // Preserve String/TEXT PKs and all existing foreign keys until the
+  // separately accepted pre-release test-only database reset (Issue 9.5).
+  id              String    @id @default(uuid())
   name            String?
   email           String    @unique
   emailVerified   DateTime?
