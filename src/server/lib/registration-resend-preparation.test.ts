@@ -6,7 +6,12 @@ import { preparePendingVerificationResend } from './registration-resend-preparat
 const now = new Date('2026-11-01T15:00:00.000Z');
 const updateMany = vi.fn();
 const create = vi.fn();
-const tx = { systemInvite: { updateMany }, emailVerificationRequest: { create } };
+const findAccount = vi.fn();
+const tx = {
+  systemInvite: { updateMany },
+  emailVerificationRequest: { create },
+  user: { findUnique: findAccount },
+};
 const transaction = vi.fn(async (operation: (arg: typeof tx) => Promise<unknown>) => operation(tx));
 const db = { $transaction: transaction } as unknown as Pick<PrismaClient, '$transaction'>;
 const input = { userId: 'pending-1', inviteCode: 'my-invite', siteOrigin: 'https://billok.ru', now };
@@ -14,6 +19,12 @@ const input = { userId: 'pending-1', inviteCode: 'my-invite', siteOrigin: 'https
 beforeEach(() => {
   vi.clearAllMocks();
   updateMany.mockResolvedValue({ count: 1 });
+  findAccount.mockResolvedValue({
+    email: 'invited@mail.ru',
+    emailVerified: null,
+    suspendedAt: null,
+    isPlaceholder: false,
+  });
   create.mockResolvedValue({ id: 'new-token-row' });
 });
 
@@ -59,6 +70,18 @@ describe('atomic preparation of a replacement confirmation token', () => {
   it('does not issue a new token when the lease is expired, freed or otherwise not owned', async () => {
     updateMany.mockResolvedValueOnce({ count: 0 });
     await expect(preparePendingVerificationResend(db, input)).resolves.toBeNull();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('6.14.2: forbidden legacy email does not renew an invite or mint a verification link', async () => {
+    findAccount.mockResolvedValueOnce({
+      email: 'legacy@example.com',
+      emailVerified: null,
+      suspendedAt: null,
+      isPlaceholder: false,
+    });
+    await expect(preparePendingVerificationResend(db, input)).resolves.toBeNull();
+    expect(updateMany).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
   });
 

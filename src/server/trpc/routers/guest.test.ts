@@ -88,7 +88,7 @@ beforeEach(async () => {
   mockDb.ownerBootstrap.findUnique.mockResolvedValue(null);
   checkRateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
   peekRateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
-  mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+  mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null, email: 'member@qa.billok.ru' });
   mockDb.guestPresence.groupBy.mockResolvedValue([]);
   mockDb.guestPresence.upsert.mockResolvedValue({ id: 'presence-1' });
   // New splits clear expired ones in the background
@@ -4309,7 +4309,7 @@ describe('Issue 3.4: only registered finalization organizers can close a guest r
       await expect(
         (await caller(session)).setFinalizationOrganizer({
           token: 'share-1',
-          email: 'helper@example.com',
+          email: 'helper@qa.billok.ru',
         }),
       ).rejects.toMatchObject({ code: session ? 'FORBIDDEN' : 'UNAUTHORIZED' });
     }
@@ -4317,6 +4317,7 @@ describe('Issue 3.4: only registered finalization organizers can close a guest r
       where.email
         ? {
             id: 'registered-helper',
+            email: 'helper@qa.billok.ru',
             suspendedAt: null,
             isPlaceholder: false,
             registrationEmailVerificationRequired: true,
@@ -4328,12 +4329,13 @@ describe('Issue 3.4: only registered finalization organizers can close a guest r
       await caller(signedIn)
     ).setFinalizationOrganizer({
       token: 'share-1',
-      email: 'HELPER@example.com',
+      email: 'HELPER@qa.billok.ru',
     });
     expect(mockDb.user.findUnique).toHaveBeenCalledWith({
-      where: { email: 'helper@example.com' },
+      where: { email: 'helper@qa.billok.ru' },
       select: {
         id: true,
+        email: true,
         suspendedAt: true,
         isPlaceholder: true,
         emailVerified: true,
@@ -4406,7 +4408,7 @@ describe('Issue 3.4: only registered finalization organizers can close a guest r
     await expect(
       (await caller(signedIn)).setFinalizationOrganizer({
         token: 'share-1',
-        email: 'helper@example.com',
+        email: 'helper@qa.billok.ru',
       }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();

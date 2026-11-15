@@ -6,6 +6,7 @@ import {
 } from '@simplewebauthn/server';
 import { Prisma, type PrismaClient } from '@/generated/prisma/client';
 import { AppError } from './app-error';
+import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
 import { hashWebAuthnBinding } from './webauthn-registration';
 import { readBillokWebAuthnRelyingParty, WEBAUTHN_CHALLENGE_TTL_MS } from './webauthn-relying-party';
 
@@ -98,6 +99,7 @@ async function ownerStatus(store: Store, userId: string) {
     store.user.findUnique({
       where: { id: userId },
       select: {
+        email: true,
         emailVerified: true,
         suspendedAt: true,
         isPlaceholder: true,
@@ -114,6 +116,7 @@ async function ownerStatus(store: Store, userId: string) {
     !bootstrap?.completedAt ||
     bootstrap.userId !== userId ||
     !user?.emailVerified ||
+    !isAllowedRegistrationEmailDomain(user.email) ||
     user.suspendedAt ||
     user.isPlaceholder ||
     keys.length < 1 ||

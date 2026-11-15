@@ -3,6 +3,7 @@ import { activeSystemInviteWindow } from './system-invite-lifetime';
 import { hashEmailVerificationToken } from './email-verification-token';
 import { redeemReservedSystemInvite } from './invite-redemption';
 import { runRegistrationCleanupIfDue } from './registration-cleanup-trigger';
+import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
 
 type ConfirmationDb = Pick<PrismaClient, '$transaction' | 'systemInvite' | 'emailVerificationRequest'>;
 
@@ -30,6 +31,19 @@ export async function confirmRegistrationEmail(
         select: { id: true, userId: true, consumedAt: true, expiresAt: true },
       });
       if (!request || request.consumedAt || request.expiresAt <= now) return false;
+
+      const account = await tx.user.findUnique({
+        where: { id: request.userId },
+        select: { email: true, emailVerified: true, suspendedAt: true, isPlaceholder: true },
+      });
+      if (
+        !account ||
+        !isAllowedRegistrationEmailDomain(account.email) ||
+        account.emailVerified ||
+        account.suspendedAt ||
+        account.isPlaceholder
+      )
+        return false;
 
       const invitation = await tx.systemInvite.findFirst({
         where: {

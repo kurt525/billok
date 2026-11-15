@@ -357,6 +357,7 @@ describe('Issue #1 6.12.1: immutable owner ID, never ADMIN_EMAIL authorization',
   beforeEach(() => {
     vi.clearAllMocks();
     mockDb.user.findUnique.mockResolvedValue({
+      email: 'admin@mail.ru',
       suspendedAt: null,
       emailVerified: new Date(),
       isPlaceholder: false,
@@ -446,6 +447,7 @@ describe('admin group totals in group currency', () => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.clearAllMocks();
     mockDb.user.findUnique.mockResolvedValue({
+      email: 'admin@mail.ru',
       suspendedAt: null,
       emailVerified: new Date(),
       isPlaceholder: false,
@@ -517,6 +519,7 @@ describe('registration mode', () => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.clearAllMocks();
     mockDb.user.findUnique.mockResolvedValue({
+      email: 'admin@mail.ru',
       suspendedAt: null,
       emailVerified: new Date(),
       isPlaceholder: false,
@@ -621,6 +624,7 @@ describe('deleteGroup', () => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.clearAllMocks();
     mockDb.user.findUnique.mockResolvedValue({
+      email: 'admin@mail.ru',
       suspendedAt: null,
       emailVerified: new Date(),
       isPlaceholder: false,
@@ -661,6 +665,7 @@ describe('cleanupExpiredSplits', () => {
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.clearAllMocks();
     mockDb.user.findUnique.mockResolvedValue({
+      email: 'admin@mail.ru',
       suspendedAt: null,
       emailVerified: new Date(),
       isPlaceholder: false,
@@ -699,6 +704,7 @@ describe('unused receipts', () => {
     vi.stubEnv('UPLOAD_DIR', '/nonexistent-sharetab-uploads');
     vi.clearAllMocks();
     mockDb.user.findUnique.mockResolvedValue({
+      email: 'admin@mail.ru',
       suspendedAt: null,
       emailVerified: new Date(),
       isPlaceholder: false,
@@ -775,6 +781,7 @@ describe('Issue #1 6.2: seven-day admin invitations, revocation and usage histor
     vi.stubEnv('ADMIN_EMAIL', 'admin@example.com');
     vi.clearAllMocks();
     mockDb.user.findUnique.mockResolvedValue({
+      email: 'admin@mail.ru',
       suspendedAt: null,
       emailVerified: new Date(),
       isPlaceholder: false,
@@ -1023,6 +1030,7 @@ describe('Issue 6.12.4.4: public announcement is a value-scoped privileged setti
     // Older invitation replay tests replace this mock implementation.
     proofConfirmation.mockReset().mockResolvedValue(undefined);
     mockDb.user.findUnique.mockResolvedValue({
+      email: 'admin@mail.ru',
       suspendedAt: null,
       emailVerified: new Date(),
       isPlaceholder: false,

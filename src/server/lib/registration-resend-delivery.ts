@@ -3,6 +3,7 @@ import type { PrismaClient } from '@/generated/prisma/client';
 import { logger } from './logger';
 import { sendRussianRegistrationVerificationEmail } from './email-verification-email';
 import { preparePendingVerificationResend } from './registration-resend-preparation';
+import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
 import { finalizePendingVerificationResend } from './registration-resend-finalization';
 
 /**
@@ -22,6 +23,7 @@ export async function deliverPendingVerificationResend(input: {
   from: string;
   server: SMTPTransportOptions;
 }): Promise<{ requestId: string; expiresAt: Date } | null> {
+  if (!isAllowedRegistrationEmailDomain(input.email)) return null;
   const prepared = await preparePendingVerificationResend(input.db, {
     userId: input.userId,
     inviteCode: input.inviteCode,

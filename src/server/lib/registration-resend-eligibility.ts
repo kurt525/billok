@@ -1,7 +1,7 @@
 import type { PrismaClient } from '@/generated/prisma/client';
 import { activeSystemInviteWindow } from './system-invite-lifetime';
 import { findUsersByEmail } from './user-email';
-import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
+import { isAllowedRegistrationEmailDomain, normalizeAllowedRegistrationEmail } from './registration-email-domain';
 
 /**
  * Locate an unverified invite-only account with one live invitation
@@ -17,8 +17,11 @@ export async function findPendingRegistrationForResend(
   email: string,
   now: Date = new Date(),
 ): Promise<{ userId: string; email: string; inviteCode: string } | null> {
-  // Exactly one case-insensitive account: no guessing among duplicates.
-  const users = await findUsersByEmail(db, email);
+  // Do not even look up accounts in forbidden zones; public caller stays
+  // non-enumerating regardless of whether a historical address exists.
+  const canonical = normalizeAllowedRegistrationEmail(email);
+  if (!canonical) return null;
+  const users = await findUsersByEmail(db, canonical);
   if (users.length !== 1) return null;
   const [user] = users;
   if (

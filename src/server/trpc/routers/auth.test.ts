@@ -653,7 +653,7 @@ describe('Issue #1 6.10.2.1: isolated account Passkey inventory', () => {
       headers: new Headers(),
       impersonating: { adminId: 'owner-1', targetId: 'person-1' },
     } as unknown as Parameters<typeof authRouter.createCaller>[0]);
-    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null, email: 'person@mail.ru' });
     await expect(api.listPasskeys()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mockDb.passkeyCredential.findMany).not.toHaveBeenCalled();
   });

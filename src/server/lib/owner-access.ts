@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@/generated/prisma/client';
 import { AppError } from './app-error';
+import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
 
 /**
  * Issue #1 6.12.2 — the ONE server-side owner authorization policy.
@@ -22,6 +23,7 @@ export async function requireOwner(
     db.user.findUnique({
       where: { id: authenticatedUserId },
       select: {
+        email: true,
         emailVerified: true,
         suspendedAt: true,
         isPlaceholder: true,
@@ -33,6 +35,7 @@ export async function requireOwner(
     !record?.completedAt ||
     record.userId !== authenticatedUserId ||
     !user?.emailVerified ||
+    !isAllowedRegistrationEmailDomain(user.email) ||
     user.suspendedAt ||
     user.isPlaceholder ||
     !Number.isSafeInteger(user.sessionSecurityVersion) ||

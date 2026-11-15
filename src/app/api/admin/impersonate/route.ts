@@ -5,6 +5,7 @@ import { recordOwnerSecurityEvent } from '@/server/lib/security-event-audit';
 import { readBoundedJson } from '@/server/lib/read-bounded-json';
 import { db } from '@/server/db';
 import { requireOwner } from '@/server/lib/owner-access';
+import { isAllowedRegistrationEmailDomain } from '@/server/lib/registration-email-domain';
 import { logAdminAction } from '@/server/trpc/routers/admin';
 import { signPayload } from '@/server/lib/signed-cookie';
 import { currentImpersonationSessionBinding, verifiedImpersonationSession } from '@/server/lib/impersonation-session';
@@ -69,7 +70,14 @@ async function performAuditedOwnerPost(req: Request, session: Session | null) {
       // The request target is an OBJECT, never an actor. A suspended,
       // pending or placeholder user is not a valid impersonation identity.
       // Validate after locking the target row and BEFORE spending the grant.
-      if (!selected || !selected.emailVerified || selected.suspendedAt || selected.isPlaceholder) return null;
+      if (
+        !selected ||
+        !selected.emailVerified ||
+        !isAllowedRegistrationEmailDomain(selected.email) ||
+        selected.suspendedAt ||
+        selected.isPlaceholder
+      )
+        return null;
       await consumeOwnerPasskeyActionProof(tx, {
         userId: session.user.id,
         action: 'IMPERSONATE',

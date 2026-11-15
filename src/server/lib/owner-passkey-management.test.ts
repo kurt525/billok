@@ -11,6 +11,7 @@ const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 function fixture(count = 3, action: 'RENAME' | 'REVOKE' = 'RENAME') {
   const user = {
     id: 'owner',
+    email: 'owner@mail.ru',
     emailVerified: now,
     suspendedAt: null as Date | null,
     isPlaceholder: false,

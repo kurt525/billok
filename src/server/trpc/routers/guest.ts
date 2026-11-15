@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'crypto';
 import { z } from 'zod';
 import { AppError } from '@/server/lib/app-error';
+import { isAllowedRegistrationEmailDomain } from '@/server/lib/registration-email-domain';
 import { Prisma, GuestSplitStatus } from '@/generated/prisma/client';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
 import { logger } from '../../lib/logger';
@@ -2635,6 +2636,7 @@ export const guestRouter = createTRPCRouter({
             where: { email: input.email.toLowerCase() },
             select: {
               id: true,
+              email: true,
               suspendedAt: true,
               isPlaceholder: true,
               emailVerified: true,
@@ -2645,6 +2647,7 @@ export const guestRouter = createTRPCRouter({
             !account ||
             account.suspendedAt ||
             account.isPlaceholder ||
+            !isAllowedRegistrationEmailDomain(account.email) ||
             (account.registrationEmailVerificationRequired && !account.emailVerified) ||
             account.id === ctx.user.id
           ) {

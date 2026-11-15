@@ -5,6 +5,7 @@ import { Prisma, type PrismaClient } from '@/generated/prisma/client';
 import { AppError } from './app-error';
 import { OWNER_BOOTSTRAP_SINGLETON_ID } from './owner-bootstrap';
 import { assertPasskeyEnrollmentCapacity } from './passkey-account-limit';
+import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
 import {
   readBillokWebAuthnRelyingParty,
   WEBAUTHN_CHALLENGE_TTL_MS,
@@ -59,6 +60,7 @@ export async function beginFirstPasskeyRegistration(input: {
   });
   if (
     !user?.emailVerified ||
+    !isAllowedRegistrationEmailDomain(user.email) ||
     user.suspendedAt ||
     !user.registrationEmailVerificationRequired ||
     user.passkeyCredentials.length
@@ -147,12 +149,19 @@ export async function finishFirstPasskeyRegistration(input: {
       const user = await tx.user.findUnique({
         where: { id: request.userId! },
         select: {
+          email: true,
           emailVerified: true,
           suspendedAt: true,
           passkeyCredentials: { where: { revokedAt: null }, select: { id: true }, take: 1 },
         },
       });
-      if (!user?.emailVerified || user.suspendedAt || user.passkeyCredentials.length) throw new AppError('FORBIDDEN');
+      if (
+        !user?.emailVerified ||
+        !isAllowedRegistrationEmailDomain(user.email) ||
+        user.suspendedAt ||
+        user.passkeyCredentials.length
+      )
+        throw new AppError('FORBIDDEN');
       const updated = await tx.webAuthnChallenge.updateMany({
         where: {
           id: request.id,
@@ -229,6 +238,7 @@ export async function canRetryInvitedFirstPasskey(
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
+      email: true,
       emailVerified: true,
       registrationEmailVerificationRequired: true,
       suspendedAt: true,
@@ -238,6 +248,7 @@ export async function canRetryInvitedFirstPasskey(
   });
   return Boolean(
     user?.emailVerified &&
+    isAllowedRegistrationEmailDomain(user.email) &&
     user.registrationEmailVerificationRequired &&
     !user.suspendedAt &&
     !user.isPlaceholder &&

@@ -4,6 +4,7 @@ import { db } from './db';
 import { logger } from './lib/logger';
 import { consumePasskeyLoginTicket } from './lib/passkey-login';
 import { issueAuthSessionNonce } from './lib/impersonation-session';
+import { isAllowedRegistrationEmailDomain } from './lib/registration-email-domain';
 
 // A verified, short-lived WebAuthn ticket is the ONLY credential accepted.
 // No additional identity provider, adapter or external account linking exists.
@@ -37,12 +38,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           select: {
             name: true,
             locale: true,
+            email: true,
             emailVerified: true,
             suspendedAt: true,
             sessionSecurityVersion: true,
           },
         });
-        if (!fresh?.emailVerified || fresh.suspendedAt) {
+        if (!fresh?.emailVerified || fresh.suspendedAt || !isAllowedRegistrationEmailDomain(fresh.email)) {
           token.sessionSecurityValid = false;
           return token;
         }

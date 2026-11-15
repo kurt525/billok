@@ -7,6 +7,7 @@ import {
 import { type PrismaClient } from '@/generated/prisma/client';
 import { AppError } from './app-error';
 import { hashWebAuthnBinding } from './webauthn-registration';
+import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
 import { readBillokWebAuthnRelyingParty, WEBAUTHN_CHALLENGE_TTL_MS } from './webauthn-relying-party';
 
 export const WEBAUTHN_LOGIN_BINDING_COOKIE = 'billok-passkey-login';
@@ -81,13 +82,14 @@ export async function finishPasskeyLogin(input: {
   const passkey = await input.db.passkeyCredential.findUnique({
     where: { credentialId: input.response.id },
     include: {
-      user: { select: { id: true, emailVerified: true, suspendedAt: true, isPlaceholder: true } },
+      user: { select: { id: true, email: true, emailVerified: true, suspendedAt: true, isPlaceholder: true } },
     },
   });
   if (
     !passkey ||
     passkey.revokedAt ||
     !passkey.user.emailVerified ||
+    !isAllowedRegistrationEmailDomain(passkey.user.email) ||
     passkey.user.suspendedAt ||
     passkey.user.isPlaceholder ||
     passkey.signCount < 0 ||
@@ -140,13 +142,14 @@ export async function finishPasskeyLogin(input: {
     const current = await tx.passkeyCredential.findUnique({
       where: { id: passkey.id },
       include: {
-        user: { select: { id: true, emailVerified: true, suspendedAt: true, isPlaceholder: true } },
+        user: { select: { id: true, email: true, emailVerified: true, suspendedAt: true, isPlaceholder: true } },
       },
     });
     if (
       !current ||
       current.revokedAt ||
       !current.user.emailVerified ||
+      !isAllowedRegistrationEmailDomain(current.user.email) ||
       current.user.suspendedAt ||
       current.user.isPlaceholder ||
       current.credentialId !== passkey.credentialId ||
@@ -212,7 +215,14 @@ export async function consumePasskeyLoginTicket(input: { db: PrismaClient; token
         passkeyCredentials: { where: { revokedAt: null }, select: { id: true }, take: 1 },
       },
     });
-    if (!user || !user.emailVerified || user.suspendedAt || user.isPlaceholder || !user.passkeyCredentials.length) {
+    if (
+      !user ||
+      !user.emailVerified ||
+      !isAllowedRegistrationEmailDomain(user.email) ||
+      user.suspendedAt ||
+      user.isPlaceholder ||
+      !user.passkeyCredentials.length
+    ) {
       return null;
     }
     const result = await tx.passkeyLoginTicket.updateMany({

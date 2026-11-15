@@ -9,7 +9,7 @@ import {
   hashEmailVerificationToken,
   EMAIL_VERIFICATION_TOKEN_TTL_MS,
 } from './email-verification-token';
-import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
+import { isAllowedRegistrationEmailDomain, normalizeAllowedRegistrationEmail } from './registration-email-domain';
 import { sendRussianPasskeyRecoveryEmail, sendRussianPasskeyRecoveryCompletedEmail } from './passkey-recovery-email';
 import { recordOwnerSecurityEvent } from './security-event-audit';
 import { hashWebAuthnBinding } from './webauthn-registration';
@@ -55,8 +55,8 @@ export async function requestPasskeyRecovery(input: {
   now?: Date;
 }): Promise<{ requested: true }> {
   const now = input.now ?? new Date();
-  const email = input.email.trim().toLowerCase();
-  if (!isAllowedRegistrationEmailDomain(email) || email.length > 254) return { requested: true };
+  const email = normalizeAllowedRegistrationEmail(input.email);
+  if (!email) return { requested: true };
   const user = await input.db.user.findUnique({
     where: { email },
     select: {
@@ -69,7 +69,8 @@ export async function requestPasskeyRecovery(input: {
     },
   });
   // Recovery must not substitute for the initial invited registration.
-  if (!user?.emailVerified || user.suspendedAt || user.isPlaceholder) return { requested: true };
+  if (!user?.emailVerified || !isAllowedRegistrationEmailDomain(user.email) || user.suspendedAt || user.isPlaceholder)
+    return { requested: true };
   const owner = await input.db.ownerBootstrap.findUnique({
     where: { id: 1 },
     select: { userId: true, completedAt: true },
@@ -105,6 +106,7 @@ export async function requestPasskeyRecovery(input: {
     if (
       !currentUser ||
       currentUser.email !== email ||
+      !isAllowedRegistrationEmailDomain(currentUser.email) ||
       !currentUser.emailVerified ||
       currentUser.suspendedAt ||
       currentUser.isPlaceholder
@@ -195,6 +197,7 @@ async function loadPasskeyRecovery(db: PrismaClient, token: string, now: Date) {
     request.consumedAt ||
     request.expiresAt <= now ||
     request.emailHash !== digest(request.user.email) ||
+    !isAllowedRegistrationEmailDomain(request.user.email) ||
     !request.user.emailVerified ||
     request.user.suspendedAt ||
     request.user.isPlaceholder ||
@@ -255,6 +258,7 @@ export async function beginPasskeyRecovery(input: {
     if (
       !currentUser ||
       current.emailHash !== digest(currentUser.email) ||
+      !isAllowedRegistrationEmailDomain(currentUser.email) ||
       !currentUser.emailVerified ||
       currentUser.suspendedAt ||
       currentUser.isPlaceholder ||
@@ -347,6 +351,7 @@ export async function finishPasskeyRecovery(input: {
         current.expiresAt <= now ||
         current.challengeHash !== challengeHash ||
         current.emailHash !== digest(current.user.email) ||
+        !isAllowedRegistrationEmailDomain(current.user.email) ||
         !current.user.emailVerified ||
         current.user.suspendedAt ||
         current.user.isPlaceholder

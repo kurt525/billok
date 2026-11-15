@@ -1,6 +1,7 @@
 import { Prisma, type PrismaClient } from '@/generated/prisma/client';
 import { AppError } from './app-error';
 import { requireOwner } from './owner-access';
+import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
 import { decodeOwnerUserCursor, encodeOwnerUserCursor, ownerUserCursorScope } from './owner-user-cursor';
 import { revokeAccountAuthenticationStateInTransaction } from './revoke-account-auth';
 import { consumeOwnerPasskeyActionProof } from './owner-passkey-action-approval';
@@ -124,7 +125,8 @@ export async function changeRegisteredUserSuspension(input: {
       bootstrap.userId === input.userId ||
       !target ||
       target.isPlaceholder ||
-      Boolean(target.suspendedAt) === input.suspend
+      Boolean(target.suspendedAt) === input.suspend ||
+      (!input.suspend && !isAllowedRegistrationEmailDomain(target.email))
     )
       throw new AppError('FORBIDDEN');
     // A signed proof is consumed in the SAME PostgreSQL transaction as the

@@ -183,7 +183,7 @@ describe('Issue 6.12.4.2: every admin user mutation requires a fresh Passkey pro
     expect(tx.user.update).not.toHaveBeenCalled();
     const impersonating = adminRouter.createCaller({
       session: { user: { id: 'owner-1' } },
-      db: { user: { findUnique: vi.fn().mockResolvedValue({ suspendedAt: null }) } },
+      db: { user: { findUnique: vi.fn().mockResolvedValue({ suspendedAt: null, email: 'member@mail.ru' }) } },
       headers: new Headers({ cookie: 'authjs.session-token=owner' }),
       impersonating: { adminId: 'owner-1', targetId: 'user-1' },
     } as unknown as Parameters<typeof adminRouter.createCaller>[0]);

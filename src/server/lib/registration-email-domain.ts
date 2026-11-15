@@ -56,6 +56,6 @@ export function normalizeAllowedRegistrationEmail(email: string): string | null 
 }
 
 /** Backwards-compatible public predicate for bootstrap, recovery and signup. */
-export function isAllowedRegistrationEmailDomain(email: string): boolean {
-  return normalizeAllowedRegistrationEmail(email) !== null;
+export function isAllowedRegistrationEmailDomain(email: unknown): email is string {
+  return typeof email === 'string' && normalizeAllowedRegistrationEmail(email) !== null;
 }

@@ -7,6 +7,7 @@ import { db } from '../db';
 import { logger } from '../lib/logger';
 import { currentImpersonationSessionBinding, verifiedImpersonationSession } from '../lib/impersonation-session';
 import { AppError, errorShape } from '../lib/app-error';
+import { isAllowedRegistrationEmailDomain } from '../lib/registration-email-domain';
 import { recordOwnerSecurityEvent, securityTargetFromInput } from '../lib/security-event-audit';
 import { LOCALE_HEADER, localeFromHeader } from '@/lib/locale-header';
 import { defaultLocale } from '@/i18n/routing';
@@ -114,10 +115,10 @@ export const protectedProcedure = t.procedure.use(loggingMiddleware).use(async (
 
   const user = await ctx.db.user.findUnique({
     where: { id: ctx.session.user.id },
-    select: { suspendedAt: true },
+    select: ctx.impersonating ? { suspendedAt: true, email: true } : { suspendedAt: true },
   });
 
-  if (!user) {
+  if (!user || (ctx.impersonating && !('email' in user && isAllowedRegistrationEmailDomain(user.email)))) {
     throw new AppError('UNAUTHORIZED');
   }
 

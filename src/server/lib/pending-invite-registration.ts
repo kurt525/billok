@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from '@/generated/prisma/client';
 import { AppError } from './app-error';
+import { normalizeAllowedRegistrationEmail } from './registration-email-domain';
 import { reserveSystemInvite } from './invite-reservation';
 import { isUserIdCollision, retryUserIdCollision } from './user-id-collision-retry';
 
@@ -16,12 +17,14 @@ export async function createPendingInviteRegistration(
   input: { name: string; email: string; inviteCode: string; now?: Date },
 ): Promise<{ id: string; name: string | null; email: string }> {
   const now = input.now ?? new Date();
+  const canonicalEmail = normalizeAllowedRegistrationEmail(input.email);
+  if (!canonicalEmail) throw new AppError('BAD_REQUEST', 'registrationEmailDomainInvalid');
   const createInvitedUser = () =>
     db.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
           name: input.name,
-          email: input.email,
+          email: canonicalEmail,
           emailVerified: null,
           registrationEmailVerificationRequired: true,
         },

@@ -5,6 +5,7 @@ import { requireOwner } from './owner-access';
 
 function scenario() {
   const user = {
+    email: 'owner@mail.ru',
     emailVerified: new Date('2026-11-13T10:00:00Z') as Date | null,
     suspendedAt: null as Date | null,
     isPlaceholder: false,
@@ -31,7 +32,13 @@ describe('Issue #1 6.12.2: central owner policy fails closed', () => {
     });
     expect(db.user.findUnique).toHaveBeenCalledWith({
       where: { id: 'real-owner' },
-      select: { emailVerified: true, suspendedAt: true, isPlaceholder: true, sessionSecurityVersion: true },
+      select: {
+        email: true,
+        emailVerified: true,
+        suspendedAt: true,
+        isPlaceholder: true,
+        sessionSecurityVersion: true,
+      },
     });
   });
 
@@ -67,6 +74,14 @@ describe('Issue #1 6.12.2: central owner policy fails closed', () => {
     ]) {
       const { client, user } = scenario();
       Object.assign(user, state);
+      await expect(requireOwner(client, 'real-owner')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+  });
+
+  it('6.14.2: a legacy owner with a forbidden DNS zone cannot regain admin permissions', async () => {
+    for (const email of ['owner@example.com', 'owner@mail.ru.evil.com']) {
+      const { client, user } = scenario();
+      user.email = email;
       await expect(requireOwner(client, 'real-owner')).rejects.toMatchObject({ code: 'FORBIDDEN' });
     }
   });

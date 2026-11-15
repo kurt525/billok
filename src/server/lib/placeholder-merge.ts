@@ -1,4 +1,5 @@
 import { AppError } from './app-error';
+import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
 import type { Prisma, SplitMode } from '@/generated/prisma/client';
 
 type ShareFields = { amount: number; shares: number; percentage: number | null };
@@ -59,7 +60,7 @@ export async function mergePlaceholderIntoUser(
     tx.user.findUnique({ where: { id: placeholderUserId }, select: { isPlaceholder: true, suspendedAt: true } }),
     tx.user.findUnique({
       where: { id: realUserId },
-      select: { isPlaceholder: true, suspendedAt: true, emailVerified: true },
+      select: { isPlaceholder: true, suspendedAt: true, emailVerified: true, email: true },
     }),
     tx.group.findUnique({ where: { id: groupId }, select: { archivedAt: true } }),
   ]);
@@ -71,7 +72,13 @@ export async function mergePlaceholderIntoUser(
   if (placeholder.suspendedAt) {
     throw new AppError('BAD_REQUEST', 'mergeDeletedAccount');
   }
-  if (!target || target.isPlaceholder || target.suspendedAt || !target.emailVerified) {
+  if (
+    !target ||
+    target.isPlaceholder ||
+    target.suspendedAt ||
+    !target.emailVerified ||
+    !isAllowedRegistrationEmailDomain(target.email)
+  ) {
     throw new AppError('BAD_REQUEST', 'mergeTargetNeedsAccount');
   }
   // History handed to someone outside the group couldn't be settled. Lock their

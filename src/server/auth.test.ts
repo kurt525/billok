@@ -72,6 +72,7 @@ beforeEach(() => {
   db.user.findUnique.mockResolvedValue({
     name: 'Анна',
     locale: 'ru',
+    email: 'anna@mail.ru',
     emailVerified: new Date('2026-11-01T00:00:00Z'),
     suspendedAt: null,
     sessionSecurityVersion: 0,
@@ -143,6 +144,7 @@ describe('Issue #1 6.9: no hidden provider can be enabled by configuration', () 
       select: {
         name: true,
         locale: true,
+        email: true,
         emailVerified: true,
         suspendedAt: true,
         sessionSecurityVersion: true,
@@ -152,6 +154,25 @@ describe('Issue #1 6.9: no hidden provider can be enabled by configuration', () 
 });
 
 describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
+  test('6.14.2: a previously valid JWT immediately loses its user when stored email moves outside .ru/.su', async () => {
+    const config = await loadAuth();
+    const signed = await config.callbacks.jwt({ token: {}, user: { id: 'user-1' } });
+    expect(signed.sessionSecurityValid).toBe(true);
+    for (const email of ['anna@example.com', 'anna@mail.ru.evil.com', 'anna@domain.рф']) {
+      db.user.findUnique.mockResolvedValueOnce({
+        name: 'Анна',
+        locale: 'ru',
+        email,
+        emailVerified: new Date(),
+        suspendedAt: null,
+        sessionSecurityVersion: 0,
+      });
+      const revoked = await config.callbacks.jwt({ token: { ...signed } });
+      expect(revoked.sessionSecurityValid).toBe(false);
+      expect(config.callbacks.session({ session: { user: {} }, token: revoked }).user).toBeUndefined();
+    }
+  });
+
   test('rejects all prior sessions after the database security version rotates', async () => {
     const config = await loadAuth();
     const previous = await config.callbacks.jwt({ token: {}, user: { id: 'user-1', name: 'Анна' } });
@@ -159,6 +180,7 @@ describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
     db.user.findUnique.mockResolvedValueOnce({
       name: 'Анна',
       locale: 'ru',
+      email: 'anna@mail.ru',
       emailVerified: new Date(),
       suspendedAt: null,
       sessionSecurityVersion: 1,
@@ -197,6 +219,7 @@ describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
     db.user.findUnique.mockResolvedValueOnce({
       name: 'Анна',
       locale: 'ru',
+      email: 'anna@mail.ru',
       emailVerified: new Date(),
       suspendedAt: null,
       sessionSecurityVersion: 3,

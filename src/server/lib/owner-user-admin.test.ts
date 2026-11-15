@@ -13,6 +13,7 @@ function fixture() {
   const bootstrap = { userId: 'owner-id', completedAt: now as Date | null };
   const actor = {
     id: 'owner-id',
+    email: 'owner@mail.ru',
     emailVerified: now as Date | null,
     suspendedAt: null as Date | null,
     isPlaceholder: false,

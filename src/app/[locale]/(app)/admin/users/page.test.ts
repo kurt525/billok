@@ -33,6 +33,7 @@ beforeEach(() => {
   cookieMock.mockResolvedValue({ get: vi.fn(() => undefined) });
   bootstrapMock.mockResolvedValue({ userId: 'owner', completedAt: new Date() });
   userMock.mockResolvedValue({
+    email: 'owner@qa.billok.ru',
     emailVerified: new Date(),
     suspendedAt: null,
     isPlaceholder: false,
@@ -49,7 +50,13 @@ describe('Issue #1 6.11: separate admin/users is owner-only before rendering dat
     });
     expect(userMock).toHaveBeenCalledWith({
       where: { id: 'owner' },
-      select: { emailVerified: true, suspendedAt: true, isPlaceholder: true, sessionSecurityVersion: true },
+      select: {
+        email: true,
+        emailVerified: true,
+        suspendedAt: true,
+        isPlaceholder: true,
+        sessionSecurityVersion: true,
+      },
     });
   });
   it('redirects anonymous visitors before any owner information is loaded', async () => {

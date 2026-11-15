@@ -46,6 +46,7 @@ const signed = {
 function fixture(n = 2, action: OwnerPasskeyAction = 'REVOKE') {
   const owner = { userId: 'owner', completedAt: now as Date | null };
   const user = {
+    email: 'owner@mail.ru',
     emailVerified: now,
     suspendedAt: null as Date | null,
     isPlaceholder: false,

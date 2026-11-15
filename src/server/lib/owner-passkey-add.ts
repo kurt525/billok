@@ -3,6 +3,7 @@ import { generateRegistrationOptions, verifyRegistrationResponse } from '@simple
 import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 import { Prisma, type PrismaClient } from '@/generated/prisma/client';
 import { AppError } from './app-error';
+import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
 import { assertPasskeyEnrollmentCapacity } from './passkey-account-limit';
 import { hashWebAuthnBinding } from './webauthn-registration';
 import { consumeOwnerPasskeyActionProof } from './owner-passkey-action-approval';
@@ -87,6 +88,7 @@ export async function beginAdditionalOwnerPasskey(input: {
     !owner?.completedAt ||
     owner.userId !== input.userId ||
     !user?.emailVerified ||
+    !isAllowedRegistrationEmailDomain(user.email) ||
     user.suspendedAt ||
     user.isPlaceholder ||
     !user.webAuthnUserHandle ||
@@ -188,10 +190,11 @@ export async function finishAdditionalOwnerPasskey(input: {
       const capacity = await assertPasskeyEnrollmentCapacity(tx, input.userId, 'OWNER_ADDITIONAL');
       const ownerAccount = await tx.user.findUnique({
         where: { id: input.userId },
-        select: { emailVerified: true, suspendedAt: true, isPlaceholder: true },
+        select: { email: true, emailVerified: true, suspendedAt: true, isPlaceholder: true },
       });
       if (
         !ownerAccount?.emailVerified ||
+        !isAllowedRegistrationEmailDomain(ownerAccount.email) ||
         ownerAccount.suspendedAt ||
         ownerAccount.isPlaceholder ||
         capacity.activeCount < 1

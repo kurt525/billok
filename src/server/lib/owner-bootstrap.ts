@@ -241,6 +241,7 @@ export async function canRetryOwnerInitialPasskey(
     db.user.findUnique({
       where: { id: userId },
       select: {
+        email: true,
         emailVerified: true,
         suspendedAt: true,
         passkeyCredentials: { where: { revokedAt: null }, select: { id: true }, take: 1 },
@@ -253,6 +254,7 @@ export async function canRetryOwnerInitialPasskey(
     request.consumedAt &&
     request.expiresAt > now &&
     account?.emailVerified &&
+    isAllowedRegistrationEmailDomain(account.email) &&
     !account.suspendedAt &&
     account.passkeyCredentials.length === 0,
   );

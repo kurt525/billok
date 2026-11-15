@@ -577,7 +577,7 @@ describe('invites', () => {
     mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
       where.id === 'p1'
         ? { suspendedAt: null, isPlaceholder: true }
-        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01') },
+        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01'), email: 'bob@qa.billok.ru' },
     );
     mockDb.groupMember.findUnique.mockImplementation(
       async ({ where }: { where: { userId_groupId: { userId: string } } }) =>
@@ -612,7 +612,7 @@ describe('invites', () => {
     mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
       where.id === 'p1'
         ? { suspendedAt: null, isPlaceholder: true }
-        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01') },
+        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01'), email: 'bob@qa.billok.ru' },
     );
     mockDb.groupMember.findUnique.mockImplementation(
       async ({ where }: { where: { userId_groupId: { userId: string } } }) => ({
@@ -693,7 +693,7 @@ describe('invites', () => {
     mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
       where.id === 'p1'
         ? { suspendedAt: null, isPlaceholder: true }
-        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01') },
+        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01'), email: 'bob@qa.billok.ru' },
     );
     mockDb.groupMember.findUnique.mockImplementation(
       async ({ where }: { where: { userId_groupId: { userId: string } } }) => ({
@@ -732,7 +732,7 @@ describe('invites', () => {
     mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
       where.id === 'p1'
         ? { suspendedAt: null, isPlaceholder: true }
-        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01') },
+        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01'), email: 'bob@qa.billok.ru' },
     );
     // Bob isn't a member until the transaction adds him
     let bobJoined = false;
@@ -1350,11 +1350,19 @@ describe('deleting a group', () => {
 // #276: merging a placeholder into the member it stands for moves their
 // expenses, shares and payments over, so the balance follows them.
 describe('merging a placeholder into a member', () => {
-  const users: Record<string, { suspendedAt: Date | null; isPlaceholder: boolean; emailVerified: Date | null }> = {
-    owner: { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01') },
-    bob: { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01') },
-    p1: { suspendedAt: null, isPlaceholder: true, emailVerified: null },
-    p2: { suspendedAt: null, isPlaceholder: true, emailVerified: null },
+  const users: Record<
+    string,
+    { suspendedAt: Date | null; isPlaceholder: boolean; emailVerified: Date | null; email: string }
+  > = {
+    owner: {
+      suspendedAt: null,
+      isPlaceholder: false,
+      emailVerified: new Date('2026-11-01'),
+      email: 'owner@qa.billok.ru',
+    },
+    bob: { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01'), email: 'bob@qa.billok.ru' },
+    p1: { suspendedAt: null, isPlaceholder: true, emailVerified: null, email: 'p1@qa.billok.ru' },
+    p2: { suspendedAt: null, isPlaceholder: true, emailVerified: null, email: 'p2@qa.billok.ru' },
   };
   // admin.deleteUser turns an account into a suspended placeholder that keeps its history in other groups
   const deletedAccount = { suspendedAt: new Date(), isPlaceholder: true };

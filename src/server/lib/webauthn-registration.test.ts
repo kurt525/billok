@@ -57,7 +57,8 @@ function fakeDb() {
       findUnique: vi
         .fn()
         .mockResolvedValueOnce(user)
-        .mockResolvedValueOnce({ webAuthnUserHandle: 'h'.repeat(43) }),
+        .mockResolvedValueOnce({ webAuthnUserHandle: 'h'.repeat(43) })
+        .mockResolvedValue({ ...user, webAuthnUserHandle: 'h'.repeat(43) }),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     webAuthnChallenge: {
@@ -154,6 +155,20 @@ describe('Issue #1 6.3.2: first WebAuthn credential requires confirmed email and
     expect(db.webAuthnChallenge.create).not.toHaveBeenCalled();
   });
 
+  it('6.14.2: a verified legacy .com account cannot begin first Passkey enrollment', async () => {
+    const { db } = fakeDb();
+    db.user.findUnique.mockReset().mockResolvedValue({ ...user, email: 'person@example.com' });
+    await expect(
+      beginFirstPasskeyRegistration({
+        db: requireDb(db),
+        userId: user.id,
+        bindingSecret: secret,
+        env,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.webAuthnChallenge.create).not.toHaveBeenCalled();
+  });
+
   it('rejects a second active Passkey before starting another first-key challenge', async () => {
     const { db } = fakeDb();
     db.user.findUnique.mockReset().mockResolvedValue({
@@ -199,6 +214,7 @@ describe('Issue #1 6.3.2: first WebAuthn credential requires confirmed email and
     const { db, entry } = fakeDb();
     entry.challengeHash = createHash('sha256').update(challenge).digest('hex');
     db.user.findUnique.mockReset().mockResolvedValue({
+      email: 'person@mail.ru',
       emailVerified: now,
       suspendedAt: null,
       passkeyCredentials: [],
@@ -244,6 +260,7 @@ describe('Issue #1 6.3.2: first WebAuthn credential requires confirmed email and
     const { db, entry } = fakeDb();
     entry.challengeHash = createHash('sha256').update(challenge).digest('hex');
     db.user.findUnique.mockReset().mockResolvedValue({
+      email: 'person@mail.ru',
       emailVerified: now,
       suspendedAt: null,
       passkeyCredentials: [],
@@ -278,6 +295,7 @@ describe('Issue #1 6.3.2: first WebAuthn credential requires confirmed email and
     const { db, entry } = fakeDb();
     entry.challengeHash = createHash('sha256').update(challenge).digest('hex');
     db.user.findUnique.mockReset().mockResolvedValue({
+      email: 'person@mail.ru',
       emailVerified: now,
       suspendedAt: null,
       passkeyCredentials: [],
@@ -292,6 +310,7 @@ describe('Issue #1 6.3.2: first WebAuthn credential requires confirmed email and
     const { db, entry } = fakeDb();
     entry.challengeHash = createHash('sha256').update(challenge).digest('hex');
     db.user.findUnique.mockReset().mockResolvedValue({
+      email: 'person@mail.ru',
       emailVerified: now,
       suspendedAt: null,
       passkeyCredentials: [],
@@ -308,6 +327,7 @@ describe('Issue #1 6.3.2: first WebAuthn credential requires confirmed email and
     const { db, entry } = fakeDb();
     entry.challengeHash = createHash('sha256').update(challenge).digest('hex');
     db.user.findUnique.mockReset().mockResolvedValue({
+      email: 'person@mail.ru',
       emailVerified: now,
       suspendedAt: null,
       passkeyCredentials: [],

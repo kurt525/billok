@@ -186,6 +186,31 @@ describe('Issue #1 6.3.2.2: browser-bound passkey authentication', () => {
     expect(verifyAuthenticationResponse).not.toHaveBeenCalled();
   });
 
+  it('6.14.2: stale .com accounts cannot produce or redeem a Passkey login ticket', async () => {
+    const { db, user } = fixture();
+    user.email = 'anna@example.com';
+    await expect(
+      finishPasskeyLogin({
+        db: asDb(db),
+        bindingSecret: browserSecret,
+        response,
+        now,
+        env,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.passkeyLoginTicket.create).not.toHaveBeenCalled();
+    const ticket = 'T'.repeat(43);
+    db.passkeyLoginTicket.findUnique.mockResolvedValue({
+      id: 'ticket-1',
+      userId: user.id,
+      tokenHash: hash(ticket),
+      expiresAt: new Date(now.getTime() + 30000),
+      consumedAt: null,
+    });
+    await expect(consumePasskeyLoginTicket({ db: asDb(db), token: ticket, now })).resolves.toBeNull();
+    expect(db.passkeyLoginTicket.updateMany).not.toHaveBeenCalled();
+  });
+
   it('verifies exact origin/RP ID, presence and UV, atomically consumes challenge and issues one ticket', async () => {
     const { db, passkey, request } = fixture();
     const result = await finishPasskeyLogin({

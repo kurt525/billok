@@ -25,6 +25,12 @@ function fixture() {
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     user: {
+      findUnique: vi.fn().mockResolvedValue({
+        email: 'invited@mail.ru',
+        emailVerified: null,
+        suspendedAt: null,
+        isPlaceholder: false,
+      }),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
   };
@@ -101,6 +107,20 @@ describe('atomic registration email confirmation', () => {
     expect(await confirmRegistrationEmail(db, invalid, now)).toBe(false);
     expect(db.$transaction).not.toHaveBeenCalled();
     expect(cleanupGate).not.toHaveBeenCalled();
+  });
+
+  it('6.14.2: a valid token cannot verify a legacy .com email account', async () => {
+    const { db, tx } = fixture();
+    tx.user.findUnique.mockResolvedValue({
+      email: 'legacy@example.com',
+      emailVerified: null,
+      suspendedAt: null,
+      isPlaceholder: false,
+    });
+    await expect(confirmRegistrationEmail(db, token, now)).resolves.toBe(false);
+    expect(tx.emailVerificationRequest.updateMany).not.toHaveBeenCalled();
+    expect(tx.user.updateMany).not.toHaveBeenCalled();
+    expect(tx.systemInvite.updateMany).not.toHaveBeenCalled();
   });
 
   it('rejects expired and consumed links, including the exact expiry boundary', async () => {
