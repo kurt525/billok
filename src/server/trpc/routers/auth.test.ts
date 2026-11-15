@@ -163,7 +163,7 @@ describe('auth.resendRegistrationVerification', () => {
   const pending = { userId: 'pending-1', inviteCode: 'my-invite', email };
   const config = {
     NEXTAUTH_URL: 'https://billok.ru',
-    EMAIL_SERVER_HOST: 'smtp.reg.ru',
+    EMAIL_SERVER_HOST: 'mail.hosting.reg.ru',
     EMAIL_SERVER_PORT: '465',
     EMAIL_SERVER_USER: 'noreply@billok.ru',
     EMAIL_SERVER_PASSWORD: 'smtp-test-only',
@@ -186,10 +186,11 @@ describe('auth.resendRegistrationVerification', () => {
       siteOrigin: 'https://billok.ru',
       from: config.EMAIL_FROM,
       server: {
-        host: 'smtp.reg.ru',
+        host: 'mail.hosting.reg.ru',
         port: 465,
         secure: true,
         requireTLS: false,
+        tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
         auth: { user: config.EMAIL_SERVER_USER, pass: config.EMAIL_SERVER_PASSWORD },
       },
     });
@@ -280,7 +281,7 @@ describe('auth.resendRegistrationVerification', () => {
 
 const EMAIL_ENV = {
   NEXTAUTH_URL: 'https://billok.ru',
-  EMAIL_SERVER_HOST: 'smtp.reg.ru',
+  EMAIL_SERVER_HOST: 'mail.hosting.reg.ru',
   EMAIL_SERVER_PORT: '465',
   EMAIL_SERVER_USER: 'noreply@billok.ru',
   EMAIL_SERVER_PASSWORD: 'smtp-test-only',

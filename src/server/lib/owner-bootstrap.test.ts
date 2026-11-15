@@ -14,7 +14,7 @@ const now = new Date('2026-11-11T12:00:00.000Z');
 const env = {
   BILLOK_OWNER_BOOTSTRAP_ACK: 'CREATE_INITIAL_OWNER',
   ADMIN_EMAIL: 'owner@example.ru',
-  EMAIL_SERVER_HOST: 'smtp.example.ru',
+  EMAIL_SERVER_HOST: 'mail.hosting.reg.ru',
   EMAIL_SERVER_PORT: '465',
   EMAIL_SERVER_USER: 'noreply@billok.ru',
   EMAIL_SERVER_PASSWORD: 'test-only',

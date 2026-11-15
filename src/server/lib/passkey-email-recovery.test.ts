@@ -31,7 +31,7 @@ const hash = (v: string) => createHash('sha256').update(v).digest('hex');
 const env = {
   NODE_ENV: 'production',
   NEXTAUTH_URL: 'https://billok.ru',
-  EMAIL_SERVER_HOST: 'smtp.example.ru',
+  EMAIL_SERVER_HOST: 'mail.hosting.reg.ru',
   EMAIL_SERVER_PORT: '465',
   EMAIL_SERVER_USER: 'noreply@billok.ru',
   EMAIL_SERVER_PASSWORD: 'not-real',

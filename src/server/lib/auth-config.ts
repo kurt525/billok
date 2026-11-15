@@ -33,6 +33,7 @@ export function readRegistrationEmailConfig(env: Record<string, string | undefin
     port < 1 ||
     port > 65535 ||
     !username.trim() ||
+    username !== username.trim() ||
     !password.trim() ||
     (from !== 'BillOK <noreply@billok.ru>' && from !== 'noreply@billok.ru')
   ) {
@@ -47,6 +48,31 @@ export function readRegistrationEmailConfig(env: Record<string, string | undefin
   }
 
   const localHost = ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname);
+  // The ONLY alternate SMTP is an ephemeral loopback mailbox in the disposable
+  // mobile CI database. The flag alone is never enough to permit an SMTP relay.
+  const qaDbUrl = env.DATABASE_URL ?? '';
+  const isolatedQa =
+    env.BILLOK_QA_FIXTURES === '1' &&
+    env.BILLOK_QA_WEBAUTHN_LOOPBACK === '1' &&
+    /^postgresql?:\/\/billokqa:billokqa_local_only@127\.0\.0\.1:\d+\/billokqa$/u.test(qaDbUrl) &&
+    localHost &&
+    host === '127.0.0.1' &&
+    port >= 1024 &&
+    env.BILLOK_QA_SMTP_PORT === rawPort &&
+    username === 'billok-qa' &&
+    password === 'qa-local-only' &&
+    from === 'noreply@billok.ru';
+
+  // Issue #1 7.1: production mail is REG.RU only, with a fixed authenticated
+  // noreply mailbox. Mailbox credentials come exclusively from runtime env.
+  // The official REG.RU mail-hosting SMTP endpoint supports 465/SSL or
+  // 587/STARTTLS; no insecure transport, custom server or fallback provider.
+  const regRuSmtp =
+    host === 'mail.hosting.reg.ru' && (port === 465 || port === 587) && username === 'noreply@billok.ru';
+  if (!regRuSmtp && !isolatedQa) throw invalid();
+  if (isolatedQa && (base.protocol !== 'http:' || !localHost)) throw invalid();
+  if (regRuSmtp && base.protocol !== 'https:') throw invalid();
+
   if (
     !(base.protocol === 'https:' || (base.protocol === 'http:' && localHost)) ||
     base.username ||
@@ -66,6 +92,7 @@ export function readRegistrationEmailConfig(env: Record<string, string | undefin
       port,
       secure: port === 465,
       requireTLS: port !== 465,
+      tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
       auth: { user: username, pass: password },
     },
   };

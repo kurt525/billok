@@ -32,7 +32,7 @@ async function main() {
   const env = {
     BILLOK_OWNER_BOOTSTRAP_ACK: 'CREATE_INITIAL_OWNER',
     ADMIN_EMAIL: ownerEmail,
-    EMAIL_SERVER_HOST: 'smtp.example.ru',
+    EMAIL_SERVER_HOST: 'mail.hosting.reg.ru',
     EMAIL_SERVER_PORT: '465',
     EMAIL_SERVER_USER: 'noreply@billok.ru',
     EMAIL_SERVER_PASSWORD: 'qa-not-real',
