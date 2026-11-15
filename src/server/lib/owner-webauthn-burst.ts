@@ -12,7 +12,8 @@ import { checkRateLimit } from './rate-limit';
 export const OWNER_WEBAUTHN_BURST_MAX = 8;
 export const OWNER_WEBAUTHN_BURST_WINDOW_MS = 2_000;
 
-export type OwnerWebAuthnRoute = 'approval-start' | 'approval-finish' | 'add-start' | 'add-finish';
+export type OwnerWebAuthnRoute =
+  'approval-start' | 'approval-finish' | 'add-start' | 'add-finish' | 'manage-rename' | 'manage-revoke';
 
 export function allowOwnerWebAuthnRequest(ownerId: string, route: OwnerWebAuthnRoute): boolean {
   if (!ownerId) return false;

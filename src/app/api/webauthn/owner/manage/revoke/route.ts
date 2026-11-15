@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/server/auth';
 import { db } from '@/server/db';
 import { requireOwner } from '@/server/lib/owner-access';
-import { checkRateLimit } from '@/server/lib/rate-limit';
-import { getClientIp } from '@/server/lib/client-ip';
+import { allowOwnerWebAuthnRequest } from '@/server/lib/owner-webauthn-burst';
 import { ownerSessionFingerprint } from '@/server/lib/owner-passkey-action-approval';
 import { revokeApprovedOwnerPasskey } from '@/server/lib/owner-passkey-management';
 
@@ -26,27 +25,34 @@ export async function POST(request: Request) {
   } catch {
     return denied();
   }
-  if (
-    !checkRateLimit('owner-manage-revoke:' + session.user.id, 12, 60 * 60 * 1000).allowed ||
-    !checkRateLimit('owner-manage-revoke-ip:' + getClientIp(request.headers), 32, 60 * 60 * 1000).allowed
-  ) {
-    return NextResponse.json({ error: 'Слишком много попыток.' }, { status: 429 });
+  // One brief per-owner anti-flood window, NOT an hourly/daily quota.
+  // Shared NAT/VPN IP activity cannot block legitimate owner operations.
+  if (!allowOwnerWebAuthnRequest(session.user.id, 'manage-revoke')) {
+    return NextResponse.json({ error: 'Слишком много запросов подряд.' }, { status: 429 });
   }
   try {
     const raw = await request.text();
     if (raw.length > 4096) return denied();
-    const body = JSON.parse(raw) as {
-      targetId?: unknown;
-      approvalToken?: unknown;
-      label?: unknown;
-    };
-    if (typeof body.targetId !== 'string') return denied();
+    const body: unknown = JSON.parse(raw);
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      Object.keys(body).length !== 2 ||
+      typeof (body as { targetId?: unknown }).targetId !== 'string' ||
+      !(body as { targetId: string }).targetId ||
+      (body as { targetId: string }).targetId.length > 128 ||
+      typeof (body as { approvalToken?: unknown }).approvalToken !== 'string' ||
+      !/^[A-Za-z0-9_-]{43}$/u.test((body as { approvalToken: string }).approvalToken)
+    )
+      return denied();
+    const valid = body as { targetId: string; approvalToken: string };
     const result = await revokeApprovedOwnerPasskey({
       db,
       userId: session.user.id,
       sessionHash: ownerSessionFingerprint(request.headers),
-      targetId: body.targetId,
-      approvalToken: body.approvalToken,
+      targetId: valid.targetId,
+      approvalToken: valid.approvalToken,
     });
     return NextResponse.json(result);
   } catch {

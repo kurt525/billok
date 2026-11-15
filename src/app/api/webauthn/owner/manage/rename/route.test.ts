@@ -14,7 +14,7 @@ vi.mock('@/server/lib/owner-passkey-management', () => ({
 vi.mock('@/server/lib/owner-passkey-action-approval', () => ({
   ownerSessionFingerprint: fingerprintMock,
 }));
-vi.mock('@/server/lib/rate-limit', () => ({ checkRateLimit: rateMock }));
+vi.mock('@/server/lib/owner-webauthn-burst', () => ({ allowOwnerWebAuthnRequest: rateMock }));
 import { POST } from './route';
 
 const payload = { targetId: 'key-1', label: 'Ноутбук', approvalToken: 'p'.repeat(43) };
@@ -28,13 +28,14 @@ beforeEach(() => {
   vi.resetAllMocks();
   authMock.mockResolvedValue({ user: { id: 'owner' } });
   fingerprintMock.mockReturnValue('a'.repeat(64));
-  rateMock.mockReturnValue({ allowed: true });
+  rateMock.mockReturnValue(true);
   actionMock.mockResolvedValue({ renamed: true, label: 'Ноутбук' });
 });
 describe('Issue #1 6.10.2.4: rename requires exact owner and fresh signed proof', () => {
   it('accepts only the exact selected key, session fingerprint and proof', async () => {
     const response = await POST(request());
     expect(response.status).toBe(200);
+    expect(rateMock).toHaveBeenCalledWith('owner', 'manage-rename');
     expect(await response.json()).toEqual({ renamed: true, label: 'Ноутбук' });
     expect(actionMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -64,9 +65,27 @@ describe('Issue #1 6.10.2.4: rename requires exact owner and fresh signed proof'
     expect((await POST(request())).status).toBe(403);
     expect((await POST(request({ ...payload, targetId: 42 }))).status).toBe(403);
   });
-  it('rate limits before evaluating signed management proof', async () => {
-    rateMock.mockReturnValueOnce({ allowed: false });
+  it('short 2-second per-owner anti-flood only; no hourly quota or shared IP bucket', async () => {
+    rateMock.mockReturnValueOnce(false);
     expect((await POST(request())).status).toBe(429);
+    expect(rateMock).toHaveBeenCalledWith('owner', 'manage-rename');
+    expect(actionMock).not.toHaveBeenCalled();
+  });
+
+  it('strictly rejects extra role/admin claims and malformed approval inputs before any DB mutation', async () => {
+    for (const invalid of [
+      { ...payload, adminId: 'admin-spoof' },
+      { ...payload, userId: 'owner-spoof' },
+      { ...payload, role: 'OWNER' },
+      { ...payload, approvalToken: 'invalid' },
+      { ...payload, targetId: '' },
+      { ...payload, targetId: 'x'.repeat(129) },
+      { ...payload, other: null },
+      null,
+      [],
+    ]) {
+      expect((await POST(request(invalid))).status).toBe(403);
+    }
     expect(actionMock).not.toHaveBeenCalled();
   });
 });

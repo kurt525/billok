@@ -95,13 +95,19 @@ describe('Issue #1 6.12.2: central owner policy fails closed', () => {
       'src/app/api/webauthn/owner/approval/finish/route.ts',
       'src/app/api/webauthn/owner/manage/rename/route.ts',
       'src/app/api/webauthn/owner/manage/revoke/route.ts',
-      'src/app/api/webauthn/owner/revoke/start/route.ts',
-      'src/app/api/webauthn/owner/revoke/finish/route.ts',
     ];
     for (const path of routes) {
       const code = readFileSync(path, 'utf8');
       expect(code, path).toContain('requireOwner(');
       expect(code, path).not.toMatch(/process\.env\.ADMIN_EMAIL|\bisCompletedOwner\(/u);
+    }
+    // The old two-step revoke routes are deliberately NOT live owner
+    // entrypoints: even an authenticated owner cannot invoke that bypass.
+    for (const phase of ['start', 'finish']) {
+      const retired = readFileSync('src/app/api/webauthn/owner/revoke/' + phase + '/route.ts', 'utf8');
+      expect(retired).toContain('status: 410');
+      expect(retired).not.toContain('finishOwnerPasskeyRevocation');
+      expect(retired).not.toContain('beginOwnerPasskeyRevocation');
     }
     // Initial owner setup intentionally works before completedAt exists; status
     // never writes any privileged data and still verifies signed session + ID.

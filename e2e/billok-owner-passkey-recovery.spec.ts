@@ -426,8 +426,16 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
     await expect(page.getByTestId('passkey-limit')).toContainText('1 из 3');
     await expect(page.getByText('Последний действующий Passkey отозвать нельзя.', { exact: false })).toBeVisible();
     await expect(page.locator('[data-testid^="owner-revoke-key-"]')).toHaveCount(0);
-    const refused = await lastKeySession.post('/api/webauthn/owner/revoke/start', {
-      data: { targetId: survivor.rowId },
+    // The old two-step owner revoke path cannot bypass session-bound approval.
+    for (const legacy of ['start', 'finish']) {
+      const retired = await lastKeySession.post('/api/webauthn/owner/revoke/' + legacy, {
+        data: { targetId: survivor.rowId },
+      });
+      expect(retired.status()).toBe(410);
+    }
+    // The supported one-time approved flow still refuses last-key revocation.
+    const refused = await lastKeySession.post('/api/webauthn/owner/approval/start', {
+      data: { action: 'REVOKE', targetId: survivor.rowId },
     });
     expect(refused.status()).toBe(403);
 

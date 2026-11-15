@@ -1,58 +1,15 @@
-import { NextResponse } from 'next/server';
-import type { AuthenticationResponseJSON } from '@simplewebauthn/server';
-import { auth } from '@/server/auth';
-import { db } from '@/server/db';
-import { requireOwner } from '@/server/lib/owner-access';
-import { finishOwnerPasskeyRevocation, OWNER_REVOKE_BINDING_COOKIE } from '@/server/lib/owner-passkey-revocation';
-import { readBillokWebAuthnRelyingParty } from '@/server/lib/webauthn-relying-party';
-import { checkRateLimit } from '@/server/lib/rate-limit';
-import { getClientIp } from '@/server/lib/client-ip';
-
-export async function POST(request: Request) {
-  const denied = () => NextResponse.json({ error: 'Подтверждение отзыва Passkey не прошло.' }, { status: 403 });
-  const session = await auth();
-  if (!session?.user?.id || (request.headers.get('cookie') ?? '').includes('sharetab-impersonate=')) return denied();
-  // A valid server session is necessary, but not sufficient, for owner
-  // operations: recheck the sole owner and current DB account state.
-  try {
-    await requireOwner(db, session.user.id);
-  } catch {
-    return denied();
-  }
-  if (
-    !checkRateLimit('owner-key-revoke-finish:' + session.user.id, 16, 60 * 60 * 1000).allowed ||
-    !checkRateLimit('owner-key-revoke-finish-ip:' + getClientIp(request.headers), 40, 60 * 60 * 1000).allowed
-  ) {
-    return NextResponse.json({ error: 'Слишком много попыток. Повторите позже.' }, { status: 429 });
-  }
-  const binding = request.headers
-    .get('cookie')
-    ?.split(';')
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(OWNER_REVOKE_BINDING_COOKIE + '='));
-  const secret = binding?.slice(OWNER_REVOKE_BINDING_COOKIE.length + 1);
-  if (!secret) return denied();
-  try {
-    const raw = await request.text();
-    if (raw.length > 24_576) return denied();
-    const assertion = JSON.parse(raw) as AuthenticationResponseJSON;
-    const result = await finishOwnerPasskeyRevocation({
-      db,
-      ownerId: session.user.id,
-      bindingSecret: secret,
-      response: assertion,
-      env: process.env,
-    });
-    const response = NextResponse.json(result);
-    response.cookies.set(OWNER_REVOKE_BINDING_COOKIE, '', {
-      path: '/api/webauthn/owner/revoke',
-      httpOnly: true,
-      sameSite: 'strict',
-      secure: readBillokWebAuthnRelyingParty(process.env).origin.startsWith('https:'),
-      maxAge: 0,
-    });
-    return response;
-  } catch {
-    return denied();
-  }
+/**
+ * Retired owner Passkey revocation entrypoint.
+ *
+ * Issue #1 6.12.4.6: the old two-step revoke path signed a challenge but
+ * lacked the current Auth.js-session-bound, one-use owner approval grant.
+ * Leave a fail-closed 410 marker for older clients instead of exposing a
+ * parallel revocation mechanism. Use owner/approval/start+finish followed
+ * by owner/manage/revoke.
+ */
+export async function POST() {
+  return new Response('Этот способ отзыва Passkey больше не поддерживается.', {
+    status: 410,
+    headers: { 'Cache-Control': 'no-store' },
+  });
 }

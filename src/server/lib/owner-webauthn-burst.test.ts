@@ -47,6 +47,28 @@ describe('Issue 6.12.4: legitimate owner WebAuthn actions have no hourly/daily q
     expect(allowOwnerWebAuthnRequest(first, 'add-finish')).toBe(true);
   });
 
+  it('allows 500 sequential signed rename/revoke operations without hourly or daily quota', () => {
+    const ownerId = randomUUID();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(4_000_000);
+    for (let i = 0; i < 500; i++) {
+      now.mockReturnValue(4_000_000 + 5_000 * i);
+      expect(allowOwnerWebAuthnRequest(ownerId, 'manage-rename')).toBe(true);
+      expect(allowOwnerWebAuthnRequest(ownerId, 'manage-revoke')).toBe(true);
+    }
+  });
+
+  it('blocks only the ninth instant rename burst, without blocking revoke or another user', () => {
+    const owner = randomUUID(),
+      another = randomUUID();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(8_000_000);
+    for (let i = 0; i < 8; i++) expect(allowOwnerWebAuthnRequest(owner, 'manage-rename')).toBe(true);
+    expect(allowOwnerWebAuthnRequest(owner, 'manage-rename')).toBe(false);
+    expect(allowOwnerWebAuthnRequest(owner, 'manage-revoke')).toBe(true);
+    expect(allowOwnerWebAuthnRequest(another, 'manage-rename')).toBe(true);
+    now.mockReturnValue(8_002_001);
+    expect(allowOwnerWebAuthnRequest(owner, 'manage-rename')).toBe(true);
+  });
+
   it('refuses missing authenticated owner identifier before rate accounting', () => {
     expect(allowOwnerWebAuthnRequest('', 'approval-start')).toBe(false);
   });

@@ -44,13 +44,21 @@ test('ordinary user: one-key inventory only, all owner key-management routes for
       '/api/webauthn/owner/add/start',
       '/api/webauthn/owner/manage/rename',
       '/api/webauthn/owner/manage/revoke',
-      '/api/webauthn/owner/revoke/start',
     ]) {
       const body = endpoint.endsWith('/add/start')
         ? { approvalToken: 'p'.repeat(43) }
         : { targetId: key.rowId, approvalToken: 'p'.repeat(43), label: 'Подмена имени' };
       const result = await session.post(endpoint, { data: body });
       expect(result.status(), 'Owner-only route: ' + endpoint).toBe(403);
+    }
+    for (const legacy of ['start', 'finish']) {
+      expect(
+        (
+          await session.post('/api/webauthn/owner/revoke/' + legacy, {
+            data: { targetId: key.rowId },
+          })
+        ).status(),
+      ).toBe(410);
     }
     await page.goto('/admin/users', { waitUntil: 'networkidle' });
     await expect(page.getByTestId('owner-users-page')).toHaveCount(0);
