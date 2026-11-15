@@ -1,3 +1,4 @@
+import { registrationEmailProofHash } from './registration-email-proof';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { hashEmailVerificationToken } from './email-verification-token';
 import { confirmRegistrationEmail } from './registration-email-confirmation';
@@ -15,6 +16,7 @@ function fixture() {
       findUnique: vi.fn().mockResolvedValue({
         id: 'request-1',
         userId: 'user-1',
+        emailHash: registrationEmailProofHash('invited@mail.ru'),
         consumedAt: null,
         expiresAt,
       }),
@@ -53,7 +55,7 @@ describe('atomic registration email confirmation', () => {
     expect(await confirmRegistrationEmail(db, token, now)).toBe(true);
     expect(tx.emailVerificationRequest.findUnique).toHaveBeenCalledWith({
       where: { tokenHash: hashEmailVerificationToken(token) },
-      select: { id: true, userId: true, consumedAt: true, expiresAt: true },
+      select: { id: true, userId: true, emailHash: true, consumedAt: true, expiresAt: true },
     });
     // A token never activates an account merely because its invite once
     // existed: it must still be reserved for this user and unrevoked,
@@ -75,7 +77,12 @@ describe('atomic registration email confirmation', () => {
       data: { consumedAt: now },
     });
     expect(tx.user.updateMany).toHaveBeenCalledWith({
-      where: { id: 'user-1', emailVerified: null },
+      where: {
+        id: 'user-1',
+        email: 'invited@mail.ru',
+        emailVerified: null,
+        registrationEmailVerificationRequired: true,
+      },
       data: { emailVerified: now },
     });
     expect(tx.systemInvite.updateMany).toHaveBeenCalledWith(
@@ -121,6 +128,32 @@ describe('atomic registration email confirmation', () => {
     expect(tx.emailVerificationRequest.updateMany).not.toHaveBeenCalled();
     expect(tx.user.updateMany).not.toHaveBeenCalled();
     expect(tx.systemInvite.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('6.14.5: a token issued for one .ru address cannot verify a different .su address', async () => {
+    const { db, tx } = fixture();
+    tx.user.findUnique.mockResolvedValue({
+      email: 'different@mail.su',
+      emailVerified: null,
+      suspendedAt: null,
+      isPlaceholder: false,
+    });
+    expect(await confirmRegistrationEmail(db, token, now)).toBe(false);
+    expect(tx.emailVerificationRequest.updateMany).not.toHaveBeenCalled();
+    expect(tx.user.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('6.14.5: a legacy token without an email fingerprint cannot verify an account', async () => {
+    const { db, tx } = fixture();
+    tx.emailVerificationRequest.findUnique.mockResolvedValueOnce({
+      id: 'request-1',
+      userId: 'user-1',
+      consumedAt: null,
+      expiresAt,
+      emailHash: null,
+    });
+    expect(await confirmRegistrationEmail(db, token, now)).toBe(false);
+    expect(tx.user.updateMany).not.toHaveBeenCalled();
   });
 
   it('rejects expired and consumed links, including the exact expiry boundary', async () => {

@@ -71,6 +71,13 @@ export const authRouter = createTRPCRouter({
           outcome: 'DENIED',
           targetFingerprint: emailHash,
         });
+      const auditAccepted = async () =>
+        recordOwnerSecurityEvent({
+          db: ctx.db,
+          action: 'AUTH_REGISTRATION_SUBMITTED',
+          outcome: 'ALLOWED',
+          targetFingerprint: emailHash,
+        });
       const maxRegAttempts = parsePositiveInt(process.env.REGISTER_RATE_LIMIT_MAX, 10);
       if (
         !checkRateLimit('register:global', 600, 60 * 60 * 1000).allowed ||
@@ -83,15 +90,18 @@ export const authRouter = createTRPCRouter({
 
       const mode = await readRegistrationMode(ctx.db);
       if (mode === 'closed') {
+        await auditProbe();
         throw new AppError('FORBIDDEN', 'registrationClosed');
       }
 
       // Enforce the single supported registration path irrespective of the
       // legacy "open" registration setting. Providers cannot register users.
       if (!input.inviteCode) {
+        await auditProbe();
         throw new AppError('FORBIDDEN', 'inviteCodeRequired');
       }
       if (!isAllowedRegistrationEmailDomain(input.email)) {
+        await auditProbe();
         throw new AppError('BAD_REQUEST', 'registrationEmailDomainInvalid');
       }
 
@@ -150,6 +160,7 @@ export const authRouter = createTRPCRouter({
       const existing = await findUsersByEmail(ctx.db, input.email);
       if (existing.length) {
         await reserveWithoutSignup(existing[0]!.id);
+        await auditAccepted();
         return acknowledgement;
       }
 
@@ -168,6 +179,7 @@ export const authRouter = createTRPCRouter({
           // invite no more revealing than the primary existing-email path.
           const winner = await findUsersByEmail(ctx.db, input.email);
           if (winner.length) await reserveWithoutSignup(winner[0]!.id);
+          await auditAccepted();
           return acknowledgement;
         }
         if (error instanceof AppError) throw error;
@@ -175,6 +187,7 @@ export const authRouter = createTRPCRouter({
       }
       // Do not reveal whether email was delivered or the account was reused.
       void pending;
+      await auditAccepted();
       return acknowledgement;
     }),
 
@@ -183,17 +196,33 @@ export const authRouter = createTRPCRouter({
     .input(z.strictObject({ token: z.string().min(1).max(128) }))
     .mutation(async ({ ctx, input }) => {
       const ip = getClientIp(ctx.headers);
+      // Never persist raw email links or token contents, even for failed probes.
+      const fingerprint = createHash('sha256')
+        .update('billok-confirm-email-attempt:' + input.token)
+        .digest('hex');
+      const auditAttempt = async (outcome: 'ALLOWED' | 'DENIED') =>
+        recordOwnerSecurityEvent({
+          db: ctx.db,
+          action: 'AUTH_EMAIL_CONFIRM_ATTEMPT',
+          outcome,
+          targetFingerprint: fingerprint,
+        });
       const maxAttempts = parsePositiveInt(process.env.EMAIL_CONFIRM_RATE_LIMIT_MAX, 10);
-      if (!checkRateLimit(`confirm-registration-email:${ip}`, maxAttempts, 60 * 60 * 1000).allowed) {
+      const hour = 60 * 60 * 1000;
+      if (
+        !checkRateLimit('confirm-registration-email:global', 600, hour).allowed ||
+        !checkRateLimit('confirm-registration-email:' + ip, maxAttempts, hour).allowed ||
+        !checkRateLimit('confirm-registration-email:token:' + fingerprint, 5, hour).allowed
+      ) {
+        await auditAttempt('DENIED');
         throw new AppError('TOO_MANY_REQUESTS', 'emailVerificationRateLimited');
       }
 
-      // Atomic, single-use verification and reservation redemption.
-      // No automatic sign-in, new registration policy or deploy.
+      // One-time verification never creates a session. No account lookup
+      // outcome is disclosed except to the holder of a valid email token.
       const verified = await confirmRegistrationEmail(ctx.db, input.token);
-      if (!verified) {
-        throw new AppError('BAD_REQUEST', 'emailVerificationLinkInvalid');
-      }
+      await auditAttempt(verified ? 'ALLOWED' : 'DENIED');
+      if (!verified) throw new AppError('BAD_REQUEST', 'emailVerificationLinkInvalid');
       return { verified: true };
     }),
 
@@ -203,7 +232,23 @@ export const authRouter = createTRPCRouter({
     .input(z.object({ email: z.string().email().max(254) }))
     .mutation(async ({ ctx, input }) => {
       const acknowledgement = { accepted: true as const };
-      if (!allowRegistrationVerificationResend(ctx.headers, input.email)) return acknowledgement;
+      const fingerprint = createHash('sha256')
+        .update('billok-registration-resend:' + input.email.trim().toLowerCase())
+        .digest('hex');
+      const auditAttempt = async (outcome: 'ALLOWED' | 'DENIED') =>
+        recordOwnerSecurityEvent({
+          db: ctx.db,
+          action: 'AUTH_REGISTRATION_RESEND_ATTEMPT',
+          outcome,
+          targetFingerprint: fingerprint,
+        });
+      if (!allowRegistrationVerificationResend(ctx.headers, input.email)) {
+        await auditAttempt('DENIED');
+        return acknowledgement;
+      }
+      // Audit permitted requests identically for missing, pending and
+      // already verified accounts. Never disclose their existence.
+      await auditAttempt('ALLOWED');
       if (!isAllowedRegistrationEmailDomain(input.email)) {
         return acknowledgement;
       }

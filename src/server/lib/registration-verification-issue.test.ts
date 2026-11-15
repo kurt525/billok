@@ -1,3 +1,4 @@
+import { registrationEmailProofHash } from './registration-email-proof';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@/generated/prisma/client';
 
@@ -41,6 +42,7 @@ describe('persist-and-send registration confirmation', () => {
       data: {
         userId: input.userId,
         tokenHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        emailHash: registrationEmailProofHash(input.email),
         expiresAt: expect.any(Date),
       },
       select: { id: true },
@@ -53,7 +55,7 @@ describe('persist-and-send registration confirmation', () => {
     expect(sent.server).toBe(input.server);
     expect(sent.url).toMatch(/^https:\/\/billok\.ru\/verify-email\?token=/);
     expect(record.data.tokenHash).not.toBe(new URL(sent.url).searchParams.get('token'));
-    expect(Object.keys(record.data).sort()).toEqual(['expiresAt', 'tokenHash', 'userId']);
+    expect(Object.keys(record.data).sort()).toEqual(['emailHash', 'expiresAt', 'tokenHash', 'userId']);
     expect(result.expiresAt).toEqual(record.data.expiresAt);
     expect(create.mock.invocationCallOrder[0]!).toBeLessThan(sendEmail.mock.invocationCallOrder[0]!);
     expect(deleteMany).not.toHaveBeenCalled();

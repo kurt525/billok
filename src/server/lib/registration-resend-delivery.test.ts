@@ -46,6 +46,7 @@ describe('resend delivery without invalidating previous confirmation links', () 
       userId: 'pending-1',
       inviteCode: 'my-invite',
       siteOrigin: 'https://billok.ru',
+      expectedEmail: 'person@mail.ru',
     });
     expect(send).toHaveBeenCalledExactlyOnceWith({
       to: input.email,

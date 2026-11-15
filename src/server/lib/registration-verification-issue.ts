@@ -2,6 +2,7 @@ import type { SMTPTransportOptions } from 'nodemailer';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { logger } from './logger';
 import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
+import { registrationEmailProofHash } from './registration-email-proof';
 import { AppError } from './app-error';
 import { prepareRegistrationVerificationLink } from './registration-verification-link';
 import { sendRussianRegistrationVerificationEmail } from './email-verification-email';
@@ -21,13 +22,15 @@ export async function issueRegistrationVerification(input: {
   confirmationPath?: '/verify-email' | '/setup-owner';
 }): Promise<{ expiresAt: Date }> {
   if (!isAllowedRegistrationEmailDomain(input.email)) throw new AppError('FORBIDDEN');
+  const emailHash = registrationEmailProofHash(input.email);
+  if (!emailHash) throw new AppError('FORBIDDEN');
   const { url, tokenHash, expiresAt } = prepareRegistrationVerificationLink(
     input.siteOrigin,
     new Date(),
     input.confirmationPath,
   );
   const request = await input.db.emailVerificationRequest.create({
-    data: { userId: input.userId, tokenHash, expiresAt },
+    data: { userId: input.userId, tokenHash, emailHash, expiresAt },
     select: { id: true },
   });
 

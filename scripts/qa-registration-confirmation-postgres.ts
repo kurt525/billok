@@ -1,3 +1,4 @@
+import { registrationEmailProofHash } from '../src/server/lib/registration-email-proof';
 /**
  * One high-value integration check against the disposable CI PostgreSQL.
  * Unit mocks cannot demonstrate that two concurrent confirmations cannot
@@ -46,8 +47,19 @@ async function main(): Promise<void> {
     assert.equal(reserved.usedById, null, 'registration must not consume invitation');
 
     await db.emailVerificationRequest.create({
-      data: { userId: user.id, tokenHash, expiresAt },
+      data: { userId: user.id, tokenHash, emailHash: registrationEmailProofHash(user.email), expiresAt },
     });
+
+    // Real PostgreSQL, not a mock: a link sent to the initial .ru address
+    // must not verify a different, otherwise valid .su email on the same user.
+    const changedEmail = 'changed-confirm-' + suffix + '@mail.su';
+    await db.user.update({ where: { id: user.id }, data: { email: changedEmail } });
+    assert.equal(
+      await confirmRegistrationEmail(db, token, now),
+      false,
+      'one-time proof is bound to the original email, not only userId or TLD',
+    );
+    await db.user.update({ where: { id: user.id }, data: { email: user.email } });
 
     // Two requests race for the same token. Exactly one may complete.
     const answers = await Promise.all([

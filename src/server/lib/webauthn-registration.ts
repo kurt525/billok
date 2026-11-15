@@ -6,6 +6,7 @@ import { AppError } from './app-error';
 import { OWNER_BOOTSTRAP_SINGLETON_ID } from './owner-bootstrap';
 import { assertPasskeyEnrollmentCapacity } from './passkey-account-limit';
 import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
+import { registrationEmailProofHash } from './registration-email-proof';
 import {
   readBillokWebAuthnRelyingParty,
   WEBAUTHN_CHALLENGE_TTL_MS,
@@ -64,6 +65,16 @@ export async function beginFirstPasskeyRegistration(input: {
     user.suspendedAt ||
     !user.registrationEmailVerificationRequired ||
     user.passkeyCredentials.length
+  ) {
+    throw new AppError('FORBIDDEN');
+  }
+  const emailHash = registrationEmailProofHash(user.email);
+  if (
+    !emailHash ||
+    !(await input.db.emailVerificationRequest.findFirst({
+      where: { userId: user.id, emailHash, consumedAt: { not: null } },
+      select: { id: true },
+    }))
   ) {
     throw new AppError('FORBIDDEN');
   }
@@ -151,6 +162,7 @@ export async function finishFirstPasskeyRegistration(input: {
         select: {
           email: true,
           emailVerified: true,
+          registrationEmailVerificationRequired: true,
           suspendedAt: true,
           passkeyCredentials: { where: { revokedAt: null }, select: { id: true }, take: 1 },
         },
@@ -158,8 +170,18 @@ export async function finishFirstPasskeyRegistration(input: {
       if (
         !user?.emailVerified ||
         !isAllowedRegistrationEmailDomain(user.email) ||
+        !user.registrationEmailVerificationRequired ||
         user.suspendedAt ||
         user.passkeyCredentials.length
+      )
+        throw new AppError('FORBIDDEN');
+      const emailHash = registrationEmailProofHash(user.email);
+      if (
+        !emailHash ||
+        !(await tx.emailVerificationRequest.findFirst({
+          where: { userId: request.userId!, emailHash, consumedAt: { not: null } },
+          select: { id: true },
+        }))
       )
         throw new AppError('FORBIDDEN');
       const updated = await tx.webAuthnChallenge.updateMany({
@@ -232,7 +254,7 @@ export async function canRetryInvitedFirstPasskey(
 ): Promise<boolean> {
   const request = await db.emailVerificationRequest.findUnique({
     where: { tokenHash },
-    select: { userId: true, consumedAt: true, expiresAt: true },
+    select: { userId: true, emailHash: true, consumedAt: true, expiresAt: true },
   });
   if (!request || request.userId !== userId || !request.consumedAt || request.expiresAt <= now) return false;
   const user = await db.user.findUnique({
@@ -248,6 +270,8 @@ export async function canRetryInvitedFirstPasskey(
   });
   return Boolean(
     user?.emailVerified &&
+    request.emailHash &&
+    registrationEmailProofHash(user.email) === request.emailHash &&
     isAllowedRegistrationEmailDomain(user.email) &&
     user.registrationEmailVerificationRequired &&
     !user.suspendedAt &&

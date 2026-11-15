@@ -2,6 +2,7 @@ import type { PrismaClient } from '@/generated/prisma/client';
 import { renewOwnedSystemInvite } from './invite-reservation';
 import { prepareRegistrationVerificationLink } from './registration-verification-link';
 import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
+import { registrationEmailProofHash } from './registration-email-proof';
 
 /**
  * Atomically renew an existing invitation lease and persist a new one-time
@@ -17,7 +18,7 @@ import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
  */
 export async function preparePendingVerificationResend(
   db: Pick<PrismaClient, '$transaction'>,
-  input: { userId: string; inviteCode: string; siteOrigin: string; now?: Date },
+  input: { userId: string; inviteCode: string; siteOrigin: string; expectedEmail: string; now?: Date },
 ): Promise<{ requestId: string; url: string; expiresAt: Date } | null> {
   const now = input.now ?? new Date();
   const { url, tokenHash, expiresAt } = prepareRegistrationVerificationLink(input.siteOrigin, now);
@@ -30,11 +31,14 @@ export async function preparePendingVerificationResend(
     if (
       !account ||
       !isAllowedRegistrationEmailDomain(account.email) ||
+      registrationEmailProofHash(account.email) !== registrationEmailProofHash(input.expectedEmail) ||
       account.emailVerified ||
       account.suspendedAt ||
       account.isPlaceholder
     )
       return null;
+    const emailHash = registrationEmailProofHash(account.email);
+    if (!emailHash) return null;
     const renewed = await renewOwnedSystemInvite(tx, {
       code: input.inviteCode,
       userId: input.userId,
@@ -43,7 +47,7 @@ export async function preparePendingVerificationResend(
     if (!renewed) return null;
 
     const request = await tx.emailVerificationRequest.create({
-      data: { userId: input.userId, tokenHash, expiresAt },
+      data: { userId: input.userId, tokenHash, emailHash, expiresAt },
       select: { id: true },
     });
 

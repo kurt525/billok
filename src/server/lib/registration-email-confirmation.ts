@@ -4,6 +4,7 @@ import { hashEmailVerificationToken } from './email-verification-token';
 import { redeemReservedSystemInvite } from './invite-redemption';
 import { runRegistrationCleanupIfDue } from './registration-cleanup-trigger';
 import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
+import { registrationEmailProofHash } from './registration-email-proof';
 
 type ConfirmationDb = Pick<PrismaClient, '$transaction' | 'systemInvite' | 'emailVerificationRequest'>;
 
@@ -28,7 +29,7 @@ export async function confirmRegistrationEmail(
     confirmed = await db.$transaction(async (tx) => {
       const request = await tx.emailVerificationRequest.findUnique({
         where: { tokenHash: hashEmailVerificationToken(token) },
-        select: { id: true, userId: true, consumedAt: true, expiresAt: true },
+        select: { id: true, userId: true, emailHash: true, consumedAt: true, expiresAt: true },
       });
       if (!request || request.consumedAt || request.expiresAt <= now) return false;
 
@@ -39,6 +40,8 @@ export async function confirmRegistrationEmail(
       if (
         !account ||
         !isAllowedRegistrationEmailDomain(account.email) ||
+        !request.emailHash ||
+        registrationEmailProofHash(account.email) !== request.emailHash ||
         account.emailVerified ||
         account.suspendedAt ||
         account.isPlaceholder
@@ -70,7 +73,12 @@ export async function confirmRegistrationEmail(
       if (consumed.count !== 1) throw new InvalidEmailConfirmation();
 
       const updated = await tx.user.updateMany({
-        where: { id: request.userId, emailVerified: null },
+        where: {
+          id: request.userId,
+          email: account.email,
+          emailVerified: null,
+          registrationEmailVerificationRequired: true,
+        },
         data: { emailVerified: now },
       });
       if (updated.count !== 1) throw new InvalidEmailConfirmation();

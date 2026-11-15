@@ -1,3 +1,4 @@
+import { registrationEmailProofHash } from './registration-email-proof';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { hashEmailVerificationToken } from './email-verification-token';
@@ -14,7 +15,13 @@ const tx = {
 };
 const transaction = vi.fn(async (operation: (arg: typeof tx) => Promise<unknown>) => operation(tx));
 const db = { $transaction: transaction } as unknown as Pick<PrismaClient, '$transaction'>;
-const input = { userId: 'pending-1', inviteCode: 'my-invite', siteOrigin: 'https://billok.ru', now };
+const input = {
+  userId: 'pending-1',
+  inviteCode: 'my-invite',
+  siteOrigin: 'https://billok.ru',
+  expectedEmail: 'invited@mail.ru',
+  now,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -54,6 +61,7 @@ describe('atomic preparation of a replacement confirmation token', () => {
       data: {
         userId: 'pending-1',
         tokenHash: hashEmailVerificationToken(token!),
+        emailHash: registrationEmailProofHash(input.expectedEmail),
         expiresAt: new Date('2026-11-01T15:30:00.000Z'),
       },
       select: { id: true },
@@ -83,6 +91,12 @@ describe('atomic preparation of a replacement confirmation token', () => {
     await expect(preparePendingVerificationResend(db, input)).resolves.toBeNull();
     expect(updateMany).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it('6.14.5: refuses mail delivery for an address different from the reserved account', async () => {
+    expect(await preparePendingVerificationResend(db, { ...input, expectedEmail: 'changed@mail.su' })).toBeNull();
+    expect(create).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
   });
 
   it('propagates storage errors so the real database can roll back the lease renewal', async () => {

@@ -1,3 +1,4 @@
+import { registrationEmailProofHash } from '../src/server/lib/registration-email-proof';
 /**
  * Fixtures only for the disposable PostgreSQL created by BillOK Chromium CI.
  * No secrets or test accounts are written to the normal deployment.
@@ -48,6 +49,7 @@ async function main() {
       data: {
         userId: pending.id,
         tokenHash: hashEmailVerificationToken(expiredToken),
+        emailHash: registrationEmailProofHash(pending.email),
         expiresAt: new Date(Date.now() - 60_000),
       },
     });

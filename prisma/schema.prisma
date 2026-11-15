@@ -150,12 +150,15 @@ model EmailVerificationRequest {
   id         String    @id @default(cuid())
   userId     String
   tokenHash  String    @unique @db.VarChar(64)
+  // SHA-256 of exact normalized email at issuance; NULL legacy tokens fail closed.
+  emailHash  String?   @db.VarChar(64)
   expiresAt  DateTime
   consumedAt DateTime?
   createdAt  DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId, emailHash, consumedAt])
   @@index([userId, expiresAt])
   @@index([expiresAt])
 }

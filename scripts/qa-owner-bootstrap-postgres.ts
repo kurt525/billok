@@ -1,3 +1,4 @@
+import { registrationEmailProofHash } from '../src/server/lib/registration-email-proof';
 /**
  * Disposable PostgreSQL integration check. Never point at a real BillOK
  * database; this creates a temporary owner and verifies the singleton lock,
@@ -61,7 +62,9 @@ async function main() {
     );
     assert.equal(await db.user.count(), 1, 'second attempt must not create another owner');
     const { token, tokenHash, expiresAt } = createEmailVerificationToken(now);
-    await db.emailVerificationRequest.create({ data: { userId: user.id, tokenHash, expiresAt } });
+    await db.emailVerificationRequest.create({
+      data: { userId: user.id, tokenHash, emailHash: registrationEmailProofHash(user.email), expiresAt },
+    });
     assert.equal(await confirmRegistrationEmail(db, token, now), true);
     assert.equal(await confirmRegistrationEmail(db, token, now), false);
     assert.ok((await db.user.findUniqueOrThrow({ where: { id: user.id } })).emailVerified);

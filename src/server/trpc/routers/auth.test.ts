@@ -110,6 +110,14 @@ describe('auth.confirmEmail', () => {
     expect(response).toEqual({ verified: true });
     expect(confirmationGate).toHaveBeenCalledExactlyOnceWith(mockDb, token);
     expect(JSON.stringify(response)).not.toContain(token);
+    expect(mockDb.securityEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'AUTH_EMAIL_CONFIRM_ATTEMPT',
+        outcome: 'ALLOWED',
+        targetFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+    });
+    expect(JSON.stringify(mockDb.securityEvent.create.mock.calls)).not.toContain(token);
   });
 
   test('returns the same error for missing, consumed or expired links', async () => {
@@ -117,6 +125,10 @@ describe('auth.confirmEmail', () => {
     const api = await caller();
     await expect(api.confirmEmail({ token })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(confirmationGate).toHaveBeenCalledExactlyOnceWith(mockDb, token);
+    expect(mockDb.securityEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: 'AUTH_EMAIL_CONFIRM_ATTEMPT', outcome: 'DENIED' }),
+    });
+    expect(JSON.stringify(mockDb.securityEvent.create.mock.calls)).not.toContain(token);
   });
 
   test('6.13.2: confirmation token cannot inject another userId, ownerId, roles or session identity', async () => {
@@ -192,6 +204,10 @@ describe('auth.resendRegistrationVerification', () => {
     await expect(api.resendRegistrationVerification({ email })).resolves.toEqual({ accepted: true });
     expect(resendEligibility).not.toHaveBeenCalled();
     expect(resendDelivery).not.toHaveBeenCalled();
+    expect(mockDb.securityEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: 'AUTH_REGISTRATION_RESEND_ATTEMPT', outcome: 'DENIED' }),
+    });
+    expect(JSON.stringify(mockDb.securityEvent.create.mock.calls)).not.toContain(email);
   });
 
   test('skips delivery for disallowed domain endings', async () => {
@@ -320,6 +336,14 @@ describe('auth.register invite-only email confirmation', () => {
       where: expect.objectContaining({ id: 'invite-valid', usedAt: null, usedById: null, revokedAt: null }),
       data: { reservedById: 'bob', reservedUntil: expect.any(Date) },
     });
+    expect(mockDb.securityEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'AUTH_REGISTRATION_SUBMITTED',
+        outcome: 'ALLOWED',
+        targetFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+    });
+    expect(JSON.stringify(mockDb.securityEvent.create.mock.calls)).not.toContain('bob@mail.ru');
   });
 
   test('6.13.3: invalid invite cannot distinguish whether the email already exists', async () => {

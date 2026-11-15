@@ -28,6 +28,7 @@ export async function deliverPendingVerificationResend(input: {
     userId: input.userId,
     inviteCode: input.inviteCode,
     siteOrigin: input.siteOrigin,
+    expectedEmail: input.email,
   });
   if (!prepared) return null;
 
