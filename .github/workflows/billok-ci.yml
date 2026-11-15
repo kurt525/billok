@@ -123,6 +123,11 @@ jobs:
             -v ON_ERROR_STOP=1 < prisma/after-push/owner_bootstrap_identity_guard.sql
           docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
             -v ON_ERROR_STOP=1 < prisma/after-push/owner_bootstrap_identity_guard.sql
+          # Prove pending -> confirmed-email -> real-Passkey ordering on
+          # disposable PostgreSQL, then ROLLBACK every synthetic fixture.
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < scripts/qa-owner-bootstrap-phase-postgres.sql
+          echo 'OWNER_BOOTSTRAP_FIRST_PASSKEY_POSTGRES=PASS'
           # Same mandatory post-Prisma DB guard as production; verify
           # idempotence and direct-SQL rejection on a fresh QA database.
           docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \

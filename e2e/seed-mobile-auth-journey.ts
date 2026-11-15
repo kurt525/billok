@@ -142,8 +142,13 @@ async function main() {
       if (alias === 'owner-qa') {
         // Only this isolated QA database has a completed owner singleton.
         // Auth.js does not have a bootstrap or impersonation test bypass.
-        await db.ownerBootstrap.create({
-          data: { id: 1, userId: user.id, completedAt: new Date() },
+        // The disposable fixture respects the SAME two-phase invariants
+        // as production bootstrap: pending singleton first, then an active
+        // verified owner with already-registered Passkeys.
+        await db.ownerBootstrap.create({ data: { id: 1, userId: user.id } });
+        await db.ownerBootstrap.update({
+          where: { id: 1 },
+          data: { completedAt: new Date() },
         });
         await db.passkeyRecoveryRequest.create({
           data: {

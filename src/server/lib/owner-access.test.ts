@@ -82,6 +82,21 @@ describe('Issue #1 6.12.2: central owner policy fails closed', () => {
     await expect(requireOwner(unavailable.client, 'real-owner')).rejects.toThrow();
   });
 
+  it('6.12.10: the post-Prisma PostgreSQL guard protects both owner rows, not just the singleton pointer', () => {
+    const sql = readFileSync('prisma/after-push/owner_bootstrap_identity_guard.sql', 'utf8');
+    expect(sql).toContain('billok_owner_bootstrap_guard_row');
+    expect(sql).toContain('billok_owner_bootstrap_guard_truncate');
+    expect(sql).toContain('billok_owner_user_row_guard');
+    expect(sql).toContain('billok_user_id_immutable');
+    expect(sql).toContain('billok_owner_account_immutable');
+    expect(sql).toContain('billok_owner_passkey_required');
+    expect(sql).toContain('NEW."emailVerified" IS DISTINCT FROM OLD."emailVerified"');
+    expect(sql).toContain('NEW."webAuthnUserHandle" IS DISTINCT FROM OLD."webAuthnUserHandle"');
+    const ci = readFileSync('.github/workflows/billok-ci.yml', 'utf8');
+    expect(ci).toContain('scripts/qa-owner-bootstrap-phase-postgres.sql');
+    expect(ci).toContain('scripts/qa-owner-identity-postgres.sql');
+  });
+
   it('forces EVERY administrative entrypoint through requireOwner, not ADMIN_EMAIL', () => {
     const routes = [
       'src/server/trpc/routers/admin.ts',
