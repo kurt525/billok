@@ -63,9 +63,12 @@ export async function POST(req: Request) {
       await requireOwner(tx, session.user.id);
       const selected = await tx.user.findUnique({
         where: { id: targetUserId },
-        select: { id: true, name: true, email: true },
+        select: { id: true, name: true, email: true, emailVerified: true, suspendedAt: true, isPlaceholder: true },
       });
-      if (!selected) return null;
+      // The request target is an OBJECT, never an actor. A suspended,
+      // pending or placeholder user is not a valid impersonation identity.
+      // Validate after locking the target row and BEFORE spending the grant.
+      if (!selected || !selected.emailVerified || selected.suspendedAt || selected.isPlaceholder) return null;
       await consumeOwnerPasskeyActionProof(tx, {
         userId: session.user.id,
         action: 'IMPERSONATE',

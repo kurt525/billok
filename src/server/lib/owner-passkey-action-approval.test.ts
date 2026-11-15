@@ -492,6 +492,48 @@ describe('Issue #1 6.10.2.2: fresh owner WebAuthn approval', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
+  it('6.12.8: locks platform owner identity while issuing and redeeming every signed action', async () => {
+    const { db } = fixture();
+    const ticket = (await finish(db)).approvalToken;
+    const bootstrapLock = 'SELECT id FROM "OwnerBootstrap" WHERE id = 1 FOR SHARE';
+    const ownerLock = 'SELECT id FROM "User" WHERE id = $1 FOR UPDATE';
+    expect(db.$queryRawUnsafe).toHaveBeenCalledWith(bootstrapLock);
+    expect(db.$queryRawUnsafe.mock.calls[0]).toEqual([ownerLock, 'owner']);
+    expect(db.$queryRawUnsafe.mock.invocationCallOrder[1]!).toBeLessThan(
+      db.ownerPasskeyActionProof.create.mock.invocationCallOrder[0]!,
+    );
+    db.$queryRawUnsafe.mockClear();
+    await consumeOwnerPasskeyActionProof(asTx(db), {
+      userId: 'owner',
+      action: 'REVOKE',
+      targetId: 'key-lost',
+      sessionHash,
+      approvalToken: ticket,
+      now,
+    });
+    expect(db.$queryRawUnsafe).toHaveBeenCalledWith(bootstrapLock);
+    expect(db.$queryRawUnsafe.mock.invocationCallOrder[0]!).toBeLessThan(
+      db.ownerPasskeyActionProof.updateMany.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('6.12.8: owner reassignment between issuance and execution blocks mutation', async () => {
+    const { db, owner } = fixture();
+    const ticket = (await finish(db)).approvalToken;
+    owner.userId = 'different-account';
+    await expect(
+      consumeOwnerPasskeyActionProof(asTx(db), {
+        userId: 'owner',
+        action: 'REVOKE',
+        targetId: 'key-lost',
+        sessionHash,
+        approvalToken: ticket,
+        now,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.ownerPasskeyActionProof.updateMany).not.toHaveBeenCalled();
+  });
+
   it('invalidates approval after session version change, key revoke or expiry', async () => {
     for (const change of ['session', 'key', 'expired'] as const) {
       const { db, user, keys, proof } = fixture();

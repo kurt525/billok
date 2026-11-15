@@ -280,6 +280,9 @@ export async function finishOwnerPasskeyActionApproval(input: {
   const approvalToken = randomBytes(32).toString('base64url');
   await input.db.$transaction(async (tx) => {
     await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', input.userId);
+    // Lock the SINGLE owner identity while checking the signature and writing
+    // the grant; a concurrent bootstrap/identity edit cannot interleave.
+    await tx.$queryRawUnsafe('SELECT id FROM "OwnerBootstrap" WHERE id = 1 FOR SHARE');
     const { user, keys } = await ownerStatus(tx, input.userId);
     const targetId = isCredentialAction(challenge.ownerActionType!)
       ? challenge.targetCredentialRowId
@@ -401,6 +404,11 @@ export async function consumeOwnerPasskeyActionProof(
   ) {
     throw new AppError('FORBIDDEN');
   }
+  // The caller already holds User FOR UPDATE. Lock OwnerBootstrap for the
+  // remainder of this SAME transaction too, then re-read its current row,
+  // user status, live keys and sessionSecurityVersion before spending the
+  // action + exact target + exact Auth.js-session-bound proof.
+  await tx.$queryRawUnsafe('SELECT id FROM "OwnerBootstrap" WHERE id = 1 FOR SHARE');
   const { user, keys } = await ownerStatus(tx, input.userId);
   if (
     user.sessionSecurityVersion !== proof.sessionSecurityVersion ||

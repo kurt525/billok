@@ -69,7 +69,14 @@ beforeEach(() => {
   state.removed = false;
   authMock.mockResolvedValue({ user: { id: owner, email: 'owner@example.ru', name: 'Владелец' } });
   ownerCheck.mockResolvedValue(owner);
-  findUser.mockResolvedValue({ id: target, name: 'Анна', email: 'anna@example.ru' });
+  findUser.mockResolvedValue({
+    id: target,
+    name: 'Анна',
+    email: 'anna@example.ru',
+    emailVerified: new Date('2026-11-01T00:00:00Z'),
+    suspendedAt: null,
+    isPlaceholder: false,
+  });
   getToken.mockResolvedValue({ id: owner, sessionSecurityValid: true, impersonationSessionNonce: nonce });
   cookiesMock.mockImplementation(async () => ({
     get: (name: string) =>
@@ -192,6 +199,42 @@ describe('Issue 6.12.3: privileged impersonation REST boundary', () => {
       ['SELECT id FROM "User" WHERE id = $1 FOR UPDATE', owner],
       ['SELECT id FROM "User" WHERE id = $1 FOR UPDATE', target],
     ]);
+  });
+
+  test('6.12.8: pending, suspended, placeholder or removed target cannot be impersonated by forged userId', async () => {
+    const { POST } = await import('./route');
+    const valid = {
+      id: target,
+      name: 'Анна',
+      email: 'anna@example.ru',
+      emailVerified: new Date('2026-11-01'),
+      suspendedAt: null,
+      isPlaceholder: false,
+    };
+    for (const changes of [
+      { emailVerified: null },
+      { suspendedAt: new Date('2026-11-02') },
+      { isPlaceholder: true },
+      null,
+    ]) {
+      findUser.mockResolvedValueOnce(changes ? { ...valid, ...changes } : null);
+      const response = await POST(request(approved(target)));
+      expect(response.status).toBe(404);
+      expect(state.impersonation).toBeNull();
+    }
+    expect(proof).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
+    expect(lock).toHaveBeenCalledWith('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', target);
+  });
+
+  test('6.12.8: owner demotion AFTER JWT precheck cannot generate impersonation cookie', async () => {
+    const { POST } = await import('./route');
+    ownerCheck.mockResolvedValueOnce(owner).mockRejectedValueOnce(new Error('owner changed'));
+    const response = await POST(request(approved(target)));
+    expect(response.status).toBe(403);
+    expect(proof).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
+    expect(state.impersonation).toBeNull();
   });
 
   test('6.12.4.5: audit failure rolls back impersonation; owner cannot enter as itself', async () => {
