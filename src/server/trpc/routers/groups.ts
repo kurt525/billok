@@ -123,7 +123,7 @@ export const groupsRouter = createTRPCRouter({
 
   create: protectedProcedure
     .input(
-      z.object({
+      z.strictObject({
         name: z.string().trim().min(1).max(100),
         description: z.string().max(500).optional(),
         currency: z
@@ -154,7 +154,7 @@ export const groupsRouter = createTRPCRouter({
 
   update: groupMemberProcedure
     .input(
-      z.object({
+      z.strictObject({
         groupId: z.string(),
         name: z.string().trim().min(1).max(100).optional(),
         description: z.string().max(500).optional(),
@@ -521,6 +521,13 @@ export const groupsRouter = createTRPCRouter({
         }
 
         if (targetUser?.isPlaceholder) {
+          // A corrupted/forged isPlaceholder flag must never allow any group
+          // administrator to delete the ONE BillOK owner via removeMember.
+          const platformOwner = await tx.ownerBootstrap.findUnique({
+            where: { id: 1 },
+            select: { userId: true },
+          });
+          if (platformOwner?.userId === input.userId) throw new AppError('FORBIDDEN');
           // A placeholder can't log in to settle up or rejoin, and moving their part
           // onto other people writes off what they owe or are owed (#260). So one
           // who is in any expense or payment goes only at a zero balance, and only
@@ -653,7 +660,7 @@ export const groupsRouter = createTRPCRouter({
 
   addPlaceholder: groupMemberProcedure
     .input(
-      z.object({
+      z.strictObject({
         groupId: z.string(),
         name: z.string().trim().min(1).max(100),
       }),
@@ -721,7 +728,9 @@ export const groupsRouter = createTRPCRouter({
     }),
 
   renamePlaceholder: groupMemberProcedure
-    .input(z.object({ groupId: z.string(), placeholderUserId: z.string(), name: z.string().trim().min(1).max(100) }))
+    .input(
+      z.strictObject({ groupId: z.string(), placeholderUserId: z.string(), name: z.string().trim().min(1).max(100) }),
+    )
     .mutation(async ({ ctx, input }) => {
       if (ctx.membership.role !== 'OWNER' && ctx.membership.role !== 'ADMIN') {
         throw new AppError('FORBIDDEN', 'onlyAdminsRenamePlaceholder');
@@ -751,7 +760,7 @@ export const groupsRouter = createTRPCRouter({
 
   mergePlaceholder: groupMemberProcedure
     .input(
-      z.object({
+      z.strictObject({
         groupId: z.string(),
         placeholderUserId: z.string(),
         realUserId: z.string(),

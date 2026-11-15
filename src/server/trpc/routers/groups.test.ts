@@ -26,6 +26,7 @@ const mockDb = {
     count: vi.fn(),
   },
   groupInvite: { findUnique: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
+  ownerBootstrap: { findUnique: vi.fn() },
   activityLog: { create: vi.fn(), deleteMany: vi.fn(), updateMany: vi.fn() },
   expense: { count: vi.fn(), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   expenseShare: {
@@ -71,6 +72,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   // protectedProcedure looks the caller up; groupMemberProcedure checks membership.
   mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+  mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'global-owner' });
   mockDb.groupMember.findUnique.mockResolvedValue({ role: 'OWNER', userId: 'owner', groupId: 'g1' });
   mockDb.$transaction.mockImplementation(async (arg: unknown) =>
     typeof arg === 'function' ? arg(mockDb) : Promise.all(arg as Promise<unknown>[]),
@@ -1342,6 +1344,42 @@ describe('merging a placeholder into a member', () => {
     expect(mockDb.user.delete).not.toHaveBeenCalled();
   }
 
+  test('Issue 6.12.5: global owner ID cannot become a removable placeholder even if a flag is forged', async () => {
+    const api = await caller('owner');
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'p1' });
+    await expect(
+      api.mergePlaceholder({
+        groupId: 'g1',
+        placeholderUserId: 'p1',
+        realUserId: 'bob',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.ownerBootstrap.findUnique).toHaveBeenCalledWith({
+      where: { id: 1 },
+      select: { userId: true },
+    });
+    expect(mockDb.groupMember.deleteMany).not.toHaveBeenCalled();
+    expect(mockDb.user.delete).not.toHaveBeenCalled();
+    expectNothingMoved();
+  });
+
+  test('Issue 6.12.5: forged owner privilege fields cannot enter merge operations', async () => {
+    const api = await caller();
+    for (const field of ['ownerId', 'userId', 'role', 'isAdmin', 'emailVerified', 'sessionSecurityVersion']) {
+      await expect(
+        api.mergePlaceholder({
+          groupId: 'g1',
+          placeholderUserId: 'p1',
+          realUserId: 'bob',
+          [field]: 'owner',
+        } as never),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.ownerBootstrap.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.groupMember.deleteMany).not.toHaveBeenCalled();
+    expectNothingMoved();
+  });
+
   test('refuses to merge a placeholder into itself', async () => {
     const api = await caller();
     await expect(
@@ -1615,5 +1653,67 @@ describe('RUB-only group API', () => {
     expect(mockDb.expense.count).not.toHaveBeenCalled();
     expect(mockDb.settlement.count).not.toHaveBeenCalled();
     expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue 6.12.5: group member removal cannot delete platform owner identity', () => {
+  test('a forged placeholder flag cannot delete global owner through membership removal', async () => {
+    mockMemberships({
+      owner: member('owner', 'OWNER'),
+      'global-owner': member('global-owner', 'MEMBER'),
+    });
+    mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
+      where.id === 'global-owner'
+        ? { id: 'global-owner', isPlaceholder: true, name: 'Владелец', placeholderName: null }
+        : { suspendedAt: null },
+    );
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'global-owner' });
+    await expect(
+      (await caller('owner')).removeMember({
+        groupId: 'g1',
+        userId: 'global-owner',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.user.delete).not.toHaveBeenCalled();
+    expect(mockDb.groupMember.delete).not.toHaveBeenCalled();
+    expect(mockDb.groupMember.updateMany).not.toHaveBeenCalled();
+    expect(mockDb.activityLog.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue 6.12.5: group role is not global BillOK ownership', () => {
+  test('group creation refuses client ownerId/userId/role/isAdmin even with an authenticated group owner', async () => {
+    const api = await caller();
+    for (const field of ['ownerId', 'userId', 'role', 'isAdmin', 'emailVerified', 'sessionSecurityVersion']) {
+      await expect(api.create({ name: 'Наш чек', [field]: 'owner' } as never)).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+    }
+    expect(mockDb.group.create).not.toHaveBeenCalled();
+    expect(mockDb.ownerBootstrap.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('group update and placeholder creation/rename reject privilege injection before any mutation', async () => {
+    const api = await caller();
+    for (const field of ['ownerId', 'userId', 'role', 'isAdmin', 'sessionSecurityVersion']) {
+      await expect(api.update({ groupId: 'g1', name: 'Обычный чек', [field]: 'OWNER' } as never)).rejects.toMatchObject(
+        { code: 'BAD_REQUEST' },
+      );
+      await expect(
+        api.addPlaceholder({ groupId: 'g1', name: 'Гость', [field]: 'OWNER' } as never),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(
+        api.renamePlaceholder({
+          groupId: 'g1',
+          placeholderUserId: 'p1',
+          name: 'Гость',
+          [field]: 'OWNER',
+        } as never),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.group.update).not.toHaveBeenCalled();
+    expect(mockDb.user.create).not.toHaveBeenCalled();
+    expect(mockDb.user.update).not.toHaveBeenCalled();
+    expect(mockDb.ownerBootstrap.findUnique).not.toHaveBeenCalled();
   });
 });

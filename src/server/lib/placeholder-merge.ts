@@ -43,6 +43,16 @@ export async function mergePlaceholderIntoUser(
   if (placeholderUserId === realUserId) {
     throw new AppError('BAD_REQUEST', 'mergeIntoItself');
   }
+  // No placeholder merge can ever absorb or delete the ONE global owner row,
+  // even if a historical/forged flag incorrectly says isPlaceholder=true.
+  // Group OWNER roles are unrelated to the single BillOK OwnerBootstrap ID.
+  // Read inside the caller's transaction; database invariants are separate
+  // acceptance work under Issue 6.12.10.
+  const billokOwner = await tx.ownerBootstrap.findUnique({
+    where: { id: 1 },
+    select: { userId: true },
+  });
+  if (billokOwner?.userId === placeholderUserId) throw new AppError('FORBIDDEN');
   // Hard guard: this reassigns financial history and may delete the user row,
   // so it must never run against a real (non-placeholder) account.
   const [placeholder, target, group] = await Promise.all([

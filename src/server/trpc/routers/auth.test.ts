@@ -549,3 +549,53 @@ describe('Issue #1 6.10.2.1: isolated account Passkey inventory', () => {
     expect(mockDb.passkeyCredential.findMany).not.toHaveBeenCalled();
   });
 });
+
+describe('Issue 6.12.5: registration and profile reject impersonated owner identity fields', () => {
+  const protectedFields = ['userId', 'ownerId', 'isAdmin', 'role', 'emailVerified', 'sessionSecurityVersion'] as const;
+
+  test('invitation registration cannot inject owner identity or verified status', async () => {
+    const api = await caller();
+    for (const field of protectedFields) {
+      await expect(
+        api.register({
+          name: 'Новый пользователь',
+          email: 'newuser@mail.ru',
+          inviteCode: 'valid',
+          [field]: field === 'isAdmin' ? true : 'owner-id',
+        } as never),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(signupGate).not.toHaveBeenCalled();
+    expect(mockDb.user.create).not.toHaveBeenCalled();
+    expect(mockDb.ownerBootstrap.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('a real profile update cannot change owner ID, account email, roles or verified state', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    const api = await caller({ user: { id: 'ordinary-member' } });
+    for (const field of [...protectedFields, 'email', 'id', 'ownerBootstrap']) {
+      await expect(
+        api.updateProfile({
+          name: 'Владелец',
+          [field]: field === 'isAdmin' ? true : 'forged-owner',
+        } as never),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.user.update).not.toHaveBeenCalled();
+  });
+
+  test('renaming a registered user only writes name for their actual Auth.js identity', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    mockDb.user.update.mockResolvedValue({ id: 'real-owner', name: 'Новое имя', email: 'owner@mail.ru' });
+    const api = await caller({ user: { id: 'real-owner' } });
+    await api.updateProfile({ name: ' Новое имя ' });
+    expect(mockDb.user.update).toHaveBeenCalledWith({
+      where: { id: 'real-owner' },
+      data: { name: 'Новое имя' },
+    });
+    expect(mockDb.user.update.mock.calls[0]![0].data).not.toHaveProperty('email');
+    expect(mockDb.user.update.mock.calls[0]![0].data).not.toHaveProperty('id');
+    expect(mockDb.user.update.mock.calls[0]![0].data).not.toHaveProperty('role');
+    expect(mockDb.ownerBootstrap.findUnique).not.toHaveBeenCalled();
+  });
+});
