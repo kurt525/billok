@@ -673,7 +673,7 @@ export const groupsRouter = createTRPCRouter({
       }
 
       const { randomUUID } = await import('crypto');
-      const placeholderEmail = `placeholder-${randomUUID()}@placeholder.local`;
+      const placeholderEmail = `placeholder-${randomUUID()}@placeholder.billok.ru`;
 
       const createOrRestorePlaceholder = () =>
         ctx.db.$transaction(async (tx) => {

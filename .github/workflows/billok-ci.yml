@@ -118,6 +118,20 @@ jobs:
             sleep 1
           done
           npx prisma db push
+          # 6.14.3: same mandatory email CHECK and lower(email) unique index
+          # as production, applied twice to prove idempotence.
+          for attempt in 1 2; do
+            docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+              -v ON_ERROR_STOP=1 < prisma/after-push/user_email_lower_unique.sql
+            docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+              -v ON_ERROR_STOP=1 < prisma/after-push/user_email_ru_su_guard.sql
+          done
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < scripts/qa-user-email-guard-postgres.sql
+          echo 'USER_EMAIL_RU_SU_SQL_GUARD=PASS'
+          BILLOK_QA_DISPOSABLE_DB=I_ACKNOWLEDGE_DISPOSABLE_DB \
+            npx tsx scripts/qa-user-email-guard-prisma.ts
+          echo 'USER_EMAIL_RU_SU_PRISMA_GUARD=PASS'
           # Production applies this same idempotent guard after Prisma push.
           docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
             -v ON_ERROR_STOP=1 < prisma/after-push/owner_bootstrap_identity_guard.sql

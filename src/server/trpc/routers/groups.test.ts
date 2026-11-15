@@ -221,7 +221,11 @@ describe('group and placeholder names are trimmed', () => {
     await api.addPlaceholder({ groupId: 'g1', name: 'Dave' });
     expect(mockDb.user.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ isPlaceholder: true, groupMembers: { create: { groupId: 'g1' } } }),
+        data: expect.objectContaining({
+          isPlaceholder: true,
+          groupMembers: { create: { groupId: 'g1' } },
+          email: expect.stringMatching(/^placeholder-[a-f0-9-]{36}@placeholder\.billok\.ru$/u),
+        }),
       }),
     );
     expect(mockDb.groupMember.create).not.toHaveBeenCalled();
