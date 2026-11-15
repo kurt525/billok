@@ -248,7 +248,7 @@ jobs:
           export AUTH_SECRET="$(openssl rand -hex 32)"
           export UPLOAD_DIR="$RUNNER_TEMP/billok-mobile-upload-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           echo "UPLOAD_DIR=$UPLOAD_DIR" >> "$GITHUB_ENV"
-          export ADMIN_EMAIL="alice@example.com"
+          export ADMIN_EMAIL="alice@qa.billok.ru"
           echo "ADMIN_EMAIL=$ADMIN_EMAIL" >> "$GITHUB_ENV"
           # Disposable QA-only SMTP; production mail settings are unchanged.
           export EMAIL_SERVER_HOST=127.0.0.1

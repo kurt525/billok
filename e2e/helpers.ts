@@ -4,15 +4,15 @@ import { claimStorageKey } from '../src/lib/guest-session';
 
 // Demo users from seed.ts
 export const users = {
-  alice: { email: 'alice@example.com', password: 'password123', name: 'Alice Johnson' },
-  bob: { email: 'bob@example.com', password: 'password123', name: 'Bob Smith' },
-  charlie: { email: 'charlie@example.com', password: 'password123', name: 'Charlie Brown' },
+  alice: { email: 'alice@qa.billok.ru', password: 'password123', name: 'Alice Johnson' },
+  bob: { email: 'bob@qa.billok.ru', password: 'password123', name: 'Bob Smith' },
+  charlie: { email: 'charlie@qa.billok.ru', password: 'password123', name: 'Charlie Brown' },
 };
 
 // Dedicated test users from seed.ts — use these instead of creating throwaway accounts
 export const testUsers = {
-  suspend: { email: 'suspend-test@example.com', password: 'password123', name: 'Suspend Test User' },
-  delete: { email: 'delete-test@example.com', password: 'password123', name: 'Delete Test User' },
+  suspend: { email: 'suspend-test@qa.billok.ru', password: 'password123', name: 'Suspend Test User' },
+  delete: { email: 'delete-test@qa.billok.ru', password: 'password123', name: 'Delete Test User' },
 };
 
 /**

@@ -126,7 +126,7 @@ test('authenticated manual receipt: add, edit, allocate, share with a second ano
     }
   });
 
-  await loginWithPasskey(page, 'alice@example.com');
+  await loginWithPasskey(page, 'alice@qa.billok.ru');
 
   await page.goto('/split', { waitUntil: 'networkidle' });
   await expect(page.getByTestId('manual-split-title')).toContainText('Разделить чек');

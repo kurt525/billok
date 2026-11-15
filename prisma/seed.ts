@@ -10,21 +10,21 @@ async function main() {
 
   // ── Core demo users ─────────────────────────────────────
   const alice = await prisma.user.upsert({
-    where: { email: 'alice@example.com' },
+    where: { email: 'alice@qa.billok.ru' },
     update: {},
-    create: { name: 'Alice Johnson', email: 'alice@example.com' },
+    create: { name: 'Alice Johnson', email: 'alice@qa.billok.ru' },
   });
 
   const bob = await prisma.user.upsert({
-    where: { email: 'bob@example.com' },
+    where: { email: 'bob@qa.billok.ru' },
     update: {},
-    create: { name: 'Bob Smith', email: 'bob@example.com' },
+    create: { name: 'Bob Smith', email: 'bob@qa.billok.ru' },
   });
 
   const charlie = await prisma.user.upsert({
-    where: { email: 'charlie@example.com' },
+    where: { email: 'charlie@qa.billok.ru' },
     update: {},
-    create: { name: 'Charlie Brown', email: 'charlie@example.com' },
+    create: { name: 'Charlie Brown', email: 'charlie@qa.billok.ru' },
   });
 
   // ── Dedicated test users (isolated from demo data) ──────
@@ -32,15 +32,15 @@ async function main() {
   // collisions with demo users or other tests.
 
   const suspendUser = await prisma.user.upsert({
-    where: { email: 'suspend-test@example.com' },
+    where: { email: 'suspend-test@qa.billok.ru' },
     update: {},
-    create: { name: 'Suspend Test User', email: 'suspend-test@example.com' },
+    create: { name: 'Suspend Test User', email: 'suspend-test@qa.billok.ru' },
   });
 
   const deleteUser = await prisma.user.upsert({
-    where: { email: 'delete-test@example.com' },
+    where: { email: 'delete-test@qa.billok.ru' },
     update: {},
-    create: { name: 'Delete Test User', email: 'delete-test@example.com' },
+    create: { name: 'Delete Test User', email: 'delete-test@qa.billok.ru' },
   });
 
   console.log('Created users: Alice, Bob, Charlie + 2 test users (Passkey-only authentication)');

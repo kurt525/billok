@@ -65,9 +65,9 @@ async function main() {
       }
     > = {};
     for (const [alias, email, count] of [
-      ['alice', 'alice@example.com', 150],
-      ['bob', 'bob@example.com', 70],
-      ['charlie', 'charlie@example.com', 40],
+      ['alice', 'alice@qa.billok.ru', 150],
+      ['bob', 'bob@qa.billok.ru', 70],
+      ['charlie', 'charlie@qa.billok.ru', 40],
       ['recovery', 'recovery@mail.ru', 1],
       ['owner-qa', 'owner-qa@mail.ru', 3],
       ['login-probe', 'login-probe@mail.ru', 1],

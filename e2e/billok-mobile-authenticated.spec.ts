@@ -105,8 +105,8 @@ async function signedQaCookies(email: string): Promise<SignedQaCookies> {
 }
 
 async function signInAsSeedAdmin(page: Page) {
-  // "alice@example.com" is an ordinary QA account despite ADMIN_EMAIL.
-  await page.context().addCookies(await signedQaCookies('alice@example.com'));
+  // "alice@qa.billok.ru" is an ordinary QA account despite ADMIN_EMAIL.
+  await page.context().addCookies(await signedQaCookies('alice@qa.billok.ru'));
   await page.goto('/dashboard', { waitUntil: 'networkidle' });
   await expect(page.getByRole('heading', { name: 'Главная' })).toBeVisible();
 }
@@ -183,7 +183,7 @@ test('ADMIN_EMAIL-matched account cannot impersonate or export without sole owne
   test.setTimeout(60_000);
   // On disposable CI ADMIN_EMAIL intentionally equals Alice; the finished
   // OwnerBootstrap row instead references owner-qa@mail.ru.
-  const ordinary = await authedPasskeyContext('alice@example.com', 0);
+  const ordinary = await authedPasskeyContext('alice@qa.billok.ru', 0);
   try {
     await page.context().addCookies((await ordinary.storageState()).cookies);
     await page.goto('/dashboard', { waitUntil: 'networkidle' });
@@ -211,7 +211,7 @@ test('ADMIN_EMAIL-matched account cannot impersonate or export without sole owne
           user?: { email?: string };
         }
       ).user?.email,
-    ).toBe('alice@example.com');
+    ).toBe('alice@qa.billok.ru');
   } finally {
     await ordinary.dispose();
   }
@@ -685,8 +685,8 @@ test('real owner mobile user page keeps filters and confirmed suspension safe', 
       expect(bounds?.height).toBeGreaterThanOrEqual(44);
       expect(bounds?.width).toBeGreaterThanOrEqual(44);
     }
-    await search.fill('bob@example.com');
-    const row = section.locator('[data-testid^="owner-user-"]').filter({ hasText: 'bob@example.com' });
+    await search.fill('bob@qa.billok.ru');
+    const row = section.locator('[data-testid^="owner-user-"]').filter({ hasText: 'bob@qa.billok.ru' });
     await expect(row).toHaveCount(1, { timeout: 15_000 });
     const block = row.getByRole('button', { name: 'Заблокировать' });
     await expect(block).toBeVisible();
@@ -2009,8 +2009,8 @@ test('admin forms remain keyboard-accessible at 300 CSS px on six mobile widths'
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
 
     await page.getByTestId('owner-users-nav').click();
-    await page.getByTestId('owner-users-search').fill('bob@example.com');
-    await expect(page.getByTestId('owner-users-list')).toContainText('bob@example.com');
+    await page.getByTestId('owner-users-search').fill('bob@qa.billok.ru');
+    await expect(page.getByTestId('owner-users-list')).toContainText('bob@qa.billok.ru');
     const ownerSearch = page.getByTestId('owner-users-search');
     await ownerSearch.focus();
     await ownerSearch.scrollIntoViewIfNeeded();
@@ -2069,8 +2069,8 @@ test('admin forms remain keyboard-accessible at 300 CSS px on six mobile widths'
     // The sole owner now manages registered users on /admin/users.
     // Check the replacement mobile confirmation and cancel without a write.
     await page.getByTestId('owner-users-nav').click();
-    await page.getByTestId('owner-users-search').fill('bob@example.com');
-    const bobCard = page.locator('[data-testid^="owner-user-"]').filter({ hasText: 'bob@example.com' });
+    await page.getByTestId('owner-users-search').fill('bob@qa.billok.ru');
+    const bobCard = page.locator('[data-testid^="owner-user-"]').filter({ hasText: 'bob@qa.billok.ru' });
     await expect(bobCard).toHaveCount(1);
     await bobCard.getByRole('button', { name: 'Заблокировать' }).click();
     const dialog = page.getByTestId('owner-users-confirm');
@@ -2146,7 +2146,7 @@ test('six-width final authenticated mobile adaptation audit across main screens'
 test('Issue 6.12.3: real Passkey owner impersonation cannot access owner APIs', async ({ page }) => {
   test.setTimeout(120_000);
   const owner = await authedPasskeyContext('owner-qa@mail.ru', 0);
-  const ordinary = await authedPasskeyContext('alice@example.com', 0);
+  const ordinary = await authedPasskeyContext('alice@qa.billok.ru', 0);
   try {
     const ownerSession = (await (await owner.get('/api/auth/session')).json()) as {
       user?: { id?: string; email?: string };
@@ -2155,7 +2155,7 @@ test('Issue 6.12.3: real Passkey owner impersonation cannot access owner APIs', 
       user?: { id?: string; email?: string };
     };
     expect(ownerSession.user?.email).toBe('owner-qa@mail.ru');
-    expect(ordinarySession.user?.email).toBe('alice@example.com');
+    expect(ordinarySession.user?.email).toBe('alice@qa.billok.ru');
     expect(ownerSession.user?.id).toBeTruthy();
     expect(ordinarySession.user?.id).toBeTruthy();
     expect(ownerSession.user?.id).not.toBe(ordinarySession.user?.id);
@@ -2166,7 +2166,7 @@ test('Issue 6.12.3: real Passkey owner impersonation cannot access owner APIs', 
     const start = await owner.post('/api/admin/impersonate', { data: { userId: targetId, approvalToken } });
     expect(start.status(), await start.text()).toBe(200);
     const current = await trpcResult(await trpcQuery(owner, 'admin.getImpersonationStatus'));
-    expect(current).toMatchObject({ isImpersonating: true, targetEmail: 'alice@example.com' });
+    expect(current).toMatchObject({ isImpersonating: true, targetEmail: 'alice@qa.billok.ru' });
     expect((await owner.get('/api/admin/export')).status()).toBe(405);
     expect(
       (
@@ -2184,7 +2184,7 @@ test('Issue 6.12.3: real Passkey owner impersonation cannot access owner APIs', 
     await page.goto('/dashboard', { waitUntil: 'domcontentloaded' });
     // The real mobile browser uses the same signed JWT + impersonation cookie.
     const mobileStatus = await trpcResult(await trpcQuery(page.request, 'admin.getImpersonationStatus'));
-    expect(mobileStatus).toMatchObject({ isImpersonating: true, targetEmail: 'alice@example.com' });
+    expect(mobileStatus).toMatchObject({ isImpersonating: true, targetEmail: 'alice@qa.billok.ru' });
 
     const end = await owner.delete('/api/admin/impersonate');
     expect(end.status(), await end.text()).toBe(200);

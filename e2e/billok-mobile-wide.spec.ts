@@ -81,7 +81,7 @@ test('Passkey login and registration keep actions and fields reachable on large 
 test('mobile app stays centered and scroll-free horizontally at 430–720px with enlarged text', async ({ page }) => {
   test.setTimeout(180_000);
 
-  await loginWithPasskey(page, 'alice@example.com');
+  await loginWithPasskey(page, 'alice@qa.billok.ru');
 
   for (const path of ['/dashboard', '/groups', '/splits', '/settings'] as const) {
     await page.goto(path, { waitUntil: 'networkidle' });

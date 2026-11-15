@@ -16,7 +16,7 @@ async function main() {
   }
   const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
   try {
-    const bob = await db.user.findUniqueOrThrow({ where: { email: 'bob@example.com' } });
+    const bob = await db.user.findUniqueOrThrow({ where: { email: 'bob@qa.billok.ru' } });
     const group = await db.group.findFirstOrThrow({
       where: { name: 'Apartment', members: { some: { userId: bob.id } } },
     });
