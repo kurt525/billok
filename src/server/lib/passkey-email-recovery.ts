@@ -11,6 +11,7 @@ import {
 } from './email-verification-token';
 import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
 import { sendRussianPasskeyRecoveryEmail, sendRussianPasskeyRecoveryCompletedEmail } from './passkey-recovery-email';
+import { recordOwnerSecurityEvent } from './security-event-audit';
 import { hashWebAuthnBinding } from './webauthn-registration';
 import { revokeAccountAuthenticationStateInTransaction } from './revoke-account-auth';
 import {
@@ -149,6 +150,16 @@ export async function requestPasskeyRecovery(input: {
   if (!created) return { requested: true };
   try {
     await sendRussianPasskeyRecoveryEmail({ to: created.email, url: url.toString(), ...mail });
+    if (isOwner) {
+      await recordOwnerSecurityEvent({
+        db: input.db,
+        action: 'OWNER_RECOVERY_REQUESTED',
+        actorId: user.id,
+        outcome: 'ALLOWED',
+        env: input.env,
+        now,
+      });
+    }
   } catch (error) {
     // A failure to send must make this recovery link invalid. Do not leak
     // SMTP errors, token or user identity to public callers.
@@ -421,6 +432,14 @@ export async function finishPasskeyRecovery(input: {
   // successful replacement, and must never contain the consumed token, a
   // session cookie or another link usable for authentication.
   if (ownerRecovered) {
+    await recordOwnerSecurityEvent({
+      db: input.db,
+      action: 'OWNER_RECOVERY_COMPLETED',
+      actorId: request.userId,
+      outcome: 'ALLOWED',
+      env: input.env,
+      now,
+    });
     try {
       const mail = readRegistrationEmailConfig(input.env as Record<string, string | undefined>);
       if (mail.siteOrigin !== rp.origin) throw new AppError('FORBIDDEN');

@@ -1,5 +1,7 @@
 import { cookies } from 'next/headers';
+import type { Session } from 'next-auth';
 import { auth } from '@/server/auth';
+import { recordOwnerSecurityEvent } from '@/server/lib/security-event-audit';
 import { readBoundedJson } from '@/server/lib/read-bounded-json';
 import { db } from '@/server/db';
 import { requireOwner } from '@/server/lib/owner-access';
@@ -15,8 +17,7 @@ const COOKIE_NAME = 'sharetab-impersonate';
  * Body: { userId: string, approvalToken: string }
  * Sets impersonation cookie so tRPC context switches effective user.
  */
-export async function POST(req: Request) {
-  const session = await auth();
+async function performAuditedOwnerPost(req: Request, session: Session | null) {
   if (!session?.user?.id) return Response.json({ error: 'Доступ запрещён' }, { status: 403 });
   try {
     await requireOwner(db, session.user.id);
@@ -149,4 +150,24 @@ export async function DELETE(req: Request) {
   // Clearing the cookie never changes or issues an Auth.js session.
   cookieStore.delete(COOKIE_NAME);
   return Response.json({ success: true });
+}
+
+export async function POST(request: Request) {
+  const session = await auth().catch(() => null);
+  let response: Response;
+  try {
+    response = await performAuditedOwnerPost(request, session);
+  } catch {
+    response = Response.json({ error: 'Доступ запрещён' }, { status: 403 });
+  }
+  // Successful audit is a separate durable security event; the existing
+  // transaction-bound AdminAuditLog remains authoritative for mutations.
+  // Denied requests are recorded OUTSIDE rolled-back transactions.
+  await recordOwnerSecurityEvent({
+    db,
+    action: 'IMPERSONATION_STARTED',
+    outcome: response.status >= 400 ? 'DENIED' : 'ALLOWED',
+    actorId: session?.user?.id ?? null,
+  });
+  return response;
 }

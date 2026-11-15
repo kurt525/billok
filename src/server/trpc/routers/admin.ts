@@ -98,6 +98,34 @@ export const adminRouter = createTRPCRouter({
     };
   }),
 
+  // Dedicated security journal: even the owner may READ but cannot change
+  // or delete events through any exposed API. Ordinary users see nothing.
+  getSecurityEvents: adminProcedure
+    .input(
+      z.strictObject({
+        cursor: z.string().max(128).optional(),
+        limit: z.number().int().min(1).max(50).default(20),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const entries = await ctx.db.securityEvent.findMany({
+        take: input.limit + 1,
+        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: {
+          id: true,
+          actorId: true,
+          targetFingerprint: true,
+          action: true,
+          outcome: true,
+          createdAt: true,
+        },
+      });
+      const more = entries.length > input.limit;
+      const page = more ? entries.slice(0, input.limit) : entries;
+      return { items: page, nextCursor: more ? page.at(-1)?.id : undefined };
+    }),
+
   getAuditLog: adminProcedure
     .input(
       z.object({

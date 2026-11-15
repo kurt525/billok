@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server';
 import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 import { db } from '@/server/db';
+import { recordOwnerSecurityEvent } from '@/server/lib/security-event-audit';
 import { finishPasskeyRecovery, PASSKEY_RECOVERY_BINDING_COOKIE } from '@/server/lib/passkey-email-recovery';
 import { getClientIp } from '@/server/lib/client-ip';
 import { checkRateLimit } from '@/server/lib/rate-limit';
 import { readBillokWebAuthnRelyingParty } from '@/server/lib/webauthn-relying-party';
 import { readBoundedJson } from '@/server/lib/read-bounded-json';
 
-export async function POST(request: Request) {
+async function performRecoveryPost(request: Request) {
   const denied = () => NextResponse.json({ error: 'Не удалось подтвердить новый Passkey.' }, { status: 403 });
   if (!checkRateLimit('passkey-recovery-finish:' + getClientIp(request.headers), 20, 60 * 60 * 1000).allowed) {
     return denied();
@@ -50,4 +51,20 @@ export async function POST(request: Request) {
   } catch {
     return denied();
   }
+}
+
+export async function POST(request: Request) {
+  let response: Response;
+  try {
+    response = await performRecoveryPost(request);
+  } catch {
+    response = new Response('Доступ запрещён', { status: 403 });
+  }
+  await recordOwnerSecurityEvent({
+    db,
+    action: 'PASSKEY_RECOVERY_FINISH',
+    outcome: response.status >= 400 ? 'DENIED' : 'ALLOWED',
+    actorId: null,
+  });
+  return response;
 }

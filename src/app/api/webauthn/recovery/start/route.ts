@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/server/db';
+import { recordOwnerSecurityEvent } from '@/server/lib/security-event-audit';
 import { beginPasskeyRecovery, PASSKEY_RECOVERY_BINDING_COOKIE } from '@/server/lib/passkey-email-recovery';
 import { newWebAuthnBindingSecret } from '@/server/lib/webauthn-registration';
 import { readBillokWebAuthnRelyingParty, WEBAUTHN_CHALLENGE_TTL_MS } from '@/server/lib/webauthn-relying-party';
@@ -7,7 +8,7 @@ import { getClientIp } from '@/server/lib/client-ip';
 import { checkRateLimit } from '@/server/lib/rate-limit';
 import { readBoundedJson } from '@/server/lib/read-bounded-json';
 
-export async function POST(request: Request) {
+async function performRecoveryPost(request: Request) {
   const denied = () => NextResponse.json({ error: 'Недействительная ссылка восстановления.' }, { status: 403 });
   if (!checkRateLimit('passkey-recovery-start:' + getClientIp(request.headers), 15, 60 * 60 * 1000).allowed) {
     return denied();
@@ -39,4 +40,20 @@ export async function POST(request: Request) {
   } catch {
     return denied();
   }
+}
+
+export async function POST(request: Request) {
+  let response: Response;
+  try {
+    response = await performRecoveryPost(request);
+  } catch {
+    response = new Response('Доступ запрещён', { status: 403 });
+  }
+  await recordOwnerSecurityEvent({
+    db,
+    action: 'PASSKEY_RECOVERY_START',
+    outcome: response.status >= 400 ? 'DENIED' : 'ALLOWED',
+    actorId: null,
+  });
+  return response;
 }

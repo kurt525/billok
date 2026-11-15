@@ -13,6 +13,7 @@ export function AuditLogSection() {
   const locale = useLocale();
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const auditLog = trpc.admin.getAuditLog.useQuery({ limit: 20, cursor });
+  const security = trpc.admin.getSecurityEvents.useQuery({ limit: 20 });
 
   const ACTION_LABELS: Record<string, { label: string; color: string }> = {
     USER_DELETED: { label: t('audit.actionUserDeleted'), color: 'bg-red-500/10 text-red-700 dark:text-red-400' },
@@ -110,6 +111,37 @@ export function AuditLogSection() {
 
   return (
     <section className="min-w-0" data-testid="admin-audit-section">
+      <div className="mb-5 min-w-0 rounded-lg border p-3" data-testid="admin-security-events">
+        <h3 className="mb-2 text-base font-semibold">События безопасности</h3>
+        <p className="mb-3 text-xs text-muted-foreground">
+          Административные действия и отклонённые попытки. Идентификаторы объектов показаны только как отпечатки;
+          секреты не сохраняются.
+        </p>
+        {security.isLoading ? (
+          <p className="text-sm text-muted-foreground">Загрузка журнала…</p>
+        ) : security.isError ? (
+          <p className="text-sm text-destructive">Не удалось получить журнал безопасности.</p>
+        ) : security.data?.items.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Событий пока нет.</p>
+        ) : (
+          <div className="max-h-72 space-y-2 overflow-y-auto" role="region" aria-label="События безопасности">
+            {security.data?.items.map((entry) => (
+              <div key={entry.id} className="min-w-0 rounded-md border px-3 py-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={entry.outcome === 'DENIED' ? 'font-semibold text-destructive' : 'font-semibold'}>
+                    {entry.outcome === 'DENIED' ? 'Отклонено' : 'Выполнено'}
+                  </span>
+                  <span className="[overflow-wrap:anywhere]">{entry.action}</span>
+                </div>
+                <p className="mt-1 text-muted-foreground [overflow-wrap:anywhere]">
+                  {new Date(entry.createdAt).toLocaleString(locale)} · Субъект: {entry.actorId ?? 'не определён'}
+                  {entry.targetFingerprint ? ' · Объект: ' + entry.targetFingerprint.slice(0, 16) : ''}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="mb-4 flex min-w-0 flex-wrap items-center gap-2">
         <ScrollText className="h-5 w-5 text-muted-foreground" />
         <h2 className="min-w-0 text-lg font-semibold [overflow-wrap:anywhere]">{t('audit.title')}</h2>

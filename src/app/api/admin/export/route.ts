@@ -1,4 +1,6 @@
+import type { Session } from 'next-auth';
 import { auth } from '@/server/auth';
+import { recordOwnerSecurityEvent } from '@/server/lib/security-event-audit';
 import { readBoundedJson } from '@/server/lib/read-bounded-json';
 import { cookies } from 'next/headers';
 import { db } from '@/server/db';
@@ -14,9 +16,8 @@ export async function GET() {
   });
 }
 
-export async function POST(req: Request) {
+async function performAuditedOwnerPost(req: Request, session: Session | null) {
   // Owner privileges are bound to the immutable DB user ID, not email.
-  const session = await auth();
   if (!session?.user?.id) return new Response('Доступ запрещён', { status: 403 });
   // Auth.js still sees the real owner while impersonating; block owner REST
   // exports whenever the mode cookie is present (even if forged/expired).
@@ -166,4 +167,24 @@ export async function POST(req: Request) {
     console.error('Export failed:', error instanceof Error ? error.name : 'unknown');
     return new Response('Внутренняя ошибка сервера', { status: 500 });
   }
+}
+
+export async function POST(request: Request) {
+  const session = await auth().catch(() => null);
+  let response: Response;
+  try {
+    response = await performAuditedOwnerPost(request, session);
+  } catch {
+    response = Response.json({ error: 'Доступ запрещён' }, { status: 403 });
+  }
+  // Successful audit is a separate durable security event; the existing
+  // transaction-bound AdminAuditLog remains authoritative for mutations.
+  // Denied requests are recorded OUTSIDE rolled-back transactions.
+  await recordOwnerSecurityEvent({
+    db,
+    action: 'ADMIN_EXPORT',
+    outcome: response.status >= 400 ? 'DENIED' : 'ALLOWED',
+    actorId: session?.user?.id ?? null,
+  });
+  return response;
 }

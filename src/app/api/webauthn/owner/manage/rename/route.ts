@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
+import type { Session } from 'next-auth';
 import { auth } from '@/server/auth';
+import { recordOwnerSecurityEvent } from '@/server/lib/security-event-audit';
 import { db } from '@/server/db';
 import { requireOwner } from '@/server/lib/owner-access';
 import { allowOwnerWebAuthnRequest } from '@/server/lib/owner-webauthn-burst';
 import { ownerSessionFingerprint } from '@/server/lib/owner-passkey-action-approval';
 import { renameOwnerPasskey } from '@/server/lib/owner-passkey-management';
 
-export async function POST(request: Request) {
+async function performAuditedOwnerPost(request: Request, session: Session | null) {
   const denied = () =>
     NextResponse.json(
       {
@@ -14,7 +16,6 @@ export async function POST(request: Request) {
       },
       { status: 403 },
     );
-  const session = await auth();
   if (!session?.user?.id || (request.headers.get('cookie') ?? '').includes('sharetab-impersonate=')) {
     return denied();
   }
@@ -61,4 +62,24 @@ export async function POST(request: Request) {
     // Do not disclose which account/key/approval was invalid.
     return denied();
   }
+}
+
+export async function POST(request: Request) {
+  const session = await auth().catch(() => null);
+  let response: Response;
+  try {
+    response = await performAuditedOwnerPost(request, session);
+  } catch {
+    response = Response.json({ error: 'Доступ запрещён' }, { status: 403 });
+  }
+  // Successful audit is a separate durable security event; the existing
+  // transaction-bound AdminAuditLog remains authoritative for mutations.
+  // Denied requests are recorded OUTSIDE rolled-back transactions.
+  await recordOwnerSecurityEvent({
+    db,
+    action: 'OWNER_PASSKEY_RENAMED',
+    outcome: response.status >= 400 ? 'DENIED' : 'ALLOWED',
+    actorId: session?.user?.id ?? null,
+  });
+  return response;
 }

@@ -7,6 +7,7 @@ import { issueRegistrationVerification } from './registration-verification-issue
 import { SYSTEM_INVITE_TTL_MS, activeSystemInviteWindow } from './system-invite-lifetime';
 import { EMAIL_VERIFICATION_TOKEN_TTL_MS } from './email-verification-token';
 import { readBillokWebAuthnRelyingParty } from './webauthn-relying-party';
+import { recordOwnerSecurityEvent } from './security-event-audit';
 
 export const OWNER_BOOTSTRAP_SINGLETON_ID = 1;
 export const OWNER_BOOTSTRAP_MAX_EMAIL_ATTEMPTS = 3;
@@ -40,7 +41,7 @@ export function readOwnerBootstrapConfiguration(env: Env) {
 }
 
 /** Serialized by a PostgreSQL advisory transaction lock and fixed-row key. */
-export async function createInitialOwner(input: {
+async function performInitialOwnerBootstrap(input: {
   db: PrismaClient;
   env: Env;
   now?: Date;
@@ -87,16 +88,44 @@ export async function createInitialOwner(input: {
   });
 }
 
+/** This is strictly local operator bootstrap, never an HTTP login fallback. */
+export async function createInitialOwner(input: {
+  db: PrismaClient;
+  env: Env;
+  now?: Date;
+}): Promise<{ userId: string; email: string }> {
+  try {
+    const result = await performInitialOwnerBootstrap(input);
+    await recordOwnerSecurityEvent({
+      db: input.db,
+      action: 'OWNER_BOOTSTRAP_STARTED',
+      actorId: result.userId,
+      outcome: 'ALLOWED',
+      env: input.env,
+      now: input.now,
+    });
+    return result;
+  } catch (error) {
+    // Must survive failed/rolled-back attempts; never attribute an anonymous
+    // operator to the already-registered owner or expose owner email.
+    await recordOwnerSecurityEvent({
+      db: input.db,
+      action: 'OWNER_BOOTSTRAP_REPLAY',
+      actorId: null,
+      outcome: 'DENIED',
+      env: input.env,
+      now: input.now,
+    });
+    throw error;
+  }
+}
+
 /**
  * A local-only explicit resend is permitted for the SAME pending owner.
  * SMTP failures do not create another owner, do not reset a password, and do
  * not disclose the verification token on stdout or in audit metadata.
  */
-export async function sendOwnerBootstrapConfirmation(input: {
-  db: PrismaClient;
-  env: Env;
-  now?: Date;
-}): Promise<{ sent: true }> {
+async function performOwnerBootstrapResend(input: { db: PrismaClient; env: Env; now?: Date }): Promise<{ sent: true }> {
   const { email, mail } = readOwnerBootstrapConfiguration(input.env);
   const now = input.now ?? new Date();
   const candidate = await input.db.$transaction(async (tx) => {
@@ -164,6 +193,33 @@ export async function sendOwnerBootstrapConfirmation(input: {
     },
   });
   return { sent: true };
+}
+
+export async function sendOwnerBootstrapConfirmation(input: {
+  db: PrismaClient;
+  env: Env;
+  now?: Date;
+}): Promise<{ sent: true }> {
+  try {
+    const result = await performOwnerBootstrapResend(input);
+    await recordOwnerSecurityEvent({
+      db: input.db,
+      action: 'OWNER_BOOTSTRAP_EMAIL_SENT',
+      outcome: 'ALLOWED',
+      env: input.env,
+      now: input.now,
+    });
+    return result;
+  } catch (error) {
+    await recordOwnerSecurityEvent({
+      db: input.db,
+      action: 'OWNER_BOOTSTRAP_REPLAY',
+      outcome: 'DENIED',
+      env: input.env,
+      now: input.now,
+    });
+    throw error;
+  }
 }
 
 /** Only for the initial owner, not ordinary invited registrants. */

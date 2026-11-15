@@ -7,6 +7,7 @@ import { db } from '../db';
 import { logger } from '../lib/logger';
 import { currentImpersonationSessionBinding, verifiedImpersonationSession } from '../lib/impersonation-session';
 import { AppError, errorShape } from '../lib/app-error';
+import { recordOwnerSecurityEvent, securityTargetFromInput } from '../lib/security-event-audit';
 import { LOCALE_HEADER, localeFromHeader } from '@/lib/locale-header';
 import { defaultLocale } from '@/i18n/routing';
 
@@ -55,7 +56,7 @@ const t = initTRPC.context<TRPCContext>().create({
 // Procedures that poll frequently and would spam the log buffer
 const QUIET_PATHS = new Set(['admin.getLogs', 'admin.getImpersonationStatus']);
 
-const loggingMiddleware = t.middleware(async ({ path, type, next, ctx }) => {
+const loggingMiddleware = t.middleware(async ({ path, type, next, ctx, getRawInput }) => {
   const start = Date.now();
   const userId = ctx.session?.user?.id;
   // Attribute impersonated requests to the real admin, not just the target
@@ -64,6 +65,25 @@ const loggingMiddleware = t.middleware(async ({ path, type, next, ctx }) => {
   const result = await next();
 
   if (QUIET_PATHS.has(path)) return result;
+
+  // Persistent security journal is deliberately separate from the redacted
+  // diagnostic ring buffer. It records rejected requests even if the owner
+  // procedure fails before entering any transaction or parsing input.
+  if (type === 'mutation' && path.startsWith('admin.')) {
+    let targetFingerprint: string | null = null;
+    try {
+      targetFingerprint = securityTargetFromInput(await getRawInput());
+    } catch {
+      // Invalid/unreadable inputs are still audited without their contents.
+    }
+    await recordOwnerSecurityEvent({
+      db: ctx.db,
+      action: path,
+      outcome: result.ok ? 'ALLOWED' : 'DENIED',
+      actorId: impersonatedBy ?? userId ?? null,
+      targetFingerprint,
+    });
+  }
 
   const durationMs = Date.now() - start;
   const ok = result.ok;

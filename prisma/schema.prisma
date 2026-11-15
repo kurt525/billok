@@ -476,6 +476,33 @@ enum ActivityType {
 
 // ─── ADMIN ─────────────────────────────────────────────────
 
+// 6.12.9: security attempts survive user deletion. No FK and no raw request
+// body, email, WebAuthn assertion, JWT, cookie or approval/recovery token.
+enum SecurityEventOutcome {
+  ALLOWED
+  DENIED
+}
+
+model SecurityEvent {
+  id                String               @id @default(cuid())
+  actorId           String?              @db.VarChar(128)
+  targetFingerprint String?              @db.VarChar(64)
+  action            String               @db.VarChar(96)
+  outcome           SecurityEventOutcome
+  createdAt         DateTime             @default(now())
+
+  @@index([createdAt])
+  @@index([action, createdAt])
+  @@index([actorId, createdAt])
+}
+
+// Limits NOT the owner's actions, only duplicate suspicious-activity emails.
+// Unique claim prevents mail floods across processes for denied requests.
+model SecurityAlertDelivery {
+  bucket    String   @id @db.VarChar(160)
+  createdAt DateTime @default(now())
+}
+
 model AdminAuditLog {
   id        String      @id @default(cuid())
   adminId   String
