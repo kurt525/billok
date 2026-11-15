@@ -464,6 +464,18 @@ describe('invites', () => {
     expect(mockDb.groupInvite.findUnique).not.toHaveBeenCalled();
   });
 
+  test('6.13.2: an invitation token never accepts a supplied actor ID or group role', async () => {
+    const api = await caller('owner');
+    for (const field of ['userId', 'ownerId', 'id', 'role', 'isAdmin', 'emailVerified']) {
+      const forged = { token: 'valid-token', [field]: 'foreign-user-uuid' };
+      await expect(api.getInvite(forged as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(api.joinByInvite(forged as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.groupInvite.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.groupMember.create).not.toHaveBeenCalled();
+    expect(mockDb.groupInvite.updateMany).not.toHaveBeenCalled();
+  });
+
   // #276: the link would only fail once someone accepted it
   test.each([
     ['a deleted account', { suspendedAt: new Date(), isPlaceholder: true }, null],
@@ -563,7 +575,9 @@ describe('invites', () => {
       placeholderUserId: 'p1',
     });
     mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
-      where.id === 'p1' ? { suspendedAt: null, isPlaceholder: true } : { suspendedAt: null, isPlaceholder: false },
+      where.id === 'p1'
+        ? { suspendedAt: null, isPlaceholder: true }
+        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01') },
     );
     mockDb.groupMember.findUnique.mockImplementation(
       async ({ where }: { where: { userId_groupId: { userId: string } } }) =>
@@ -596,7 +610,9 @@ describe('invites', () => {
       .mockResolvedValueOnce({ id: 'i1', groupId: 'g1', usedAt: null, expiresAt: inAWeek(), placeholderUserId: 'p1' })
       .mockResolvedValue({ usedById: usedById ?? null });
     mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
-      where.id === 'p1' ? { suspendedAt: null, isPlaceholder: true } : { suspendedAt: null, isPlaceholder: false },
+      where.id === 'p1'
+        ? { suspendedAt: null, isPlaceholder: true }
+        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01') },
     );
     mockDb.groupMember.findUnique.mockImplementation(
       async ({ where }: { where: { userId_groupId: { userId: string } } }) => ({
@@ -642,7 +658,9 @@ describe('invites', () => {
     expect(mockDb.expense.updateMany).not.toHaveBeenCalled();
     // A share lock, so a removal waits for the merge instead of slipping in after the check
     const [sql, ...values] = mockDb.$queryRaw.mock.calls[0]! as [TemplateStringsArray, ...unknown[]];
-    expect(sql.join('?')).toMatch(/FROM "GroupMember" WHERE "userId" = \? AND "groupId" = \? FOR SHARE/);
+    expect(sql.join('?')).toMatch(
+      /FROM "GroupMember" WHERE "userId" = \? AND "groupId" = \? AND "removedAt" IS NULL FOR SHARE/,
+    );
     expect(values).toEqual(['bob', 'g1']);
   });
 
@@ -673,7 +691,9 @@ describe('invites', () => {
       placeholderUserId: 'p1',
     });
     mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
-      where.id === 'p1' ? { suspendedAt: null, isPlaceholder: true } : { suspendedAt: null, isPlaceholder: false },
+      where.id === 'p1'
+        ? { suspendedAt: null, isPlaceholder: true }
+        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01') },
     );
     mockDb.groupMember.findUnique.mockImplementation(
       async ({ where }: { where: { userId_groupId: { userId: string } } }) => ({
@@ -710,7 +730,9 @@ describe('invites', () => {
       placeholderUserId: 'p1',
     });
     mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
-      where.id === 'p1' ? { suspendedAt: null, isPlaceholder: true } : { suspendedAt: null, isPlaceholder: false },
+      where.id === 'p1'
+        ? { suspendedAt: null, isPlaceholder: true }
+        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01') },
     );
     // Bob isn't a member until the transaction adds him
     let bobJoined = false;
@@ -1056,6 +1078,21 @@ describe('leaving a group', () => {
 describe('transferring ownership', () => {
   const account = { isPlaceholder: false, suspendedAt: null };
 
+  test('6.13.2: group owner role transfer cannot also set global ownerId, JWT or arbitrary roles', async () => {
+    const api = await caller('owner');
+    for (const field of ['ownerId', 'userId', 'role', 'isAdmin', 'sessionSecurityVersion', 'id']) {
+      await expect(
+        api.transferOwnership({
+          groupId: 'g1',
+          newOwnerId: 'bob',
+          [field]: 'foreign-user-uuid',
+        } as never),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.groupMember.update).not.toHaveBeenCalled();
+    expect(mockDb.ownerBootstrap.findUnique).not.toHaveBeenCalled();
+  });
+
   test('makes a member with an account the owner, and the old owner a member', async () => {
     mockMemberships({ owner: member('owner', 'OWNER'), bob: member('bob', 'MEMBER', { user: account }) });
     const api = await caller('owner');
@@ -1313,11 +1350,11 @@ describe('deleting a group', () => {
 // #276: merging a placeholder into the member it stands for moves their
 // expenses, shares and payments over, so the balance follows them.
 describe('merging a placeholder into a member', () => {
-  const users: Record<string, { suspendedAt: null; isPlaceholder: boolean }> = {
-    owner: { suspendedAt: null, isPlaceholder: false },
-    bob: { suspendedAt: null, isPlaceholder: false },
-    p1: { suspendedAt: null, isPlaceholder: true },
-    p2: { suspendedAt: null, isPlaceholder: true },
+  const users: Record<string, { suspendedAt: Date | null; isPlaceholder: boolean; emailVerified: Date | null }> = {
+    owner: { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01') },
+    bob: { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01') },
+    p1: { suspendedAt: null, isPlaceholder: true, emailVerified: null },
+    p2: { suspendedAt: null, isPlaceholder: true, emailVerified: null },
   };
   // admin.deleteUser turns an account into a suspended placeholder that keeps its history in other groups
   const deletedAccount = { suspendedAt: new Date(), isPlaceholder: true };
@@ -1376,6 +1413,74 @@ describe('merging a placeholder into a member', () => {
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     }
     expect(mockDb.ownerBootstrap.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.groupMember.deleteMany).not.toHaveBeenCalled();
+    expectNothingMoved();
+  });
+
+  test('6.13.2: a known UUID outside the current check cannot receive guest debt', async () => {
+    mockDb.$queryRaw.mockResolvedValueOnce([]);
+    const api = await caller('owner');
+    await expect(
+      api.mergePlaceholder({
+        groupId: 'g1',
+        placeholderUserId: 'p1',
+        realUserId: 'bob',
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining('member') });
+    expect(mockDb.$queryRaw).toHaveBeenCalledOnce();
+    expect(mockDb.groupMember.deleteMany).not.toHaveBeenCalled();
+    expectNothingMoved();
+  });
+
+  test('6.13.2: removed membership never qualifies for merging financial data', async () => {
+    const { readFileSync } = await import('node:fs');
+    const code = readFileSync('src/server/lib/placeholder-merge.ts', 'utf8');
+    expect(code).toContain('AND "removedAt" IS NULL FOR SHARE');
+    const api = await caller('owner');
+    mockDb.$queryRaw.mockResolvedValueOnce([]);
+    await expect(
+      api.mergePlaceholder({
+        groupId: 'g1',
+        placeholderUserId: 'p1',
+        realUserId: 'bob',
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expectNothingMoved();
+  });
+
+  test('6.13.2: a deleted/suspended or unverified target UUID never receives a guest receipt', async () => {
+    for (const target of [
+      { ...users.bob, suspendedAt: new Date('2026-11-02') },
+      { ...users.bob, emailVerified: null },
+    ]) {
+      mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
+        where.id === 'bob' ? target : (users[where.id] ?? null),
+      );
+      const api = await caller('owner');
+      await expect(
+        api.mergePlaceholder({
+          groupId: 'g1',
+          placeholderUserId: 'p1',
+          realUserId: 'bob',
+        }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mockDb.groupMember.deleteMany).not.toHaveBeenCalled();
+      expectNothingMoved();
+    }
+  });
+
+  test('6.13.2: knowing other account UUID cannot impersonate acting owner via JSON fields', async () => {
+    const api = await caller('owner');
+    for (const key of ['ownerId', 'userId', 'role', 'isAdmin', 'emailVerified', 'id']) {
+      await expect(
+        api.mergePlaceholder({
+          groupId: 'g1',
+          placeholderUserId: 'p1',
+          realUserId: 'bob',
+          [key]: 'other-user-uuid',
+        } as never),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
     expect(mockDb.groupMember.deleteMany).not.toHaveBeenCalled();
     expectNothingMoved();
   });

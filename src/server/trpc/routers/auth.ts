@@ -108,7 +108,7 @@ export const authRouter = createTRPCRouter({
 
   // A POST mutation prevents mail scanners from consuming links on GET.
   confirmEmail: publicProcedure
-    .input(z.object({ token: z.string().min(1).max(128) }))
+    .input(z.strictObject({ token: z.string().min(1).max(128) }))
     .mutation(async ({ ctx, input }) => {
       const ip = getClientIp(ctx.headers);
       const maxAttempts = parsePositiveInt(process.env.EMAIL_CONFIRM_RATE_LIMIT_MAX, 10);

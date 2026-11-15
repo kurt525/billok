@@ -114,6 +114,16 @@ describe('auth.confirmEmail', () => {
     expect(confirmationGate).toHaveBeenCalledExactlyOnceWith(mockDb, token);
   });
 
+  test('6.13.2: confirmation token cannot inject another userId, ownerId, roles or session identity', async () => {
+    const api = await caller();
+    for (const field of ['userId', 'ownerId', 'id', 'role', 'isAdmin', 'emailVerified']) {
+      await expect(api.confirmEmail({ token, [field]: 'foreign-uuid' } as never)).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+    }
+    expect(confirmationGate).not.toHaveBeenCalled();
+  });
+
   test('rejects empty input before reaching the confirmation service', async () => {
     const api = await caller();
     await expect(api.confirmEmail({ token: '' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });

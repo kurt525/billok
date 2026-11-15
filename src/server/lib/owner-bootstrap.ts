@@ -8,6 +8,7 @@ import { SYSTEM_INVITE_TTL_MS, activeSystemInviteWindow } from './system-invite-
 import { EMAIL_VERIFICATION_TOKEN_TTL_MS } from './email-verification-token';
 import { readBillokWebAuthnRelyingParty } from './webauthn-relying-party';
 import { recordOwnerSecurityEvent } from './security-event-audit';
+import { retryUserIdCollision } from './user-id-collision-retry';
 
 export const OWNER_BOOTSTRAP_SINGLETON_ID = 1;
 export const OWNER_BOOTSTRAP_MAX_EMAIL_ATTEMPTS = 3;
@@ -49,43 +50,45 @@ async function performInitialOwnerBootstrap(input: {
   const { email } = readOwnerBootstrapConfiguration(input.env);
   const now = input.now ?? new Date();
   const code = 'owner-' + randomBytes(20).toString('hex');
-  return input.db.$transaction(async (tx) => {
-    await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(260110211)::text AS lock_status`);
-    const [existing, users] = await Promise.all([
-      tx.ownerBootstrap.findUnique({ where: { id: OWNER_BOOTSTRAP_SINGLETON_ID } }),
-      tx.user.count(),
-    ]);
-    // A populated database cannot be bootstrapped. Never delete data here.
-    if (existing || users !== 0) throw new AppError('FORBIDDEN');
-    const owner = await tx.user.create({
-      data: {
-        email,
-        name: 'Владелец',
-        emailVerified: null,
-        registrationEmailVerificationRequired: true,
-        locale: 'ru',
-      },
-      select: { id: true, email: true },
+  const createOwner = () =>
+    input.db.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(260110211)::text AS lock_status`);
+      const [existing, users] = await Promise.all([
+        tx.ownerBootstrap.findUnique({ where: { id: OWNER_BOOTSTRAP_SINGLETON_ID } }),
+        tx.user.count(),
+      ]);
+      // A populated database cannot be bootstrapped. Never delete data here.
+      if (existing || users !== 0) throw new AppError('FORBIDDEN');
+      const owner = await tx.user.create({
+        data: {
+          email,
+          name: 'Владелец',
+          emailVerified: null,
+          registrationEmailVerificationRequired: true,
+          locale: 'ru',
+        },
+        select: { id: true, email: true },
+      });
+      await tx.ownerBootstrap.create({
+        data: { id: OWNER_BOOTSTRAP_SINGLETON_ID, userId: owner.id },
+      });
+      // Unpublished private invitation, never displayed or reusable by public
+      // registration. The same existing invite redemption validates owner email.
+      await tx.systemInvite.create({
+        data: {
+          code,
+          label: 'Первоначальная настройка владельца',
+          expiresAt: new Date(now.getTime() + SYSTEM_INVITE_TTL_MS),
+          reservedById: owner.id,
+          reservedUntil: new Date(now.getTime() + EMAIL_VERIFICATION_TOKEN_TTL_MS),
+        },
+      });
+      await tx.adminAuditLog.create({
+        data: { adminId: owner.id, action: 'OWNER_BOOTSTRAP_STARTED', metadata: { mode: 'local-passkey-only' } },
+      });
+      return { userId: owner.id, email: owner.email };
     });
-    await tx.ownerBootstrap.create({
-      data: { id: OWNER_BOOTSTRAP_SINGLETON_ID, userId: owner.id },
-    });
-    // Unpublished private invitation, never displayed or reusable by public
-    // registration. The same existing invite redemption validates owner email.
-    await tx.systemInvite.create({
-      data: {
-        code,
-        label: 'Первоначальная настройка владельца',
-        expiresAt: new Date(now.getTime() + SYSTEM_INVITE_TTL_MS),
-        reservedById: owner.id,
-        reservedUntil: new Date(now.getTime() + EMAIL_VERIFICATION_TOKEN_TTL_MS),
-      },
-    });
-    await tx.adminAuditLog.create({
-      data: { adminId: owner.id, action: 'OWNER_BOOTSTRAP_STARTED', metadata: { mode: 'local-passkey-only' } },
-    });
-    return { userId: owner.id, email: owner.email };
-  });
+  return retryUserIdCollision(createOwner);
 }
 
 /** This is strictly local operator bootstrap, never an HTTP login fallback. */

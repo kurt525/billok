@@ -9,9 +9,11 @@ import { removeReceiptFiles } from '../../lib/receipt-cleanup';
 import { mergePlaceholderIntoUser } from '../../lib/placeholder-merge';
 import { checkRateLimit } from '../../lib/rate-limit';
 import { normalizeGuestName } from '@/lib/guest-session';
+import { retryUserIdCollision } from '@/server/lib/user-id-collision-retry';
 
 // Invite tokens are cuids (25 characters); a defensive bound so oversized input never reaches the lookup.
 const inviteTokenSchema = z.string().max(64);
+const inviteTokenInputSchema = z.strictObject({ token: inviteTokenSchema });
 // getInvite answers whether a token is live without using it up, so cap how fast one account can ask.
 const INVITE_LOOKUP_LIMIT = 30;
 const INVITE_LOOKUP_WINDOW_MS = 60 * 1000;
@@ -324,7 +326,7 @@ export const groupsRouter = createTRPCRouter({
   // What the invite page shows before the person accepts. Anyone signed in who
   // holds the token sees it, which is less than the token already gives them
   // (joining the group). null when joinByInvite would refuse the token.
-  getInvite: protectedProcedure.input(z.object({ token: inviteTokenSchema })).query(async ({ ctx, input }) => {
+  getInvite: protectedProcedure.input(inviteTokenInputSchema).query(async ({ ctx, input }) => {
     if (!checkRateLimit(`invite-lookup:${ctx.user.id}`, INVITE_LOOKUP_LIMIT, INVITE_LOOKUP_WINDOW_MS).allowed) {
       throw new AppError('TOO_MANY_REQUESTS', 'inviteLookupRateLimited');
     }
@@ -361,7 +363,7 @@ export const groupsRouter = createTRPCRouter({
     };
   }),
 
-  joinByInvite: protectedProcedure.input(z.object({ token: inviteTokenSchema })).mutation(async ({ ctx, input }) => {
+  joinByInvite: protectedProcedure.input(inviteTokenInputSchema).mutation(async ({ ctx, input }) => {
     const invite = await ctx.db.groupInvite.findUnique({
       where: { token: input.token },
     });
@@ -603,7 +605,7 @@ export const groupsRouter = createTRPCRouter({
   // owner becomes a plain member: nothing assigns ADMIN, so the new owner would
   // have no way to take it back.
   transferOwnership: groupMemberProcedure
-    .input(z.object({ groupId: z.string(), newOwnerId: z.string() }))
+    .input(z.strictObject({ groupId: z.string(), newOwnerId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const notOwner = new AppError('FORBIDDEN', 'onlyOwnerTransfers');
       if (ctx.membership.role !== 'OWNER') {
@@ -673,43 +675,45 @@ export const groupsRouter = createTRPCRouter({
       const { randomUUID } = await import('crypto');
       const placeholderEmail = `placeholder-${randomUUID()}@placeholder.local`;
 
-      const { user, restored } = await ctx.db.$transaction(async (tx) => {
-        await lockGroupMembers(tx, input.groupId);
-        const holder = await findNameHolder(tx, input.groupId, input.name);
-        if (holder && !holder.removedAt) {
-          throw new AppError('CONFLICT', 'placeholderNameTaken');
-        }
-        // Adding a removed placeholder's name brings them back with their history,
-        // rather than a second person by that name (#284). A merge that took them
-        // meanwhile leaves nobody to bring back, and the name is free.
-        if (holder?.user.isPlaceholder) {
-          const { count } = await tx.groupMember.updateMany({
-            where: { userId: holder.userId, groupId: input.groupId, removedAt: { not: null } },
-            data: { removedAt: null },
-          });
-          if (count === 1) {
-            return {
-              user: { id: holder.userId, name: holder.user.placeholderName ?? holder.user.name },
-              restored: true,
-            };
+      const createOrRestorePlaceholder = () =>
+        ctx.db.$transaction(async (tx) => {
+          await lockGroupMembers(tx, input.groupId);
+          const holder = await findNameHolder(tx, input.groupId, input.name);
+          if (holder && !holder.removedAt) {
+            throw new AppError('CONFLICT', 'placeholderNameTaken');
           }
-        } else if (holder) {
-          throw new AppError('CONFLICT', 'placeholderNameTaken');
-        }
-        // One write: if the group is deleted meanwhile, the membership can't be made
-        // and the placeholder is rolled back with it, instead of staying with no group (#265)
-        const created = await tx.user.create({
-          data: {
-            email: placeholderEmail,
-            name: input.name,
-            isPlaceholder: true,
-            placeholderName: input.name,
-            createdByUserId: ctx.user.id,
-            groupMembers: { create: { groupId: input.groupId } },
-          },
+          // Adding a removed placeholder's name brings them back with their history,
+          // rather than a second person by that name (#284). A merge that took them
+          // meanwhile leaves nobody to bring back, and the name is free.
+          if (holder?.user.isPlaceholder) {
+            const { count } = await tx.groupMember.updateMany({
+              where: { userId: holder.userId, groupId: input.groupId, removedAt: { not: null } },
+              data: { removedAt: null },
+            });
+            if (count === 1) {
+              return {
+                user: { id: holder.userId, name: holder.user.placeholderName ?? holder.user.name },
+                restored: true,
+              };
+            }
+          } else if (holder) {
+            throw new AppError('CONFLICT', 'placeholderNameTaken');
+          }
+          // One write: if the group is deleted meanwhile, the membership can't be made
+          // and the placeholder is rolled back with it, instead of staying with no group (#265)
+          const created = await tx.user.create({
+            data: {
+              email: placeholderEmail,
+              name: input.name,
+              isPlaceholder: true,
+              placeholderName: input.name,
+              createdByUserId: ctx.user.id,
+              groupMembers: { create: { groupId: input.groupId } },
+            },
+          });
+          return { user: { id: created.id, name: created.name }, restored: false };
         });
-        return { user: { id: created.id, name: created.name }, restored: false };
-      });
+      const { user, restored } = await retryUserIdCollision(createOrRestorePlaceholder);
 
       await ctx.db.activityLog.create({
         data: {

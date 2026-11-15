@@ -43,6 +43,30 @@ async function main(): Promise<void> {
           if (i === 1) secondId = user.id;
         }
 
+        // 6.13.2: prove the real PostgreSQL User PRIMARY KEY rejects a
+        // duplicate supplied ID without overwriting the existing account.
+        // Recover the test transaction with a SAVEPOINT, then roll back ALL
+        // synthetic rows at the end as before.
+        await tx.$executeRawUnsafe('SAVEPOINT billok_uuid_collision_qa');
+        let conflictRejected = false;
+        try {
+          await tx.$executeRawUnsafe(
+            'INSERT INTO "User" (id, email, "updatedAt") VALUES ($1, $2, now())',
+            firstId,
+            'uuid4-attempt-to-overwrite@qa.billok.ru',
+          );
+        } catch {
+          conflictRejected = true;
+          await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT billok_uuid_collision_qa');
+        }
+        assert.ok(conflictRejected, 'PostgreSQL accepted a duplicate User.id');
+        await tx.$executeRawUnsafe('RELEASE SAVEPOINT billok_uuid_collision_qa');
+        const original = await tx.user.findUniqueOrThrow({
+          where: { id: firstId },
+          select: { email: true },
+        });
+        assert.equal(original.email, 'uuid4-check-0@qa.billok.ru', 'Duplicate ID changed the original email');
+
         const group = await tx.group.create({
           data: {
             name: 'Изолированная проверка UUIDv4',
@@ -97,6 +121,7 @@ async function main(): Promise<void> {
       'QA group leaked outside the transaction',
     );
     console.log('BILLOK_USER_UUIDV4_POSTGRES=PASS');
+    console.log('BILLOK_USER_ID_INTEGRITY_POSTGRES=PASS');
   } finally {
     await db.$disconnect();
   }
