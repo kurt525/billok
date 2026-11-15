@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@/generated/prisma/client';
 import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 import { generateRegistrationOptions, verifyRegistrationResponse } from '@simplewebauthn/server';
-import { sendRussianPasskeyRecoveryEmail } from './passkey-recovery-email';
+import { sendRussianPasskeyRecoveryEmail, sendRussianPasskeyRecoveryCompletedEmail } from './passkey-recovery-email';
 import { hashEmailVerificationToken } from './email-verification-token';
 import { hashWebAuthnBinding } from './webauthn-registration';
 import {
@@ -18,7 +18,10 @@ vi.mock('@simplewebauthn/server', () => ({
   generateRegistrationOptions: vi.fn(),
   verifyRegistrationResponse: vi.fn(),
 }));
-vi.mock('./passkey-recovery-email', () => ({ sendRussianPasskeyRecoveryEmail: vi.fn() }));
+vi.mock('./passkey-recovery-email', () => ({
+  sendRussianPasskeyRecoveryEmail: vi.fn(),
+  sendRussianPasskeyRecoveryCompletedEmail: vi.fn(),
+}));
 
 const now = new Date('2026-11-12T10:00:00.000Z');
 const validToken = 't'.repeat(43);
@@ -292,6 +295,52 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
     expect(db.passkeyCredential.create).not.toHaveBeenCalled();
   });
 
+  it('6.12.7: account email changed after lookup but before lock never gets a recovery link', async () => {
+    const { db } = fixture();
+    db.user.findUnique.mockResolvedValueOnce(account).mockResolvedValueOnce({ ...account, email: 'attacker@mail.ru' });
+    expect(await requestPasskeyRecovery({ db: client(db), email: account.email, env, now })).toEqual({
+      requested: true,
+    });
+    expect(db.$queryRawUnsafe).toHaveBeenCalledWith('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', account.id);
+    expect(db.passkeyRecoveryRequest.create).not.toHaveBeenCalled();
+    expect(sendRussianPasskeyRecoveryEmail).not.toHaveBeenCalled();
+  });
+
+  it('6.12.7: losing verification, owner binding or the last active key during a request fails closed', async () => {
+    for (const reason of ['unverified', 'owner changed', 'key revoked'] as const) {
+      const { db } = fixture();
+      if (reason === 'unverified') {
+        db.user.findUnique.mockResolvedValueOnce(account).mockResolvedValueOnce({ ...account, emailVerified: null });
+      } else if (reason === 'owner changed') {
+        db.ownerBootstrap.findUnique
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce({ userId: account.id, completedAt: now });
+      } else {
+        db.passkeyCredential.count.mockResolvedValue(0);
+      }
+      expect(await requestPasskeyRecovery({ db: client(db), email: account.email, env, now })).toEqual({
+        requested: true,
+      });
+      expect(db.passkeyRecoveryRequest.create).not.toHaveBeenCalled();
+      expect(sendRussianPasskeyRecoveryEmail).not.toHaveBeenCalled();
+    }
+  });
+
+  it('6.12.7: requesting owner replacement writes audit, never session or plaintext recovery token', async () => {
+    const { db } = fixture();
+    db.ownerBootstrap.findUnique.mockResolvedValue({ userId: account.id, completedAt: now });
+    await requestPasskeyRecovery({ db: client(db), email: account.email, env, now });
+    expect(db.adminAuditLog.create).toHaveBeenCalledWith({
+      data: {
+        adminId: account.id,
+        action: 'OWNER_PASSKEY_RECOVERY_REQUESTED',
+        metadata: { method: 'verified-email', sessionIssued: false },
+      },
+    });
+    expect(db.adminAuditLog.create.mock.calls[0]![0]).not.toHaveProperty('token');
+    expect(db.passkeyLoginTicket).not.toHaveProperty('create');
+  });
+
   it('server-side rate limit persists across requests; count never caps total lifetime recoveries', async () => {
     const { db } = fixture();
     db.passkeyRecoveryRequest.count.mockResolvedValue(RECOVERY_EMAIL_LIMIT_PER_HOUR);
@@ -363,6 +412,28 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
       ).resolves.toMatchObject({ challenge: challengeValue });
       expect(db.webAuthnChallenge.create).toHaveBeenCalledTimes(1);
       expect(db.passkeyLoginTicket).not.toHaveProperty('create');
+    }
+  });
+
+  it('6.12.7: email or owner status changed during challenge start never replaces the previous challenge', async () => {
+    for (const reason of ['changed email', 'incomplete bootstrap', 'lost keys'] as const) {
+      const { db } = fixture();
+      if (reason === 'changed email') db.user.findUnique.mockResolvedValue({ ...account, email: 'other@mail.ru' });
+      if (reason === 'incomplete bootstrap') {
+        db.ownerBootstrap.findUnique.mockResolvedValue({ userId: account.id, completedAt: null });
+      }
+      if (reason === 'lost keys') db.passkeyCredential.count.mockResolvedValue(0);
+      await expect(
+        beginPasskeyRecovery({
+          db: client(db),
+          token: validToken,
+          bindingSecret: secret,
+          env,
+          now,
+        }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.webAuthnChallenge.deleteMany).not.toHaveBeenCalled();
+      expect(db.webAuthnChallenge.create).not.toHaveBeenCalled();
     }
   });
 
@@ -584,6 +655,57 @@ describe('Issue #1 6.8.1.3: email recovery must never become a login', () => {
       expect(db.passkeyLoginTicket).not.toHaveProperty('create');
       vi.clearAllMocks();
     }
+  });
+
+  it('6.12.7: completed owner replacement sends alert to CONFIRMED email after database commit, no sign-in', async () => {
+    const { db } = fixture();
+    db.ownerBootstrap.findUnique.mockResolvedValue({ userId: account.id, completedAt: now });
+    await finishPasskeyRecovery({
+      db: client(db),
+      token: validToken,
+      bindingSecret: secret,
+      response: browserResponse,
+      env,
+      now,
+    });
+    expect(sendRussianPasskeyRecoveryCompletedEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ to: account.email, from: 'BillOK <noreply@billok.ru>' }),
+    );
+    expect(db.$transaction.mock.invocationCallOrder[0]!).toBeLessThan(
+      vi.mocked(sendRussianPasskeyRecoveryCompletedEmail).mock.invocationCallOrder[0]!,
+    );
+    expect(db.passkeyLoginTicket).not.toHaveProperty('create');
+  });
+
+  it('6.12.7: notification SMTP failure cannot undo owner recovery or create a session', async () => {
+    const { db } = fixture();
+    db.ownerBootstrap.findUnique.mockResolvedValue({ userId: account.id, completedAt: now });
+    vi.mocked(sendRussianPasskeyRecoveryCompletedEmail).mockRejectedValueOnce(new Error('SMTP unavailable'));
+    expect(
+      await finishPasskeyRecovery({
+        db: client(db),
+        token: validToken,
+        bindingSecret: secret,
+        response: browserResponse,
+        env,
+        now,
+      }),
+    ).toEqual({ recovered: true });
+    expect(db.passkeyCredential.create).toHaveBeenCalledTimes(1);
+    expect(db.passkeyLoginTicket).not.toHaveProperty('create');
+  });
+
+  it('6.12.7: ordinary account recovery does not trigger owner-only security alert', async () => {
+    const { db } = fixture();
+    await finishPasskeyRecovery({
+      db: client(db),
+      token: validToken,
+      bindingSecret: secret,
+      response: browserResponse,
+      env,
+      now,
+    });
+    expect(sendRussianPasskeyRecoveryCompletedEmail).not.toHaveBeenCalled();
   });
 
   it('owner recovery rejects a fourth active key and leaves existing credentials intact', async () => {

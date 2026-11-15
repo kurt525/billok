@@ -47,6 +47,46 @@ export function russianPasskeyRecoveryEmail(url: string) {
   };
 }
 
+/** No recovery URL or auth token is ever included in this separate alert. */
+export function russianPasskeyRecoveryCompletedEmail() {
+  return {
+    subject: 'BillOK — восстановление Passkey владельца завершено',
+    text: [
+      'Для учётной записи владельца BillOK зарегистрирован новый Passkey.',
+      'Все ранее действовавшие Passkey и сеансы были отозваны.',
+      'Ссылка восстановления не выполняла вход. Для доступа требуется обычная авторизация Passkey.',
+      'Если вы не выполняли восстановление, проверьте безопасность своей почты и немедленно обратитесь к администратору сервера.',
+    ].join('\n'),
+    html: [
+      '<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto">',
+      '<h1>Восстановление Passkey владельца завершено</h1>',
+      '<p>Зарегистрирован новый Passkey, все прежние ключи и сеансы отозваны.</p>',
+      '<p>Для входа требуется подтверждение новым Passkey.</p>',
+      '<p>Если вы не выполняли восстановление, проверьте безопасность электронной почты и обратитесь к администратору сервера.</p>',
+      '</div>',
+    ].join(''),
+  };
+}
+
+export async function sendRussianPasskeyRecoveryCompletedEmail(input: {
+  to: string;
+  from: string;
+  server: SMTPTransportOptions;
+}): Promise<void> {
+  const transport = nodemailer.createTransport(input.server);
+  const delivery = await transport.sendMail({
+    from: input.from,
+    to: input.to,
+    ...russianPasskeyRecoveryCompletedEmail(),
+  });
+  if (
+    delivery.rejected?.length ||
+    delivery.pending?.length ||
+    (delivery.accepted && !delivery.accepted.includes(input.to))
+  )
+    throw new Error('Не удалось отправить уведомление о восстановлении Passkey');
+}
+
 export async function sendRussianPasskeyRecoveryEmail(input: {
   to: string;
   url: string;

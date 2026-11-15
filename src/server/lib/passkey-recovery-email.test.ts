@@ -5,7 +5,12 @@ const { createTransport, sendMail } = vi.hoisted(() => {
   return { sendMail, createTransport: vi.fn(() => ({ sendMail })) };
 });
 vi.mock('nodemailer', () => ({ default: { createTransport } }));
-import { russianPasskeyRecoveryEmail, sendRussianPasskeyRecoveryEmail } from './passkey-recovery-email';
+import {
+  russianPasskeyRecoveryEmail,
+  russianPasskeyRecoveryCompletedEmail,
+  sendRussianPasskeyRecoveryEmail,
+  sendRussianPasskeyRecoveryCompletedEmail,
+} from './passkey-recovery-email';
 
 describe('Issue #1 6.8.1.3: separate email recovery, never email login', () => {
   it('clearly instructs the recipient to CREATE a key, then enter via signed WebAuthn', () => {
@@ -32,6 +37,32 @@ describe('Issue #1 6.8.1.3: separate email recovery, never email login', () => {
     expect(template.html).toContain('&amp;foo=');
     expect(template.html).toContain('&lt;script&gt;');
     expect(template.html).not.toContain('<script>');
+  });
+
+  it('6.12.7: owner-completion alert never contains a recovery token, link or authentication capability', async () => {
+    const notice = russianPasskeyRecoveryCompletedEmail();
+    expect(notice.subject).toContain('завершено');
+    expect(notice.text).toContain('Все ранее');
+    for (const exposed of ['?token=', 'recover-passkey', 'secret', 'https://', 'Одноразовая ссылка']) {
+      expect(JSON.stringify(notice)).not.toContain(exposed);
+    }
+    const options = {
+      to: 'owner@mail.ru',
+      from: 'noreply@billok.ru',
+      server: { host: 'smtp.example.ru', port: 465, secure: true },
+    };
+    sendMail.mockResolvedValueOnce({ accepted: [options.to], rejected: [], pending: [] });
+    await sendRussianPasskeyRecoveryCompletedEmail(options);
+    expect(sendMail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: options.to,
+        subject: notice.subject,
+        text: notice.text,
+        html: notice.html,
+      }),
+    );
+    sendMail.mockResolvedValueOnce({ accepted: [], rejected: [options.to], pending: [] });
+    await expect(sendRussianPasskeyRecoveryCompletedEmail(options)).rejects.toThrow();
   });
 
   it('uses configured SMTP and fails closed on partial deliveries', async () => {

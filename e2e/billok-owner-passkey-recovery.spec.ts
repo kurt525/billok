@@ -453,11 +453,41 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
       await replacement.getByTestId('request-passkey-recovery').click();
       await expect(replacement.getByRole('status')).toContainText('Если такой аккаунт существует');
       const link = await findOwnerRecoveryLink(replacement);
+      const initialMailbox = await replacement.request.get(mailbox + '/messages?to=' + encodeURIComponent(email));
+      expect(initialMailbox.ok()).toBe(true);
+      const messagesBefore = ((await initialMailbox.json()) as { messages: Array<{ links: string[] }> }).messages
+        .length;
+      await expectNoSession(replacement);
+      // 6.12.7: a valid owner email link may not be re-targeted to a
+      // different user or a redirect destination, even before WebAuthn.
+      for (const forged of [
+        { token: new URL(link).searchParams.get('token'), ownerId: 'forged-owner' },
+        { token: new URL(link).searchParams.get('token'), email: 'attacker@mail.ru' },
+        { token: new URL(link).searchParams.get('token'), redirect: 'https://attacker.invalid' },
+      ]) {
+        const rejected = await replacement.request.post('/api/webauthn/recovery/start', { data: forged });
+        expect(rejected.status()).toBe(403);
+      }
       await expectNoSession(replacement);
       await enableVirtualPasskey(replacement);
       await replacement.goto(link, { waitUntil: 'networkidle' });
       await replacement.getByTestId('create-recovered-passkey').click();
       await expect(replacement.getByRole('status')).toContainText('Новый Passkey создан', { timeout: 30_000 });
+      // A separate notice must arrive on the already verified owner mailbox
+      // AFTER the transaction. Unlike the recovery link, it has NO auth URL.
+      await expect
+        .poll(
+          async () => {
+            const mailboxResult = await replacement.request.get(mailbox + '/messages?to=' + encodeURIComponent(email));
+            if (!mailboxResult.ok()) return false;
+            const current = ((await mailboxResult.json()) as { messages: Array<{ links: string[] }> }).messages;
+            return (
+              current.length > messagesBefore && current.slice(messagesBefore).some((msg) => msg.links.length === 0)
+            );
+          },
+          { timeout: 20_000, intervals: [250, 500, 1000] },
+        )
+        .toBe(true);
       await expectNoSession(replacement);
       await expect(authedPasskeyContext(email, 2)).rejects.toThrow(/WebAuthn signature rejected: 403/u);
       const replay = await replacement.request.post('/api/webauthn/recovery/start', {

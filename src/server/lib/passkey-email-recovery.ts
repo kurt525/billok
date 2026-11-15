@@ -10,7 +10,7 @@ import {
   EMAIL_VERIFICATION_TOKEN_TTL_MS,
 } from './email-verification-token';
 import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
-import { sendRussianPasskeyRecoveryEmail } from './passkey-recovery-email';
+import { sendRussianPasskeyRecoveryEmail, sendRussianPasskeyRecoveryCompletedEmail } from './passkey-recovery-email';
 import { hashWebAuthnBinding } from './webauthn-registration';
 import { revokeAccountAuthenticationStateInTransaction } from './revoke-account-auth';
 import {
@@ -94,6 +94,35 @@ export async function requestPasskeyRecovery(input: {
   // A new request invalidates older outstanding recovery links for this user.
   const created = await input.db.$transaction(async (tx) => {
     await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', user.id);
+    // An account's email, owner binding, verification or key count may have
+    // changed since the public lookup. Revalidate AFTER the user row lock,
+    // before minting any token or deciding where to send the email.
+    const currentUser = await tx.user.findUnique({
+      where: { id: user.id },
+      select: { email: true, emailVerified: true, suspendedAt: true, isPlaceholder: true },
+    });
+    if (
+      !currentUser ||
+      currentUser.email !== email ||
+      !currentUser.emailVerified ||
+      currentUser.suspendedAt ||
+      currentUser.isPlaceholder
+    )
+      return null;
+    const currentOwner = await tx.ownerBootstrap.findUnique({
+      where: { id: 1 },
+      select: { userId: true, completedAt: true },
+    });
+    const currentlyOwner = currentOwner?.userId === user.id;
+    if (currentlyOwner !== isOwner) return null;
+    const currentKeys = await tx.passkeyCredential.count({
+      where: { userId: user.id, revokedAt: null },
+    });
+    if (
+      (currentlyOwner && (!currentOwner?.completedAt || currentKeys < 1 || currentKeys > 3)) ||
+      (!currentlyOwner && currentKeys !== 1)
+    )
+      return null;
     const count = await tx.passkeyRecoveryRequest.count({
       where: { userId: user.id, createdAt: { gt: windowStart } },
     });
@@ -102,14 +131,24 @@ export async function requestPasskeyRecovery(input: {
       where: { userId: user.id, consumedAt: null },
       data: { consumedAt: now },
     });
-    return tx.passkeyRecoveryRequest.create({
-      data: { userId: user.id, tokenHash, emailHash: digest(user.email), expiresAt },
+    const saved = await tx.passkeyRecoveryRequest.create({
+      data: { userId: user.id, tokenHash, emailHash: digest(currentUser.email), expiresAt },
       select: { id: true },
     });
+    if (currentlyOwner) {
+      await tx.adminAuditLog.create({
+        data: {
+          adminId: user.id,
+          action: 'OWNER_PASSKEY_RECOVERY_REQUESTED',
+          metadata: { method: 'verified-email', sessionIssued: false },
+        },
+      });
+    }
+    return { id: saved.id, email: currentUser.email };
   });
   if (!created) return { requested: true };
   try {
-    await sendRussianPasskeyRecoveryEmail({ to: user.email, url: url.toString(), ...mail });
+    await sendRussianPasskeyRecoveryEmail({ to: created.email, url: url.toString(), ...mail });
   } catch (error) {
     // A failure to send must make this recovery link invalid. Do not leak
     // SMTP errors, token or user identity to public callers.
@@ -198,6 +237,27 @@ export async function beginPasskeyRecovery(input: {
       current.tokenHash !== hashEmailVerificationToken(input.token)
     )
       throw new AppError('FORBIDDEN');
+    const currentUser = await tx.user.findUnique({
+      where: { id: request.userId },
+      select: { email: true, emailVerified: true, suspendedAt: true, isPlaceholder: true, webAuthnUserHandle: true },
+    });
+    if (
+      !currentUser ||
+      current.emailHash !== digest(currentUser.email) ||
+      !currentUser.emailVerified ||
+      currentUser.suspendedAt ||
+      currentUser.isPlaceholder ||
+      currentUser.webAuthnUserHandle !== request.user.webAuthnUserHandle
+    )
+      throw new AppError('FORBIDDEN');
+    const owner = await tx.ownerBootstrap.findUnique({
+      where: { id: 1 },
+      select: { userId: true, completedAt: true },
+    });
+    const isOwner = owner?.userId === request.userId;
+    const active = await tx.passkeyCredential.count({ where: { userId: request.userId, revokedAt: null } });
+    if ((isOwner && (!owner?.completedAt || active < 1 || active > 3)) || (!isOwner && active !== 1))
+      throw new AppError('FORBIDDEN');
     await tx.webAuthnChallenge.deleteMany({ where: { userId: request.userId, purpose: 'RECOVER' } });
     const challengeHash = digest(options.challenge);
     await tx.passkeyRecoveryRequest.update({
@@ -261,6 +321,7 @@ export async function finishPasskeyRecovery(input: {
   }
   if (!checked.verified || !checked.registrationInfo.userVerified) throw new AppError('FORBIDDEN');
   const { credential, credentialDeviceType, credentialBackedUp, aaguid } = checked.registrationInfo;
+  let ownerRecovered = false;
   try {
     await input.db.$transaction(async (tx) => {
       await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', request.userId);
@@ -347,6 +408,7 @@ export async function finishPasskeyRecovery(input: {
           },
         },
       });
+      ownerRecovered = isOwner;
     });
   } catch (error) {
     if (error instanceof AppError) throw error;
@@ -354,6 +416,20 @@ export async function finishPasskeyRecovery(input: {
       throw new AppError('CONFLICT');
     }
     throw error;
+  }
+  // Notification is sent only after COMMIT: it must never roll back a
+  // successful replacement, and must never contain the consumed token, a
+  // session cookie or another link usable for authentication.
+  if (ownerRecovered) {
+    try {
+      const mail = readRegistrationEmailConfig(input.env as Record<string, string | undefined>);
+      if (mail.siteOrigin !== rp.origin) throw new AppError('FORBIDDEN');
+      await sendRussianPasskeyRecoveryCompletedEmail({ to: request.user.email, ...mail });
+    } catch (error) {
+      logger.warn('auth.owner_passkey_recovery_notification_failed', {
+        error: error instanceof Error ? error.name : 'unknown',
+      });
+    }
   }
   return { recovered: true };
 }

@@ -5,6 +5,7 @@ import { finishPasskeyRecovery, PASSKEY_RECOVERY_BINDING_COOKIE } from '@/server
 import { getClientIp } from '@/server/lib/client-ip';
 import { checkRateLimit } from '@/server/lib/rate-limit';
 import { readBillokWebAuthnRelyingParty } from '@/server/lib/webauthn-relying-party';
+import { readBoundedJson } from '@/server/lib/read-bounded-json';
 
 export async function POST(request: Request) {
   const denied = () => NextResponse.json({ error: 'Не удалось подтвердить новый Passkey.' }, { status: 403 });
@@ -19,13 +20,17 @@ export async function POST(request: Request) {
   const bindingSecret = cookie?.slice(PASSKEY_RECOVERY_BINDING_COOKIE.length + 1);
   if (!bindingSecret) return denied();
   try {
-    const raw = await request.text();
-    if (raw.length > 35_000) return denied();
-    const { token, credential } = JSON.parse(raw) as {
-      token?: unknown;
-      credential?: RegistrationResponseJSON;
-    };
-    if (typeof token !== 'string' || !credential || typeof credential !== 'object') return denied();
+    const body = await readBoundedJson(request, 35_000);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 2) return denied();
+    const { token, credential } = body as { token?: unknown; credential?: RegistrationResponseJSON };
+    if (
+      typeof token !== 'string' ||
+      !/^[A-Za-z0-9_-]{43}$/u.test(token) ||
+      !credential ||
+      typeof credential !== 'object' ||
+      Array.isArray(credential)
+    )
+      return denied();
     const result = await finishPasskeyRecovery({
       db,
       token,
