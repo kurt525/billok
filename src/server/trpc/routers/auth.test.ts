@@ -617,7 +617,6 @@ describe('auth.getProfile', () => {
     mockDb.user.findUnique.mockResolvedValue({
       name: 'Alice',
       email: 'alice@example.com',
-      venmoUsername: null,
       locale: 'en',
       defaultCurrency: 'USD',
     });

@@ -1,14 +1,12 @@
 'use client';
 
-import { use, useState } from 'react';
-import { useSession } from 'next-auth/react';
+import { use } from 'react';
 import { useFormatter, useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
 import { formatCents } from '@/lib/money';
 import { copyToClipboard } from '@/lib/clipboard';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Copy, Share2, Receipt, ArrowRight, Loader2 } from 'lucide-react';
@@ -19,7 +17,6 @@ import { guestVisualColorStyle, guestVisualColorBorder } from '@/lib/guest-visua
 import { guestReceiptRoleFlags } from '@/lib/guest-receipt-roles';
 import { GuestReceiptRoles } from '@/components/guest-receipt-roles';
 import { GuestAccountStatus } from '@/components/guest-account-status';
-import { buildVenmoPayUrl, isValidVenmoHandle } from '@/lib/venmo';
 import { groupSizeWeights, personItemShares } from '@/lib/split-calculator';
 
 export default function SharedSplitPage({ params }: { params: Promise<{ token: string }> }) {
@@ -28,31 +25,9 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
   const t = useTranslations('split.result');
   const tr = useTranslations('split.roles');
   const ta = useTranslations('split.accountStatus');
-  const tv = useTranslations('split.venmo');
   const tc = useTranslations('common');
   const format = useFormatter();
-  const { data: authSession } = useSession();
   const split = trpc.guest.getSplit.useQuery({ token });
-  const venmoSetting = trpc.admin.getVenmoEnabled.useQuery();
-  const profile = trpc.auth.getProfile.useQuery(undefined, {
-    enabled: !!authSession?.user && !!venmoSetting.data?.enabled,
-  });
-  const utils = trpc.useUtils();
-  const setPayerVenmoHandle = trpc.guest.setPayerVenmoHandle.useMutation({
-    onSuccess: () => {
-      utils.guest.getSplit.invalidate({ token });
-    },
-  });
-
-  // The venmo handle is derived from the split record (falling back to the
-  // creator's profile) until the user edits it, at which point the edited
-  // value takes over. No state-syncing effect needed.
-  const [venmoHandleEdit, setVenmoHandleEdit] = useState<string | null>(null);
-  const venmoHandle =
-    venmoHandleEdit ??
-    split.data?.payerVenmoHandle ??
-    (split.data?.isCreator ? (profile.data?.venmoUsername ?? '') : '');
-
   if (split.isLoading) {
     return (
       <div className="flex flex-col items-center justify-center gap-4 py-20">
@@ -165,30 +140,6 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
             name: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
           })}
         </p>
-        {venmoSetting.data?.enabled &&
-          currency === 'USD' &&
-          (split.data?.isCreator ? (
-            <div className="flex items-center justify-center gap-2 mt-2">
-              <Input
-                placeholder={tv('handlePlaceholder')}
-                aria-label={tv('handle')}
-                value={venmoHandle}
-                onChange={(e) => setVenmoHandleEdit(e.target.value)}
-                onBlur={() => {
-                  const trimmed = venmoHandle.trim() || null;
-                  if (trimmed !== (split.data?.payerVenmoHandle ?? null)) {
-                    setPayerVenmoHandle.mutate({ token, handle: trimmed });
-                  }
-                }}
-                className="h-8 text-sm max-w-48"
-                data-testid="venmo-handle-input"
-              />
-            </div>
-          ) : venmoHandle ? (
-            <p className="text-sm text-muted-foreground mt-1" data-testid="venmo-handle-display">
-              {t('venmoHandle', { handle: venmoHandle.replace(/^@/, '') })}
-            </p>
-          ) : null)}
       </div>
 
       {/* Total */}
@@ -294,26 +245,6 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
                     </div>
                   )}
                 </div>
-
-                {venmoSetting.data?.enabled &&
-                  currency === 'USD' &&
-                  isValidVenmoHandle(venmoHandle) &&
-                  !split.data?.isPayer &&
-                  person.personIndex !== data.paidByIndex && (
-                    <a
-                      href={buildVenmoPayUrl(
-                        venmoHandle,
-                        person.total,
-                        `BillOK: ${data.receiptData.merchantName ?? t('billSplit')}`,
-                      )!}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-3 flex items-center justify-center gap-2 rounded-lg bg-[#008CFF] px-4 py-2 text-sm font-medium text-white hover:bg-[#0070CC] transition-colors"
-                      data-testid={`venmo-pay-${idx}`}
-                    >
-                      {tv('payVia', { amount: formatCents(person.total, currency, locale) })}
-                    </a>
-                  )}
               </CardContent>
             </Card>
           );

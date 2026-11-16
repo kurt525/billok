@@ -91,19 +91,4 @@ describe('6.12.9: only sole owner can inspect security events, nobody can edit t
       }),
     });
   });
-
-  test('allowed admin no-op records success but never exposes or mutates security table', async () => {
-    const { caller, db } = fixture('owner');
-    expect(await caller.admin.setVenmoEnabled({ enabled: false })).toEqual({ success: true });
-    expect(db.securityEvent.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        actorId: 'owner',
-        action: 'admin.setVenmoEnabled',
-        outcome: 'ALLOWED',
-        targetFingerprint: null,
-      }),
-    });
-    expect(db.securityEvent).not.toHaveProperty('update');
-    expect(db.securityEvent).not.toHaveProperty('delete');
-  });
 });

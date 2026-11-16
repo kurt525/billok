@@ -47,10 +47,7 @@ const group = (
     },
   ],
   settlements: [],
-  members: [
-    { user: { id: 'me', name: 'Me', venmoUsername: null } },
-    { user: { id: debtor.id, name: debtor.name, venmoUsername: null } },
-  ],
+  members: [{ user: { id: 'me', name: 'Me' } }, { user: { id: debtor.id, name: debtor.name } }],
 });
 const archivedGroup = group('g1', 'Old trip', new Date('2026-10-01'), { id: 'bob', name: 'Bob' }, 500);
 const activeGroup = group('g2', 'Flat', null, { id: 'carol', name: 'Carol' }, 300);
@@ -74,8 +71,8 @@ describe('dashboard balances include archived groups', () => {
     const api = await caller();
     const { owedToYou } = await api.getOverallDebts();
     expect(owedToYou).toEqual([
-      { userId: 'bob', userName: 'Bob', venmoUsername: null, amount: 500 },
-      { userId: 'carol', userName: 'Carol', venmoUsername: null, amount: 300 },
+      { userId: 'bob', userName: 'Bob', amount: 500 },
+      { userId: 'carol', userName: 'Carol', amount: 300 },
     ]);
   });
 

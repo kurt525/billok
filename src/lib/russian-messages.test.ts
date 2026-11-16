@@ -51,7 +51,6 @@ describe('BillOK Russian-only translations', () => {
             'login.emailPlaceholder',
             'register.emailPlaceholder',
             'login.passwordPlaceholder',
-            'profile.venmoPlaceholder',
             'detail',
             'new.amountPlaceholder',
             'new.exchangeRatePlaceholder',

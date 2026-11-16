@@ -124,22 +124,6 @@ function freeOwnerName(people: IdentifiedGuestPerson[], ownerIndex: number): boo
   return changed;
 }
 
-async function getCreatorPayerVenmoHandle(
-  db: typeof import('@/server/db').db,
-  userId: string | undefined | null,
-  payerName: string | undefined,
-): Promise<string | null> {
-  if (!userId || !payerName) return null;
-  const creator = await db.user.findUnique({
-    where: { id: userId },
-    select: { venmoUsername: true, name: true },
-  });
-  if (creator?.venmoUsername && creator.name && normalizeGuestName(creator.name) === normalizeGuestName(payerName)) {
-    return creator.venmoUsername;
-  }
-  return null;
-}
-
 /** Clear an organizer's acknowledgement only for sessions with a saved one.
  * No extra JSON writes for unchanged/legacy sessions or personal tip updates.
  */
@@ -779,12 +763,6 @@ export const guestRouter = createTRPCRouter({
         name: filteredPeople[s.personIndex]?.name ?? `Person ${s.personIndex + 1}`,
       }));
 
-      const payerVenmoHandle = await getCreatorPayerVenmoHandle(
-        ctx.db,
-        ctx.session?.user?.id,
-        filteredPeople[remappedPaidBy]?.name,
-      );
-
       const share = issueGuestShareLink();
       await ctx.db.$transaction(async (tx) => {
         const receiptId = await lockReceiptForSplit(tx, input.receiptId, ctx.session?.user?.id);
@@ -801,7 +779,6 @@ export const guestRouter = createTRPCRouter({
             assignments: remappedAssignments as unknown as Prisma.InputJsonValue,
             summary: summaryWithNames as unknown as Prisma.InputJsonValue,
             paidByIndex: remappedPaidBy,
-            payerVenmoHandle,
             userId: ctx.user.id,
             expiresAt: createExpiryDate(),
           },
@@ -895,7 +872,6 @@ export const guestRouter = createTRPCRouter({
         roundingCorrectionCents?: number;
       }[],
       paidByIndex: split.paidByIndex,
-      payerVenmoHandle: split.payerVenmoHandle,
       isCreator: !!split.userId && split.userId === ctx.session?.user?.id,
       archivedCreatorView: guestLinkExpired,
       isPayer: (() => {
@@ -1061,12 +1037,6 @@ export const guestRouter = createTRPCRouter({
         }
       }
 
-      const claimPayerVenmoHandle = await getCreatorPayerVenmoHandle(
-        ctx.db,
-        ctx.session?.user?.id,
-        people[paidByIndex]?.name,
-      );
-
       const share = issueGuestShareLink();
       await ctx.db.$transaction(async (tx) => {
         const receiptId = await lockReceiptForSplit(tx, input.receiptId, ctx.session?.user?.id);
@@ -1086,7 +1056,6 @@ export const guestRouter = createTRPCRouter({
             people: people as unknown as Prisma.InputJsonValue,
             assignments: [] as unknown as Prisma.InputJsonValue,
             paidByIndex,
-            payerVenmoHandle: claimPayerVenmoHandle,
             status: GuestSplitStatus.CLAIMING,
             userId: ctx.user.id,
             expiresAt: createExpiryDate(),
@@ -2420,7 +2389,6 @@ export const guestRouter = createTRPCRouter({
           }[]
         | null,
       paidByIndex: session.paidByIndex,
-      payerVenmoHandle: session.payerVenmoHandle,
       isCreator: !!session.userId && session.userId === ctx.session?.user?.id,
       canFinalize: canFinalizeGuestSession(
         session.userId,
@@ -3724,41 +3692,5 @@ export const guestRouter = createTRPCRouter({
         }
         return { success: true };
       });
-    }),
-
-  setPayerVenmoHandle: protectedProcedure
-    .input(
-      z.object({
-        token: shareTokenSchema,
-        handle: z.string().max(50).nullable(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      // Keyed by the client-sent share token before it's checked, so it goes in the capped token store
-      const { allowed } = checkTokenRateLimit(`venmo-handle:${ctx.user.id}:${input.token}`, 10, 60 * 1000);
-      if (!allowed) {
-        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
-      }
-
-      const split = await ctx.db.guestSplit.findUnique({
-        where: { shareToken: shareLookupHash(input.token) },
-        select: { id: true, userId: true, expiresAt: true },
-      });
-      if (!split) {
-        throw new AppError('NOT_FOUND', 'splitNotFound');
-      }
-      if (split.expiresAt < new Date()) {
-        throw new AppError('NOT_FOUND', 'splitExpired');
-      }
-      if (split.userId !== ctx.user.id) {
-        throw new AppError('FORBIDDEN', 'onlyCreatorSetsVenmo');
-      }
-
-      await ctx.db.guestSplit.update({
-        where: { id: split.id },
-        data: { payerVenmoHandle: input.handle?.trim() || null },
-      });
-
-      return { success: true };
     }),
 });

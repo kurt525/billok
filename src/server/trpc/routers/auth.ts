@@ -321,7 +321,6 @@ export const authRouter = createTRPCRouter({
         id: true,
         name: true,
         email: true,
-        venmoUsername: true,
         sbpPhone: true,
         sbpBankId: true,
         locale: true,
@@ -340,7 +339,6 @@ export const authRouter = createTRPCRouter({
         name: z.string().trim().min(1).max(100).optional(),
         defaultCurrency: z.string().length(3).optional(),
         locale: z.enum(locales).optional(),
-        venmoUsername: z.string().max(50).nullable().optional(),
         sbpPhone: z.string().max(24).nullable().optional(),
         sbpBankId: z.string().max(40).nullable().optional(),
       }),
@@ -370,7 +368,6 @@ export const authRouter = createTRPCRouter({
         ...stripUndefined(input),
         ...(input.sbpPhone !== undefined ? { sbpPhone: phone } : {}),
         ...(input.sbpBankId !== undefined ? { sbpBankId: input.sbpBankId || null } : {}),
-        ...(input.venmoUsername !== undefined ? { venmoUsername: input.venmoUsername?.trim() || null } : {}),
       };
       const user = await ctx.db.user.update({
         where: { id: ctx.user.id },
@@ -381,7 +378,6 @@ export const authRouter = createTRPCRouter({
         name: user.name,
         email: user.email,
         locale: user.locale,
-        venmoUsername: user.venmoUsername,
         sbpPhone: user.sbpPhone,
         sbpBankId: user.sbpBankId,
       };

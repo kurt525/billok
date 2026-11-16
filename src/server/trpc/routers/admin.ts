@@ -364,7 +364,6 @@ export const adminRouter = createTRPCRouter({
             placeholderName: 'Deleted user',
             email: `deleted-${input.userId}@placeholder.local`,
             image: null,
-            venmoUsername: null,
             suspendedAt: new Date(),
           },
         });
@@ -832,16 +831,6 @@ export const adminRouter = createTRPCRouter({
         return { success: true };
       });
     }),
-
-  // Legacy ShareTab API preserved for compatibility, but BillOK uses RUB and SBP only.
-  // Ignore any persisted Venmo toggle, including on old USD receipts.
-  getVenmoEnabled: publicProcedure.query(() => ({ enabled: false })),
-
-  setVenmoEnabled: adminProcedure.input(z.object({ enabled: z.boolean() })).mutation(({ input }) => {
-    if (input.enabled) throw new AppError('FORBIDDEN');
-    // Do not rewrite persisted legacy records just to hide a retired feature.
-    return { success: true };
-  }),
 
   // ─── Email Test ──────────────────────────────────────────
 

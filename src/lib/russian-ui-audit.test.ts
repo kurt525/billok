@@ -12,7 +12,9 @@ describe('BillOK Russian-only user-facing fallbacks', () => {
     const claim = source('src/app/[locale]/split/[token]/claim/page.tsx');
     expect(groupScan).not.toContain("'Unknown'");
     expect(claim).not.toContain("'Bill split'");
-    expect(claim).toContain("'Разделение чека'");
+    expect(claim).toContain("t('billSplit')");
+    const messages = JSON.parse(source('messages/ru/split.json')) as { claim: { billSplit: string } };
+    expect(messages.claim.billSplit).toMatch(/[А-Яа-яЁё]/u);
   });
 
   it('shows Russian notifications rather than raw network exceptions when creating bills', () => {

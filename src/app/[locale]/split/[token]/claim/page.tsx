@@ -77,7 +77,6 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Link } from '@/i18n/navigation';
-import { buildVenmoPayUrl, isValidVenmoHandle } from '@/lib/venmo';
 import { getInitials } from '@/lib/avatar';
 import { guestVisualColorStyle, guestVisualColorBorder } from '@/lib/guest-visual-color';
 import { organizerPersonIndex, guestReceiptRoleFlags } from '@/lib/guest-receipt-roles';
@@ -204,7 +203,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const t = useTranslations('split.claim');
   const tr = useTranslations('split.roles');
   const ta = useTranslations('split.accountStatus');
-  const tv = useTranslations('split.venmo');
   const tc = useTranslations('common');
 
   // --- State ---
@@ -287,22 +285,11 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const [splitQty, setSplitQty] = useState('');
   const [removeFor, setRemoveFor] = useState<{ id: string; name: string } | null>(null);
   const [confirmFinalize, setConfirmFinalize] = useState(false);
-  // The creator's edit of the payer's Venmo handle (see venmoHandle below)
-  const [venmoHandleEdit, setVenmoHandleEdit] = useState<string | null>(null);
   const { data: authSession } = useSession();
 
   // --- tRPC ---
   const [liveStreamConnected, setLiveStreamConnected] = useState(false);
-  const venmoSetting = trpc.admin.getVenmoEnabled.useQuery();
-  const profile = trpc.auth.getProfile.useQuery(undefined, {
-    enabled: !!authSession?.user && !!venmoSetting.data?.enabled,
-  });
   const utils = trpc.useUtils();
-  const setPayerVenmoHandle = trpc.guest.setPayerVenmoHandle.useMutation({
-    onSuccess: () => {
-      utils.guest.getSession.invalidate({ token });
-    },
-  });
   const session = trpc.guest.getSession.useQuery(
     { token },
     {
@@ -489,13 +476,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     },
     onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
   });
-  // The payer's Venmo handle follows the session (falling back to the creator's profile) until the
-  // creator edits it, so a handle saved after this page loaded still shows
-  const venmoHandle =
-    venmoHandleEdit ??
-    session.data?.payerVenmoHandle ??
-    (session.data?.isCreator ? (profile.data?.venmoUsername ?? '') : '');
-
   // Where each person is in the session as last loaded
   const indexById = useMemo(
     () => new Map((session.data?.people ?? []).map((person, index) => [person.id, index])),
@@ -2034,32 +2014,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           </Card>
         )}
 
-        {/* Venmo handle */}
-        {venmoSetting.data?.enabled &&
-          currency === 'USD' &&
-          (data.isCreator ? (
-            <div className="flex items-center justify-center gap-2">
-              <Input
-                placeholder={tv('handlePlaceholder')}
-                aria-label={tv('handle')}
-                value={venmoHandle}
-                onChange={(e) => setVenmoHandleEdit(e.target.value)}
-                onBlur={() => {
-                  const trimmed = venmoHandle.trim() || null;
-                  if (trimmed !== (session.data?.payerVenmoHandle ?? null)) {
-                    setPayerVenmoHandle.mutate({ token, handle: trimmed });
-                  }
-                }}
-                className="h-8 text-sm max-w-48"
-                data-testid="venmo-handle-input"
-              />
-            </div>
-          ) : venmoHandle ? (
-            <p className="text-sm text-muted-foreground text-center" data-testid="venmo-handle-display">
-              Venmo: @{venmoHandle.replace(/^@/, '')}
-            </p>
-          ) : null)}
-
         {/* Per-person summary */}
         {data.summary && data.summary.length > 0 && (
           <div className="space-y-3">
@@ -2108,25 +2062,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           {formatCents(person.roundingCorrectionCents, currency, locale)}
                         </span>
                       </div>
-                    )}
-                  {venmoSetting.data?.enabled &&
-                    currency === 'USD' &&
-                    isValidVenmoHandle(venmoHandle) &&
-                    myPersonIndex !== data.paidByIndex &&
-                    person.personIndex !== data.paidByIndex && (
-                      <a
-                        href={buildVenmoPayUrl(
-                          venmoHandle,
-                          person.total,
-                          `BillOK: ${data.receiptData.merchantName ?? 'Разделение чека'}`,
-                        )!}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="mt-3 flex items-center justify-center gap-2 rounded-lg bg-[#008CFF] px-4 py-2 text-sm font-medium text-white hover:bg-[#0070CC] transition-colors"
-                        data-testid={`venmo-pay-${person.personIndex}`}
-                      >
-                        {tv('payVia', { amount: formatCents(person.total, currency, locale) })}
-                      </a>
                     )}
                 </CardContent>
               </Card>

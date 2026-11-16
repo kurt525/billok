@@ -103,7 +103,6 @@ export const groupsRouter = createTRPCRouter({
                 image: true,
                 isPlaceholder: true,
                 placeholderName: true,
-                venmoUsername: true,
               },
             },
           },

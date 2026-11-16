@@ -55,6 +55,8 @@ jobs:
         run: python3 scripts/test_billok_production_secrets.py
       - name: Verify safe upstream cleanup and Russian-only resources (Issue #1 9.3)
         run: python3 scripts/test_billok_legacy_cleanup.py
+      - name: Verify no live Venmo code, API or payment links (Issue #1 9.3)
+        run: python3 scripts/test_billok_venmo_removal.py
       - name: Verify SBP registry auto-update safety tests
         run: npm run sbp:sync:test
       - name: Verify translation keys

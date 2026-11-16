@@ -77,11 +77,6 @@
     "createSessionFailed": "Не удалось создать сеанс распределения.",
     "receiptImageAlt": "Изображение чека"
   },
-  "venmo": {
-    "handle": "Имя пользователя Venmo",
-    "handlePlaceholder": "Введите имя пользователя Venmo",
-    "payVia": "Перевести {amount} через Venmo"
-  },
   "claim": {
     "loadingSession": "Загрузка сеанса…",
     "sessionNotFound": "Сеанс не найден",
@@ -386,7 +381,6 @@
     "aReceipt": "чек",
     "linkCopied": "Ссылка скопирована",
     "paidBy": "Оплатил <name>{payer}</name>",
-    "venmoHandle": "Аккаунт Venmo: @{handle}",
     "totalBill": "Общая сумма чека",
     "eachPersonOwes": "Сколько должен каждый участник",
     "subtotal": "Промежуточный итог",

@@ -475,7 +475,6 @@ describe('new shared receipts use RUB exclusively', () => {
       assignments: [{ itemIndex: 0, personIndices: [0] }],
       summary: [{ personIndex: 0, name: 'Анна', itemTotal: 505, tax: 0, tip: 0, total: 505 }],
       paidByIndex: 0,
-      payerVenmoHandle: null,
       userId: null,
     });
     const result = await (await caller()).getSplit({ token: 'old-link' });
@@ -499,7 +498,6 @@ describe('BillOK private finalized history after guest link expiry', () => {
     assignments: [{ itemIndex: 0, personIndices: [0] }],
     summary: [{ personIndex: 0, name: 'Организатор', itemTotal: 1000, tax: 0, tip: 0, total: 1000 }],
     paidByIndex: 0,
-    payerVenmoHandle: null,
   });
 
   beforeEach(() => mockDb.guestSplit.findUnique.mockResolvedValue(expired()));
@@ -585,12 +583,9 @@ describe('share tokens longer than any real one (#208)', () => {
     expect(mockDb.receipt.findUnique).not.toHaveBeenCalled();
   });
 
-  test('a signed-in caller gets the same for expireSession and setPayerVenmoHandle', async () => {
+  test('a signed-in caller gets the same for expireSession', async () => {
     const api = await caller(signedIn);
     await expect(api.expireSession({ token: long })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    await expect(api.setPayerVenmoHandle({ token: long, handle: 'someone' })).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-    });
     expect(checkRateLimit).not.toHaveBeenCalled();
   });
 });
@@ -705,7 +700,6 @@ function claimSession(
     assignments: [],
     summary: null,
     paidByIndex: 0,
-    payerVenmoHandle: null,
     userId: 'user-1',
     createdAt: new Date(),
     ...overrides,
@@ -6958,7 +6952,6 @@ describe('Issue #1 5.21: server-side guest and payer payment permissions', () =>
     createdAt: new Date('2026-11-10T07:00:00.000Z'),
     status: 'FINALIZED',
     paidByIndex: 1,
-    payerVenmoHandle: null,
     receiptData: { merchantName: 'Ужин', subtotal: 1001, total: 1001, tax: 0, tip: 0, currency: 'RUB' },
     summary: [
       { personIndex: 0, name: 'Анна', total: 459, itemTotal: 334, tip: 125, tax: 0 },
