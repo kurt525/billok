@@ -1,9 +1,16 @@
 name: Build and Push Docker Image
 
+# 8.4: no automatic image publishing on push.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      confirm_image:
+        description: "Введите РАЗРЕШАЮ DOCKER BILLOK после приёмки"
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 concurrency:
   group: docker-${{ github.ref }}
@@ -15,6 +22,12 @@ env:
 
 jobs:
   build-and-push:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == github.repository_owner &&
+      vars.BILLOK_IMAGE_PUBLISH_APPROVED == 'true' &&
+      inputs.confirm_image == 'РАЗРЕШАЮ DOCKER BILLOK'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -40,12 +53,11 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=
 
       # Build once, test that image, and push that same image, so no
-      # untested image gets a tag: :latest is pulled by installs tracking it,
-      # and promote-stable.yml promotes :stable from these sha tags. The
+      # untested image gets a tag: only the commit-SHA tag is published,
+      # and stable requires a separate, explicitly approved promotion. The
       # tradeoff: build-push-action adds no provenance when it loads the image
       # for testing, so the pushed image has none. Keeping it would mean
       # pushing a tag before the test and promoting it afterwards

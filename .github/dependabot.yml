@@ -8,10 +8,10 @@
 #   github-actions .github/workflows/*.yml
 #   docker         docker/Dockerfile base image
 #
-# CI runs on GitHub-hosted runners (public repo), so bot PRs need no runner
-# variable. auto-release.yml runs on every push to main and cuts a build tag,
-# so a merged dependency bump gets one like any other merge; promote-stable.yml
-# is manual (workflow_dispatch) and is not triggered by these merges.
+# The dedicated BillOK CI uses a self-hosted runner only on trusted branches.
+# Dependabot PRs never run on that runner. Upstream release/image workflows
+# are manual-only, owner-approved and remain disabled until acceptance of BillOK.
+# Merging dependency updates must not create tags, releases or Docker images.
 version: 2
 updates:
   - package-ecosystem: npm

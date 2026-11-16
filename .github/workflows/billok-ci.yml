@@ -41,6 +41,8 @@ jobs:
         run: python3 scripts/test_billok_workflow_routing.py
       - name: Verify least-privilege CI security (Issue #1 8.3)
         run: python3 scripts/test_billok_ci_security.py
+      - name: Verify release and publishing gates (Issue #1 8.4)
+        run: python3 scripts/test_billok_release_gates.py
       - name: Verify SBP registry auto-update safety tests
         run: npm run sbp:sync:test
       - name: Verify translation keys

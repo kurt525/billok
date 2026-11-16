@@ -1,16 +1,20 @@
 name: Promote to Stable
 
+# 8.4: Git stable tag is never rewritten; a full SHA is mandatory.
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Tag or commit SHA to promote (e.g. build/2026.05.08.1 or abc1234). Defaults to latest main."
-        required: false
+        description: "Полный SHA коммита main (40 шестнадцатеричных символов)"
+        required: true
+        type: string
+      confirm_stable:
+        description: "Введите РАЗРЕШАЮ STABLE BILLOK после приёмки"
+        required: true
         type: string
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
   group: promote-stable
@@ -22,31 +26,41 @@ env:
 
 jobs:
   promote:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == github.repository_owner &&
+      vars.BILLOK_STABLE_PROMOTION_APPROVED == 'true' &&
+      inputs.confirm_stable == 'РАЗРЕШАЮ STABLE BILLOK'
+    permissions:
+      contents: read
+      packages: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           fetch-depth: 0
 
-      - name: Resolve ref
+      - name: Validate exact main commit
         id: resolve
+        env:
+          PROMOTE_REF: ${{ inputs.ref }}
+        shell: bash
         run: |
-          REF="${{ inputs.ref }}"
-          if [ -z "$REF" ]; then
-            REF="main"
+          set -euo pipefail
+          if [[ ! "$PROMOTE_REF" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "::error::Expected a complete lower-case 40-digit commit SHA"
+            exit 1
           fi
-          FULL_SHA=$(git rev-parse "$REF")
-          SHORT_SHA=$(echo "$FULL_SHA" | cut -c1-7)
-          echo "sha=${FULL_SHA}" >> "$GITHUB_OUTPUT"
-          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          git cat-file -e "$PROMOTE_REF^{commit}"
+          git merge-base --is-ancestor "$PROMOTE_REF" origin/main
+          echo "sha=$PROMOTE_REF" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${PROMOTE_REF:0:7}" >> "$GITHUB_OUTPUT"
+          echo "ref=$PROMOTE_REF" >> "$GITHUB_OUTPUT"
 
-      - name: Move stable tag
-        run: |
-          git tag -f stable "${{ steps.resolve.outputs.sha }}"
-          git push -f origin stable
-
+      # 8.4: never modify existing Git tags or force-push stable.
       - name: Log in to Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
