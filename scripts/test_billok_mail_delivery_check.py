@@ -1,4 +1,4 @@
-"""Unit tests for 7.3 REG.RU mail probe. Never contact SMTP/IMAP."""
+"""Unit tests for 7.3 REG.RU outgoing mail probe. Never contact real SMTP."""
 import contextlib
 import importlib.util
 import io
@@ -82,30 +82,6 @@ class BillOKMailDeliveryProbeTests(unittest.TestCase):
             with self.assertRaisesRegex(probe.ProbeError, "SMTP_RECIPIENT_REFUSED"):
                 probe.send_via_smtp(msg, "mock-secret", probe.tls_context())
 
-    def test_detects_imap_inbox_and_spam_without_listing_personal_folders(self):
-        mailbox = MagicMock()
-        mailbox.list.return_value = ("OK", [
-            b'(\\HasNoChildren) "/" "INBOX"',
-            b'(\\HasNoChildren \\Junk) "/" "&BB4EQgQ,BEAEMAQyBDsEOgQ4-"',
-            b'(\\HasNoChildren) "/" "My Private Folder"',
-        ])
-        self.assertEqual(
-            probe._mailboxes(mailbox),
-            [("INBOX", "INBOX"), ("SPAM", "&BB4EQgQ,BEAEMAQyBDsEOgQ4-")],
-        )
-
-    def test_imap_header_is_read_only_and_never_fetches_the_body(self):
-        mailbox = MagicMock()
-        mailbox.search.return_value = ("OK", [b"42"])
-        mailbox.fetch.return_value = ("OK", [(
-            b"42 (BODY[HEADER.FIELDS (AUTHENTICATION-RESULTS)] {76}",
-            b"Authentication-Results: mx.example.ru; spf=pass; dkim=pass; dmarc=pass\r\n\r\n",
-        )])
-        content = probe._imap_marker_header(mailbox, "a" * 32)
-        self.assertIn(b"dkim=pass", content)
-        self.assertIn("BODY.PEEK[HEADER.FIELDS", mailbox.fetch.call_args.args[1])
-        self.assertNotIn("BODY[]", mailbox.fetch.call_args.args[1])
-
     def test_never_sends_without_manual_opt_in_and_approved_recipient(self):
         with patch.dict(os.environ, {}, clear=True):
             with patch.object(sys, "argv", ["probe", "--send", "--to", "me@mail.ru"]):
@@ -120,27 +96,38 @@ class BillOKMailDeliveryProbeTests(unittest.TestCase):
                         probe.main()
                     send.assert_not_called()
 
-    def test_self_delivery_uses_imap_and_external_delivery_does_not(self):
+    def test_no_self_delivery_and_no_claim_of_inbox_verification(self):
         with patch.dict(os.environ, {"BILLOK_REAL_SMTP_TEST": "1"}), \
             patch.object(probe, "password_from_protected_file", return_value="dummy"), \
             patch.object(probe, "send_via_smtp") as send, \
-            patch.object(probe, "check_own_mailbox", return_value="INBOX") as inspect, \
-            patch.object(sys, "argv", ["probe", "--send", "--to", probe.SENDER, "--check-own-inbox"]):
-            with contextlib.redirect_stdout(io.StringIO()) as log:
-                self.assertEqual(probe.main(), 0)
-            self.assertIn("SMTP_ACCEPTED=PASS", log.getvalue())
-            send.assert_called_once()
-            inspect.assert_called_once()
+            patch.object(sys, "argv", ["probe", "--send", "--to", probe.SENDER]):
+            with self.assertRaisesRegex(probe.ProbeError, "RECIPIENT_MUST_NOT_BE_NOREPLY_SENDER"):
+                probe.main()
+            send.assert_not_called()
+
         with patch.dict(os.environ, {"BILLOK_REAL_SMTP_TEST": "1"}), \
             patch.object(probe, "password_from_protected_file", return_value="dummy"), \
             patch.object(probe, "send_via_smtp") as send, \
-            patch.object(probe, "check_own_mailbox") as inspect, \
             patch.object(sys, "argv", ["probe", "--send", "--to", "tester@mail.ru"]):
             with contextlib.redirect_stdout(io.StringIO()) as log:
                 self.assertEqual(probe.main(), 0)
-            self.assertIn("EXTERNAL_INBOX_AND_SPAM=NOT_VERIFIED", log.getvalue())
+            text = log.getvalue()
+            self.assertIn("SMTP_ACCEPTED=PASS", text)
+            self.assertIn("EXTERNAL_INBOX_AND_SPAM=NOT_VERIFIED", text)
+            self.assertIn("CHECK_RECIPIENT_MAILBOX_MANUALLY=REQUIRED", text)
+            self.assertIn("TEST_MESSAGE_ID=", text)
             send.assert_called_once()
-            inspect.assert_not_called()
+
+    def test_imap_option_cannot_be_requested(self):
+        with patch.dict(os.environ, {"BILLOK_REAL_SMTP_TEST": "1"}), \
+            patch.object(probe, "send_via_smtp") as send, \
+            patch.object(sys, "argv", [
+                "probe", "--send", "--to", "tester@mail.ru", "--check-own-inbox"
+            ]):
+            with self.assertRaises(SystemExit) as error:
+                probe.main()
+            self.assertEqual(error.exception.code, 2)
+            send.assert_not_called()
 
 
 if __name__ == "__main__":
