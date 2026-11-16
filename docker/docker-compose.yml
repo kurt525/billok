@@ -9,8 +9,10 @@ services:
       args:
         COMMIT_SHA: ${COMMIT_SHA:-unknown}
     image: sharetab:latest
+    # Issue #1 8.10: upstream is reachable ONLY from the VPS loopback.
+    # Never bind the application container on 0.0.0.0 or the public IP.
     ports:
-      - "${PORT:-3000}:3000"
+      - "127.0.0.1:${BILLOK_INTERNAL_PORT:-3000}:3000"
     environment:
       - DB_USER=${DB_USER:-sharetab}
       - DB_PASSWORD=${DB_PASSWORD:-sharetab}
