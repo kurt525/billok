@@ -22,6 +22,12 @@ describe('Issue #1 6.8.1.3: separate email recovery, never email login', () => {
     expect(message.text).toContain('не ссылка для входа');
     expect(message.html).toContain('нового Passkey');
     expect(message.html).toContain(url);
+    expect(message.html).toContain('Если кнопка недоступна');
+    expect(message.text).toContain('Ссылка действует 30 минут');
+    expect(message.html).toContain('Ссылка действует 30 минут');
+    expect(message.text).toContain('Если вы не запрашивали');
+    expect(message.html).toContain('Если вы не запрашивали');
+    expect(message.text + message.html).not.toMatch(/сброс пароля|введите пароль|забыли пароль|sign in/i);
   });
 
   it('rejects unsafe origins and escapes URL markup', () => {

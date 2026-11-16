@@ -38,6 +38,7 @@ export async function deliverPendingVerificationResend(input: {
       url: prepared.url,
       from: input.from,
       server: input.server,
+      kind: 'resend',
     });
   } catch (error) {
     // Never delete earlier tokens, even if SMTP reports a partial failure.

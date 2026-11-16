@@ -53,6 +53,7 @@ describe('resend delivery without invalidating previous confirmation links', () 
       url,
       from: input.from,
       server: input.server,
+      kind: 'resend',
     });
     expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(send.mock.invocationCallOrder[0]!);
     expect(finalize).toHaveBeenCalledExactlyOnceWith(db, {

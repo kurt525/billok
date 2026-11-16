@@ -22,35 +22,49 @@ function escapeHtml(value: string): string {
   });
 }
 
-export function russianRegistrationVerificationEmail(url: string) {
+export type RegistrationVerificationEmailKind = 'initial' | 'resend';
+
+/** Distinguish initial confirmation from a new one-time resend request. */
+export function russianRegistrationVerificationEmail(url: string, kind: RegistrationVerificationEmailKind = 'initial') {
   const parsed = new URL(url);
   const isLocalHttp = parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
   if (!(parsed.protocol === 'https:' || isLocalHttp) || parsed.username || parsed.password) {
     throw new Error('Недопустимая ссылка подтверждения электронной почты');
   }
   const safeUrl = escapeHtml(url);
+  const resend = kind === 'resend';
+  const introduction = resend
+    ? 'Вы запросили повторную отправку письма. Для завершения регистрации подтвердите адрес электронной почты:'
+    : 'Для завершения регистрации в BillOK подтвердите адрес электронной почты:';
+  const ignoreNotice = resend
+    ? 'Если вы не запрашивали повторную отправку, проигнорируйте это письмо.'
+    : 'Если вы не регистрировались в BillOK, проигнорируйте это письмо.';
 
   return {
-    subject: 'Подтвердите электронную почту для BillOK',
+    subject: resend
+      ? 'Повторное подтверждение электронной почты для BillOK'
+      : 'Подтвердите электронную почту для BillOK',
     text: [
       'Здравствуйте!',
       '',
-      'Для завершения регистрации в BillOK подтвердите адрес электронной почты:',
+      introduction,
       url,
       '',
       'Ссылка действует 30 минут и может быть использована только один раз.',
-      'Если вы не регистрировались в BillOK, проигнорируйте это письмо.',
+      ignoreNotice,
     ].join('\n'),
     html: [
       '<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;color:#222">',
-      '<h1 style="font-size:22px">Подтверждение почты в BillOK</h1>',
-      '<p>Для завершения регистрации подтвердите адрес электронной почты:</p>',
+      resend
+        ? '<h1 style="font-size:22px">Повторное подтверждение почты в BillOK</h1>'
+        : '<h1 style="font-size:22px">Подтверждение почты в BillOK</h1>',
+      '<p>' + introduction + '</p>',
       '<p><a href="' + safeUrl + '" style="display:inline-block;padding:12px 20px;',
       'background:#166534;color:#fff;border-radius:8px;text-decoration:none">Подтвердить почту</a></p>',
       '<p>Или откройте ссылку в браузере:</p>',
       '<p style="overflow-wrap:anywhere"><a href="' + safeUrl + '">' + safeUrl + '</a></p>',
       '<p>Ссылка действует <strong>30 минут</strong> и может быть использована только один раз.</p>',
-      '<p style="color:#666">Если вы не регистрировались в BillOK, проигнорируйте это письмо.</p>',
+      '<p style="color:#666">' + ignoreNotice + '</p>',
       '</div>',
     ].join('\n'),
   };
@@ -62,8 +76,9 @@ export async function sendRussianRegistrationVerificationEmail(input: {
   url: string;
   from: string;
   server: SMTPTransportOptions;
+  kind?: RegistrationVerificationEmailKind;
 }): Promise<void> {
-  const message = russianRegistrationVerificationEmail(input.url);
+  const message = russianRegistrationVerificationEmail(input.url, input.kind);
   const transport = nodemailer.createTransport(input.server);
   const delivery = await transport.sendMail({ from: input.from, to: input.to, ...message });
   if (

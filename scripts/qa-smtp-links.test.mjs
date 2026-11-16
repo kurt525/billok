@@ -16,8 +16,21 @@ test('QA mailbox finds confirmation links in actual Nodemailer MIME', async () =
   assert.deepEqual(linksInMessage(raw), [url]);
 });
 
+test('7.2: QA mailbox finds resent confirmation in actual Russian HTML+text MIME', async () => {
+  const url = 'http://127.0.0.1:33589/verify-email?token=' + 'S'.repeat(43);
+  const raw = await compile(russianRegistrationVerificationEmail(url, 'resend'));
+  assert.match(raw, /multipart\/alternative/i);
+  assert.deepEqual(linksInMessage(raw), [url]);
+});
+
 test('QA mailbox finds Passkey recovery links in actual Nodemailer MIME', async () => {
   const url = 'http://localhost:33589/recover-passkey?token=' + 'R'.repeat(43);
+  const raw = await compile(russianPasskeyRecoveryEmail(url));
+  assert.deepEqual(linksInMessage(raw), [url]);
+});
+
+test('7.2: Passkey recovery MIME preserves the visible fallback link without duplicate actions', async () => {
+  const url = 'http://localhost:33589/recover-passkey?token=' + 'T'.repeat(43);
   const raw = await compile(russianPasskeyRecoveryEmail(url));
   assert.deepEqual(linksInMessage(raw), [url]);
 });

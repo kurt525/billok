@@ -34,6 +34,24 @@ describe('registration email confirmation message', () => {
     expect(message.text + message.html).not.toMatch(/ShareTab|Sign in|Click here|Verify email/i);
   });
 
+  it('7.2: resend has a distinct Russian subject, HTML and text with the same one-time link', () => {
+    const resend = russianRegistrationVerificationEmail(url, 'resend');
+    const initial = russianRegistrationVerificationEmail(url, 'initial');
+    expect(resend.subject).toBe('Повторное подтверждение электронной почты для BillOK');
+    expect(initial.subject).toBe('Подтвердите электронную почту для BillOK');
+    expect(resend.text).toContain('Вы запросили повторную отправку письма');
+    expect(resend.html).toContain('Повторное подтверждение почты');
+    expect(resend.text).toContain('30 минут');
+    expect(resend.html).toContain('30 минут');
+    expect(resend.text).toContain('только один раз');
+    expect(resend.html).toContain('только один раз');
+    expect(resend.text).toContain('Если вы не запрашивали');
+    expect(resend.html).toContain('Если вы не запрашивали');
+    expect(resend.text.match(/https:\/\/billok\.ru\/verify-email\?token=/gu)).toHaveLength(1);
+    expect(resend.html.match(/https:\/\/billok\.ru\/verify-email\?token=/gu)).toHaveLength(3);
+    expect(resend.text + resend.html).not.toMatch(/сброс пароля|введите пароль|magic link|sign in/i);
+  });
+
   it('escapes markup when the confirmation link contains reserved characters', () => {
     const message = russianRegistrationVerificationEmail('https://billok.ru/verify-email?x="><script>&y=1');
     expect(message.html).toContain('&quot;');
@@ -75,6 +93,19 @@ describe('BillOK registration confirmation delivery', () => {
         subject: 'Подтвердите электронную почту для BillOK',
         text: expect.stringContaining(options.url),
         html: expect.stringContaining('Подтвердить почту'),
+      }),
+    );
+  });
+
+  it('7.2: explicitly sends the resend template, not the initial registration template', async () => {
+    await sendRussianRegistrationVerificationEmail({ ...options, kind: 'resend' });
+    expect(sendMail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: options.from,
+        to: options.to,
+        subject: 'Повторное подтверждение электронной почты для BillOK',
+        text: expect.stringContaining('повторную отправку'),
+        html: expect.stringContaining('Повторное подтверждение почты'),
       }),
     );
   });
