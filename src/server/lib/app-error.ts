@@ -1,12 +1,11 @@
 import { TRPCError } from '@trpc/server';
 import { createTranslator, type AbstractIntlMessages } from 'next-intl';
 import type { Locale } from '@/i18n/routing';
-import en from '../../../messages/en/errors.json';
 import ru from '../../../messages/ru/errors.json';
 
 type ErrorCode = TRPCError['code'];
 // `generic` holds the messages for errors without a key
-export type ErrorKey = Exclude<keyof typeof en, 'generic'>;
+export type ErrorKey = Exclude<keyof typeof ru, 'generic'>;
 export type ErrorValues = Record<string, string | number>;
 
 const catalogs: Record<Locale, AbstractIntlMessages> = { ru };
@@ -24,7 +23,7 @@ function translate(locale: Locale, key: string, values?: ErrorValues): string {
  * The error every procedure throws, so the person sees it in their language (#266): the
  * key names its text in messages/{locale}/errors.json, and the API's error formatter
  * (`errorShape`) sends that text in the language of the page that called. `message` stays
- * the English text, for logs, tests and API callers that send no language. Without a key,
+ * the Russian text, for logs, tests and API callers that send no language. Without a key,
  * the person gets the general message for the code.
  */
 export class AppError extends TRPCError {
@@ -40,7 +39,7 @@ export class AppError extends TRPCError {
     values?: ErrorValues,
     options?: { cause?: unknown; remainingParts?: number },
   ) {
-    super({ code, message: key ? englishMessage(key, values) : englishGeneric(code), cause: options?.cause });
+    super({ code, message: key ? translate('ru', key, values) : genericMessage(code, 'ru'), cause: options?.cause });
     this.name = 'AppError';
     this.messageKey = key ?? null;
     this.messageValues = values;
@@ -48,7 +47,7 @@ export class AppError extends TRPCError {
   }
 }
 
-const GENERIC_KEYS: Partial<Record<ErrorCode, keyof typeof en.generic>> = {
+const GENERIC_KEYS: Partial<Record<ErrorCode, keyof typeof ru.generic>> = {
   BAD_REQUEST: 'badRequest',
   UNAUTHORIZED: 'unauthorized',
   FORBIDDEN: 'forbidden',
@@ -56,18 +55,6 @@ const GENERIC_KEYS: Partial<Record<ErrorCode, keyof typeof en.generic>> = {
   CONFLICT: 'conflict',
   TOO_MANY_REQUESTS: 'tooManyRequests',
 };
-
-function englishMessage(key: string, values?: ErrorValues): string {
-  const t = createTranslator({ locale: 'en', messages: en }) as unknown as (
-    key: string,
-    values?: ErrorValues,
-  ) => string;
-  return t(key, values);
-}
-
-function englishGeneric(code: ErrorCode): string {
-  return englishMessage(`generic.${GENERIC_KEYS[code] ?? 'other'}`);
-}
 
 function genericMessage(code: ErrorCode, locale: Locale): string {
   return translate(locale, `generic.${GENERIC_KEYS[code] ?? 'other'}`);

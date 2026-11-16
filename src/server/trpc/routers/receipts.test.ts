@@ -1,3 +1,4 @@
+import ruErrors from '../../../../messages/ru/errors.json';
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { manualPartsConfirmationSnapshot } from '@/lib/manual-parts-confirmation';
 
@@ -84,7 +85,7 @@ describe('manual group bill authorization and storage', () => {
     mockDb.group.findUnique.mockResolvedValue({ currency });
     await expect((await caller()).createManual({ groupId: 'g1' })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Expenses from receipts are allowed only for RUB receipts in RUB groups.',
+      message: ruErrors.rubOnlyReceipt,
     });
     expect(mockDb.$queryRaw).toHaveBeenCalledOnce();
     expect(mockDb.receipt.create).not.toHaveBeenCalled();
@@ -299,7 +300,7 @@ describe('manual group receipt: each member saves only their own voluntary tip',
     mockDb.expense.findUnique.mockResolvedValue({ id: 'e1' });
     await expect((await caller()).setPersonalTip(input)).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Receipt already has an expense',
+      message: ruErrors.receiptAlreadyHasExpense,
     });
     expect(mockDb.receipt.update).not.toHaveBeenCalled();
   });
@@ -833,7 +834,7 @@ describe('manual receipt: consumed portions and creator rounding', () => {
     });
     await expect((await caller()).assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Invalid personal tips or receipt total exceeds the permitted amount.',
+      message: ruErrors.receiptPersonalTipsInvalid,
     });
     expect(mockDb.expense.create).not.toHaveBeenCalled();
     expect(mockDb.receiptItemAssignment.createMany).not.toHaveBeenCalled();
@@ -959,7 +960,7 @@ describe('RUB-only finalization of a group receipt', () => {
     mockDb.group.findUnique.mockResolvedValueOnce({ archivedAt: null, currency: 'USD' });
     await expect((await caller()).assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Expenses from receipts are allowed only for RUB receipts in RUB groups.',
+      message: ruErrors.rubOnlyReceipt,
     });
     expect(mockDb.receipt.findUnique).not.toHaveBeenCalled();
     expect(mockDb.$transaction).not.toHaveBeenCalled();
@@ -999,7 +1000,7 @@ describe('RUB-only finalization of a group receipt', () => {
     });
     await expect((await caller()).assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Additional tax and shared tips are not supported for receipts.',
+      message: ruErrors.receiptExtraChargesNotSupported,
     });
     expect(mockDb.$transaction).not.toHaveBeenCalled();
     expect(mockDb.expense.create).not.toHaveBeenCalled();
@@ -1107,7 +1108,7 @@ describe('a group archived while a receipt was being finished (#289)', () => {
     const api = await caller();
     await expect(api.assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Cannot create expenses in archived groups',
+      message: ruErrors.archivedCreateExpense,
     });
     expect(mockDb.expense.create).not.toHaveBeenCalled();
     expect(mockDb.receiptItemAssignment.deleteMany).not.toHaveBeenCalled();
@@ -1154,7 +1155,7 @@ describe('a group archived while a receipt was being finished (#289)', () => {
     const api = await caller();
     await expect(api.assignItemsAndCreateExpense(finish)).rejects.toMatchObject({
       code: 'CONFLICT',
-      message: 'Receipt was removed from this group',
+      message: ruErrors.receiptRemovedFromGroup,
     });
     expect(mockDb.expense.create).not.toHaveBeenCalled();
     expect(mockDb.receiptItemAssignment.deleteMany).not.toHaveBeenCalled();
@@ -1307,7 +1308,7 @@ describe('saving a receipt for later while it is deleted from the pending list (
     mockDb.group.findUnique.mockResolvedValue({ currency });
     await expect((await caller()).saveForLater({ groupId: 'g1', receiptId: 'r1' })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Expenses from receipts are allowed only for RUB receipts in RUB groups.',
+      message: ruErrors.rubOnlyReceipt,
     });
     expect(rawSql()).toEqual([expect.stringMatching(/FROM "Group" WHERE "id" = \? FOR SHARE/)]);
     expect(mockDb.receipt.update).not.toHaveBeenCalled();
@@ -1332,7 +1333,7 @@ describe('saving a receipt for later while it is deleted from the pending list (
     mockDb.$queryRaw.mockResolvedValueOnce([{ archivedAt: new Date() }]);
     await expect((await caller()).saveForLater({ groupId: 'g1', receiptId: 'r1' })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Cannot add expenses to an archived group',
+      message: ruErrors.archivedAddExpense,
     });
     expect(mockDb.group.findUnique).not.toHaveBeenCalled();
     expect(mockDb.receipt.update).not.toHaveBeenCalled();

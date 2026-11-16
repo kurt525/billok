@@ -33,7 +33,7 @@ describe('BillOK brand foundation', () => {
 
   test('default translation copy has no upstream brand remaining', () => {
     for (const name of ['common', 'auth', 'split', 'errors']) {
-      const content = source(`messages/en/${name}.json`);
+      const content = source(`messages/ru/${name}.json`);
       expect(content).toContain('BillOK');
       expect(content).not.toContain('ShareTab');
     }

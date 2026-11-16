@@ -1,3 +1,4 @@
+import ruErrors from '../../../../messages/ru/errors.json';
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('next/headers', () => ({
@@ -852,7 +853,7 @@ describe('guest.joinSession', () => {
       .joinSession({ token: 'share-1', name: 'Carol', joinKey: JOIN_KEY })
       .catch((e: unknown) => e);
     expect(error).toMatchObject({ code: 'CONFLICT' });
-    expect((error as Error).message).toContain('already used with a different name');
+    expect((error as Error).message).toBe(ruErrors.joinKeyReused);
     // Retrying would resend the same key, so the message mustn't suggest it
     expect((error as Error).message).not.toMatch(/try again/i);
     expect((error as Error).message).not.toContain(OTHER_TOKEN);
@@ -906,7 +907,7 @@ describe('guest.joinSession', () => {
     expect(error).toMatchObject({ code: 'CONFLICT' });
     expect((error as Error).message).not.toContain(ALICE_TOKEN);
     // The refusal says how to get back in as yourself
-    expect((error as Error).message).toContain('personal link');
+    expect((error as Error).message).toContain('персональную ссылку');
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
@@ -1003,7 +1004,7 @@ describe('guest.resumeSession', () => {
     claimSession([{ name: 'Alice', personToken: ALICE_TOKEN }], { expiresAt: new Date(Date.now() - 1000) });
     await expect((await caller()).resumeSession({ token: 'share-1', personToken: ALICE_TOKEN })).rejects.toMatchObject({
       code: 'NOT_FOUND',
-      message: 'Session expired',
+      message: ruErrors.sessionExpired,
     });
   });
 
@@ -3879,7 +3880,7 @@ describe('claim-session transactions when the database is busy (#203)', () => {
       }),
     ).rejects.toMatchObject({
       code: 'SERVICE_UNAVAILABLE',
-      message: 'BillOK is busy right now. Please try again in a moment.',
+      message: ruErrors.serverBusy,
     });
     expect(mockDb.$transaction).toHaveBeenCalledTimes(1);
   });
@@ -4816,7 +4817,7 @@ describe('guest.finalizeSession', () => {
       (await caller(signedIn)).finalizeSession({ token: 'share-1', personToken: OTHER_TOKEN, personId: pid(2) }),
     ).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
-      message: 'Every item needs someone before the split can be finalized.',
+      message: ruErrors.itemsUnassigned,
     });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });

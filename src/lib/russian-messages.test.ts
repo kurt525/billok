@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -37,28 +37,14 @@ function flatten(input: Record<string, unknown>, prefix = ''): Record<string, st
   return result;
 }
 
-function params(value: string): string[] {
-  return [...value.matchAll(/\{([a-z][a-zA-Z0-9_]*)\b/g)].map((match) => match[1]!).sort();
-}
-
-function richTags(value: string): string[] {
-  return [...value.matchAll(/<\/?([a-z][a-zA-Z0-9_]*)>/g)].map((match) => match[1]!).sort();
-}
-
 describe('BillOK Russian-only translations', () => {
   for (const namespace of namespaces) {
-    it(`${namespace} has every source key and matching ICU arguments`, () => {
-      const english = flatten(load('en', namespace));
+    it('Russian namespace ' + namespace + ' has complete, readable copy', () => {
       const russian = flatten(load('ru', namespace));
-
-      // English is a historical compatibility floor, not a supported locale.
-      expect(Object.keys(russian)).toEqual(expect.arrayContaining(Object.keys(english)));
-      for (const key of Object.keys(russian)) {
-        expect(russian[key]!.trim(), `Empty: ${namespace}.${key}`).not.toBe('');
-        if (english[key]) {
-          expect(params(russian[key]!), `Variables: ${namespace}.${key}`).toEqual(params(english[key]!));
-          expect(richTags(russian[key]!), `Rich text: ${namespace}.${key}`).toEqual(richTags(english[key]!));
-        }
+      expect(Object.keys(russian).length).toBeGreaterThan(0);
+      for (const [key, text] of Object.entries(russian)) {
+        expect(text.trim(), 'Empty: ' + namespace + '.' + key).not.toBe('');
+        expect(text, 'Upstream brand: ' + namespace + '.' + key).not.toMatch(/ShareTab/iu);
         if (
           ![
             'brand.name',
@@ -71,11 +57,18 @@ describe('BillOK Russian-only translations', () => {
             'new.exchangeRatePlaceholder',
           ].includes(key)
         ) {
-          expect(russian[key], `Untranslated: ${namespace}.${key}`).toMatch(/[А-Яа-яЁё]/);
+          expect(text, 'Untranslated: ' + namespace + '.' + key).toMatch(/[А-Яа-яЁё]/u);
         }
       }
     });
   }
+
+  it('has no abandoned language catalogs', () => {
+    const names = readdirSync(resolve(process.cwd(), 'messages'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    expect(names).toEqual(['ru']);
+  });
 
   it('keeps Russian plural categories in invitation and counters', () => {
     for (const value of [load('ru', 'auth').invite, load('ru', 'dashboard')]) {

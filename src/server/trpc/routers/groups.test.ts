@@ -1,3 +1,4 @@
+import ruErrors from '../../../../messages/ru/errors.json';
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('next/headers', () => ({
@@ -836,7 +837,7 @@ describe('removing a placeholder', () => {
     const api = await caller();
     await expect(api.removeMember({ groupId: 'g1', userId: 'p1' })).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
-      message: "Alice still owes or is owed money in this group, so they can't be removed. Settle up first.",
+      message: ruErrors.placeholderUnsettled.replace('{name}', 'Alice'),
     });
     expectNothingChanged();
   });
@@ -966,8 +967,7 @@ describe('leaving a group', () => {
     const api = await caller('owner');
     await expect(api.removeMember({ groupId: 'g1', userId: 'owner' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message:
-        "The group's owner can't leave it. Transfer ownership to another member first, or delete the group if nobody needs it.",
+      message: ruErrors.ownerCannotLeave,
     });
     expect(mockDb.groupMember.delete).not.toHaveBeenCalled();
   });
@@ -980,7 +980,7 @@ describe('leaving a group', () => {
     const api = await caller(leaver);
     await expect(api.removeMember({ groupId: 'g1', userId: leaver })).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
-      message: 'You still owe or are owed money in this group. Settle up before you leave.',
+      message: ruErrors.leaveWithBalance,
     });
     expect(mockDb.groupMember.delete).not.toHaveBeenCalled();
   });
@@ -1043,8 +1043,7 @@ describe('leaving a group', () => {
       const api = await caller('bob');
       await expect(api.removeMember({ groupId: 'g1', userId: 'bob' })).rejects.toMatchObject({
         code: 'FORBIDDEN',
-        message:
-          "The group's owner can't leave it. Transfer ownership to another member first, or delete the group if nobody needs it.",
+        message: ruErrors.ownerCannotLeave,
       });
       expect(mockDb.groupMember.delete).not.toHaveBeenCalled();
     });
@@ -1057,7 +1056,7 @@ describe('leaving a group', () => {
       const api = await caller('owner');
       await expect(api.removeMember({ groupId: 'g1', userId: 'bob' })).rejects.toMatchObject({
         code: 'FORBIDDEN',
-        message: 'Cannot remove the owner',
+        message: ruErrors.cannotRemoveOwner,
       });
       expect(mockDb.groupMember.delete).not.toHaveBeenCalled();
     });
@@ -1070,7 +1069,7 @@ describe('leaving a group', () => {
       const api = await caller('owner');
       await expect(api.removeMember({ groupId: 'g1', userId: 'carol' })).rejects.toMatchObject({
         code: 'FORBIDDEN',
-        message: 'Cannot remove other members',
+        message: ruErrors.cannotRemoveOthers,
       });
       expect(mockDb.groupMember.delete).not.toHaveBeenCalled();
     });
@@ -1137,7 +1136,7 @@ describe('transferring ownership', () => {
     const api = await caller('owner');
     await expect(api.transferOwnership({ groupId: 'g1', newOwnerId: 'bob' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'Only the owner can transfer ownership',
+      message: ruErrors.onlyOwnerTransfers,
     });
     expect(mockDb.groupMember.update).not.toHaveBeenCalled();
   });
@@ -1153,7 +1152,7 @@ describe('transferring ownership', () => {
     const api = await caller('owner');
     await expect(api.transferOwnership({ groupId: 'g1', newOwnerId: 'bob' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'Only the owner can transfer ownership',
+      message: ruErrors.onlyOwnerTransfers,
     });
     expect(mockDb.groupMember.update).not.toHaveBeenCalled();
   });
@@ -1163,7 +1162,7 @@ describe('transferring ownership', () => {
     const api = await caller('owner');
     await expect(api.transferOwnership({ groupId: 'g1', newOwnerId: 'owner' })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'You already own this group',
+      message: ruErrors.alreadyOwner,
     });
     expect(mockDb.groupMember.update).not.toHaveBeenCalled();
   });
@@ -1173,18 +1172,14 @@ describe('transferring ownership', () => {
     const api = await caller('owner');
     await expect(api.transferOwnership({ groupId: 'g1', newOwnerId: 'bob' })).rejects.toMatchObject({
       code: 'NOT_FOUND',
-      message: 'Member not found',
+      message: ruErrors.memberNotFound,
     });
     expect(mockDb.groupMember.update).not.toHaveBeenCalled();
   });
 
   test.each([
-    ['a placeholder', { isPlaceholder: true, suspendedAt: null }, 'Only a member with an account can own a group'],
-    [
-      'a suspended account',
-      { isPlaceholder: false, suspendedAt: new Date() },
-      "That member's account is suspended, so they can't own the group",
-    ],
+    ['a placeholder', { isPlaceholder: true, suspendedAt: null }, ruErrors.ownerNeedsAccount],
+    ['a suspended account', { isPlaceholder: false, suspendedAt: new Date() }, ruErrors.ownerSuspended],
   ])('is refused to %s', async (_, user, message) => {
     mockMemberships({ owner: member('owner', 'OWNER'), bob: member('bob', 'MEMBER', { user }) });
     const api = await caller('owner');
@@ -1236,7 +1231,7 @@ describe('deleting a group', () => {
     const api = await caller('owner');
     await expect(api.delete({ groupId: 'g1' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'Only the owner can delete a group',
+      message: ruErrors.onlyOwnerDeletesGroup,
     });
     expect(mockDb.group.delete).not.toHaveBeenCalled();
   });
@@ -1251,7 +1246,7 @@ describe('deleting a group', () => {
     const api = await caller('owner');
     await expect(api.delete({ groupId: 'g1' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'Only the owner can delete a group',
+      message: ruErrors.onlyOwnerDeletesGroup,
     });
     expect(mockDb.group.delete).not.toHaveBeenCalled();
     expect(mockDb.receipt.deleteMany).not.toHaveBeenCalled();
@@ -1438,7 +1433,7 @@ describe('merging a placeholder into a member', () => {
         placeholderUserId: 'p1',
         realUserId: 'bob',
       }),
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining('member') });
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: ruErrors.mergeTargetNotMember });
     expect(mockDb.$queryRaw).toHaveBeenCalledOnce();
     expect(mockDb.groupMember.deleteMany).not.toHaveBeenCalled();
     expectNothingMoved();
@@ -1530,7 +1525,7 @@ describe('merging a placeholder into a member', () => {
     const api = await caller();
     await expect(
       api.mergePlaceholder({ groupId: 'g1', placeholderUserId: 'p1', realUserId: 'bob' }),
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining('archived') });
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: ruErrors.mergeArchivedGroup });
     expectNothingMoved();
   });
 
@@ -1665,7 +1660,7 @@ describe('archiving a group', () => {
     const api = await caller();
     await expect(api.archive({ groupId: 'g1' })).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
-      message: 'This group still has unsettled balances. Settle up before archiving it.',
+      message: ruErrors.archiveUnsettled,
     });
     expect(mockDb.expense.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { groupId: 'g1' } }));
     expect(mockDb.settlement.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { groupId: 'g1' } }));
@@ -1679,8 +1674,7 @@ describe('archiving a group', () => {
     const api = await caller();
     await expect(api.archive({ groupId: 'g1' })).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
-      message:
-        "Someone who is no longer in this group still owes or is owed money, so it can't be archived. Invite them back to settle up, or edit the expenses they're in.",
+      message: ruErrors.archiveFormerMemberUnsettled,
     });
     expect(mockDb.activityLog.create).not.toHaveBeenCalled();
   });

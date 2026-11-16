@@ -1,35 +1,34 @@
 import { describe, test, expect } from 'vitest';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import en from '../../../messages/en/errors.json';
 import ru from '../../../messages/ru/errors.json';
 import { AppError, errorShape, userErrorMessage } from './app-error';
 
-// #266: server errors reached every locale in English
+// BillOK 9.3: internal and user-facing errors have a single Russian catalog
 describe('AppError', () => {
-  test('carries its key and values, with the English text as its message for logs and API callers', () => {
+  test('carries its key and values, with Russian text as its message for logs and API callers', () => {
     const error = new AppError('BAD_REQUEST', 'leaveWithBalance');
     expect(error).toBeInstanceOf(TRPCError);
     expect(error.code).toBe('BAD_REQUEST');
     expect(error.messageKey).toBe('leaveWithBalance');
-    expect(error.message).toBe('You still owe or are owed money in this group. Settle up before you leave.');
+    expect(error.message).toBe(ru.leaveWithBalance);
 
     const withValues = new AppError('BAD_REQUEST', 'sessionFull', { max: 100 });
     expect(withValues.messageValues).toEqual({ max: 100 });
-    expect(withValues.message).toBe('Maximum 100 people per session');
+    expect(withValues.message).toBe(ru.sessionFull.replace('{max}', '100'));
   });
 });
 
 describe('userErrorMessage', () => {
   test("is the error's text in the page's language", () => {
     expect(userErrorMessage(new AppError('BAD_REQUEST', 'leaveWithBalance'), 'ru')).toBe(ru.leaveWithBalance);
-    expect(ru.leaveWithBalance).not.toBe(en.leaveWithBalance);
+    expect(ru.leaveWithBalance).toMatch(/[А-Яа-яЁё]/u);
     expect(userErrorMessage(new AppError('BAD_REQUEST', 'sessionFull', { max: 100 }), 'ru')).toBe(
       ru.sessionFull.replace('{max}', '100'),
     );
   });
 
-  test("an error without a key gets its code's general message, never its own English text", () => {
+  test("an error without a key gets its code's general message, never its own unsafe text", () => {
     const internal = new TRPCError({
       code: 'INTERNAL_SERVER_ERROR',
       message: 'Invalid `prisma.user.update()` invocation',

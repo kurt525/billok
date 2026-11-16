@@ -1,13 +1,13 @@
 {
-  "name": "sharetab",
+  "name": "billok",
   "version": "0.8.0",
   "description": "BillOK — ручное разделение общих чеков и расходов без OCR и AI",
   "author": "Carlos Cristobal",
   "license": "MIT",
-  "homepage": "https://github.com/sw-carlos-cristobal/sharetab",
+  "homepage": "https://billok.ru",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sw-carlos-cristobal/sharetab.git"
+    "url": "https://github.com/kurt525/billok.git"
   },
   "keywords": [
     "self-hosted",
@@ -27,16 +27,12 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "pr:create": "node scripts/pr-create.mjs",
-    "git:push-main": "node scripts/git-push-main.mjs",
-    "push:main": "npm run git:push-main --",
     "db:seed": "npx tsx prisma/seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "npx playwright test",
     "test:docker": "bash scripts/docker-smoke.sh --build",
     "test:e2e:ui": "npx playwright test --ui",
-    "demo": "tsx e2e/demo-video.ts",
-    "demo:gifs": "tsx e2e/demo-gifs.ts",
     "lint:i18n": "npx tsx scripts/check-translations.ts",
     "test:coverage": "vitest run --coverage",
     "sbp:sync": "node scripts/sync-sbp-banks.mjs",

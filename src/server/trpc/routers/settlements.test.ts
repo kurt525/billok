@@ -1,3 +1,4 @@
+import ruErrors from '../../../../messages/ru/errors.json';
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('next/headers', () => ({
@@ -154,7 +155,7 @@ describe('a group archived while a payment was on its way (#289)', () => {
     const api = await caller('bob');
     await expect(api.create({ groupId: 'g1', currency: 'RUB', toId: 'alice', amount: 500 })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Cannot create settlements in an archived group',
+      message: ruErrors.archivedCreateSettlement,
     });
     expect(mockDb.settlement.create).not.toHaveBeenCalled();
     expect(mockDb.activityLog.create).not.toHaveBeenCalled();
@@ -165,7 +166,7 @@ describe('a group archived while a payment was on its way (#289)', () => {
     const api = await caller('bob');
     await expect(api.delete({ groupId: 'g1', settlementId: 's1' })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Cannot delete payments from an archived group',
+      message: ruErrors.archivedDeletePayment,
     });
     expect(mockDb.settlement.deleteMany).not.toHaveBeenCalled();
   });
@@ -251,7 +252,7 @@ describe('a payment with someone removed from the group', () => {
     const api = await caller('alice');
     await expect(api.create({ groupId: 'g1', currency: 'RUB', ...payment })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'A payment with someone removed from this group can only settle what they still owe or are owed.',
+      message: ruErrors.settlementRemovedMemberOverpaid,
     });
     expect(mockDb.settlement.create).not.toHaveBeenCalled();
   });
@@ -305,7 +306,7 @@ describe('RUB-only settlement creation', () => {
     const api = await caller('bob');
     await expect(api.create({ groupId: 'g1', toId: 'alice', amount: 500 })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'New settlements are allowed only in groups using RUB.',
+      message: ruErrors.rubOnlySettlement,
     });
     expect(mockDb.$transaction).not.toHaveBeenCalled();
   });

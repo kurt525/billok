@@ -1,3 +1,4 @@
+import ruErrors from '../../../../messages/ru/errors.json';
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AppError } from '../../lib/app-error';
 
@@ -294,7 +295,7 @@ describe('auth.register invite-only email confirmation', () => {
     const api = await caller();
     await expect(api.register({ name: 'Ada', email: 'ada@mail.ru' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'An invite code is required to register.',
+      message: ruErrors.inviteCodeRequired,
     });
     expect(signupGate).not.toHaveBeenCalled();
   });
@@ -498,7 +499,7 @@ describe('auth.register invite-only email confirmation', () => {
     signupGate.mockRejectedValueOnce(new AppError('FORBIDDEN', 'inviteCodeInvalid'));
     await expect(api.register({ name: 'Ada', email: 'ada@mail.ru', inviteCode: 'claimed' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'Invalid or expired invite code.',
+      message: ruErrors.inviteCodeInvalid,
     });
     signupGate.mockRejectedValueOnce(new AppError('CONFLICT', 'emailTaken'));
     await expect(api.register({ name: 'Ada', email: 'ada@mail.ru', inviteCode: 'valid' })).resolves.toEqual({

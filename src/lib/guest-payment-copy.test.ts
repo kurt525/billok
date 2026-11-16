@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import ru from '../../messages/ru/split.json';
-import en from '../../messages/en/split.json';
 
 const keys = [
   'markMyPayment',
@@ -50,12 +49,13 @@ describe('Issue #1 5.19.1: gender-neutral payment action and event wording', () 
     },
   );
 
-  it('keeps corresponding English keys and the same interpolation parameters', () => {
+  it('keeps required Russian payment keys and only approved placeholders', () => {
     for (const key of keys) {
-      expect(typeof en.claim[key]).toBe('string');
-      const ruParams = [...ru.claim[key].matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort();
-      const enParams = [...en.claim[key].matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort();
-      expect(ruParams).toEqual(enParams);
+      const message = ru.claim[key];
+      expect(typeof message).toBe('string');
+      expect(message.trim()).not.toBe('');
+      const placeholders = [...message.matchAll(/\{(\w+)\}/g)].map((match) => match[1]!);
+      expect(placeholders.every((name) => ['name', 'payer', 'amount', 'receipt', 'at'].includes(name))).toBe(true);
     }
   });
 });

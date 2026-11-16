@@ -1,3 +1,4 @@
+import ruErrors from '../../../../messages/ru/errors.json';
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('next/headers', () => ({
@@ -57,7 +58,7 @@ describe('Issue 3.2: expenses in own group only, no per-owner creation quota', (
     await expect(
       api.create({
         groupId: 'foreign',
-        title: 'Unauthorized',
+        title: ruErrors.signInRequired,
         amount: 101,
         paidById: 'u1',
         splitMode: 'EQUAL',
@@ -183,7 +184,7 @@ describe('a group archived while a change was on its way (#289)', () => {
     const api = await caller();
     await expect(api.create(newExpense)).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'New expenses are allowed only in groups using RUB.',
+      message: ruErrors.rubOnlyGroup,
     });
     expect(mockDb.$transaction).not.toHaveBeenCalled();
   });
@@ -227,7 +228,7 @@ describe('a group archived while a change was on its way (#289)', () => {
     const api = await caller();
     await expect(api.create(newExpense)).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Cannot add expenses to an archived group',
+      message: ruErrors.archivedAddExpense,
     });
     expect(mockDb.expense.create).not.toHaveBeenCalled();
     expect(mockDb.activityLog.create).not.toHaveBeenCalled();
@@ -237,7 +238,7 @@ describe('a group archived while a change was on its way (#289)', () => {
     const api = await caller();
     await expect(
       api.update({ groupId: 'g1', expenseId: 'e1', amount: 2000, shares: [{ userId: 'u1', amount: 2000 }] }),
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Cannot modify expenses in an archived group' });
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: ruErrors.archivedEditExpense });
     expect(mockDb.expenseShare.deleteMany).not.toHaveBeenCalled();
     expect(mockDb.expense.update).not.toHaveBeenCalled();
   });
@@ -246,7 +247,7 @@ describe('a group archived while a change was on its way (#289)', () => {
     const api = await caller();
     await expect(api.delete({ groupId: 'g1', expenseId: 'e1' })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Cannot delete expenses from an archived group',
+      message: ruErrors.archivedDeleteExpense,
     });
     expect(mockDb.expense.delete).not.toHaveBeenCalled();
   });
@@ -415,8 +416,7 @@ describe('RUB-only expense editing API', () => {
     mockDb.group.findUnique.mockResolvedValueOnce({ archivedAt: null, currency: 'USD' });
     await expect(api.update({ groupId: 'g1', expenseId: 'e1', title: 'Dinner' })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message:
-        'Editing is available only for expenses and groups in RUB. Existing amounts in other currencies are unchanged.',
+      message: ruErrors.rubOnlyExpense,
     });
     mockDb.expense.findUnique.mockResolvedValueOnce({ ...ownExpense, currency: 'USD' });
     await expect(api.update({ groupId: 'g1', expenseId: 'e1', title: 'Dinner' })).rejects.toMatchObject({
