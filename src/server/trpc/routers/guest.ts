@@ -2311,15 +2311,6 @@ export const guestRouter = createTRPCRouter({
             status: guestPresenceState(!!entry.personToken, seenByPerson.get(entry.id)),
           }));
 
-    let receiptImagePath: string | null = null;
-    if (session.receiptId) {
-      const receipt = await ctx.db.receipt.findUnique({
-        where: { id: session.receiptId },
-        select: { imagePath: true },
-      });
-      receiptImagePath = receipt?.imagePath ?? null;
-    }
-
     return {
       id: session.id,
       shareToken: input.token,
@@ -2396,7 +2387,6 @@ export const guestRouter = createTRPCRouter({
         ctx.session?.user?.id,
       ),
       hasFinalizationOrganizer: typeof parseExtractedData(session.receiptData).finalizationOrganizerUserId === 'string',
-      receiptImagePath,
       createdAt: session.createdAt,
       expiresAt: session.expiresAt,
     };

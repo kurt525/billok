@@ -68,7 +68,6 @@ import {
   Users,
   Receipt,
   ArrowRight,
-  Image as ImageIcon,
   Pencil,
   X,
   Link2,
@@ -261,7 +260,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     setParkedSaves(new Map());
   }
   const [saving, setSaving] = useState(false);
-  const [showImage, setShowImage] = useState(false);
   const [editingPersonId, setEditingPersonId] = useState<string | null>(null);
   const [creatorGuestLink, setCreatorGuestLink] = useState<{
     personId: string;
@@ -2125,38 +2123,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           {t('copyLink')}
         </Button>
 
-        {/* Receipt image viewer */}
-        {data.receiptImagePath && (
-          <>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setShowImage(!showImage)}
-              data-testid="toggle-receipt-image"
-            >
-              <ImageIcon className="mr-2 h-4 w-4" />
-              {showImage ? t('hideReceipt') : t('viewReceipt')}
-            </Button>
-            {showImage && (
-              <Card>
-                <CardContent className="p-2">
-                  {/* eslint-disable-next-line @next/next/no-img-element -- user-uploaded
-                      receipt photo with unknown natural dimensions; next/image would need
-                      either server-side dimension probing or a fill+aspect-ratio layout
-                      change, out of scope here */}
-                  <img
-                    src={`/api/uploads/${data.receiptImagePath}`}
-                    alt={t('receiptImage')}
-                    className="w-full rounded-md"
-                    data-testid="receipt-image"
-                  />
-                </CardContent>
-              </Card>
-            )}
-          </>
-        )}
-
         {/* People already in session */}
         {data.people.length > 0 && (
           <Card>
@@ -2576,38 +2542,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             <p className="text-xs text-muted-foreground">{t('personalTipPendingTotals')}</p>
           </CardContent>
         </Card>
-      )}
-
-      {/* Receipt image viewer */}
-      {data.receiptImagePath && (
-        <>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setShowImage(!showImage)}
-            data-testid="toggle-receipt-image"
-          >
-            <ImageIcon className="mr-2 h-4 w-4" />
-            {showImage ? t('hideReceipt') : t('viewReceipt')}
-          </Button>
-          {showImage && (
-            <Card>
-              <CardContent className="p-2">
-                {/* eslint-disable-next-line @next/next/no-img-element -- user-uploaded
-                    receipt photo with unknown natural dimensions; next/image would need
-                    either server-side dimension probing or a fill+aspect-ratio layout
-                    change, out of scope here */}
-                <img
-                  src={`/api/uploads/${data.receiptImagePath}`}
-                  alt={t('receiptImage')}
-                  className="w-full rounded-md"
-                  data-testid="receipt-image"
-                />
-              </CardContent>
-            </Card>
-          )}
-        </>
       )}
 
       {data.isCreator && <GuestPaymentGroupsEditor token={token} people={data.people} paidByIndex={data.paidByIndex} />}

@@ -57,6 +57,8 @@ jobs:
         run: python3 scripts/test_billok_legacy_cleanup.py
       - name: Verify no live Venmo code, API or payment links (Issue #1 9.3)
         run: python3 scripts/test_billok_venmo_removal.py
+      - name: Verify manual receipt UI has no obsolete photo viewers (Issue #1 9.3)
+        run: python3 scripts/test_billok_manual_no_photo_viewers.py
       - name: Verify SBP registry auto-update safety tests
         run: npm run sbp:sync:test
       - name: Verify translation keys
