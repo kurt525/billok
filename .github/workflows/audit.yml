@@ -1,9 +1,8 @@
-name: Dependency Audit
+name: BillOK Dependency Audit
 
+# Manual, non-publishing audit on the dedicated runner; no upstream
+# scheduling or duplicate GitHub-hosted CI.
 on:
-  schedule:
-    # Run every Monday at 08:00 UTC
-    - cron: "0 8 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -11,24 +10,28 @@ permissions:
 
 jobs:
   audit:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, billok]
+    timeout-minutes: 25
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - name: Checkout BillOK
+        uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
+      - name: Use preinstalled Node.js 22.23.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_bin="$RUNNER_TOOL_CACHE/node/22.23.4/x64/bin"
+          test -x "$node_bin/node"
+          echo "$node_bin" >> "$GITHUB_PATH"
+          "$node_bin/node" --version
 
       - name: Install dependencies
-        run: npm ci --legacy-peer-deps
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
 
       - name: Audit production dependencies
         run: npm audit --audit-level=high --omit=dev
 
-      - name: Audit dev dependencies (informational)
+      - name: Audit development dependencies (informational)
         if: always()
         continue-on-error: true
         run: npm audit --audit-level=high

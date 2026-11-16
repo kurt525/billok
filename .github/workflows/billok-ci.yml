@@ -33,6 +33,8 @@ jobs:
         run: npm ci --legacy-peer-deps --no-audit --no-fund
       - name: Generate Prisma client
         run: npx prisma generate
+      - name: Verify BillOK workflow routing (Issue #1 8.2)
+        run: python3 scripts/test_billok_workflow_routing.py
       - name: Verify SBP registry auto-update safety tests
         run: npm run sbp:sync:test
       - name: Verify translation keys

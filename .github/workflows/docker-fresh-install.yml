@@ -7,11 +7,10 @@ name: Docker Fresh Install
 # entrypoint, the pre-push SQL migrations, or the packages the Dockerfile
 # adds. Run it locally with `npm run test:docker`.
 
-# Pull requests (and manual runs): on main, docker.yml runs the same script
-# before it publishes the image.
+# 8.2: manual only; require a separate Docker-capable isolated runner.
+# The regular ci-runner has no Docker-daemon permission. 8.9 owns Docker
+# isolation tests; 8.4 owns release/publication protection.
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -20,7 +19,7 @@ concurrency:
 
 jobs:
   fresh-install:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, billok-docker-smoke]
     permissions:
       contents: read
 
@@ -37,9 +36,9 @@ jobs:
           context: .
           file: docker/Dockerfile
           load: true
-          tags: sharetab:ci
+          tags: billok:ci
           # Reuse the layers the main-branch image build caches.
           cache-from: type=gha,scope=main-image
 
       - name: Smoke test the image
-        run: scripts/docker-smoke.sh --image sharetab:ci
+        run: scripts/docker-smoke.sh --image billok:ci
