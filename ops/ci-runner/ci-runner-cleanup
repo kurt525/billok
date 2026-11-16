@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+# BillOK-only host cleanup and disk guard, Issue #1 8.8.
+# No global docker prune: it may delete another project's Docker build cache,
+# stopped containers or image layers. No other runner's diagnostic logs.
+# Never touch Node.js 22.23.4, runner services, project volumes or worktrees.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+MODE="${1:-daily}"
+DRY_RUN="${CI_CLEANUP_DRY_RUN:-0}"
+LOCK_FILE=/run/lock/ci-runner-cleanup.lock
+NODE_BIN=/opt/actions-runner-billok/_work/_tool/node/22.23.4/x64/bin/node
+CI_DISK=/srv/ci-storage
+RUNNER_WORK=/opt/actions-runner-billok/_work
+RUNNER_SERVICE=actions.runner.kurt525-billok.msk-1-vm-0w12-billok.service
+log() { printf '[ci-runner-cleanup] %s\n' "$*"; }
+disk_pct() { df -P "$1" | awk 'NR == 2 {gsub(/%/, "", $5);print $5}'; }
+disk_free() { df -PB1 "$1" | awk 'NR == 2 {print $4}'; }
+disk_summary() {
+  local d
+  for d in / "$CI_DISK"; do
+    df -hP "$d" | awk -v disk="$d" 'NR==2 {printf " disk=%s used=%s free=%s pct=%s",disk,$3,$4,$5}'
+  done
+}
+check_health() {
+  local root_pct ci_pct
+  if ! mountpoint -q "$CI_DISK" || ! mountpoint -q "$RUNNER_WORK"; then
+    log "RESULT=CRITICAL BillOK CI storage/work mount missing; no cleanup"
+    return 2
+  fi
+  if [[ ! -x "$NODE_BIN" || "$("$NODE_BIN" --version)" != v22.23.4 ]]; then
+    log 'RESULT=CRITICAL required Node.js 22.23.4 missing; no cleanup'
+    return 2
+  fi
+  if ! systemctl is-active --quiet "$RUNNER_SERVICE"; then
+    log 'RESULT=CRITICAL BillOK self-hosted runner service inactive'
+    return 2
+  fi
+  root_pct="$(disk_pct /)";ci_pct="$(disk_pct "$CI_DISK")"
+  log "HEALTH$(disk_summary) node=v22.23.4 runner=active"
+  if (( root_pct >= 90 || ci_pct >= 90 )); then
+    log 'RESULT=CRITICAL one or more disks >=90%; operator review needed'
+    return 2
+  fi
+  if (( root_pct >= 80 || ci_pct >= 80 )); then
+    log 'RESULT=WARNING one or more disks >=80%; hourly pressure cleanup is scheduled'
+    return 0
+  fi
+  log 'RESULT=HEALTHY'
+}
+runner_busy() { pgrep -f '/opt/actions-runner[^ ]*/bin/Runner.Worker' >/dev/null 2>&1; }
+case "$MODE" in daily|pressure|status) ;; *) log "ERROR invalid mode: $MODE";exit 2 ;; esac
+# Status is safe for ordinary CI jobs and never changes the host.
+if [[ "$MODE" == status ]]; then check_health;exit "$?";fi
+if [[ "$EUID" -ne 0 ]]; then log 'ERROR root required for cleanup';exit 3;fi
+# Fail closed if the CI mount, runner or pinned Node.js is unavailable.
+# An overloaded disk is a reason to clean, not a reason to stop cleaning.
+if ! mountpoint -q "$CI_DISK" || ! mountpoint -q "$RUNNER_WORK"; then
+  log 'ERROR CI storage/work mount missing; refusing cleanup';exit 4
+fi
+if [[ ! -x "$NODE_BIN" || "$("$NODE_BIN" --version)" != v22.23.4 ]]; then
+  log 'ERROR required Node.js 22.23.4 missing; refusing cleanup';exit 4
+fi
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then log 'RESULT=DEFERRED lock busy';exit 0;fi
+before_free_root="$(disk_free /)"
+before_free_ci="$(disk_free "$CI_DISK")"
+before_pct_root="$(disk_pct /)"
+before_pct_ci="$(disk_pct "$CI_DISK")"
+log "START mode=$MODE dry_run=$DRY_RUN $(disk_summary)"
+if runner_busy; then log 'RESULT=DEFERRED active Runner.Worker; no deletion';exit 0;fi
+if [[ "$MODE" == pressure ]] && (( before_pct_root < 80 && before_pct_ci < 80 )); then
+  log 'RESULT=HEALTHY both / and /srv/ci-storage below 80%; no cleanup needed';exit 0
+fi
+if [[ "$MODE" == pressure ]]; then diag_days=7;tmp_age_minutes=4320
+else diag_days=14;tmp_age_minutes=10080;fi
+
+clean_logs() {
+  # Only the BillOK runner's aged diagnostic .log files; never other runners.
+  local d=/opt/actions-runner-billok/_diag f
+  [[ -d "$d" && ! -L "$d" ]] || return 0
+  while IFS= read -r -d '' f; do
+    if [[ "$DRY_RUN" == 1 ]]; then log "DRY_RUN old BillOK runner log $f"
+    else rm -f -- "$f";fi
+  done < <(find "$d" -maxdepth 1 -type f -name '*.log' -mtime "+$diag_days" -print0)
+}
+clean_billok_tmp() {
+  local d fresh local_mounts
+  while IFS= read -r -d '' d; do
+    # Only aged, unmounted /tmp/billok-* worktrees. Keep important recovery,
+    # secret, deploy and Node.js restore directories even when old.
+    [[ "$d" == /tmp/billok-* && -d "$d" && ! -L "$d" ]] || continue
+    case "$d" in
+      /tmp/billok-node*|/tmp/billok-backup*|/tmp/billok-deploy*|/tmp/billok-release*|/tmp/billok-secret*|/tmp/billok-sign*|/tmp/billok-keep*|/tmp/billok-production*)
+        log "SKIP protected BillOK directory $d";continue;;
+    esac
+    local_mounts="$(findmnt -rn -o TARGET)"
+    if mountpoint -q "$d" || grep -Fq "$d/" <<< "$local_mounts"; then
+      log "SKIP mounted or nested-mounted scratch $d";continue
+    fi
+    fresh="$(find "$d" -xdev -type f -mmin -1440 -print -quit)"
+    if [[ -n "$fresh" ]]; then log "SKIP modified in last 24h $d";continue;fi
+    if [[ "$DRY_RUN" == 1 ]];then log "DRY_RUN old BillOK scratch $d"
+    else log "REMOVE old BillOK scratch $d";rm -rf --one-file-system -- "$d";fi
+  done < <(find /tmp -mindepth 1 -maxdepth 1 -xdev -type d -name 'billok-*' -mmin "+$tmp_age_minutes" -print0)
+}
+clean_labeled_volumes() {
+  # Anonymous/unlabeled volumes may contain other projects' databases.
+  # Remove ONLY explicitly labeled, unmounted, aged BillOK CI temporary volumes.
+  local v created epoch now attached
+  now="$(date +%s)"
+  while IFS= read -r v;do
+    [[ "$v" =~ ^billok-ci-temp-[0-9]+-[0-9]+$ ]] || continue
+    [[ "$(docker volume inspect -f '{{ index .Labels "billok.ci.ephemeral" }}' "$v" 2>/dev/null)" == true ]] || continue
+    attached="$(docker ps -aq --filter "volume=$v")"
+    if [[ -n "$attached" ]];then log "SKIP attached volume $v";continue;fi
+    created="$(docker volume inspect -f '{{ .CreatedAt }}' "$v")"
+    epoch="$(date -d "$created" +%s 2>/dev/null || printf 0)"
+    if (( epoch == 0 || now - epoch < 259200 ));then continue;fi
+    if [[ "$DRY_RUN" == 1 ]];then log "DRY_RUN labeled CI volume $v"
+    else log "REMOVE labeled CI volume $v";docker volume rm "$v";fi
+  done < <(docker volume ls -q --filter 'label=billok.ci.ephemeral=true')
+}
+clean_logs
+clean_billok_tmp
+if docker info >/dev/null 2>&1;then
+  clean_labeled_volumes
+  log 'PROTECTED shared Docker build cache, images and containers: never prune globally'
+else
+  log 'WARNING Docker unavailable; skip labeled temporary volumes'
+fi
+after_free_root="$(disk_free /)"
+after_free_ci="$(disk_free "$CI_DISK")"
+after_pct_root="$(disk_pct /)"
+after_pct_ci="$(disk_pct "$CI_DISK")"
+log "FINISH $(disk_summary); root_delta_bytes=$((after_free_root-before_free_root)); ci_delta_bytes=$((after_free_ci-before_free_ci))"
+if [[ "$DRY_RUN" == 1 ]];then log 'RESULT=DRY_RUN';exit 0;fi
+if (( after_pct_root >= 90 || after_pct_ci >= 90 ));then
+  log 'RESULT=INSUFFICIENT one or more disks >=90%; protected data intentionally retained; operator review needed'
+  exit 2
+fi
+if (( after_pct_root >= 85 || after_pct_ci >= 85 ));then
+  log 'RESULT=WARNING one or more disks >=85%; review before more CI activity'
+  exit 0
+fi
+log 'RESULT=OK'
