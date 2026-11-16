@@ -57,34 +57,6 @@ export function AuditLogSection() {
       label: t('audit.actionUnusedReceiptsCleaned'),
       color: 'bg-blue-500/10 text-blue-700 dark:text-blue-400',
     },
-    MERIDIAN_LOGIN_STARTED: {
-      label: t('audit.actionMeridianLogin'),
-      color: 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-400',
-    },
-    MERIDIAN_LOGIN_COMPLETED: {
-      label: t('audit.actionMeridianLoggedIn'),
-      color: 'bg-green-500/10 text-green-700 dark:text-green-400',
-    },
-    MERIDIAN_LOGIN_FAILED: {
-      label: t('audit.actionMeridianLoginFailed'),
-      color: 'bg-red-500/10 text-red-700 dark:text-red-400',
-    },
-    MERIDIAN_LOGOUT: {
-      label: t('audit.actionMeridianLogout'),
-      color: 'bg-orange-500/10 text-orange-700 dark:text-orange-400',
-    },
-    MERIDIAN_NOTIFY_PREFERENCE_CHANGED: {
-      label: t('audit.actionNotifyPrefChanged'),
-      color: 'bg-violet-500/10 text-violet-700 dark:text-violet-400',
-    },
-    AI_PROVIDER_TESTED: {
-      label: t('audit.actionAIProviderTest'),
-      color: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
-    },
-    GUEST_UPLOADS_SETTING_CHANGED: {
-      label: t('audit.actionGuestUploadsChanged'),
-      color: 'bg-violet-500/10 text-violet-700 dark:text-violet-400',
-    },
   };
 
   function formatMetadata(metadata: Record<string, unknown> | null): string {

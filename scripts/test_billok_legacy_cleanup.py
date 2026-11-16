@@ -67,5 +67,37 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         )
 
 
+    def test_obsolete_ai_and_external_auth_admin_translations_removed(self):
+        admin = json.loads(source("messages/ru/admin.json"))
+        for section in (
+            "guestUploads", "aiStats", "aiProviderTest", "authExpiry",
+            "meridianAuth", "codexAuth",
+        ):
+            self.assertNotIn(section, admin)
+        for required in ("audit", "ownerUsers", "impersonation", "registration"):
+            self.assertIn(required, admin)
+
+    def test_unused_legacy_audit_labels_removed_but_security_log_kept(self):
+        admin = json.loads(source("messages/ru/admin.json"))
+        audit = source("src/components/admin/audit-log-section.tsx")
+        for action, key in (
+            ("MERIDIAN_LOGIN_STARTED", "actionMeridianLogin"),
+            ("MERIDIAN_LOGIN_COMPLETED", "actionMeridianLoggedIn"),
+            ("MERIDIAN_LOGIN_FAILED", "actionMeridianLoginFailed"),
+            ("MERIDIAN_LOGOUT", "actionMeridianLogout"),
+            ("MERIDIAN_NOTIFY_PREFERENCE_CHANGED", "actionNotifyPrefChanged"),
+            ("AI_PROVIDER_TESTED", "actionAIProviderTest"),
+            ("GUEST_UPLOADS_SETTING_CHANGED", "actionGuestUploadsChanged"),
+        ):
+            self.assertNotIn(key, admin["audit"])
+            self.assertNotIn(action, audit)
+        self.assertIn("trpc.admin.getSecurityEvents.useQuery", audit)
+        self.assertIn("trpc.admin.getAuditLog.useQuery", audit)
+        self.assertIn("label: entry.action", audit)
+        for current in ("actionUserDeleted", "actionInviteCreated", "actionExportCreated"):
+            self.assertIn(current, admin["audit"])
+
+
+
 if __name__ == "__main__":
     unittest.main()
