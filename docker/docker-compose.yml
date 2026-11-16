@@ -1,5 +1,8 @@
 services:
   sharetab:
+    labels:
+      ru.billok.project: billok
+      ru.billok.component: application
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -32,15 +35,38 @@ services:
       - pgdata:/var/lib/postgresql/data
       - uploads:/app/uploads
     restart: unless-stopped
+    # Combined PostgreSQL + Next.js container. No production deployment in 8.9.
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: "2.0"
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # Give the entrypoint time to stop Node and shut PostgreSQL down cleanly
     stop_grace_period: 30s
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      # Healthy only when both the bundled PostgreSQL and web process respond.
+      test:
+        - CMD-SHELL
+        - su-exec postgres pg_isready -q -h /run/postgresql && wget -qO- http://127.0.0.1:3000/api/health >/dev/null
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
 
+# Explicitly named, independently recoverable BillOK-only volumes.
+# Do not use docker compose down --volumes or reuse another project's volumes.
 volumes:
   pgdata:
+    name: billok_pgdata
+    labels:
+      ru.billok.project: billok
+      ru.billok.data: postgres
   uploads:
+    name: billok_uploads
+    labels:
+      ru.billok.project: billok
+      ru.billok.data: uploads

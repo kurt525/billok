@@ -47,6 +47,8 @@ jobs:
         run: python3 scripts/test_billok_release_gates.py
       - name: Verify runner maintenance guard (Issue #1 8.8)
         run: python3 scripts/test_ci_runner_maintenance.py
+      - name: Verify BillOK container isolation and backup/restore safety (Issue #1 8.9)
+        run: python3 scripts/test_billok_container_isolation.py
       - name: Verify SBP registry auto-update safety tests
         run: npm run sbp:sync:test
       - name: Verify translation keys
