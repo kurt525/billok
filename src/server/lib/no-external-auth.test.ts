@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -54,7 +54,15 @@ describe('Issue #1 6.9: no undeclared alternate authentication code', () => {
     }
     expect(source('src/middleware.ts')).not.toContain("'/verify-request'");
     expect(source('CONTRIBUTING.md')).not.toMatch(/mock-smtp\.mjs|magic-link tests/i);
-    expect(source('.github/workflows/test.yml')).not.toContain('mock-smtp.mjs');
+    // 8.2 removed upstream test.yml: guard EVERY remaining workflow instead
+    // of assuming a legacy file still exists.
+    const workflowDir = resolve(process.cwd(), '.github/workflows');
+    const workflowFiles = readdirSync(workflowDir).filter((name) => /\.ya?ml$/u.test(name));
+    expect(workflowFiles).toContain('billok-ci.yml');
+    expect(workflowFiles).not.toContain('test.yml');
+    for (const workflow of workflowFiles) {
+      expect(source('.github/workflows/' + workflow), workflow).not.toContain('mock-smtp.mjs');
+    }
     expect(config).toContain('readRegistrationEmailConfig');
     expect(source('src/server/lib/email-verification-email.ts')).toContain('sendRussianRegistrationVerificationEmail');
     expect(source('src/server/lib/webauthn-registration.ts')).toContain('verifyRegistrationResponse');
