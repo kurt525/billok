@@ -51,6 +51,8 @@ jobs:
         run: python3 scripts/test_billok_container_isolation.py
       - name: Verify loopback-only Nginx/HTTPS predeploy configuration (Issue #1 8.10)
         run: python3 scripts/test_billok_https_proxy.py
+      - name: Verify production secrets isolation and fail-closed startup (Issue #1 8.11)
+        run: python3 scripts/test_billok_production_secrets.py
       - name: Verify SBP registry auto-update safety tests
         run: npm run sbp:sync:test
       - name: Verify translation keys

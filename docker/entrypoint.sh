@@ -1,20 +1,22 @@
 #!/bin/sh
 set -e
 
-# ── Validate required secrets ──────────────────────────────────
-if [ -z "$NEXTAUTH_SECRET" ] || [ "$NEXTAUTH_SECRET" = "change-me-in-production" ]; then
-  echo "ERROR: NEXTAUTH_SECRET must be set. Generate with: openssl rand -base64 32"
-  exit 1
-fi
-if [ -z "$AUTH_SECRET" ] || [ "$AUTH_SECRET" = "change-me-in-production" ]; then
-  echo "ERROR: AUTH_SECRET must be set. Generate with: openssl rand -base64 32"
-  exit 1
-fi
+# 8.11: fail closed before starting PostgreSQL or application processes.
+# Credentials are loaded from root-owned files, never Docker inspect.
+. /app/load-secrets.sh
 
 PGDATA="${PGDATA:-/var/lib/postgresql/data}"
 DB_USER="${DB_USER:-sharetab}"
-DB_PASSWORD="${DB_PASSWORD:-sharetab}"
+# Loaded from /run/billok-secrets/database-password.
+: "${DB_PASSWORD:?BillOK secret database-password missing}"
 DB_NAME="${DB_NAME:-sharetab}"
+
+# Keep Auth.js and SMTP secrets out of PostgreSQL child environments.
+postgres_command() {
+  env -u DB_PASSWORD -u AUTH_SECRET -u NEXTAUTH_SECRET \
+    -u EMAIL_SERVER_PASSWORD -u WEB_PUSH_VAPID_PRIVATE_KEY \
+    su-exec postgres "$@"
+}
 
 # ── Start PostgreSQL ────────────────────────────────────────
 
@@ -31,7 +33,7 @@ chown -R nextjs:nodejs "$UPLOAD_DIR"
 # Initialize database if needed
 if [ ! -s "$PGDATA/PG_VERSION" ]; then
   echo "Initializing PostgreSQL database..."
-  su-exec postgres initdb -D "$PGDATA" --auth-local=trust --auth-host=md5
+  postgres_command initdb -D "$PGDATA" --auth-local=trust --auth-host=md5
 
   # Allow local connections
   echo "host all all 127.0.0.1/32 md5" >> "$PGDATA/pg_hba.conf"
@@ -41,28 +43,29 @@ if [ ! -s "$PGDATA/PG_VERSION" ]; then
   sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost'/" "$PGDATA/postgresql.conf"
 
   # Start temporarily to create user and database
-  su-exec postgres pg_ctl -D "$PGDATA" -w start -o "-k /run/postgresql"
+  postgres_command pg_ctl -D "$PGDATA" -w start -o "-k /run/postgresql"
 
-  # Use psql variable quoting (:"ident" / :'literal') so credentials containing
-  # quotes can't break or inject into the bootstrap SQL
-  su-exec postgres psql -h /run/postgresql -v ON_ERROR_STOP=1 \
-    -v db_user="$DB_USER" -v db_password="$DB_PASSWORD" -v db_name="$DB_NAME" <<'EOSQL'
-CREATE USER :"db_user" WITH PASSWORD :'db_password';
+  # 8.11: validated hex secret reaches psql through stdin, not process argv,
+  # GitHub logs, or docker inspect. Identifier arguments contain no secrets.
+  # DB_PASSWORD is strictly validated as a >=64-character lowercase hex value.
+  postgres_command psql -h /run/postgresql -v ON_ERROR_STOP=1 \
+    -v db_user="$DB_USER" -v db_name="$DB_NAME" <<EOSQL
+CREATE USER :"db_user" WITH PASSWORD '$DB_PASSWORD';
 CREATE DATABASE :"db_name" OWNER :"db_user";
 GRANT ALL PRIVILEGES ON DATABASE :"db_name" TO :"db_user";
 EOSQL
 
-  su-exec postgres pg_ctl -D "$PGDATA" -w stop
+  postgres_command pg_ctl -D "$PGDATA" -w stop
   echo "PostgreSQL initialized."
 fi
 
 echo "Starting PostgreSQL..."
 # Remove stale PID file left behind by unclean container restarts
 rm -f "$PGDATA/postmaster.pid"
-su-exec postgres pg_ctl -D "$PGDATA" -w start -o "-k /run/postgresql"
+postgres_command pg_ctl -D "$PGDATA" -w start -o "-k /run/postgresql"
 
 # Wait for PostgreSQL to be ready
-until su-exec postgres pg_isready -h localhost -q; do
+until postgres_command pg_isready -h localhost -q; do
   echo "Waiting for PostgreSQL..."
   sleep 1
 done
@@ -81,7 +84,8 @@ if [ -d "/app/prisma/migrations" ]; then
   for sqlfile in /app/prisma/migrations/*.sql; do
     [ -f "$sqlfile" ] || continue
     echo "Running migration: $(basename "$sqlfile")..."
-    su-exec postgres psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$sqlfile" 2>&1
+    PGPASSWORD="$DB_PASSWORD" postgres_command psql -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" \
+      -v ON_ERROR_STOP=1 -f "$sqlfile" 2>&1
   done
 fi
 
@@ -95,7 +99,8 @@ if [ -d "/app/prisma/after-push" ]; then
   for sqlfile in /app/prisma/after-push/*.sql; do
     [ -f "$sqlfile" ] || continue
     echo "Running post-schema SQL: $(basename "$sqlfile")..."
-    su-exec postgres psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$sqlfile" 2>&1
+    PGPASSWORD="$DB_PASSWORD" postgres_command psql -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" \
+      -v ON_ERROR_STOP=1 -f "$sqlfile" 2>&1
   done
 fi
 
@@ -107,7 +112,7 @@ echo "  BillOK Configuration"
 echo "============================================"
 echo "  Version:        $(node -e "console.log(require('./package.json').version)" 2>/dev/null || echo 'unknown')"
 echo "  Commit:         $(cat .commit-sha 2>/dev/null || echo 'unknown')"
-echo "  Database:       $(echo "$DATABASE_URL" | sed -E 's#//[^@]+@#//***:***@#')"
+echo "  Database:       local PostgreSQL; credentials not logged"
 echo "  DB User:        ${DB_USER:-sharetab}"
 echo "  DB Name:        ${DB_NAME:-sharetab}"
 echo "  Auth URL:       ${NEXTAUTH_URL:-not set}"
@@ -139,7 +144,7 @@ export HOME=/home/nextjs
 # restart (the stale postmaster.pid this script used to clean up).
 stop_postgres() {
   echo "Stopping PostgreSQL..."
-  su-exec postgres pg_ctl -D "$PGDATA" -m fast -w stop || true
+  postgres_command pg_ctl -D "$PGDATA" -m fast -w stop || true
 }
 
 shutdown() {

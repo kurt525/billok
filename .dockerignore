@@ -12,9 +12,19 @@ src/generated
 .playwright-mcp
 workspace.code-workspace
 
-# secrets
-.env
-.env.local
+# 8.11: no local credentials, package auth tokens or private keys in image.
+# Applies to nested files as well as repo-root files.
+.env*
+**/.env*
+.npmrc
+**/.npmrc
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+**/*.keystore
+**/secrets/
 
 # runtime data (dev only — never ship into the image)
 data

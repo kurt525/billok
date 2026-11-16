@@ -47,6 +47,7 @@ RUN npm init -y && \
 WORKDIR /app
 
 COPY docker/entrypoint.sh /app/entrypoint.sh
+COPY docker/load-secrets.sh /app/load-secrets.sh
 
 # Create directories
 RUN mkdir -p /app/uploads/receipts /var/lib/postgresql/data /run/postgresql && \
