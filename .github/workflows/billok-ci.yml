@@ -15,12 +15,16 @@ concurrency:
 # Trusted branches only: never run public pull_request code on the self-hosted VPS.
 jobs:
   code-quality:
+    permissions:
+      contents: read
     name: Code quality and types
     runs-on: [self-hosted, Linux, X64, billok]
     timeout-minutes: 35
     steps:
       - name: Checkout BillOK
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Use preinstalled Node.js 22.23.4
         shell: bash
         run: |
@@ -35,6 +39,8 @@ jobs:
         run: npx prisma generate
       - name: Verify BillOK workflow routing (Issue #1 8.2)
         run: python3 scripts/test_billok_workflow_routing.py
+      - name: Verify least-privilege CI security (Issue #1 8.3)
+        run: python3 scripts/test_billok_ci_security.py
       - name: Verify SBP registry auto-update safety tests
         run: npm run sbp:sync:test
       - name: Verify translation keys
@@ -47,12 +53,16 @@ jobs:
         run: npx tsc --noEmit
 
   unit-tests:
+    permissions:
+      contents: read
     name: Unit tests (Vitest)
     runs-on: [self-hosted, Linux, X64, billok]
     timeout-minutes: 35
     steps:
       - name: Checkout BillOK
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Use preinstalled Node.js 22.23.4
         shell: bash
         run: |
@@ -69,22 +79,30 @@ jobs:
         run: npm test
 
   mobile-pwa-tests:
+    permissions:
+      contents: read
     name: BillOK mobile PWA tests
     runs-on: [self-hosted, Linux, X64, billok]
     timeout-minutes: 10
     steps:
       - name: Checkout BillOK
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Test mobile PWA contract
         run: python3 scripts/test_billok_pwa.py
 
   mobile-browser-smoke:
+    permissions:
+      contents: read
     name: Mobile Chromium (320–720 px)
     runs-on: [self-hosted, Linux, X64, billok]
     timeout-minutes: 35
     steps:
       - name: Checkout trusted BillOK branch
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Use preinstalled Node.js 22.23.4
         shell: bash
         run: |
@@ -272,6 +290,7 @@ jobs:
           export NEXTAUTH_URL="http://localhost:$qa_port"
           export AUTH_URL="$NEXTAUTH_URL"
           export AUTH_SECRET="$(openssl rand -hex 32)"
+          printf "::add-mask::%s\n" "$AUTH_SECRET"
           export UPLOAD_DIR="$RUNNER_TEMP/billok-mobile-upload-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           echo "UPLOAD_DIR=$UPLOAD_DIR" >> "$GITHUB_ENV"
           export ADMIN_EMAIL="alice@qa.billok.ru"
@@ -300,7 +319,6 @@ jobs:
           export GUEST_RATE_LIMIT_MAX=1000
           echo "NEXTAUTH_URL=$NEXTAUTH_URL" >> "$GITHUB_ENV"
           echo "AUTH_URL=$AUTH_URL" >> "$GITHUB_ENV"
-          echo "AUTH_SECRET=$AUTH_SECRET" >> "$GITHUB_ENV"
           # setsid gives the isolated compiled server its own process group
           # for cleanup. Never launch Next.js dev mode for browser acceptance.
           setsid npm run start -- -H 127.0.0.1 -p "$qa_port" \
@@ -374,6 +392,8 @@ jobs:
           fi
 
   coverage-regression:
+    permissions:
+      contents: read
     name: Coverage regression (%)
     runs-on: [self-hosted, Linux, X64, billok]
     timeout-minutes: 35
@@ -381,6 +401,7 @@ jobs:
       - name: Checkout BillOK (including main for baseline)
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Use preinstalled Node.js 22.23.4
         shell: bash

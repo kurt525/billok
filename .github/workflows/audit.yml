@@ -10,11 +10,15 @@ permissions:
 
 jobs:
   audit:
+    permissions:
+      contents: read
     runs-on: [self-hosted, Linux, X64, billok]
     timeout-minutes: 25
     steps:
       - name: Checkout BillOK
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Use preinstalled Node.js 22.23.4
         shell: bash
