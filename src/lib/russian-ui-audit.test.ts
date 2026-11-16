@@ -137,7 +137,7 @@ describe('Issue #1 1.2.12: Russian-only web/PWA and API error contracts', () => 
     expect(errors).toContain('const catalogs: Record<Locale, AbstractIntlMessages> = { ru }');
     expect(errors).toContain('message: userErrorMessage(error, locale)');
     expect(errors).toContain('return genericMessage(error.code, locale)');
-    for (const file of ['src/app/api/admin/export/route.ts', 'src/app/api/uploads/[...path]/route.ts']) {
+    for (const file of ['src/app/api/admin/export/route.ts']) {
       const route = source(file);
       expect(route).not.toMatch(/new Response\('(Forbidden|Unauthorized|Not found|Internal Server Error)'/u);
     }

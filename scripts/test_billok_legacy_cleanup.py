@@ -123,5 +123,26 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("currency: 'RUB'", create)
 
 
+    def test_upstream_image_endpoints_and_dead_scan_e2e_absent(self):
+        for name in (
+            "src/app/api/uploads/[...path]/route.ts",
+            "src/app/api/uploads/[...path]/route.test.ts",
+            "e2e/admin-unused-receipts.spec.ts",
+            "e2e/delete-cleanup.spec.ts",
+        ):
+            self.assertFalse((ROOT / name).exists(), name)
+        self.assertNotIn("receiptImagePath", source("src/server/trpc/routers/guest.ts"))
+        routes = source("e2e/security.spec.ts")
+        self.assertIn("Manual receipt has no image-upload or image-serving API", routes)
+        self.assertIn("oldPhoto.headers()['content-type']", routes)
+
+    def test_unused_receipt_loading_animations_removed(self):
+        self.assertFalse((ROOT / "src/lib/loading-messages.ts").exists())
+        common = json.loads(source("messages/ru/common.json"))
+        self.assertNotIn("loadingMessages", common)
+        self.assertIn("errors", common)
+        self.assertIn("nav", common)
+
+
 if __name__ == "__main__":
     unittest.main()

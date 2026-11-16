@@ -71,10 +71,10 @@ export async function deleteUnusedSplitReceipts(
  * or of its group then either waits for the new split and sees it, or finishes first and
  * the split is saved without the receipt, instead of pointing at one deleted a moment later.
  *
- * A split's page shows its receipt's image to anyone with the link, and `/api/uploads` serves
- * it to anyone while the split is open (#318), so only a guest upload, or a receipt the caller
- * can open on the group's pages (the group scan page's Share Link), can be used; any other is
- * refused as not found.
+ * Keep the original ownership and group-membership checks for a linked historical
+ * receipt. BillOK no longer serves image files to anyone; the old upload route
+ * is absent. This row lock still prevents a split from claiming a receipt
+ * belonging to another group or another registered user.
  */
 export async function lockReceiptForSplit(
   tx: Prisma.TransactionClient,

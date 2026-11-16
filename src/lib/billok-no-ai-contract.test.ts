@@ -85,16 +85,10 @@ describe('BillOK does not ship OCR or AI service code', () => {
     expect(manual).not.toMatch(/(?:extract|transcribe|processReceipt|uploadFile)\s*\(/);
   });
 
-  test('legacy receipt images are read-only and cannot re-enable uploads', () => {
-    const legacyRoute = read('src/app/api/uploads/[...path]/route.ts');
-    expect(legacyRoute).toMatch(/export\s+async\s+function\s+GET\s*\(/);
-    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
-      expect(legacyRoute).not.toMatch(new RegExp('export\\s+(?:async\\s+)?function\\s+' + method + '\\s*\\('));
-    }
-    expect(legacyRoute).toContain('resolveUploadPath');
-    expect(legacyRoute).toContain('imagePath: filePath');
-    expect(legacyRoute).toContain('receipt.uploadedById === session.user.id');
+  test('the legacy receipt image-serving route cannot expose manual BillOK checks', () => {
+    expect(existsSync(resolve(process.cwd(), 'src/app/api/uploads/[...path]/route.ts'))).toBe(false);
     const historicalEditor = read('src/app/[locale]/(app)/groups/[groupId]/scan/page.tsx');
     expect(historicalEditor).toContain("if (!receiptId) router.replace('/groups/' + groupId + '/expenses/new')");
+    expect(historicalEditor).toContain('getReceiptItems');
   });
 });

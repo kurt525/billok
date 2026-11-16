@@ -39,39 +39,28 @@ test.describe('Security & Edge Cases', () => {
     });
   });
 
-  // ── Upload Security ───────────────────────────────────────
+  // ── Removed upstream photo endpoints ─────────────────────
 
-  test.describe('Upload Security', () => {
-    test('6.2 — path traversal blocked on image serving', async () => {
+  test.describe('Manual receipt has no image-upload or image-serving API', () => {
+    test('old photo endpoints cannot return an image', async () => {
       const ctx = await request.newContext({ baseURL: BASE_URL });
-      const response = await ctx.get('/api/uploads/../../etc/passwd', { maxRedirects: 0 });
-      // Path traversal resolves to /etc/passwd which gets caught by middleware (redirect)
-      // or returns 401/403/404 — any of these means the traversal was blocked
-      expect([301, 302, 307, 308, 401, 403, 404]).toContain(response.status());
-      await ctx.dispose();
-    });
-
-    test('6.4 — image serving denies unauthenticated access', async () => {
-      const ctx = await request.newContext({ baseURL: BASE_URL });
-      const response = await ctx.get('/api/uploads/receipts/test.jpg');
-      // Returns 404 (receipt not in DB) or 401 (no auth) — both deny access
-      expect([401, 404]).toContain(response.status());
-      await ctx.dispose();
-    });
-
-    test('5.1.5 — upload requires auth', async () => {
-      const ctx = await request.newContext({ baseURL: BASE_URL });
-      const response = await ctx.post('/api/upload', {
-        multipart: {
-          file: {
-            name: 'test.jpg',
-            mimeType: 'image/jpeg',
-            buffer: Buffer.from('fake image data'),
+      try {
+        const oldPhoto = await ctx.get('/api/uploads/receipts/obsolete.jpg', { maxRedirects: 0 });
+        expect([301, 302, 307, 308, 404]).toContain(oldPhoto.status());
+        expect(oldPhoto.headers()['content-type'] ?? '').not.toMatch(/^image\//);
+        const oldUpload = await ctx.post('/api/upload', {
+          multipart: {
+            file: {
+              name: 'obsolete.jpg',
+              mimeType: 'image/jpeg',
+              buffer: Buffer.from('not a real photo'),
+            },
           },
-        },
-      });
-      expect(response.status()).toBe(401);
-      await ctx.dispose();
+        });
+        expect([404, 405]).toContain(oldUpload.status());
+      } finally {
+        await ctx.dispose();
+      }
     });
   });
 
