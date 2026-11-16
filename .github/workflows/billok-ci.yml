@@ -94,6 +94,8 @@ jobs:
         run: npm ci --legacy-peer-deps --no-audit --no-fund
       - name: Verify disposable QA mail MIME decoding
         run: node --import tsx --test scripts/qa-smtp-links.test.mjs
+      - name: Verify protected REG.RU delivery-check tool without sending email
+        run: python3 scripts/test_billok_mail_delivery_check.py
       - name: Generate Prisma client
         run: npx prisma generate
       - name: Start isolated temporary PostgreSQL
