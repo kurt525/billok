@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import nodemailer from 'nodemailer';
 import type { PrismaClient, SecurityEventOutcome } from '@/generated/prisma/client';
 import { readRegistrationEmailConfig } from './auth-config';
+import { sendBillokTransactionalEmail } from './transactional-email';
 import { logger } from './logger';
 import { readBillokWebAuthnRelyingParty } from './webauthn-relying-party';
 
@@ -135,19 +135,20 @@ export async function recordOwnerSecurityEvent(input: {
     const env = input.env ?? process.env;
     const mail = readRegistrationEmailConfig(env);
     if (mail.siteOrigin !== readBillokWebAuthnRelyingParty(env).origin) return;
-    const smtp = nodemailer.createTransport({
-      ...mail.server,
-      connectionTimeout: 4_000,
-      greetingTimeout: 4_000,
-      socketTimeout: 6_000,
-    });
-    const sent = await smtp.sendMail({
+    await sendBillokTransactionalEmail({
       from: mail.from,
       to: owner.user.email,
-      ...russianSecurityAlert({ action: input.action, outcome: input.outcome, actorId, targetFingerprint, when }),
+      server: mail.server,
+      message: russianSecurityAlert({
+        action: input.action,
+        outcome: input.outcome,
+        actorId,
+        targetFingerprint,
+        when,
+      }),
+      errorMessage: 'Delivery rejected',
+      timeouts: { connectionTimeout: 4_000, greetingTimeout: 4_000, socketTimeout: 6_000 },
     });
-    if (sent.rejected?.length || sent.pending?.length || (sent.accepted && !sent.accepted.includes(owner.user.email)))
-      throw new Error('Delivery rejected');
   } catch (error) {
     logger.warn('security.owner_alert_failed', {
       action: input.action,

@@ -1,5 +1,5 @@
-import nodemailer from 'nodemailer';
 import type { SMTPTransportOptions } from 'nodemailer';
+import { sendBillokTransactionalEmail } from './transactional-email';
 
 export function russianPasskeyRecoveryEmail(url: string) {
   const parsed = new URL(url);
@@ -75,18 +75,13 @@ export async function sendRussianPasskeyRecoveryCompletedEmail(input: {
   from: string;
   server: SMTPTransportOptions;
 }): Promise<void> {
-  const transport = nodemailer.createTransport(input.server);
-  const delivery = await transport.sendMail({
+  await sendBillokTransactionalEmail({
     from: input.from,
     to: input.to,
-    ...russianPasskeyRecoveryCompletedEmail(),
+    server: input.server,
+    message: russianPasskeyRecoveryCompletedEmail(),
+    errorMessage: 'Не удалось отправить уведомление о восстановлении Passkey',
   });
-  if (
-    delivery.rejected?.length ||
-    delivery.pending?.length ||
-    (delivery.accepted && !delivery.accepted.includes(input.to))
-  )
-    throw new Error('Не удалось отправить уведомление о восстановлении Passkey');
 }
 
 export async function sendRussianPasskeyRecoveryEmail(input: {
@@ -95,17 +90,11 @@ export async function sendRussianPasskeyRecoveryEmail(input: {
   from: string;
   server: SMTPTransportOptions;
 }): Promise<void> {
-  const transport = nodemailer.createTransport(input.server);
-  const delivery = await transport.sendMail({
+  await sendBillokTransactionalEmail({
     from: input.from,
     to: input.to,
-    ...russianPasskeyRecoveryEmail(input.url),
+    server: input.server,
+    message: russianPasskeyRecoveryEmail(input.url),
+    errorMessage: 'Не удалось отправить письмо восстановления',
   });
-  if (
-    delivery.rejected?.length ||
-    delivery.pending?.length ||
-    (delivery.accepted && !delivery.accepted.includes(input.to))
-  ) {
-    throw new Error('Не удалось отправить письмо восстановления');
-  }
 }

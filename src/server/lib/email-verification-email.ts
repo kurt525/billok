@@ -1,5 +1,5 @@
-import nodemailer from 'nodemailer';
 import type { SMTPTransportOptions } from 'nodemailer';
+import { sendBillokTransactionalEmail } from './transactional-email';
 
 /**
  * The message for registration email confirmation (not an Auth.js sign-in link).
@@ -78,14 +78,11 @@ export async function sendRussianRegistrationVerificationEmail(input: {
   server: SMTPTransportOptions;
   kind?: RegistrationVerificationEmailKind;
 }): Promise<void> {
-  const message = russianRegistrationVerificationEmail(input.url, input.kind);
-  const transport = nodemailer.createTransport(input.server);
-  const delivery = await transport.sendMail({ from: input.from, to: input.to, ...message });
-  if (
-    delivery.rejected?.length ||
-    delivery.pending?.length ||
-    (delivery.accepted && !delivery.accepted.includes(input.to))
-  ) {
-    throw new Error('Не удалось отправить письмо подтверждения BillOK');
-  }
+  await sendBillokTransactionalEmail({
+    from: input.from,
+    to: input.to,
+    server: input.server,
+    message: russianRegistrationVerificationEmail(input.url, input.kind),
+    errorMessage: 'Не удалось отправить письмо подтверждения BillOK',
+  });
 }

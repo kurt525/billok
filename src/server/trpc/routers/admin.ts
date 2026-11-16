@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import { requireOwner } from '@/server/lib/owner-access';
+import { readRegistrationEmailConfig } from '@/server/lib/auth-config';
+import { sendBillokTransactionalEmail } from '@/server/lib/transactional-email';
+import { isAllowedRegistrationEmailDomain } from '@/server/lib/registration-email-domain';
 import { AppError } from '@/server/lib/app-error';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
 import { type AdminAction, type PrismaClient, GuestSplitStatus, Prisma } from '@/generated/prisma/client';
-import nodemailer from 'nodemailer';
 import fs from 'fs';
 import * as fsp from 'fs/promises';
 import path from 'path';
@@ -844,51 +846,47 @@ export const adminRouter = createTRPCRouter({
   // ─── Email Test ──────────────────────────────────────────
 
   sendTestEmail: adminProcedure.mutation(async ({ ctx }) => {
-    const host = process.env.EMAIL_SERVER_HOST;
-    if (!host) {
+    // 7.4: use the SAME strict REG.RU transport as confirmation and recovery.
+    // This is not a sign-in link and cannot register an Auth.js provider.
+    let mail: ReturnType<typeof readRegistrationEmailConfig>;
+    try {
+      mail = readRegistrationEmailConfig(process.env);
+    } catch {
       throw new AppError('PRECONDITION_FAILED', 'emailNotConfigured');
     }
+    const to = ctx.user.email;
+    if (!to || !isAllowedRegistrationEmailDomain(to)) throw new AppError('PRECONDITION_FAILED', 'emailNotConfigured');
 
-    const transport = nodemailer.createTransport({
-      host,
-      port: parseInt(process.env.EMAIL_SERVER_PORT ?? '587'),
-      secure: parseInt(process.env.EMAIL_SERVER_PORT ?? '587') === 465,
-      auth: {
-        user: process.env.EMAIL_SERVER_USER,
-        pass: process.env.EMAIL_SERVER_PASSWORD,
-      },
-    });
-
-    const from = process.env.EMAIL_FROM ?? 'BillOK <noreply@billok.ru>';
-    const to = ctx.user.email!;
-
+    const sentAt = new Date().toISOString();
     try {
-      await transport.sendMail({
-        from,
+      await sendBillokTransactionalEmail({
+        from: mail.from,
         to,
-        subject: 'Проверка электронной почты BillOK',
-        text: `Это тестовое письмо из панели администратора BillOK.\n\nОтправлено: ${new Date().toISOString()}\nАдминистратор: ${ctx.user.email}`,
-        html: `
-          <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-            <h2 style="color: #10b981;">Проверка электронной почты BillOK</h2>
-            <p>Это тестовое письмо из панели администратора BillOK.</p>
-            <p style="color: #666; font-size: 14px;">
-              Отправлено: ${new Date().toISOString()}<br/>
-              Администратор: ${ctx.user.email}
-            </p>
-          </div>
-        `,
+        server: mail.server,
+        message: {
+          subject: 'Проверка электронной почты BillOK',
+          text: [
+            'Это контрольное письмо из панели владельца BillOK.',
+            'Время UTC: ' + sentAt,
+            'Письмо не предоставляет доступ к учётной записи.',
+          ].join('\n'),
+          html: [
+            '<div lang="ru" style="font-family:Arial,sans-serif;max-width:480px;margin:auto">',
+            '<h2>Проверка электронной почты BillOK</h2>',
+            '<p>Это контрольное письмо из панели владельца BillOK.</p>',
+            '<p>Время UTC: ' + sentAt + '</p>',
+            '<p>Письмо не предоставляет доступ к учётной записи.</p>',
+            '</div>',
+          ].join(''),
+        },
+        errorMessage: 'Не удалось отправить контрольное письмо BillOK',
       });
 
-      await logAdminAction(ctx.db, ctx.user.id, 'TEST_EMAIL_SENT', null, {
-        to,
-      });
-
+      await logAdminAction(ctx.db, ctx.user.id, 'TEST_EMAIL_SENT', null, { to });
       return { success: true, sentTo: to };
-    } catch (error) {
-      throw new AppError('INTERNAL_SERVER_ERROR', 'testEmailFailed', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
+    } catch {
+      // Do not expose SMTP server details or secret-related errors to clients.
+      throw new AppError('INTERNAL_SERVER_ERROR', 'testEmailFailed');
     }
   }),
 

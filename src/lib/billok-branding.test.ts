@@ -20,8 +20,11 @@ describe('BillOK brand foundation', () => {
 
   test('mail sender defaults and templates are branded BillOK', () => {
     expect(source('.env.example')).toContain('BillOK <noreply@billok.ru>');
+    // 7.4: the admin test email now inherits the brand and sender from the
+    // centralized SMTP configuration rather than declaring a second sender.
+    expect(source('src/server/lib/auth-config.ts')).toContain('BillOK <noreply@billok.ru>');
+    expect(source('src/server/trpc/routers/admin.ts')).toContain('readRegistrationEmailConfig(process.env)');
     for (const file of ['src/server/lib/auth-config.ts', 'src/server/trpc/routers/admin.ts']) {
-      expect(source(file)).toContain('BillOK <noreply@billok.ru>');
       expect(source(file)).not.toContain('ShareTab <noreply@sharetab.local>');
       expect(source(file)).not.toContain('ShareTab Test Email');
       expect(source(file)).not.toContain('[ShareTab]');
