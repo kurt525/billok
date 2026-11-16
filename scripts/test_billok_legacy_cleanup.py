@@ -99,5 +99,29 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
 
 
 
+    def test_unused_currency_selector_and_exchange_rate_screen_are_gone(self):
+        self.assertFalse((ROOT / "src/lib/currencies.ts").exists())
+        self.assertFalse((ROOT / "src/lib/russian-currency-options.test.ts").exists())
+        detail = source("src/app/[locale]/(app)/groups/[groupId]/expenses/[expenseId]/page.tsx")
+        for old in ("isCurrencyConverted", "e.baseCurrencyAmount", "e.exchangeRate",
+                    "groupCurrency", "detail.exchangeRate"):
+            self.assertNotIn(old, detail)
+        self.assertIn("formatCents(e.amount, e.currency, locale)", detail)
+        self.assertIn("manualExpenseBreakdown", detail)
+        self.assertIn("group-finalized-receipt-items", detail)
+
+    def test_old_currency_rate_localization_removed_but_rub_contract_retained(self):
+        messages = json.loads(source("messages/ru/expenses.json"))
+        for key in ("differentCurrencyNote", "manualRateOverride",
+                    "exchangeRatePlaceholder", "convertedAmount", "autoRateNote"):
+            self.assertNotIn(key, messages["new"])
+        self.assertNotIn("exchangeRate", messages["detail"])
+        self.assertIn("rubOnlyLegacyGroup", messages["new"])
+        self.assertIn("rubOnlyLegacyExpense", messages["edit"])
+        create = source("src/server/trpc/routers/expenses.ts")
+        self.assertIn("exchangeRate: z.never().optional()", create)
+        self.assertIn("currency: 'RUB'", create)
+
+
 if __name__ == "__main__":
     unittest.main()

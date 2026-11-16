@@ -59,8 +59,6 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
     SHARES: t('new.splitShares'),
     ITEM: t('detail.splitByItem'),
   } satisfies Record<typeof e.splitMode, string>;
-  const groupCurrency = group.data?.currency ?? 'RUB';
-  const isCurrencyConverted = e.baseCurrencyAmount != null && e.currency.toUpperCase() !== groupCurrency.toUpperCase();
   const manualSummary =
     receiptItems.data?.receipt.isManual && e.receiptId === receiptItems.data.receipt.id
       ? manualExpenseBreakdown({
@@ -94,25 +92,11 @@ export default function ExpenseDetailPage({ params }: { params: Promise<{ groupI
               <span data-testid="expense-detail-total" className="tabular-nums [overflow-wrap:anywhere]">
                 {formatCents(e.amount, e.currency, locale)}
               </span>
-              {isCurrencyConverted && (
-                <span className="ml-2 text-sm font-normal text-muted-foreground [overflow-wrap:anywhere]">
-                  ({formatCents(e.baseCurrencyAmount!, groupCurrency, locale)})
-                </span>
-              )}
             </div>
             <Badge variant="secondary" className="max-w-full whitespace-normal [overflow-wrap:anywhere]">
               {splitModeLabels[e.splitMode]}
             </Badge>
           </CardTitle>
-          {isCurrencyConverted && (
-            <p className="text-xs text-muted-foreground">
-              {t('detail.exchangeRate', {
-                rate: e.exchangeRate?.toFixed(4) ?? '1.0000',
-                from: e.currency,
-                to: groupCurrency,
-              })}
-            </p>
-          )}
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid min-w-0 grid-cols-1 gap-4 text-sm min-[360px]:grid-cols-2">

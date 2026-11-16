@@ -53,7 +53,6 @@ describe('BillOK Russian-only translations', () => {
             'login.passwordPlaceholder',
             'detail',
             'new.amountPlaceholder',
-            'new.exchangeRatePlaceholder',
           ].includes(key)
         ) {
           expect(text, 'Untranslated: ' + namespace + '.' + key).toMatch(/[А-Яа-яЁё]/u);
@@ -131,14 +130,14 @@ describe('BillOK Russian-only translations', () => {
     }
   });
 
-  it('keeps payer, group transfer and currency placeholders when splitting expenses', () => {
+  it('keeps payer and group transfer placeholders without obsolete currency notices', () => {
     const groups = load('ru', 'groups');
     const expenses = load('ru', 'expenses');
     const groupDetail = groups.detail as Record<string, string>;
     const expenseNew = expenses.new as Record<string, string>;
     expect(groupDetail.paidBy).toContain('{name}');
-    expect(expenseNew.differentCurrencyNote).toContain('{expenseCurrency}');
-    expect(expenseNew.differentCurrencyNote).toContain('{groupCurrency}');
+    expect(expenseNew).not.toHaveProperty('differentCurrencyNote');
+    expect(expenseNew.rubOnlyLegacyGroup).toContain('{currency}');
     const transfer = groups.transfer as Record<string, string>;
     expect(transfer.done).toContain('{name}');
   });
