@@ -20,6 +20,7 @@ pressure чистит при >=80% на любом из двух дисков; d
 ## Изоляция очистки
 
 Разрешены только:
+
 - старые логи BillOK runner (/opt/actions-runner-billok/_diag/*.log);
 - старые /tmp/billok-* за исключением путей Node, backup, deploy, release,
   secret, sign, keep и production; только без новых файлов за 24 часа,
