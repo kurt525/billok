@@ -40,7 +40,8 @@ test('9.3: sharing a manual receipt reserves the payer for its creator', async (
   await startManualReceipt(page, ['Антон', 'Павел'], 1);
   await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
   await expect(page.getByTestId('switch-person-1')).toBeEnabled();
-  await expect(page.getByTestId('switch-person-0')).toBeDisabled();
+  // Создатель распределяет позиции всех участников, но гости не могут занять его место.
+  await expect(page.getByTestId('switch-person-0')).toBeEnabled();
 
   const visitorContext = await browser.newContext({
     viewport: { width: 320, height: 800 },
