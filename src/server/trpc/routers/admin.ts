@@ -6,9 +6,6 @@ import { isAllowedRegistrationEmailDomain } from '@/server/lib/registration-emai
 import { AppError } from '@/server/lib/app-error';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
 import { type AdminAction, type PrismaClient, GuestSplitStatus, Prisma } from '@/generated/prisma/client';
-import fs from 'fs';
-import * as fsp from 'fs/promises';
-import path from 'path';
 import { getRecentLogs } from '@/server/lib/logger';
 import { deleteGroupWithData } from '@/server/lib/group-delete';
 import { lockGroupMembers } from '@/server/lib/group-balances';
@@ -881,126 +878,14 @@ export const adminRouter = createTRPCRouter({
 
   // ─── Storage ────────────────────────────────────────────
 
+  // Only DB records are relevant to manual BillOK receipts.
   getStorageStats: adminProcedure.query(async ({ ctx }) => {
-    // Receipt count from DB
-    const receiptCount = await ctx.db.receipt.count();
-
-    // Get all receipt image paths from DB
-    const receipts = await ctx.db.receipt.findMany({
-      select: { imagePath: true },
-    });
-    const dbPaths = new Set(receipts.map((r) => r.imagePath));
-
-    // Scan uploads directory
-    const uploadDir = path.resolve(process.cwd(), process.env.UPLOAD_DIR ?? './uploads');
-
-    let totalDiskUsage = 0;
-    let orphanCount = 0;
-    const orphanPaths: string[] = [];
-    let diskFiles = 0;
-
-    if (fs.existsSync(uploadDir)) {
-      const scanDir = async (dir: string) => {
-        const entries = await fsp.readdir(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            await scanDir(fullPath);
-          } else {
-            diskFiles++;
-            const stat = await fsp.stat(fullPath);
-            totalDiskUsage += stat.size;
-
-            const relativePath = path.relative(uploadDir, fullPath).replace(/\\/g, '/');
-            const isReferenced =
-              dbPaths.has(relativePath) ||
-              dbPaths.has(`uploads/${relativePath}`) ||
-              dbPaths.has(`/uploads/${relativePath}`) ||
-              dbPaths.has(fullPath);
-
-            if (!isReferenced) {
-              orphanCount++;
-              orphanPaths.push(relativePath);
-            }
-          }
-        }
-      };
-      await scanDir(uploadDir);
-    }
-
-    const unused = await countUnusedReceipts(ctx.db);
-
+    const [receiptCount, unused] = await Promise.all([ctx.db.receipt.count(), countUnusedReceipts(ctx.db)]);
     return {
       receiptCount,
-      diskFiles,
-      totalDiskUsage,
-      totalDiskUsageFormatted: formatBytes(totalDiskUsage),
-      orphanCount,
-      orphanPaths,
       unusedReceiptCount: unused.count,
       unusedReceiptBytes: unused.bytes,
       unusedReceiptBytesFormatted: formatBytes(unused.bytes),
-    };
-  }),
-
-  cleanupOrphans: adminProcedure.mutation(async ({ ctx }) => {
-    // Get all receipt image paths from DB
-    const receipts = await ctx.db.receipt.findMany({
-      select: { imagePath: true },
-    });
-    const dbPaths = new Set(receipts.map((r) => r.imagePath));
-
-    const uploadDir = path.resolve(process.cwd(), process.env.UPLOAD_DIR ?? './uploads');
-
-    let deletedCount = 0;
-    let freedBytes = 0;
-
-    if (fs.existsSync(uploadDir)) {
-      const scanAndDelete = async (dir: string) => {
-        const entries = await fsp.readdir(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            await scanAndDelete(fullPath);
-            try {
-              const remaining = await fsp.readdir(fullPath);
-              if (remaining.length === 0) {
-                await fsp.rm(fullPath);
-              }
-            } catch {
-              // ignore
-            }
-          } else {
-            const relativePath = path.relative(uploadDir, fullPath).replace(/\\/g, '/');
-            const isReferenced =
-              dbPaths.has(relativePath) ||
-              dbPaths.has(`uploads/${relativePath}`) ||
-              dbPaths.has(`/uploads/${relativePath}`) ||
-              dbPaths.has(fullPath);
-
-            if (!isReferenced) {
-              const stat = await fsp.stat(fullPath);
-              freedBytes += stat.size;
-              await fsp.unlink(fullPath);
-              deletedCount++;
-            }
-          }
-        }
-      };
-      await scanAndDelete(uploadDir);
-    }
-
-    if (deletedCount > 0) {
-      await logAdminAction(ctx.db, ctx.user.id, 'ORPHANS_CLEANED', null, {
-        deletedCount,
-        freedBytes,
-      });
-    }
-
-    return {
-      deletedCount,
-      freedBytes,
-      freedBytesFormatted: formatBytes(freedBytes),
     };
   }),
 

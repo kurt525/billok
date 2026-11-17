@@ -72,12 +72,12 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
     expect(claim).toContain('min-w-0 font-medium text-muted-foreground [overflow-wrap:anywhere]');
   });
 
-  it('keeps rare admin clean-up controls touch-sized with wrapping titles on mobile', () => {
+  it('keeps the unused receipt cleanup touch-sized with wrapping titles on mobile', () => {
     const admin = source('src/app/[locale]/(app)/admin/page.tsx');
     const cleanupTitleClasses = [...admin.matchAll(/<CardTitle className="([^"]+)">/g)]
       .map((match) => match[1]?.split(/\s+/) ?? [])
       .filter((classes) => classes.includes('flex-wrap') && classes.includes('justify-between'));
-    expect(cleanupTitleClasses).toHaveLength(2);
+    expect(cleanupTitleClasses).toHaveLength(1);
     for (const classes of cleanupTitleClasses) {
       expect(classes).toEqual(
         expect.arrayContaining([
@@ -91,15 +91,12 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
         ]),
       );
     }
-    expect(admin.match(/className="min-h-11 min-w-11 whitespace-normal leading-tight"/g)).toHaveLength(2);
-    expect(admin).toContain("onClick={() => setCleanupTarget('orphans')}");
-    expect(admin).toContain("onClick={() => setCleanupTarget('unused')}");
+    expect(admin.match(/className="min-h-11 min-w-11 whitespace-normal leading-tight"/g)).toHaveLength(1);
+    expect(admin).toContain('onClick={() => setCleanupOpen(true)}');
     expect(admin).toContain('data-testid="admin-storage-cleanup-dialog"');
-    expect(admin).toContain("if (cleanupTarget === 'orphans' &&");
-    expect(admin).toContain("if (cleanupTarget === 'unused' &&");
-    expect(admin).toContain('cleanup.mutate();');
-    expect(admin).toContain('cleanupUnused.mutate();');
-    expect(admin).not.toContain('onClick={() => cleanup.mutate()}');
+    expect(admin).toContain('data-testid="admin-storage-cleanup-confirm"');
+    expect(admin).toContain('if ((data?.unusedReceiptCount ?? 0) > 0) cleanupUnused.mutate();');
+    expect(admin).not.toContain('cleanupOrphans');
     expect(admin).not.toContain('onClick={() => cleanupUnused.mutate()}');
   });
 

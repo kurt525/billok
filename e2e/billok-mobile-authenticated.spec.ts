@@ -1265,7 +1265,7 @@ test('mobile admin group deletion dialog is safe at six widths', async ({ page }
   }
 });
 
-test('mobile read-only admin health and storage cards fit six widths', async ({ page }) => {
+test('mobile admin health and manual receipt cards fit six widths', async ({ page }) => {
   test.setTimeout(170_000);
   await signInAsOwnerAdmin(page);
   const longValue = 'АдаптивнаяПроверкаОченьДлинногоЗначенияБезПробелов'.repeat(3);
@@ -1297,14 +1297,9 @@ test('mobile read-only admin health and storage cards fit six widths', async ({ 
       entries[storageIndex].result.data = {
         json: {
           receiptCount: 5,
-          diskFiles: 3,
-          totalDiskUsage: 1024,
-          totalDiskUsageFormatted: longValue,
-          orphanCount: 0,
-          orphanPaths: [],
           unusedReceiptCount: 0,
           unusedReceiptBytes: 0,
-          unusedReceiptBytesFormatted: '0 B',
+          unusedReceiptBytesFormatted: longValue,
         },
       };
       storageReads++;
@@ -1321,11 +1316,11 @@ test('mobile read-only admin health and storage cards fit six widths', async ({ 
     const storage = page.getByTestId('admin-storage-stats');
     await expect(health.getByTestId('admin-system-version')).toContainText(longValue);
     await expect(health.getByTestId('admin-system-commit')).toContainText('a'.repeat(96));
-    await expect(storage.getByTestId('admin-storage-disk-usage')).toContainText(longValue);
+    await expect(storage.getByTestId('unused-receipts-card')).toContainText(longValue);
     for (const section of [health, storage]) {
       await expect(section).toBeVisible();
       const cards = section.locator('[data-slot="card"]');
-      await expect(cards).toHaveCount(section === health ? 3 : 4);
+      await expect(cards).toHaveCount(section === health ? 3 : 2);
       for (const card of await cards.all()) {
         const bounds = await card.boundingBox();
         expect(bounds).not.toBeNull();
@@ -1345,14 +1340,14 @@ test('mobile read-only admin health and storage cards fit six widths', async ({ 
   expect(storageReads).toBeGreaterThanOrEqual(6);
 });
 
-test('mobile storage cleanup confirmation cancels both actions at six widths', async ({ page }) => {
+test('mobile unused receipt cleanup confirmation cancels without deleting at six widths', async ({ page }) => {
   test.setTimeout(170_000);
   await signInAsOwnerAdmin(page);
   let cleanupMutations = 0;
   await page.route('**/api/trpc/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     const procedures = path.split('/api/trpc/')[1]?.split(',') ?? [];
-    if (procedures.some((name) => ['admin.cleanupOrphans', 'admin.cleanupUnusedReceipts'].includes(name))) {
+    if (procedures.some((name) => ['admin.cleanupUnusedReceipts'].includes(name))) {
       cleanupMutations++;
       await route.abort();
       return;
@@ -1366,11 +1361,6 @@ test('mobile storage cleanup confirmation cancels both actions at six widths', a
     entries[index].result.data = {
       json: {
         receiptCount: 12,
-        diskFiles: 8,
-        totalDiskUsage: 4096,
-        totalDiskUsageFormatted: '4 KB',
-        orphanCount: 3,
-        orphanPaths: [],
         unusedReceiptCount: 4,
         unusedReceiptBytes: 2048,
         unusedReceiptBytesFormatted: '2 KB',
@@ -1385,8 +1375,8 @@ test('mobile storage cleanup confirmation cancels both actions at six widths', a
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
     const storage = page.getByTestId('admin-storage-stats');
     const triggers = storage.getByTestId('admin-storage-open-cleanup');
-    await expect(triggers).toHaveCount(2);
-    for (const index of [0, 1]) {
+    await expect(triggers).toHaveCount(1);
+    for (const index of [0]) {
       const trigger = triggers.nth(index);
       const triggerRect = await trigger.boundingBox();
       expect(triggerRect).not.toBeNull();
@@ -1395,7 +1385,7 @@ test('mobile storage cleanup confirmation cancels both actions at six widths', a
       await trigger.click();
       const dialog = page.getByTestId('admin-storage-cleanup-dialog');
       await expect(dialog).toBeVisible();
-      await expect(dialog).toContainText(index === 0 ? 'Файлов без связанного чека: 3' : 'Неиспользуемых чеков: 4');
+      await expect(dialog).toContainText('Неиспользуемых чеков: 4');
       const rect = await dialog.boundingBox();
       expect(rect).not.toBeNull();
       expect(rect!.x).toBeGreaterThanOrEqual(-1);
@@ -1990,7 +1980,6 @@ test('admin forms remain keyboard-accessible at 300 CSS px on six mobile widths'
     'admin.createInvitation',
     'admin.setAnnouncement',
     'admin.cleanupExpiredSplits',
-    'admin.cleanupOrphans',
     'admin.cleanupUnusedReceipts',
   ]);
   await page.route('**/api/trpc/**', async (route) => {

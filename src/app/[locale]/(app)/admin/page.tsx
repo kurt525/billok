@@ -17,19 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  Shield,
-  Database,
-  Package,
-  Clock,
-  FolderOpen,
-  HardDrive,
-  FileWarning,
-  Loader2,
-  RefreshCw,
-  ReceiptText,
-  Users,
-} from 'lucide-react';
+import { Shield, Database, Package, Clock, Loader2, RefreshCw, ReceiptText, Users } from 'lucide-react';
 
 import { AuditLogSection } from '@/components/admin/audit-log-section';
 import { RegistrationControlSection } from '@/components/admin/registration-control-section';
@@ -194,28 +182,18 @@ function SystemHealthSection() {
 function StorageStatsSection() {
   const t = useTranslations('admin');
   const tc = useTranslations('common');
-  const [cleanupTarget, setCleanupTarget] = useState<'orphans' | 'unused' | null>(null);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
   const storage = trpc.admin.getStorageStats.useQuery();
   const utils = trpc.useUtils();
-  const cleanup = trpc.admin.cleanupOrphans.useMutation({
-    onSuccess: () => {
-      utils.admin.getStorageStats.invalidate();
-      utils.admin.getAuditLog.invalidate();
-      setCleanupTarget(null);
-    },
-  });
   const cleanupUnused = trpc.admin.cleanupUnusedReceipts.useMutation({
     onSuccess: () => {
       utils.admin.getStorageStats.invalidate();
       utils.admin.getAuditLog.invalidate();
-      setCleanupTarget(null);
+      setCleanupOpen(false);
     },
   });
 
-  const cleanupBusy = cleanup.isPending || cleanupUnused.isPending;
-
   if (storage.isLoading) return <SectionSkeleton title={t('storage.title')} />;
-
   const data = storage.data;
 
   return (
@@ -225,7 +203,7 @@ function StorageStatsSection() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <FolderOpen className="h-4 w-4" />
+              <ReceiptText className="h-4 w-4" />
               {t('storage.receipts')}
             </CardTitle>
           </CardHeader>
@@ -235,63 +213,7 @@ function StorageStatsSection() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <HardDrive className="h-4 w-4" />
-              {t('storage.diskUsage')}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="min-w-0 text-2xl font-bold [overflow-wrap:anywhere]" data-testid="admin-storage-disk-usage">
-              {data?.totalDiskUsageFormatted ?? '0 B'}
-            </p>
-            <p className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-              {t('storage.filesOnDisk', { count: data?.diskFiles ?? 0 })}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="@2xl:col-span-2">
-          <CardHeader className="pb-2">
-            <CardTitle className="flex min-w-0 flex-wrap items-center justify-between gap-2 [overflow-wrap:anywhere]">
-              <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-muted-foreground [overflow-wrap:anywhere]">
-                <FileWarning className="h-4 w-4" />
-                {t('storage.orphanedFiles')}
-              </span>
-              {(data?.orphanCount ?? 0) > 0 && (
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  className="min-h-11 min-w-11 whitespace-normal leading-tight"
-                  data-testid="admin-storage-open-cleanup"
-                  onClick={() => setCleanupTarget('orphans')}
-                  disabled={cleanupBusy}
-                >
-                  {cleanup.isPending ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                  )}
-                  {t('storage.cleanUp')}
-                </Button>
-              )}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="min-w-0 text-2xl font-bold [overflow-wrap:anywhere]">{data?.orphanCount ?? 0}</p>
-            <p className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-              {t('storage.orphanDescription')}
-            </p>
-            {cleanup.isSuccess && (
-              <p className="mt-2 text-sm text-green-600">
-                {t('storage.cleanedUp', { count: cleanup.data.deletedCount, size: cleanup.data.freedBytesFormatted })}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="@2xl:col-span-2" data-testid="unused-receipts-card">
+        <Card data-testid="unused-receipts-card">
           <CardHeader className="pb-2">
             <CardTitle className="flex min-w-0 flex-wrap items-center justify-between gap-2 [overflow-wrap:anywhere]">
               <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-muted-foreground [overflow-wrap:anywhere]">
@@ -304,8 +226,8 @@ function StorageStatsSection() {
                   variant="destructive"
                   className="min-h-11 min-w-11 whitespace-normal leading-tight"
                   data-testid="admin-storage-open-cleanup"
-                  onClick={() => setCleanupTarget('unused')}
-                  disabled={cleanupBusy}
+                  onClick={() => setCleanupOpen(true)}
+                  disabled={cleanupUnused.isPending}
                 >
                   {cleanupUnused.isPending ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -336,9 +258,9 @@ function StorageStatsSection() {
         </Card>
       </div>
       <Dialog
-        open={cleanupTarget !== null}
+        open={cleanupOpen}
         onOpenChange={(open) => {
-          if (!open && !cleanupBusy) setCleanupTarget(null);
+          if (!open && !cleanupUnused.isPending) setCleanupOpen(false);
         }}
       >
         <DialogContent
@@ -346,21 +268,12 @@ function StorageStatsSection() {
           className="min-w-0 overflow-x-hidden [overflow-wrap:anywhere] [&_[data-slot=dialog-close]]:min-h-11 [&_[data-slot=dialog-close]]:min-w-11"
         >
           <DialogHeader className="min-w-0 pr-11">
-            <DialogTitle className="[overflow-wrap:anywhere]">
-              {cleanupTarget === 'orphans' ? t('storage.confirmOrphansTitle') : t('storage.confirmUnusedTitle')}
-            </DialogTitle>
+            <DialogTitle className="[overflow-wrap:anywhere]">{t('storage.confirmUnusedTitle')}</DialogTitle>
             <DialogDescription className="[overflow-wrap:anywhere]">
-              {cleanupTarget === 'orphans'
-                ? t('storage.confirmOrphansDescription', { count: data?.orphanCount ?? 0 })
-                : t('storage.confirmUnusedDescription', { count: data?.unusedReceiptCount ?? 0 })}
+              {t('storage.confirmUnusedDescription', { count: data?.unusedReceiptCount ?? 0 })}
             </DialogDescription>
           </DialogHeader>
-          {cleanupTarget === 'orphans' && cleanup.isError && (
-            <p role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
-              {localizedTrpcError(cleanup.error, tc('errors.generic'))}
-            </p>
-          )}
-          {cleanupTarget === 'unused' && cleanupUnused.isError && (
+          {cleanupUnused.isError && (
             <p role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
               {localizedTrpcError(cleanupUnused.error, tc('errors.generic'))}
             </p>
@@ -370,8 +283,8 @@ function StorageStatsSection() {
               variant="outline"
               className="min-h-11 min-w-11"
               data-testid="admin-storage-cleanup-cancel"
-              disabled={cleanupBusy}
-              onClick={() => setCleanupTarget(null)}
+              disabled={cleanupUnused.isPending}
+              onClick={() => setCleanupOpen(false)}
             >
               {t('storage.cancel')}
             </Button>
@@ -379,16 +292,12 @@ function StorageStatsSection() {
               variant="destructive"
               className="min-h-11 min-w-11"
               data-testid="admin-storage-cleanup-confirm"
-              disabled={
-                cleanupBusy ||
-                (cleanupTarget === 'orphans' ? (data?.orphanCount ?? 0) === 0 : (data?.unusedReceiptCount ?? 0) === 0)
-              }
+              disabled={cleanupUnused.isPending || (data?.unusedReceiptCount ?? 0) === 0}
               onClick={() => {
-                if (cleanupTarget === 'orphans' && (data?.orphanCount ?? 0) > 0) cleanup.mutate();
-                if (cleanupTarget === 'unused' && (data?.unusedReceiptCount ?? 0) > 0) cleanupUnused.mutate();
+                if ((data?.unusedReceiptCount ?? 0) > 0) cleanupUnused.mutate();
               }}
             >
-              {cleanupBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {cleanupUnused.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {t('storage.cleanUp')}
             </Button>
           </DialogFooter>

@@ -216,7 +216,7 @@ describe('admin router procedures existence', () => {
     expect(procedures).toContain('listGroups');
     expect(procedures).toContain('deleteGroup');
     expect(procedures).toContain('getStorageStats');
-    expect(procedures).toContain('cleanupOrphans');
+    expect(procedures).not.toContain('cleanupOrphans');
     expect(procedures).toContain('cleanupUnusedReceipts');
 
     // New procedures
@@ -716,17 +716,17 @@ describe('unused receipts', () => {
 
   test('storage stats count them, with their size', async () => {
     mockDb.receipt.count.mockResolvedValue(5);
-    mockDb.receipt.findMany.mockResolvedValue([]);
     countUnusedReceipts.mockResolvedValue({ count: 2, bytes: 2048 });
     const api = await callerAs(adminSession);
 
-    await expect(api.getStorageStats()).resolves.toMatchObject({
+    await expect(api.getStorageStats()).resolves.toEqual({
       receiptCount: 5,
       unusedReceiptCount: 2,
       unusedReceiptBytes: 2048,
       unusedReceiptBytesFormatted: '2 KB',
     });
     expect(countUnusedReceipts).toHaveBeenCalledWith(mockDb);
+    expect(mockDb.receipt.findMany).not.toHaveBeenCalled();
   });
 
   test('cleaning up deletes them in batches and records it in the audit log', async () => {
