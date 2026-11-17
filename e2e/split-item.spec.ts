@@ -101,7 +101,7 @@ test('9.3: two splits of five pieces preserve original price exactly', async () 
     const items = await itemsFor(ctx, receiptId);
     expect(items).toHaveLength(3);
     expect(items.map((i) => i.quantity).sort()).toEqual([1, 2, 2]);
-    expect(items.map((i) => i.totalPrice).sort()).toEqual([500, 1000, 1000]);
+    expect(items.map((i) => i.totalPrice).sort((a, b) => a - b)).toEqual([500, 1000, 1000]);
     expect(items.reduce((sum, i) => sum + i.totalPrice, 0)).toBe(2500);
   } finally {
     await ctx.dispose();

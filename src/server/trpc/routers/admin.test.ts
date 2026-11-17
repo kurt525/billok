@@ -758,9 +758,11 @@ describe('unused receipts', () => {
 describe('Issue #1 6.2: seven-day admin invitations, revocation and usage history', () => {
   const code = 'invite-secret-to-deliver';
   const approvalToken = 'b'.repeat(43);
-  const createdAt = new Date('2026-11-10T09:00:00.000Z');
-  const expiresAt = new Date('2026-11-17T09:00:00.000Z');
-  const usedAt = new Date('2026-11-11T09:00:00.000Z');
+  // Relative to test execution: a fixed November 2026 date expired while CI kept running.
+  // Preserve the strict seven-day window without changing the production invitation guard.
+  const createdAt = new Date(Date.now() - 86_400_000);
+  const expiresAt = new Date(createdAt.getTime() + 7 * 86_400_000);
+  const usedAt = new Date(createdAt.getTime() + 3_600_000);
   const invite = {
     id: 'invite-1',
     code,
