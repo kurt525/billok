@@ -5,25 +5,15 @@ import { describe, expect, it } from 'vitest';
 const source = (filename: string) => readFileSync(resolve(process.cwd(), filename), 'utf8');
 
 describe('Android group actions and account forms', () => {
-  it('keeps invitation and settlement dialogs scrollable with keyboard-size viewport and safe bottom inset', () => {
-    for (const [filename, testId] of [
-      ['src/components/groups/invite-dialog.tsx', 'mobile-invite-dialog'],
-      ['src/components/groups/settle-dialog.tsx', 'mobile-settle-dialog'],
-    ] as const) {
-      const ui = source(filename);
-      expect(ui, filename).toContain('data-testid="' + testId + '"');
-      expect(ui, filename).toContain('max-h-[calc(100dvh-2rem)]');
-      expect(ui, filename).toContain('overflow-y-auto overscroll-contain');
-      expect(ui, filename).toContain('env(safe-area-inset-bottom)');
-    }
+  it('keeps the active invitation dialog scrollable with keyboard-size viewport and safe bottom inset', () => {
+    const ui = source('src/components/groups/invite-dialog.tsx');
+    expect(ui).toContain('data-testid="mobile-invite-dialog"');
+    expect(ui).toContain('max-h-[calc(100dvh-2rem)]');
+    expect(ui).toContain('overflow-y-auto overscroll-contain');
+    expect(ui).toContain('env(safe-area-inset-bottom)');
   });
 
-  it('provides 44px settlement and invitation inputs, copy and confirmation actions', () => {
-    const settle = source('src/components/groups/settle-dialog.tsx');
-    expect(settle).not.toContain('flex h-9 w-full rounded-md border');
-    expect(settle.match(/flex h-11 min-w-0 w-full rounded-md border/g)).toHaveLength(2);
-    expect(settle).toContain('inputMode="decimal"');
-    expect(settle).toContain('className="min-h-11 w-full text-base"');
+  it('provides touch-size invitation inputs, copy and confirmation actions', () => {
     const invite = source('src/components/groups/invite-dialog.tsx');
     expect(invite).toContain('data-testid="mobile-copy-invite"');
     expect(invite).toContain('className="size-12 shrink-0"');

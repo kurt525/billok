@@ -7,12 +7,8 @@ function source(path: string): string {
 }
 
 describe('BillOK brand foundation', () => {
-  test('mobile, sidebar and guest check headers use the BillOK name', () => {
-    for (const file of [
-      'src/components/layout/mobile-header.tsx',
-      'src/components/layout/sidebar.tsx',
-      'src/app/[locale]/split/layout.tsx',
-    ]) {
+  test('mobile and guest check headers use the BillOK name', () => {
+    for (const file of ['src/components/layout/mobile-header.tsx', 'src/app/[locale]/split/layout.tsx']) {
       expect(source(file)).toContain('BillOK');
       expect(source(file)).not.toContain('ShareTab');
     }

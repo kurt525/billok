@@ -321,6 +321,26 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("ordinary member", active)
         self.assertIn("getByText('Управление'", active)
 
+    def test_obsolete_desktop_and_freeform_settlement_components_are_deleted(self):
+        for dead in ("src/components/layout/sidebar.tsx",
+                     "src/components/groups/settle-dialog.tsx",
+                     "src/components/ui/dropdown-menu.tsx",
+                     "src/components/ui/select.tsx",
+                     "src/server/lib/normalize-date.ts",
+                     "src/server/lib/normalize-date.test.ts",
+                     "e2e/sidebar.spec.ts"):
+            self.assertFalse((ROOT / dead).exists(), dead)
+        layout = source("src/app/[locale]/(app)/layout.tsx")
+        self.assertIn("<MobileHeader isAdmin={isAdmin}", layout)
+        self.assertNotIn("AppSidebar", layout)
+        group = source("src/app/[locale]/(app)/groups/[groupId]/page.tsx")
+        self.assertNotIn("<SettleDialog", group)
+        self.assertIn("group-debt-row", group)
+        self.assertNotIn("sidebar.spec.ts", source("playwright.config.ts"))
+        self.assertNotIn("settle-dialog.tsx", source("src/lib/mobile-group-actions.test.ts"))
+        self.assertNotIn("sidebar.tsx", source("src/lib/billok-branding.test.ts"))
+        self.assertNotIn("normalize-date.ts", source("CLAUDE.md"))
+
     def test_claim_share_link_no_longer_needs_photo_and_old_locale(self):
         suite = source("e2e/claim-share-link.spec.ts")
         for obsolete in ("guest-file-input", "scan-file-input", "test-receipt.png", "/en/", "FAKE_PNG", "FAKE_JPEG"):
