@@ -1,14 +1,5 @@
 import { test, expect, request, type Page } from '@playwright/test';
-import {
-  users,
-  login,
-  createTestGroup,
-  trpcMutation,
-  trpcQuery,
-  trpcResult,
-  authedContext,
-  joinGuestSession,
-} from './helpers';
+import { users, login, createTestGroup, trpcMutation, trpcQuery, trpcResult, joinGuestSession } from './helpers';
 
 const BASE = process.env.BASE_URL || 'http://localhost:3001';
 
@@ -27,44 +18,6 @@ function recordBrowserDialogs(page: Page) {
 test.describe('Confirmation dialogs', () => {
   test.beforeEach(async ({ page }) => {
     await login(page, users.alice.email, users.alice.password);
-  });
-
-  test('removing a placeholder asks in the page and names them; the icon buttons have names', async ({ page }) => {
-    const browserDialogs = recordBrowserDialogs(page);
-    const { owner, groupId, dispose } = await createTestGroup(
-      users.alice.email,
-      users.alice.password,
-      [],
-      'Confirm Placeholder',
-    );
-    try {
-      expect((await trpcMutation(owner, 'groups.addPlaceholder', { groupId, name: 'Dana' })).ok()).toBe(true);
-      await page.goto(`/en/groups/${groupId}/settings`);
-
-      // Rename's buttons
-      await page.getByRole('button', { name: 'Rename Dana' }).click();
-      await expect(page.getByRole('button', { name: 'Save name' })).toBeVisible();
-      await page.getByRole('button', { name: 'Cancel renaming' }).click();
-
-      const remove = page.getByRole('button', { name: 'Remove Dana' });
-      await remove.click();
-      const dialog = page.getByRole('alertdialog', { name: 'Remove Dana?' });
-      await expect(dialog).toBeVisible();
-      await expect(dialog).toContainText("can't be removed until they've settled up");
-
-      // Cancel leaves Dana, and puts focus back on the button that opened it
-      await dialog.getByRole('button', { name: 'Cancel' }).click();
-      await expect(dialog).toBeHidden();
-      await expect(remove).toBeFocused();
-      await expect(page.getByText('Dana', { exact: true })).toBeVisible();
-
-      await remove.click();
-      await dialog.getByRole('button', { name: 'Remove', exact: true }).click();
-      await expect(page.getByText('Dana', { exact: true })).toHaveCount(0);
-      expect(browserDialogs).toEqual([]);
-    } finally {
-      await dispose();
-    }
   });
 
   test('deleting an expense asks in the page and names it', async ({ page }) => {
@@ -105,34 +58,6 @@ test.describe('Confirmation dialogs', () => {
     } finally {
       await dispose();
     }
-  });
-
-  test('deleting a split from My Splits asks in the page', async ({ page }) => {
-    const browserDialogs = recordBrowserDialogs(page);
-    const ctx = await authedContext(users.alice.email, users.alice.password);
-    const merchantName = `Confirm Split ${Date.now()}`;
-    const created = await trpcMutation(ctx, 'guest.createSplit', {
-      receiptData: { merchantName, subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'USD' },
-      items: [{ name: 'Pasta', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
-      people: [{ name: 'Alice' }],
-      assignments: [{ itemIndex: 0, personIndices: [0] }],
-      paidByIndex: 0,
-    });
-    expect(created.ok(), await created.text()).toBe(true);
-    await ctx.dispose();
-
-    await page.goto('/en/splits');
-    const card = page.locator('[data-slot="card"]', { hasText: merchantName });
-    await card.getByRole('button', { name: 'Delete split' }).click();
-    const dialog = page.getByRole('alertdialog', { name: 'Delete this split?' });
-    await expect(dialog).toContainText('link stops working');
-    await dialog.getByRole('button', { name: 'Cancel' }).click();
-    await expect(card).toBeVisible();
-
-    await card.getByRole('button', { name: 'Delete split' }).click();
-    await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
-    await expect(card).toHaveCount(0);
-    expect(browserDialogs).toEqual([]);
   });
 });
 

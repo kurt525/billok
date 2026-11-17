@@ -228,6 +228,19 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertEqual(suite.count("test('9.3:"), 5)
         self.assertIn("e2e/split-item.spec.ts", source(".github/workflows/billok-ci.yml"))
 
+    def test_confirm_dialogs_people_and_splits_migrated(self):
+        legacy = source("e2e/confirm-dialogs.spec.ts")
+        for obsolete in ("removing a placeholder asks", "deleting a split from My Splits"):
+            self.assertNotIn(obsolete, legacy)
+        mobile = source("e2e/confirm-dialogs-people-splits.spec.ts")
+        for required in ("authedPasskeyContext", "groups.addPlaceholder", "guest.createSplit",
+                         "getByRole('alertdialog')", "currency: 'RUB'"):
+            self.assertIn(required, mobile)
+        for obsolete in ("/en/", "/api/upload", "receipts.processReceipt", "users.alice.password"):
+            self.assertNotIn(obsolete, mobile)
+        self.assertEqual(mobile.count("test('9.3:"), 2)
+        self.assertIn("e2e/confirm-dialogs-people-splits.spec.ts", source(".github/workflows/billok-ci.yml"))
+
     def test_confirm_dialogs_manual_passkey(self):
         old = source("e2e/confirm-dialogs.spec.ts")
         for dead in ("FAKE_JPEG", "/api/upload", "receipts.processReceipt", "uploadReceipt("):
