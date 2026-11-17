@@ -8,7 +8,6 @@ import {
   trpcResult,
   authedContext,
   joinGuestSession,
-  FAKE_JPEG,
 } from './helpers';
 
 const BASE = process.env.BASE_URL || 'http://localhost:3001';
@@ -23,16 +22,6 @@ function recordBrowserDialogs(page: Page) {
     void dialog.dismiss();
   });
   return seen;
-}
-
-async function uploadReceipt(owner: Awaited<ReturnType<typeof authedContext>>, groupId: string): Promise<string> {
-  const uploadRes = await owner.post('/api/upload', {
-    multipart: { file: { name: 'receipt.jpg', mimeType: 'image/jpeg', buffer: FAKE_JPEG } },
-  });
-  const { receiptId } = await uploadRes.json();
-  const processed = await (await trpcMutation(owner, 'receipts.processReceipt', { receiptId, groupId }, 60_000)).json();
-  expect(processed.result, JSON.stringify(processed)).toBeDefined();
-  return receiptId;
 }
 
 test.describe('Confirmation dialogs', () => {
@@ -78,35 +67,6 @@ test.describe('Confirmation dialogs', () => {
     }
   });
 
-  test('archiving and deleting a group ask in the page first', async ({ page }) => {
-    const browserDialogs = recordBrowserDialogs(page);
-    const { groupId, dispose } = await createTestGroup(users.alice.email, users.alice.password, [], 'Confirm Group');
-    try {
-      await page.goto(`/en/groups/${groupId}/settings`);
-
-      await page.getByRole('button', { name: 'Archive group' }).click();
-      const archive = page.getByRole('alertdialog', { name: 'Archive this group?' });
-      await expect(archive).toContainText('Everyone must be settled up first');
-      await archive.getByRole('button', { name: 'Cancel' }).click();
-      await expect(archive).toBeHidden();
-
-      // Escape cancels too
-      await page.getByRole('button', { name: 'Delete group' }).click();
-      const del = page.getByRole('alertdialog', { name: 'Delete this group?' });
-      await expect(del).toContainText("This can't be undone");
-      await page.keyboard.press('Escape');
-      await expect(del).toBeHidden();
-      await expect(page).toHaveURL(new RegExp(`/groups/${groupId}/settings$`));
-
-      await page.getByRole('button', { name: 'Delete group' }).click();
-      await del.getByRole('button', { name: 'Delete group' }).click();
-      await page.waitForURL(/\/en\/groups$/, { timeout: 10_000 });
-      expect(browserDialogs).toEqual([]);
-    } finally {
-      await dispose();
-    }
-  });
-
   test('deleting an expense asks in the page and names it', async ({ page }) => {
     const browserDialogs = recordBrowserDialogs(page);
     const { owner, groupId, memberIds, dispose } = await createTestGroup(
@@ -141,70 +101,6 @@ test.describe('Confirmation dialogs', () => {
       await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
       await page.waitForURL(new RegExp(`/groups/${groupId}$`), { timeout: 10_000 });
       await expect(page.getByText('Ferry tickets')).toHaveCount(0);
-      expect(browserDialogs).toEqual([]);
-    } finally {
-      await dispose();
-    }
-  });
-
-  test('deleting a pending receipt asks in the page; the settings and delete buttons have names', async ({ page }) => {
-    const browserDialogs = recordBrowserDialogs(page);
-    const { owner, groupId, dispose } = await createTestGroup(
-      users.alice.email,
-      users.alice.password,
-      [],
-      'Confirm Receipt',
-    );
-    try {
-      const receiptId = await uploadReceipt(owner, groupId);
-      expect((await trpcMutation(owner, 'receipts.saveForLater', { groupId, receiptId })).ok()).toBe(true);
-      await page.goto(`/en/groups/${groupId}`);
-
-      // Base UI gives a Button drawn as a link the button role
-      await expect(page.getByRole('button', { name: 'Group Settings' })).toHaveAttribute(
-        'href',
-        `/en/groups/${groupId}/settings`,
-      );
-
-      await page.getByRole('button', { name: 'Delete receipt' }).click();
-      const dialog = page.getByRole('alertdialog', { name: 'Delete this receipt?' });
-      await expect(dialog).toBeVisible();
-      await dialog.getByRole('button', { name: 'Cancel' }).click();
-      await expect(page.getByText('The Golden Fork')).toBeVisible();
-
-      await page.getByRole('button', { name: 'Delete receipt' }).click();
-      await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
-      await expect(page.getByText('The Golden Fork')).toHaveCount(0);
-      expect(browserDialogs).toEqual([]);
-    } finally {
-      await dispose();
-    }
-  });
-
-  test("removing a receipt's item asks in the page and names it", async ({ page }) => {
-    const browserDialogs = recordBrowserDialogs(page);
-    const { owner, groupId, dispose } = await createTestGroup(
-      users.alice.email,
-      users.alice.password,
-      [],
-      'Confirm Receipt Item',
-    );
-    try {
-      const receiptId = await uploadReceipt(owner, groupId);
-      await page.goto(`/en/groups/${groupId}/scan?receiptId=${receiptId}`);
-
-      await page.getByRole('button', { name: 'Edit Caesar Salad' }).click();
-      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-
-      const remove = page.getByRole('button', { name: 'Remove Caesar Salad' });
-      await remove.click();
-      const dialog = page.getByRole('alertdialog', { name: 'Remove Caesar Salad?' });
-      await dialog.getByRole('button', { name: 'Cancel' }).click();
-      await expect(page.getByText('Caesar Salad', { exact: true })).toBeVisible();
-
-      await remove.click();
-      await dialog.getByRole('button', { name: 'Remove', exact: true }).click();
-      await expect(page.getByText('Caesar Salad', { exact: true })).toHaveCount(0);
       expect(browserDialogs).toEqual([]);
     } finally {
       await dispose();

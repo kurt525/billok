@@ -228,6 +228,19 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertEqual(suite.count("test('9.3:"), 5)
         self.assertIn("e2e/split-item.spec.ts", source(".github/workflows/billok-ci.yml"))
 
+    def test_confirm_dialogs_manual_passkey(self):
+        old = source("e2e/confirm-dialogs.spec.ts")
+        for dead in ("FAKE_JPEG", "/api/upload", "receipts.processReceipt", "uploadReceipt("):
+            self.assertNotIn(dead, old)
+        suite = source("e2e/confirm-dialogs-manual.spec.ts")
+        for required in ("authedPasskeyContext", "receipts.createManual", "receipts.saveForLater",
+                         "receipts.getReceiptItems", "getByRole('alertdialog')"):
+            self.assertIn(required, suite)
+        for dead in ("/en/", "FAKE_JPEG", "processReceipt", "password"):
+            self.assertNotIn(dead, suite)
+        self.assertEqual(suite.count("test('9.3:"), 3)
+        self.assertIn("e2e/confirm-dialogs-manual.spec.ts", source(".github/workflows/billok-ci.yml"))
+
     def test_archive_receipt_only_uses_manual_qa_flow(self):
         archived = source("e2e/groups-archive.spec.ts")
         self.assertNotIn("FAKE_JPEG", archived)
