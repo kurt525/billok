@@ -6,7 +6,6 @@ import {
   trpcMutation,
   trpcResult,
   trpcQuery,
-  FAKE_PNG,
   authedContext,
   users,
 } from './helpers';
@@ -717,76 +716,6 @@ test.describe('Claim page — continue on another device', () => {
     expect(copied).not.toContain('#');
     await context.close();
     await ctx.dispose();
-  });
-});
-
-test.describe('Claim page — receipt image', () => {
-  test.beforeEach(({}, testInfo) => {
-    if (!process.env.RUN_AI_TESTS) testInfo.skip(true, 'Set RUN_AI_TESTS=1 to enable (requires receipt with image)');
-  });
-
-  test('toggle button shows and hides receipt image', async ({ page }) => {
-    // This test requires a real receipt with an image.
-    // Create a receipt via upload, then a claiming session linked to it.
-    const ctx = await authedContext(users.alice.email, users.alice.password);
-
-    // Upload a receipt image
-    const uploadRes = await ctx.post(`${BASE}/api/upload?guest=true`, {
-      multipart: {
-        file: { name: 'receipt.png', mimeType: 'image/png', buffer: FAKE_PNG },
-      },
-    });
-    expect(uploadRes.status()).toBe(200);
-    const { receiptId } = await uploadRes.json();
-
-    // Add items to the receipt
-    await trpcMutation(ctx, 'receipts.addItem', {
-      receiptId,
-      name: 'Test Item',
-      quantity: 1,
-      unitPrice: 1000,
-      totalPrice: 1000,
-    });
-
-    // Create a claiming session linked to the receipt
-    const anonCtx = await request.newContext({ baseURL: BASE });
-    const createRes = await trpcMutation(anonCtx, 'guest.createClaimSession', {
-      receiptId,
-      receiptData: {
-        merchantName: 'Image Test Cafe',
-        subtotal: 1000,
-        tax: 100,
-        tip: 0,
-        total: 1100,
-        currency: 'USD',
-      },
-      items: [{ name: 'Test Item', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
-      creatorName: 'Tester',
-      paidByName: 'Tester',
-    });
-    const shareToken = (await createRes.json()).result?.data?.json?.shareToken;
-
-    await ctx.dispose();
-    await anonCtx.dispose();
-
-    // Open claim page
-    await page.goto(`/en/split/${shareToken}/claim`);
-    await expect(page.getByTestId('claim-join-form')).toBeVisible({ timeout: 10000 });
-
-    // Receipt image toggle should be visible
-    const toggleBtn = page.getByTestId('toggle-receipt-image');
-    await expect(toggleBtn).toBeVisible();
-
-    // Image should not be visible initially
-    await expect(page.getByTestId('receipt-image')).not.toBeVisible();
-
-    // Click toggle to show image
-    await toggleBtn.click();
-    await expect(page.getByTestId('receipt-image')).toBeVisible();
-
-    // Click toggle again to hide
-    await toggleBtn.click();
-    await expect(page.getByTestId('receipt-image')).not.toBeVisible();
   });
 });
 

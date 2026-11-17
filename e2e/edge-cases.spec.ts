@@ -147,26 +147,6 @@ test.describe('Edge Cases & Security', () => {
     await ctx.dispose();
   });
 
-  test('9.8 — upload generates UUID filename', async () => {
-    const ctx = await authedContext('alice@qa.billok.ru', 'password123');
-    const res = await ctx.post('/api/upload', {
-      multipart: {
-        file: {
-          name: '../../etc/passwd.jpg',
-          mimeType: 'image/jpeg',
-          buffer: Buffer.alloc(20, 0xff),
-        },
-      },
-    });
-    if (res.status() === 200) {
-      const body = await res.json();
-      // imagePath should NOT contain ".." — it should be a UUID
-      expect(body.imagePath).not.toContain('..');
-      expect(body.imagePath).toMatch(/^receipts\/[a-f0-9-]+\.\w+$/);
-    }
-    await ctx.dispose();
-  });
-
   test('1.1.4 — register with invalid email fails', async () => {
     const ctx = await request.newContext({ baseURL: BASE });
     const res = await trpcMutation(ctx, 'auth.register', {

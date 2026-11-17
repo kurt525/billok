@@ -186,6 +186,30 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
 
 
 
+    def test_obsolete_photo_browser_scenarios_not_in_test_suite(self):
+        for obsolete in ("e2e/receipt-ui.spec.ts",):
+            self.assertFalse((ROOT / obsolete).exists(), obsolete)
+        self.assertNotIn("receipt-ui.spec.ts", source("playwright.config.ts"))
+        forbidden = {
+            "e2e/claim-features.spec.ts": ("Claim page — receipt image", "RUN_AI_TESTS", "FAKE_PNG"),
+            "e2e/bug-findings.spec.ts": ("Finding #8: non-JSON upload error handling", "/api/upload"),
+            "e2e/edge-cases.spec.ts": ("upload generates UUID filename", "/api/upload"),
+            "e2e/guest-split.spec.ts": ("Snap a Bill", 'input[type="file"]'),
+            "e2e/guest-claim-ui.spec.ts": ("guest-snap-upload", "guest-gallery-upload", "guest-file-input"),
+            "e2e/placeholder-ui.spec.ts": ("Pending Receipts UI", "Upload a receipt"),
+        }
+        for path, markers in forbidden.items():
+            content = source(path)
+            for marker in markers:
+                self.assertNotIn(marker, content, f"{path}: {marker}")
+        for retained in (
+            "e2e/billok-mobile-receipt-actions.spec.ts",
+            "e2e/billok-mobile-guest-split.spec.ts",
+            "e2e/billok-passkey-smoke.spec.ts",
+            "e2e/security.spec.ts",
+        ):
+            self.assertTrue((ROOT / retained).exists(), retained)
+
     def test_only_russian_internal_locale_rewrite_remains(self):
         paths = source("src/lib/locale-paths.ts")
         middleware = source("src/middleware.ts")
