@@ -401,6 +401,7 @@ jobs:
                 e2e/assignment-chip-names.spec.ts \
                 e2e/split-item.spec.ts \
                 e2e/claim-share-link.spec.ts \
+                e2e/groups-archive-manual.spec.ts \
                 e2e/billok-mobile-guest-split.spec.ts \
                 --project=parallel --no-deps --workers=2 --retries=0 \
                 --reporter=line --output=/tmp/billok-mobile-playwright-results

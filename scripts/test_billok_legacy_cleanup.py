@@ -228,6 +228,17 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertEqual(suite.count("test('9.3:"), 5)
         self.assertIn("e2e/split-item.spec.ts", source(".github/workflows/billok-ci.yml"))
 
+    def test_archive_receipt_only_uses_manual_qa_flow(self):
+        archived = source("e2e/groups-archive.spec.ts")
+        self.assertNotIn("FAKE_JPEG", archived)
+        self.assertNotIn("/api/upload", archived)
+        self.assertNotIn("receipts.processReceipt", archived)
+        modern = source("e2e/groups-archive-manual.spec.ts")
+        for expected in ("authedPasskeyContext", "receipts.createManual", "receipts.saveForLater",
+                         "groups.archive", "groups.unarchive", "receipts.listPending"):
+            self.assertIn(expected, modern)
+        self.assertIn("e2e/groups-archive-manual.spec.ts", source(".github/workflows/billok-ci.yml"))
+
     def test_claim_share_link_no_longer_needs_photo_and_old_locale(self):
         suite = source("e2e/claim-share-link.spec.ts")
         for obsolete in ("guest-file-input", "scan-file-input", "test-receipt.png", "/en/", "FAKE_PNG", "FAKE_JPEG"):

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { login, users, authedContext, createTestGroup, trpcMutation, trpcError, FAKE_JPEG } from './helpers';
+import { login, users, authedContext, createTestGroup, trpcMutation, trpcError } from './helpers';
 
 test.describe('Group Archiving', () => {
   // ── API-level tests ──────────────────────────────────────
@@ -410,37 +410,6 @@ test.describe('Group Archiving', () => {
       if (!body.result) throw new Error(`mutation failed (${res.status()}): ${JSON.stringify(body)}`);
       return body.result.data?.json;
     }
-
-    test('group page lists a saved receipt without the link to finish it, and still deletes it', async ({ page }) => {
-      await login(page, users.alice.email, users.alice.password);
-      const { owner, groupId, dispose } = await createTestGroup(
-        users.alice.email,
-        users.alice.password,
-        [],
-        'Archive Saved Receipt',
-      );
-      const uploadRes = await owner.post('/api/upload', {
-        multipart: { file: { name: 'receipt.jpg', mimeType: 'image/jpeg', buffer: FAKE_JPEG } },
-      });
-      const { receiptId } = await uploadRes.json();
-      await mutationResult(await trpcMutation(owner, 'receipts.processReceipt', { receiptId, groupId }, 60_000));
-      await mutationResult(await trpcMutation(owner, 'receipts.saveForLater', { groupId, receiptId }));
-      await trpcMutation(owner, 'groups.archive', { groupId });
-
-      await page.goto(`/en/groups/${groupId}`);
-      await expect(page.getByText('This group is archived')).toBeVisible();
-      await expect(page.getByText('The Golden Fork')).toBeVisible();
-      await expect(page.locator(`a[href*="receiptId=${receiptId}"]`)).toHaveCount(0);
-      // The group has no expenses, but an archived group can't take its first one
-      await expect(page.getByText('No expenses yet.')).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Add your first expense' })).toHaveCount(0);
-
-      await page.locator('[data-slot="card"]', { hasText: 'The Golden Fork' }).getByRole('button').click();
-      await page.getByRole('alertdialog').getByRole('button', { name: 'Delete', exact: true }).click();
-      await expect(page.getByText('The Golden Fork')).toHaveCount(0);
-
-      await dispose();
-    });
 
     test('expense page shows no Edit or Delete in an archived group', async ({ page }) => {
       await login(page, users.alice.email, users.alice.password);
