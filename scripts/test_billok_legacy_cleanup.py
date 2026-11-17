@@ -219,6 +219,15 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("workflow-manual", suite)
         self.assertIn("e2e/assignment-chip-names.spec.ts", source(".github/workflows/billok-ci.yml"))
 
+    def test_split_item_uses_only_manual_receipts_and_signed_passkey(self):
+        suite = source("e2e/split-item.spec.ts")
+        for marker in ("/api/upload", "FAKE_PNG", "authedContext(", "createTestGroup(", "password123"):
+            self.assertNotIn(marker, suite)
+        self.assertIn("authedPasskeyContext", suite)
+        self.assertIn("receipts.createManual", suite)
+        self.assertEqual(suite.count("test('9.3:"), 5)
+        self.assertIn("e2e/split-item.spec.ts", source(".github/workflows/billok-ci.yml"))
+
     def test_only_russian_internal_locale_rewrite_remains(self):
         paths = source("src/lib/locale-paths.ts")
         middleware = source("src/middleware.ts")
