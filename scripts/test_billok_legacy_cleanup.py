@@ -281,6 +281,23 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
             self.assertIn(key, modern)
         self.assertIn("e2e/groups-archive-manual.spec.ts", source(".github/workflows/billok-ci.yml"))
 
+    def test_group_archive_legacy_finances_preserved_with_passkey(self):
+        old = source("e2e/groups-archive.spec.ts")
+        for name in ("cannot create settlement on archived group",
+                     "cannot archive a group until everyone is settled up",
+                     "archive refusal says so when someone who left still has a balance",
+                     "cannot update expense on archived group"):
+            self.assertNotIn("test('" + name + "'", old)
+        modern = source("e2e/groups-archive-financial.spec.ts")
+        for key in ("authedPasskeyContext", "groups.removeMember", "settlements.create",
+                    "expenses.create", "expenses.update", "groups.archive", "currency: 'RUB'",
+                    "PRECONDITION_FAILED", "BAD_REQUEST", "trpcError"):
+            self.assertIn(key, modern)
+        for dead in ("/en/", "/api/upload", "FAKE_JPEG", "users.alice.password", "currency: 'USD'"):
+            self.assertNotIn(dead, modern)
+        self.assertEqual(modern.count("test('9.3:"), 3)
+        self.assertIn("e2e/groups-archive-financial.spec.ts", source(".github/workflows/billok-ci.yml"))
+
     def test_claim_share_link_no_longer_needs_photo_and_old_locale(self):
         suite = source("e2e/claim-share-link.spec.ts")
         for obsolete in ("guest-file-input", "scan-file-input", "test-receipt.png", "/en/", "FAKE_PNG", "FAKE_JPEG"):
