@@ -97,10 +97,6 @@ async function performAuditedOwnerPost(req: Request, session: Session | null) {
           tx.receipt.findMany({
             select: {
               id: true,
-              imagePath: true,
-              originalName: true,
-              mimeType: true,
-              fileSize: true,
               status: true,
               extractedData: true,
               groupId: true,

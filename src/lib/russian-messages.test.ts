@@ -76,12 +76,12 @@ describe('BillOK Russian-only translations', () => {
     }
   });
 
-  it('loads the Russian errors namespace for client-side OCR failures', () => {
+  it('loads the Russian errors namespace for manual receipt errors', () => {
     const request = readFileSync(resolve(process.cwd(), 'src/i18n/request.ts'), 'utf8');
     expect(request).toContain('const errors = (await import(');
     expect(request).toContain('/errors.json');
     expect(request).toMatch(/\berrors,\s*\}/);
-    expect(load('ru', 'errors').receiptProcessingFailed as string).toMatch(/Не удалось обработать чек/);
+    expect(load('ru', 'errors').receiptNotProcessed as string).toMatch(/чек/iu);
   });
 
   it('keeps the error detail placeholder available without adding unsafe text', () => {

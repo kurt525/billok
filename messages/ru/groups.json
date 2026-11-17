@@ -40,7 +40,7 @@
     "savedForLater": "Сохранено на потом",
     "deleteReceipt": "Удалить чек",
     "deleteReceiptTitle": "Удалить этот чек?",
-    "deleteReceiptDescription": "Позиции и фотография чека также будут удалены. Это действие нельзя отменить.",
+    "deleteReceiptDescription": "Позиции чека также будут удалены. Это действие нельзя отменить.",
     "addFirstExpense": "Добавить первый расход",
     "paidBy": "Оплатил участник {name}",
     "unknown": "Неизвестно"
