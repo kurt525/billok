@@ -261,20 +261,11 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("e2e/confirm-dialogs-final.spec.ts", source(".github/workflows/billok-ci.yml"))
 
     def test_archive_receipt_only_uses_manual_qa_flow(self):
-        archived = source("e2e/groups-archive.spec.ts")
-        self.assertNotIn("FAKE_JPEG", archived)
-        self.assertNotIn("/api/upload", archived)
-        self.assertNotIn("receipts.processReceipt", archived)
+        self.assertFalse((ROOT / "e2e/groups-archive.spec.ts").exists())
         modern = source("e2e/groups-archive-manual.spec.ts")
         for expected in ("authedPasskeyContext", "receipts.createManual", "receipts.saveForLater",
                          "groups.archive", "groups.unarchive", "receipts.listPending"):
             self.assertIn(expected, modern)
-        for old_title in ("owner can archive a group", "member cannot archive a group",
-                          "archived group excluded from groups.list",
-                          "archived group appears in groups.listArchived",
-                          "owner can unarchive a group", "member cannot unarchive a group",
-                          "cannot create expense on archived group"):
-            self.assertNotIn("test('" + old_title + "'", archived)
         self.assertEqual(modern.count("test('9.3:"), 4)
         for key in ("groups.listArchived", "groups.joinByInvite", "trpcError",
                     "expenses.create", "currency: 'RUB'"):
@@ -282,12 +273,7 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("e2e/groups-archive-manual.spec.ts", source(".github/workflows/billok-ci.yml"))
 
     def test_group_archive_legacy_finances_preserved_with_passkey(self):
-        old = source("e2e/groups-archive.spec.ts")
-        for name in ("cannot create settlement on archived group",
-                     "cannot archive a group until everyone is settled up",
-                     "archive refusal says so when someone who left still has a balance",
-                     "cannot update expense on archived group"):
-            self.assertNotIn("test('" + name + "'", old)
+        self.assertFalse((ROOT / "e2e/groups-archive.spec.ts").exists())
         modern = source("e2e/groups-archive-financial.spec.ts")
         for key in ("authedPasskeyContext", "groups.removeMember", "settlements.create",
                     "expenses.create", "expenses.update", "groups.archive", "currency: 'RUB'",
@@ -299,14 +285,7 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("e2e/groups-archive-financial.spec.ts", source(".github/workflows/billok-ci.yml"))
 
     def test_archive_legacy_ui_routes_migrated_to_russian_mobile(self):
-        old = source("e2e/groups-archive.spec.ts")
-        for title in ("archive button appears in group settings",
-                      "archiving a group redirects to groups list",
-                      "archived group not visible in active groups list",
-                      "archived group visible after clicking Archived button",
-                      "archived group detail shows archived banner",
-                      "unarchive from settings restores group to active list"):
-            self.assertNotIn("test('" + title + "'", old)
+        self.assertFalse((ROOT / "e2e/groups-archive.spec.ts").exists())
         modern = source("e2e/groups-archive-ui.spec.ts")
         for key in ("authedPasskeyContext", "mobile-groups-search",
                     "mobile-groups-archived-toggle", "getByRole('alertdialog')",
@@ -318,14 +297,7 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("e2e/groups-archive-ui.spec.ts", source(".github/workflows/billok-ci.yml"))
 
     def test_archive_access_ui_replaces_five_obsolete_cases(self):
-        old = source("e2e/groups-archive.spec.ts")
-        for title in ("expense page shows no Edit or Delete in an archived group",
-                      "a refused expense delete says why instead of failing silently",
-                      "a plain member is told to ask an owner or admin to unarchive",
-                      "the owner still gets the Manage link on an archived group",
-                      "direct links to add, edit or scan an expense say the group is archived"):
-            self.assertNotIn("test('" + title + "'", old)
-        self.assertIn("an admin impersonating a plain member", old)
+        self.assertFalse((ROOT / "e2e/groups-archive.spec.ts").exists())
         migrated = source("e2e/groups-archive-access.spec.ts")
         for key in ("authedPasskeyContext", "groups.createInvite", "groups.joinByInvite",
                     "expense-detail-delete", "expense-detail-edit", "groups.archive",
@@ -335,6 +307,19 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
             self.assertNotIn(dead, migrated)
         self.assertEqual(migrated.count("test('9.3:"), 3)
         self.assertIn("e2e/groups-archive-access.spec.ts", source(".github/workflows/billok-ci.yml"))
+
+    def test_archive_admin_impersonation_is_still_signed_and_role_restricted(self):
+        self.assertFalse((ROOT / "e2e/groups-archive.spec.ts").exists())
+        signed = source("e2e/billok-mobile-authenticated.spec.ts")
+        self.assertIn("approveQaOwnerAction(owner, 'IMPERSONATE', targetId)", signed)
+        self.assertIn("admin.getImpersonationStatus", signed)
+        self.assertIn("e2e/billok-mobile-authenticated.spec.ts", source(".github/workflows/billok-ci.yml"))
+        route = source("src/app/api/admin/impersonate/route.ts")
+        self.assertIn("approvalToken", route)
+        self.assertIn("requireOwner", route)
+        active = source("e2e/groups-archive-access.spec.ts")
+        self.assertIn("ordinary member", active)
+        self.assertIn("getByText('Управление'", active)
 
     def test_claim_share_link_no_longer_needs_photo_and_old_locale(self):
         suite = source("e2e/claim-share-link.spec.ts")
