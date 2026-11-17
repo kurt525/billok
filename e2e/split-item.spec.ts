@@ -7,15 +7,21 @@ async function makeManualItem(name: string, quantity: number, unitPrice: number,
   const ctx = await authedPasskeyContext('bob@qa.billok.ru');
   try {
     const group = await trpcMutation(ctx, 'groups.create', { name: 'Split API ' + name });
-    expect(group.ok(), await group.text()).toBe(true);
-    const groupId = (await trpcResult(group)).id as string;
+    const groupBody = await group.json();
+    expect(group.ok(), JSON.stringify(groupBody)).toBe(true);
+    const groupId = groupBody.result?.data?.json?.id as string;
+    expect(groupId).toBeTruthy();
     const created = await trpcMutation(ctx, 'receipts.createManual', { groupId });
-    expect(created.ok(), await created.text()).toBe(true);
-    const { receiptId } = await trpcResult(created);
+    const createdBody = await created.json();
+    expect(created.ok(), JSON.stringify(createdBody)).toBe(true);
+    const receiptId = createdBody.result?.data?.json?.receiptId as string;
+    expect(receiptId).toBeTruthy();
     const added = await trpcMutation(ctx, 'receipts.addItem', { receiptId, name, quantity, unitPrice, totalPrice });
-    expect(added.ok(), await added.text()).toBe(true);
-    const item = await trpcResult(added);
-    return { ctx, receiptId: receiptId as string, item };
+    const addedBody = await added.json();
+    expect(added.ok(), JSON.stringify(addedBody)).toBe(true);
+    const item = addedBody.result?.data?.json as { id: string; sortOrder: number };
+    expect(item?.id).toBeTruthy();
+    return { ctx, receiptId, item };
   } catch (error) {
     await ctx.dispose();
     throw error;
