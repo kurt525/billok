@@ -58,11 +58,6 @@ next-env.d.ts
 /test-results/
 /playwright-report/
 
-# demo video output
-/demo/*.webm
-/demo/*.mp4
-/demo/*.png
-!/demo/social-preview.png
 /blob-report/
 /tmp-screenshots/
 /test-screenshots/

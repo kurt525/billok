@@ -216,5 +216,27 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
 
 
 
+    def test_sharetab_demo_and_unused_ocr_fixtures_absent(self):
+        self.assertFalse((ROOT / "e2e/generate-receipt-images.mjs").exists())
+        self.assertFalse(any((ROOT / "demo").glob("*.gif")))
+        self.assertFalse((ROOT / "demo/social-preview.png").exists())
+        receipt_dir = ROOT / "e2e/receipts"
+        self.assertEqual(
+            sorted(p.name for p in receipt_dir.iterdir() if p.is_file()),
+            ["coffee-shop.png"],
+            "Only the fixture used by four retained E2E tests should remain",
+        )
+        for spec in (
+            "guest-claiming-ui.spec.ts",
+            "guest-split-item-ui.spec.ts",
+            "save-for-later.spec.ts",
+            "split-item-ui.spec.ts",
+        ):
+            self.assertIn(
+                "e2e/receipts/coffee-shop.png",
+                source("e2e/" + spec),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
