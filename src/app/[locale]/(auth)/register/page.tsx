@@ -2,10 +2,9 @@
 
 import { Suspense, useState } from 'react';
 import { TRPCClientError } from '@trpc/client';
-import { useLocale, useTranslations } from 'next-intl';
+import { useTranslations } from 'next-intl';
 import { useSearchParams } from 'next/navigation';
 import { Link } from '@/i18n/navigation';
-import type { Locale } from '@/i18n/routing';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -63,7 +62,6 @@ export default function RegisterPage() {
 
 function RegisterForm() {
   const t = useTranslations('auth.register');
-  const locale = useLocale() as Locale;
   const searchParams = useSearchParams();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -77,7 +75,7 @@ function RegisterForm() {
   const registerMutation = trpc.auth.register.useMutation();
 
   const mode = regMode.data?.mode ?? 'open';
-  const callbackPath = normalizeCallbackPath(searchParams.get('callbackUrl'), locale);
+  const callbackPath = normalizeCallbackPath(searchParams.get('callbackUrl'));
   const loginHref = `/login?callbackUrl=${encodeURIComponent(callbackPath)}`;
 
   async function handleSubmit(e: React.FormEvent) {

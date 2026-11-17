@@ -4,10 +4,9 @@ import { Suspense, useState } from 'react';
 import { startAuthentication } from '@simplewebauthn/browser';
 import type { PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/browser';
 import { signIn, signOut } from 'next-auth/react';
-import { useLocale, useTranslations } from 'next-intl';
+import { useTranslations } from 'next-intl';
 import { useSearchParams } from 'next/navigation';
 import { Link, useRouter } from '@/i18n/navigation';
-import type { Locale } from '@/i18n/routing';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { KeyRound, Receipt } from 'lucide-react';
@@ -26,13 +25,12 @@ export default function LoginPage() {
 function LoginForm() {
   const t = useTranslations('auth.login');
   const tCommon = useTranslations('common');
-  const locale = useLocale() as Locale;
   const router = useRouter();
   const params = useSearchParams();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [signOutFailed, setSignOutFailed] = useState(false);
-  const callbackPath = normalizeCallbackPath(params.get('callbackUrl'), locale);
+  const callbackPath = normalizeCallbackPath(params.get('callbackUrl'));
   const callbackHref = stripLocalePrefix(callbackPath);
   const registerHref = '/register?callbackUrl=' + encodeURIComponent(callbackPath);
   const urlErrorKey = getSignInErrorKey(params.get('error'));
@@ -112,7 +110,7 @@ function LoginForm() {
                 className="ml-1 h-auto p-0 text-sm text-destructive underline"
                 onClick={() => {
                   setSignOutFailed(false);
-                  signOut({ callbackUrl: '/' + locale + '/login' }).catch(() => setSignOutFailed(true));
+                  signOut({ callbackUrl: '/login' }).catch(() => setSignOutFailed(true));
                 }}
               >
                 {tCommon('nav.signOut')}

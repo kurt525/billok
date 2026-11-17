@@ -1,8 +1,4 @@
-import { locales, type Locale } from '@/i18n/routing';
-
-// Redirect bookmarked ShareTab language-prefixed routes without losing guest tokens or query strings.
-const legacyLocales = ['ru', 'en', 'es', 'sv', 'fr', 'de', 'pt-BR', 'ja', 'zh-CN', 'ko'] as const;
-
+// Russian-only canonical URLs. next-intl internally uses /ru/* to render pages.
 function splitPathSuffix(path: string) {
   const suffixIndex = path.search(/[?#]/);
   if (suffixIndex === -1) return { pathname: path, suffix: '' };
@@ -13,31 +9,19 @@ export function isSafeInternalPath(path: string | null): path is string {
   return !!path && path.startsWith('/') && !path.startsWith('//') && !path.includes('\\');
 }
 
-export function isSupportedLocale(value: string | null | undefined): value is Locale {
-  return !!value && locales.includes(value as Locale);
-}
-
-export function hasLocalePrefix(path: string): boolean {
-  const { pathname } = splitPathSuffix(path);
-  return legacyLocales.some((locale) => pathname === `/${locale}` || pathname.startsWith(`/${locale}/`));
-}
-
+/** Strip only next-intl's internal Russian prefix, not defunct ShareTab languages. */
 export function stripLocalePrefix(path: string): string {
   const { pathname, suffix } = splitPathSuffix(path);
-  const locale = legacyLocales.find((value) => pathname === `/${value}` || pathname.startsWith(`/${value}/`));
-  if (!locale) return path;
-  const stripped = pathname.slice(locale.length + 1);
-  return `${stripped.startsWith('/') ? stripped : '/' + stripped}${suffix}`;
+  if (pathname !== '/ru' && !pathname.startsWith('/ru/')) return path;
+  return `${pathname.slice(3) || '/'}${suffix}`;
 }
 
-/** Legacy clients may send a language prefix, but BillOK's canonical routes never have one. */
-export function withLocalePrefix(path: string, locale: Locale): string {
-  // The locale argument is retained for older callers, but never changes the URL.
-  void locale;
-  return stripLocalePrefix(path.startsWith('/') ? path : `/${path}`);
-}
-
-export function normalizeCallbackPath(rawCallbackUrl: string | null, locale: Locale): string {
+/** Keep Passkey post-login redirects local and usable in Russian-only BillOK. */
+export function normalizeCallbackPath(rawCallbackUrl: string | null): string {
   if (!isSafeInternalPath(rawCallbackUrl)) return '/dashboard';
-  return withLocalePrefix(rawCallbackUrl, locale);
+  const canonical = stripLocalePrefix(rawCallbackUrl);
+  // Stale links with an unsupported language (including old pt-BR, zh-CN)
+  // must not send an authenticated user to a nonexistent route.
+  if (/^\/[a-z]{2}(?:-[a-z]{2})?(?:\/|[?#]|$)/iu.test(canonical)) return '/dashboard';
+  return canonical;
 }
