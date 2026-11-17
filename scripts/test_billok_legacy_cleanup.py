@@ -298,6 +298,25 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertEqual(modern.count("test('9.3:"), 3)
         self.assertIn("e2e/groups-archive-financial.spec.ts", source(".github/workflows/billok-ci.yml"))
 
+    def test_archive_legacy_ui_routes_migrated_to_russian_mobile(self):
+        old = source("e2e/groups-archive.spec.ts")
+        for title in ("archive button appears in group settings",
+                      "archiving a group redirects to groups list",
+                      "archived group not visible in active groups list",
+                      "archived group visible after clicking Archived button",
+                      "archived group detail shows archived banner",
+                      "unarchive from settings restores group to active list"):
+            self.assertNotIn("test('" + title + "'", old)
+        modern = source("e2e/groups-archive-ui.spec.ts")
+        for key in ("authedPasskeyContext", "mobile-groups-search",
+                    "mobile-groups-archived-toggle", "getByRole('alertdialog')",
+                    "groups.archive", "Восстановить из архива", "Группа в архиве"):
+            self.assertIn(key, modern)
+        for dead in ("/en/", "currency: 'USD'", "users.alice.password", "FAKE_JPEG"):
+            self.assertNotIn(dead, modern)
+        self.assertEqual(modern.count("test('9.3:"), 2)
+        self.assertIn("e2e/groups-archive-ui.spec.ts", source(".github/workflows/billok-ci.yml"))
+
     def test_claim_share_link_no_longer_needs_photo_and_old_locale(self):
         suite = source("e2e/claim-share-link.spec.ts")
         for obsolete in ("guest-file-input", "scan-file-input", "test-receipt.png", "/en/", "FAKE_PNG", "FAKE_JPEG"):

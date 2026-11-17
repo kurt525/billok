@@ -403,6 +403,7 @@ jobs:
                 e2e/claim-share-link.spec.ts \
                 e2e/groups-archive-manual.spec.ts \
                 e2e/groups-archive-financial.spec.ts \
+                e2e/groups-archive-ui.spec.ts \
                 e2e/confirm-dialogs-manual.spec.ts \
                 e2e/confirm-dialogs-people-splits.spec.ts \
                 e2e/confirm-dialogs-final.spec.ts \
