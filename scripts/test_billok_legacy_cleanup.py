@@ -317,6 +317,25 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertEqual(modern.count("test('9.3:"), 2)
         self.assertIn("e2e/groups-archive-ui.spec.ts", source(".github/workflows/billok-ci.yml"))
 
+    def test_archive_access_ui_replaces_five_obsolete_cases(self):
+        old = source("e2e/groups-archive.spec.ts")
+        for title in ("expense page shows no Edit or Delete in an archived group",
+                      "a refused expense delete says why instead of failing silently",
+                      "a plain member is told to ask an owner or admin to unarchive",
+                      "the owner still gets the Manage link on an archived group",
+                      "direct links to add, edit or scan an expense say the group is archived"):
+            self.assertNotIn("test('" + title + "'", old)
+        self.assertIn("an admin impersonating a plain member", old)
+        migrated = source("e2e/groups-archive-access.spec.ts")
+        for key in ("authedPasskeyContext", "groups.createInvite", "groups.joinByInvite",
+                    "expense-detail-delete", "expense-detail-edit", "groups.archive",
+                    "Удалять расход могут только", "Группа в архиве"):
+            self.assertIn(key, migrated)
+        for dead in ("/en/", "users.alice.password", "currency: 'USD'"):
+            self.assertNotIn(dead, migrated)
+        self.assertEqual(migrated.count("test('9.3:"), 3)
+        self.assertIn("e2e/groups-archive-access.spec.ts", source(".github/workflows/billok-ci.yml"))
+
     def test_claim_share_link_no_longer_needs_photo_and_old_locale(self):
         suite = source("e2e/claim-share-link.spec.ts")
         for obsolete in ("guest-file-input", "scan-file-input", "test-receipt.png", "/en/", "FAKE_PNG", "FAKE_JPEG"):
