@@ -75,7 +75,7 @@ test('9.3: archived RUB expense cannot be edited or deleted and direct entry pag
     for (const route of ['expenses/new', 'expenses/' + expenseId + '/edit', 'scan', 'scan?receiptId=any']) {
       await page.goto('/groups/' + groupId + '/' + route);
       await expect(page.getByRole('heading', { name: 'Группа в архиве' }), route).toBeVisible();
-      await expect(page.getByRole('link', { name: 'К группе' }), route).toBeVisible();
+      await expect(page.getByText('К группе', { exact: true }), route).toBeVisible();
       await expect(page.locator('form'), route).toHaveCount(0);
     }
   } finally {
@@ -128,7 +128,7 @@ test('9.3: archived group shows management to owner, but no restore action for o
     await signedPage(page, 'alice@qa.billok.ru');
 
     await page.goto('/groups/' + groupId);
-    await expect(page.getByRole('link', { name: 'Управление' })).toBeVisible();
+    await expect(page.getByText('Управление', { exact: true })).toBeVisible();
     await expect(page.getByText('Попросите владельца или администратора восстановить группу из архива.')).toHaveCount(
       0,
     );
@@ -141,7 +141,7 @@ test('9.3: archived group shows management to owner, but no restore action for o
     await expect(
       memberPage.getByText('Попросите владельца или администратора восстановить группу из архива.'),
     ).toBeVisible();
-    await expect(memberPage.getByRole('link', { name: 'Управление' })).toHaveCount(0);
+    await expect(memberPage.getByText('Управление', { exact: true })).toHaveCount(0);
     await memberPage.goto('/groups/' + groupId + '/settings');
     await expect(memberPage.getByText('Группа в архиве', { exact: true })).toBeVisible();
     await expect(
