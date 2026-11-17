@@ -21,13 +21,7 @@ export default defineConfig({
     // Tests that mutate or depend on shared seed data — run serially first
     {
       name: 'serial',
-      testMatch: [
-        'admin.spec.ts',
-        'admin-cleanup.spec.ts',
-        'admin-features.spec.ts',
-        'expenses.spec.ts',
-        'groups.spec.ts',
-      ],
+      testMatch: ['admin-cleanup.spec.ts', 'admin-features.spec.ts', 'expenses.spec.ts'],
       fullyParallel: false,
       workers: 1,
       use: { browserName: 'chromium' },
@@ -35,13 +29,7 @@ export default defineConfig({
     // Everything else — fully parallel, runs after serial completes
     {
       name: 'parallel',
-      testIgnore: [
-        'admin.spec.ts',
-        'admin-cleanup.spec.ts',
-        'admin-features.spec.ts',
-        'expenses.spec.ts',
-        'groups.spec.ts',
-      ],
+      testIgnore: ['admin-cleanup.spec.ts', 'admin-features.spec.ts', 'expenses.spec.ts'],
       dependencies: ['serial'],
       use: { browserName: 'chromium' },
     },

@@ -321,6 +321,32 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("ordinary member", active)
         self.assertIn("getByText('Управление'", active)
 
+    def test_obsolete_password_admin_and_groups_e2e_are_deleted(self):
+        for obsolete in ("e2e/admin.spec.ts", "e2e/groups.spec.ts"):
+            self.assertFalse((ROOT / obsolete).exists(), obsolete)
+            self.assertNotIn(obsolete.split("/")[-1], source("playwright.config.ts"))
+        for path, markers in {
+            "e2e/billok-mobile-authenticated.spec.ts": (
+                "admin.getSystemHealth",
+                "admin-groups-search",
+                "mobile-groups-create",
+                "group-debt-row",
+            ),
+            "e2e/billok-mobile-guest-split.spec.ts": (
+                "'groups.create'",
+                "'groups.createInvite'",
+            ),
+            "e2e/billok-mobile-wide.spec.ts": (
+                "'/groups/new'",
+            ),
+            "e2e/billok-passkey-management-regular.spec.ts": (
+                "Owner-only route",
+            ),
+        }.items():
+            content = source(path)
+            for marker in markers:
+                self.assertIn(marker, content, path)
+
     def test_obsolete_settlement_and_english_admin_e2e_are_deleted(self):
         for obsolete in ("e2e/balances.spec.ts", "e2e/mobile-admin.spec.ts"):
             self.assertFalse((ROOT / obsolete).exists(), obsolete)
