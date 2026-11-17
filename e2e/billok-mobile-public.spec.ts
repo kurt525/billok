@@ -285,11 +285,13 @@ test('registration email link needs a tap and never retries a rejected Passkey s
   }
 });
 
-test('root and legacy language links reach canonical Russian pages without redirect loops', async ({ page }) => {
+test('Russian login is canonical and removed foreign locale URLs cannot bypass authentication', async ({ page }) => {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page).toHaveURL(/\/login$/);
   await page.goto('/en/login', { waitUntil: 'domcontentloaded' });
-  await expect(page).toHaveURL(/\/login$/);
+  await expect(page).toHaveURL(/\/login\?callbackUrl=/);
+  expect(new URL(page.url()).searchParams.get('callbackUrl')).toBe('/en/login');
+  await expect(page.locator('html')).toHaveAttribute('lang', 'ru');
 });
 
 test('internal Russian legacy routes still enforce authentication', async ({ page }) => {
