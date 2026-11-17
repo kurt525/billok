@@ -210,6 +210,15 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         ):
             self.assertTrue((ROOT / retained).exists(), retained)
 
+    def test_name_chip_e2e_uses_manual_receipts_and_passkey(self):
+        suite = source("e2e/assignment-chip-names.spec.ts")
+        for old in ("/api/upload", "receipts.processReceipt", "guest-file-input", "FAKE_JPEG", "/en/split"):
+            self.assertNotIn(old, suite)
+        self.assertIn("authedPasskeyContext", suite)
+        self.assertIn("create-manual-group-receipt", suite)
+        self.assertIn("workflow-manual", suite)
+        self.assertIn("e2e/assignment-chip-names.spec.ts", source(".github/workflows/billok-ci.yml"))
+
     def test_only_russian_internal_locale_rewrite_remains(self):
         paths = source("src/lib/locale-paths.ts")
         middleware = source("src/middleware.ts")
