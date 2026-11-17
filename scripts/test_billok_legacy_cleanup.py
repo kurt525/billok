@@ -321,6 +321,37 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("ordinary member", active)
         self.assertIn("getByText('Управление'", active)
 
+    def test_obsolete_password_english_mobile_e2e_are_deleted(self):
+        for obsolete in (
+            "e2e/auth.spec.ts",
+            "e2e/mobile.spec.ts",
+            "e2e/groups-search.spec.ts",
+            "e2e/my-splits.spec.ts",
+        ):
+            self.assertFalse((ROOT / obsolete).exists(), obsolete)
+        current = {
+            "e2e/billok-mobile-public.spec.ts": (
+                "invited mobile signup waits for email confirmation",
+                "/register",
+            ),
+            "e2e/billok-mobile-auth-journey.spec.ts": (
+                "loginWithPasskey",
+                "/register",
+            ),
+            "e2e/billok-mobile-authenticated.spec.ts": (
+                "mobile-groups-search",
+                "six-width final authenticated mobile adaptation audit across main screens",
+            ),
+            "e2e/billok-mobile-guest-split.spec.ts": (
+                "splits-page",
+                "split-card-",
+            ),
+        }
+        for path, markers in current.items():
+            content = source(path)
+            for marker in markers:
+                self.assertIn(marker, content, path)
+
     def test_obsolete_desktop_and_freeform_settlement_components_are_deleted(self):
         for dead in ("src/components/layout/sidebar.tsx",
                      "src/components/groups/settle-dialog.tsx",
