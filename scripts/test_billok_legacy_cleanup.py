@@ -144,5 +144,47 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("nav", common)
 
 
+    def test_unsupported_language_switching_e2e_removed(self):
+        for name in (
+            "e2e/admin-i18n.spec.ts",
+            "e2e/i18n.spec.ts",
+            "e2e/i18n-errors.spec.ts",
+        ):
+            self.assertFalse((ROOT / name).exists(), name)
+        russian = source("src/i18n/routing.ts")
+        self.assertIn("locales = ['ru'] as const", russian)
+        for retained in (
+            "e2e/billok-mobile-public.spec.ts",
+            "e2e/billok-mobile-authenticated.spec.ts",
+            "e2e/billok-mobile-guest-split.spec.ts",
+            "e2e/billok-passkey-smoke.spec.ts",
+        ):
+            self.assertTrue((ROOT / retained).exists(), retained)
+
+    def test_playwright_no_longer_selects_missing_upstream_scenarios(self):
+        import re
+        cfg = source("playwright.config.ts")
+        names = re.findall(r"'([A-Za-z0-9-]+[.]spec[.]ts)'", cfg)
+        self.assertGreater(len(names), 0)
+        self.assertEqual(len(names), 2 * len(set(names)))
+        for name in set(names):
+            self.assertTrue((ROOT / "e2e" / name).is_file(), name)
+        for dead in (
+            "admin-i18n.spec.ts",
+            "admin-ai-provider-ui.spec.ts",
+            "admin-meridian.spec.ts",
+            "ai-provider-test.spec.ts",
+            "venmo-toggle.spec.ts",
+            "venmo-profile.spec.ts",
+            "venmo-deeplink.spec.ts",
+            "venmo-settle.spec.ts",
+            "guest-upload-toggle.spec.ts",
+        ):
+            self.assertNotIn(dead, cfg)
+        self.assertIn("dependencies: ['serial']", cfg)
+        self.assertIn("fullyParallel: false", cfg)
+
+
+
 if __name__ == "__main__":
     unittest.main()
