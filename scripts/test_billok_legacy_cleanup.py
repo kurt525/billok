@@ -229,9 +229,6 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("e2e/split-item.spec.ts", source(".github/workflows/billok-ci.yml"))
 
     def test_confirm_dialogs_people_and_splits_migrated(self):
-        legacy = source("e2e/confirm-dialogs.spec.ts")
-        for obsolete in ("removing a placeholder asks", "deleting a split from My Splits"):
-            self.assertNotIn(obsolete, legacy)
         mobile = source("e2e/confirm-dialogs-people-splits.spec.ts")
         for required in ("authedPasskeyContext", "groups.addPlaceholder", "guest.createSplit",
                          "getByRole('alertdialog')", "currency: 'RUB'"):
@@ -242,9 +239,6 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("e2e/confirm-dialogs-people-splits.spec.ts", source(".github/workflows/billok-ci.yml"))
 
     def test_confirm_dialogs_manual_passkey(self):
-        old = source("e2e/confirm-dialogs.spec.ts")
-        for dead in ("FAKE_JPEG", "/api/upload", "receipts.processReceipt", "uploadReceipt("):
-            self.assertNotIn(dead, old)
         suite = source("e2e/confirm-dialogs-manual.spec.ts")
         for required in ("authedPasskeyContext", "receipts.createManual", "receipts.saveForLater",
                          "receipts.getReceiptItems", "getByRole('alertdialog')"):
@@ -253,6 +247,18 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
             self.assertNotIn(dead, suite)
         self.assertEqual(suite.count("test('9.3:"), 3)
         self.assertIn("e2e/confirm-dialogs-manual.spec.ts", source(".github/workflows/billok-ci.yml"))
+
+    def test_obsolete_confirm_dialog_suite_is_replaced_and_signed(self):
+        self.assertFalse((ROOT / "e2e/confirm-dialogs.spec.ts").exists())
+        last = source("e2e/confirm-dialogs-final.spec.ts")
+        for key in ("authedPasskeyContext", "expenses.create", "expenses.get",
+                    "guest.createClaimSession", "joinGuestSession", "rememberClaimIdentity",
+                    "guest.getSession", "getByRole('alertdialog')", "currency: 'RUB'"):
+            self.assertIn(key, last)
+        for dead in ("/en/", "FAKE_JPEG", "/api/upload", "receipts.processReceipt", "users.alice.password"):
+            self.assertNotIn(dead, last)
+        self.assertEqual(last.count("test('9.3:"), 2)
+        self.assertIn("e2e/confirm-dialogs-final.spec.ts", source(".github/workflows/billok-ci.yml"))
 
     def test_archive_receipt_only_uses_manual_qa_flow(self):
         archived = source("e2e/groups-archive.spec.ts")
