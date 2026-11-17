@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { login, users, authedContext, createTestGroup, trpcMutation, trpcError } from './helpers';
+import { login, users, authedContext, createTestGroup, trpcMutation } from './helpers';
 
 test.describe('Group Archiving', () => {
   // ── API-level tests ──────────────────────────────────────
