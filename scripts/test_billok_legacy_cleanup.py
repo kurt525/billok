@@ -269,6 +269,16 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         for expected in ("authedPasskeyContext", "receipts.createManual", "receipts.saveForLater",
                          "groups.archive", "groups.unarchive", "receipts.listPending"):
             self.assertIn(expected, modern)
+        for old_title in ("owner can archive a group", "member cannot archive a group",
+                          "archived group excluded from groups.list",
+                          "archived group appears in groups.listArchived",
+                          "owner can unarchive a group", "member cannot unarchive a group",
+                          "cannot create expense on archived group"):
+            self.assertNotIn("test('" + old_title + "'", archived)
+        self.assertEqual(modern.count("test('9.3:"), 4)
+        for key in ("groups.listArchived", "groups.joinByInvite", "trpcError",
+                    "expenses.create", "currency: 'RUB'"):
+            self.assertIn(key, modern)
         self.assertIn("e2e/groups-archive-manual.spec.ts", source(".github/workflows/billok-ci.yml"))
 
     def test_claim_share_link_no_longer_needs_photo_and_old_locale(self):
