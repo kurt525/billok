@@ -321,6 +321,27 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("ordinary member", active)
         self.assertIn("getByText('Управление'", active)
 
+    def test_obsolete_settlement_and_english_admin_e2e_are_deleted(self):
+        for obsolete in ("e2e/balances.spec.ts", "e2e/mobile-admin.spec.ts"):
+            self.assertFalse((ROOT / obsolete).exists(), obsolete)
+            self.assertNotIn(obsolete.split("/")[-1], source("playwright.config.ts"))
+        for filename, markers in {
+            "e2e/billok-mobile-authenticated.spec.ts": (
+                "group-debt-row",
+                "mobile-payment-delete-dialog",
+                "admin-groups-search",
+                "admin-storage-cleanup-dialog",
+                "admin-server-logs",
+            ),
+            "e2e/billok-owner-passkey-recovery.spec.ts": (
+                "owner-users-page",
+                "loginWithPasskey",
+            ),
+        }.items():
+            content = source(filename)
+            for marker in markers:
+                self.assertIn(marker, content, filename)
+
     def test_obsolete_password_english_mobile_e2e_are_deleted(self):
         for obsolete in (
             "e2e/auth.spec.ts",
