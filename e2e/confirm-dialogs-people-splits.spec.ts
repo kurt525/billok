@@ -34,9 +34,11 @@ test('9.3: removing a group placeholder requires confirmation and Cancel preserv
   expect(added.ok(), await added.text()).toBe(true);
 
   await page.goto('/groups/' + groupId + '/settings');
-  const row = page.getByTestId('group-placeholder-row').filter({ hasText: 'Диана' });
+  // В режиме редактирования имя находится в value input, а не в текстовом узле строки.
+  const row = page.getByTestId('group-placeholder-row');
   await expect(row).toBeVisible();
   await row.getByRole('button', { name: 'Переименовать участника Диана' }).click();
+  await expect(row.locator('input')).toHaveValue('Диана');
   await expect(row.getByRole('button', { name: 'Сохранить имя' })).toBeVisible();
   await row.getByRole('button', { name: 'Отменить переименование' }).click();
   const remove = row.getByRole('button', { name: 'Удалить участника Диана' });
