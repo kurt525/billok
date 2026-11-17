@@ -2,7 +2,6 @@ import { test, expect } from '@playwright/test';
 import {
   users,
   login,
-  navigateToGroup,
   authedContext,
   createTestGroup,
   trpcMutation,
