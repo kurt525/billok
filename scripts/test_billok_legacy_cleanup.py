@@ -228,6 +228,17 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertEqual(suite.count("test('9.3:"), 5)
         self.assertIn("e2e/split-item.spec.ts", source(".github/workflows/billok-ci.yml"))
 
+    def test_claim_share_link_no_longer_needs_photo_and_old_locale(self):
+        suite = source("e2e/claim-share-link.spec.ts")
+        for obsolete in ("guest-file-input", "scan-file-input", "test-receipt.png", "/en/", "FAKE_PNG", "FAKE_JPEG"):
+            self.assertNotIn(obsolete, suite)
+        self.assertFalse((ROOT / "e2e/test-receipt.png").exists())
+        self.assertIn("authedPasskeyContext", suite)
+        self.assertIn("receipts.createManual", suite)
+        self.assertIn("workflow-manual", suite)
+        self.assertEqual(suite.count("test('9.3:"), 3)
+        self.assertIn("e2e/claim-share-link.spec.ts", source(".github/workflows/billok-ci.yml"))
+
     def test_only_russian_internal_locale_rewrite_remains(self):
         paths = source("src/lib/locale-paths.ts")
         middleware = source("src/middleware.ts")

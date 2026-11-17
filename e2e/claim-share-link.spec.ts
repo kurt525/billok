@@ -1,93 +1,103 @@
-import { test, expect } from '@playwright/test';
-import { resolve } from 'path';
-import { login, users, createTestGroup } from './helpers';
+import { expect, test, type Page } from '@playwright/test';
+import { authedPasskeyContext } from './passkey-auth';
+import { trpcMutation } from './helpers';
 
-const RECEIPT_IMAGE = resolve('e2e/test-receipt.png');
+// The same real signed CI Passkey session as the mandatory mobile acceptance suite.
+async function signIn(page: Page) {
+  const api = await authedPasskeyContext('bob@qa.billok.ru');
+  try {
+    await page.context().addCookies((await api.storageState()).cookies);
+  } finally {
+    await api.dispose();
+  }
+}
 
-// #263: Share Link started the claim session with only the payer in it, and the creator's device
-// wasn't anyone in it, so whoever opened the link first could join as the payer.
-test('Share Link lists everyone typed and joins the creator as the payer', async ({ page, browser }) => {
-  // The scan is a real extraction when the server under test uses a live AI provider (see
-  // guest-upload-toggle.spec.ts for the timings behind this budget)
-  test.setTimeout(180_000);
-
-  await page.goto('/en/split');
-  await page.getByTestId('guest-file-input').setInputFiles(RECEIPT_IMAGE);
-  await expect(page.getByTestId('guest-people-step')).toBeVisible({ timeout: 150_000 });
-
-  await page.getByTestId('person-input-0').fill('Dana');
-  await page.getByTestId('add-person-btn').click();
-  await page.getByTestId('person-input-1').fill('Pat');
-  await page.getByLabel('Who paid the bill?').selectOption({ label: 'Pat' });
+async function startManualReceipt(page: Page, names: string[], payerIndex: number) {
+  await page.goto('/split');
+  await page.getByTestId('workflow-manual').click();
+  await page.getByTestId('manual-receipt-name').fill('Общий ужин');
+  for (const [index, name] of names.entries()) {
+    if (index > 0) await page.getByTestId('add-person-btn').click();
+    await page.getByTestId('person-input-' + index).fill(name);
+  }
+  await page.locator('#who-paid').selectOption(String(payerIndex));
   await page.getByTestId('next-assign-btn').click();
-  const share = page.getByTestId('share-for-claiming-btn');
-  await share.scrollIntoViewIfNeeded();
-  await share.click();
-  await page.waitForURL(/\/en\/split\/[^/]+\/claim$/);
+  await page.getByTestId('guest-add-item-btn').click();
+  const inputs = page.getByTestId('guest-add-item-submit').locator('xpath=ancestor::form').locator('input');
+  await inputs.nth(0).fill('Ужин');
+  await inputs.nth(1).fill('1');
+  await inputs.nth(2).fill('500,00');
+  await page.getByTestId('guest-add-item-submit').click();
+  await expect(page.getByTestId('share-for-claiming-btn')).toBeEnabled();
+  await page.getByTestId('share-for-claiming-btn').click();
+  await expect(page).toHaveURL(/\/split\/[^/]+\/claim(?:\?.*)?$/);
+}
 
-  // The creator's device already is Pat, the payer: no join form
-  await expect(page.getByText('People in this session (2)')).toBeVisible();
-  await expect(page.getByTestId('switch-person-1')).toContainText('Pat (you)');
+test.use({ viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
+
+test('9.3: sharing a manual receipt reserves the payer for its creator', async ({ page, browser }) => {
+  await signIn(page);
+  await startManualReceipt(page, ['Антон', 'Павел'], 1);
   await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
+  await expect(page.getByTestId('switch-person-1')).toBeEnabled();
+  await expect(page.getByTestId('switch-person-0')).toBeDisabled();
 
-  // Someone else opening the link can join as Dana, but not as Pat
-  const visitorContext = await browser.newContext();
+  const visitorContext = await browser.newContext({
+    viewport: { width: 320, height: 800 },
+    isMobile: true,
+    hasTouch: true,
+  });
   try {
     const visitor = await visitorContext.newPage();
     await visitor.goto(page.url());
     await expect(visitor.getByTestId('claim-join-form')).toBeVisible();
-    await expect(visitor.getByTestId('rejoin-person-0')).toContainText('Dana');
+    await expect(visitor.getByTestId('rejoin-person-0')).toContainText('Антон');
     await expect(visitor.getByTestId('rejoin-person-1')).toHaveCount(0);
   } finally {
     await visitorContext.close();
   }
 });
 
-// A creator whose browser can't store their identity isn't joined at creation: they'd be locked
-// out of the payer, unable to resume them or join under that name. They join by hand, as before.
-test('without storage, Share Link leaves the payer free for the creator to join as', async ({ page }) => {
-  test.setTimeout(180_000);
+test('9.3: manual sharing without browser storage leaves creator seat claimable', async ({ page }) => {
+  await signIn(page);
   await page.addInitScript(() => {
     Storage.prototype.setItem = () => {
-      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+      throw new DOMException('Недостаточно места', 'QuotaExceededError');
     };
   });
-
-  await page.goto('/en/split');
-  await page.getByTestId('guest-file-input').setInputFiles(RECEIPT_IMAGE);
-  await expect(page.getByTestId('guest-people-step')).toBeVisible({ timeout: 150_000 });
-  await page.getByTestId('person-input-0').fill('Pat');
-  await page.getByTestId('add-person-btn').click();
-  await page.getByTestId('person-input-1').fill('Dana');
-  await page.getByTestId('next-assign-btn').click();
-  const share = page.getByTestId('share-for-claiming-btn');
-  await share.scrollIntoViewIfNeeded();
-  await share.click();
-  await page.waitForURL(/\/en\/split\/[^/]+\/claim$/);
-
-  await expect(page.getByText('People in this session (2)')).toBeVisible();
-  const joinAsPat = page.getByTestId('rejoin-person-0');
-  await expect(joinAsPat).toContainText('Pat');
-  await joinAsPat.click();
-  await expect(page.getByTestId('switch-person-0')).toContainText('Pat (you)');
+  await startManualReceipt(page, ['Павел', 'Антон'], 0);
+  await expect(page.getByTestId('claim-join-form')).toBeVisible();
+  await expect(page.getByTestId('rejoin-person-0')).toContainText('Павел');
+  await page.getByTestId('rejoin-person-0').click();
+  await expect(page.getByTestId('switch-person-0')).toBeEnabled();
 });
 
-// The group scan page's Share Link had the same gap: the signed-in member who shared it
-// landed on the join form, as any visitor would
-test("a group scan's Share Link joins the member who shared it", async ({ page }) => {
-  test.setTimeout(180_000);
-  const { groupId, dispose } = await createTestGroup(users.alice.email, users.alice.password, [], 'Share Link Scan');
+test('9.3: sharing a manual group receipt joins the signed-in group member', async ({ page }) => {
+  await signIn(page);
+  const group = await trpcMutation(page.request, 'groups.create', { name: 'Group Share ' + Date.now() });
+  const groupBody = await group.json();
+  expect(group.ok(), JSON.stringify(groupBody)).toBe(true);
+  const groupId = groupBody.result?.data?.json?.id as string;
+  expect(groupId).toBeTruthy();
+  const created = await trpcMutation(page.request, 'receipts.createManual', { groupId });
+  const receiptBody = await created.json();
+  expect(created.ok(), JSON.stringify(receiptBody)).toBe(true);
+  const receiptId = receiptBody.result?.data?.json?.receiptId as string;
+  expect(receiptId).toBeTruthy();
+  const added = await trpcMutation(page.request, 'receipts.addItem', {
+    receiptId,
+    name: 'Суп',
+    quantity: 1,
+    unitPrice: 10000,
+    totalPrice: 10000,
+  });
+  expect(added.ok(), await added.text()).toBe(true);
 
-  await login(page, users.alice.email, users.alice.password);
-  await page.goto(`/en/groups/${groupId}/scan`);
-  await page.getByTestId('scan-file-input').setInputFiles(RECEIPT_IMAGE);
+  await page.goto('/groups/' + groupId + '/scan?receiptId=' + receiptId);
   const share = page.getByTestId('group-share-claiming-btn');
-  await expect(share).toBeEnabled({ timeout: 150_000 });
+  await expect(share).toBeEnabled();
   await share.click();
-  await page.waitForURL(/\/en\/split\/[^/]+\/claim$/);
-
-  await expect(page.getByTestId('switch-person-0')).toContainText(`${users.alice.name} (you)`);
+  await expect(page).toHaveURL(/\/split\/[^/]+\/claim(?:\?.*)?$/);
   await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
-
-  await dispose();
+  await expect(page.getByTestId('switch-person-0')).toBeEnabled();
 });
