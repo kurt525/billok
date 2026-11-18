@@ -3,7 +3,7 @@
 # Usage: bash scripts/docker-smoke.sh [--build] [--image NAME] [--keep]
 set -euo pipefail
 
-IMAGE="sharetab:smoke"
+IMAGE="billok:smoke"
 BUILD=false
 KEEP=false
 
@@ -20,7 +20,7 @@ done
 
 cd "$(dirname "$0")/.."
 
-CONTAINER="sharetab-smoke-$$-$RANDOM"
+CONTAINER="billok-smoke-$$-$RANDOM"
 FAILED=true
 ADMIN_EMAIL="smoke-admin@qa.billok.ru"
 ADMIN_PASSWORD=$(openssl rand -hex 16)
@@ -89,7 +89,7 @@ wait_healthy() {
 # unaligned, tuples-only output and fails on the first error.
 # Usage: db -c '<sql>' [-c '<sql>' ...]
 db() {
-  docker exec "$CONTAINER" su-exec postgres psql -h /run/postgresql -d sharetab \
+  docker exec "$CONTAINER" su-exec postgres psql -h /run/postgresql -d billok \
     -v ON_ERROR_STOP=1 -tA "$@"
 }
 
@@ -115,7 +115,7 @@ fi
 
 section "Start on an empty database"
 secret=$(openssl rand -base64 32)
-docker run -d --name "$CONTAINER" --label sharetab-smoke \
+docker run -d --name "$CONTAINER" --label billok-smoke \
   -e NEXTAUTH_SECRET="$secret" -e AUTH_SECRET="$secret" \
   -e AUTH_TRUST_HOST=true -e ADMIN_EMAIL="$ADMIN_EMAIL" \
 wait_healthy "first start"

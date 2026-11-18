@@ -1,5 +1,5 @@
 services:
-  sharetab:
+  billok:
     labels:
       ru.billok.project: billok
       ru.billok.component: application
@@ -8,14 +8,14 @@ services:
       dockerfile: docker/Dockerfile
       args:
         COMMIT_SHA: ${COMMIT_SHA:-unknown}
-    image: sharetab:latest
+    image: billok:latest
     # Issue #1 8.10: upstream is reachable ONLY from the VPS loopback.
     # Never bind the application container on 0.0.0.0 or the public IP.
     ports:
       - "127.0.0.1:${BILLOK_INTERNAL_PORT:-3000}:3000"
     environment:
-      - DB_USER=${DB_USER:-sharetab}
-      - DB_NAME=${DB_NAME:-sharetab}
+      - DB_USER=${DB_USER:-billok}
+      - DB_NAME=${DB_NAME:-billok}
       - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
       - AUTH_TRUST_HOST=${AUTH_TRUST_HOST:-false}
       - EMAIL_SERVER_HOST=${EMAIL_SERVER_HOST:-}

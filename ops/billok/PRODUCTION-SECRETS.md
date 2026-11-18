@@ -77,7 +77,7 @@ PostgreSQL; ключи загружаются только в память пр�
 
 ## Контроль без раскрытия секретов
 
-1. Проверить docker compose config: в environment сервиса sharetab
+1. Проверить docker compose config: в environment сервиса billok
    **нет** DB_PASSWORD, AUTH_SECRET, NEXTAUTH_SECRET, DATABASE_URL,
    EMAIL_SERVER_PASSWORD, WEB_PUSH_VAPID_PRIVATE_KEY.
 2. Проверить монтирование только для чтения и привязку порта к 127.0.0.1.

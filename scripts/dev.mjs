@@ -93,7 +93,7 @@ try {
 } catch {}
 console.log('');
 console.log('============================================');
-console.log('  ShareTab Dev Server');
+console.log('  BillOK Dev Server');
 console.log('============================================');
 console.log(`  Version:  ${pkg.version}`);
 console.log(`  Commit:   ${commitSha}`);

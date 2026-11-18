@@ -6,10 +6,10 @@ set -e
 . /app/load-secrets.sh
 
 PGDATA="${PGDATA:-/var/lib/postgresql/data}"
-DB_USER="${DB_USER:-sharetab}"
+DB_USER="${DB_USER:-billok}"
 # Loaded from /run/billok-secrets/database-password.
 : "${DB_PASSWORD:?BillOK secret database-password missing}"
-DB_NAME="${DB_NAME:-sharetab}"
+DB_NAME="${DB_NAME:-billok}"
 
 # Keep Auth.js and SMTP secrets out of PostgreSQL child environments.
 postgres_command() {
@@ -113,8 +113,8 @@ echo "============================================"
 echo "  Version:        $(node -e "console.log(require('./package.json').version)" 2>/dev/null || echo 'unknown')"
 echo "  Commit:         $(cat .commit-sha 2>/dev/null || echo 'unknown')"
 echo "  Database:       local PostgreSQL; credentials not logged"
-echo "  DB User:        ${DB_USER:-sharetab}"
-echo "  DB Name:        ${DB_NAME:-sharetab}"
+echo "  DB User:        ${DB_USER:-billok}"
+echo "  DB Name:        ${DB_NAME:-billok}"
 echo "  Auth URL:       ${NEXTAUTH_URL:-not set}"
 echo "  Auth Trust:     ${AUTH_TRUST_HOST:-false}"
 echo "  Owner Setup:    ${ADMIN_EMAIL:-not set}"

@@ -100,6 +100,35 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("sbpBankId: z.string().max(40)", auth)
         self.assertIn("name: z.string().trim().min(1)", auth)
 
+    def test_docker_and_scripts_use_billok_defaults_and_safe_service_name(self):
+        compose = source("docker/docker-compose.yml")
+        entrypoint = source("docker/entrypoint.sh")
+        smoke = source("scripts/docker-smoke.sh")
+        dev = source("scripts/dev.mjs")
+        pr_create = source("scripts/pr-create.mjs")
+        for content in (compose, entrypoint, smoke, dev, pr_create):
+            self.assertNotIn("sharetab", content.lower())
+        self.assertIn("  billok:", compose)
+        self.assertIn("image: billok:latest", compose)
+        self.assertIn("DB_USER=", compose)
+        self.assertIn("DB_NAME=", compose)
+        self.assertIn("DB_USER=", entrypoint)
+        self.assertIn("DB_NAME=", entrypoint)
+        self.assertIn('IMAGE="billok:smoke"', smoke)
+        self.assertIn('CONTAINER="billok-smoke-', smoke)
+        self.assertIn("BillOK Dev Server", dev)
+        self.assertIn("billok-pr-body", pr_create)
+        for testpath in ("scripts/test_billok_container_isolation.py",
+                         "scripts/test_billok_https_proxy.py",
+                         "scripts/test_billok_production_secrets.py"):
+            self.assertIn('["billok"]', source(testpath))
+            self.assertNotIn('["sharetab"]', source(testpath))
+        guide = source("ops/billok/PRODUCTION-SECRETS.md")
+        self.assertIn("в environment сервиса billok", guide)
+        self.assertNotIn("в environment сервиса sharetab", guide)
+        # Old image in deployment policy tests is deliberately a rejected input.
+        self.assertIn("sharetab:latest", source("scripts/lib/sbp-catalog-deploy-readiness.test.mjs"))
+
     def test_rub_balance_paths_do_not_reintroduce_foreign_exchange(self):
         # 9.3 removes runtime FX; Prisma columns are handled only in 9.4.
         for path in (

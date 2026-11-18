@@ -20,7 +20,7 @@ class BillokHttpsProxyTests(unittest.TestCase):
             ["docker", "compose", "-f", str(COMPOSE), "config", "--format", "json"],
             check=True, capture_output=True, text=True, timeout=15,
         ).stdout)
-        app = cfg["services"]["sharetab"]
+        app = cfg["services"]["billok"]
         ports = app.get("ports")
         self.assertEqual(len(ports), 1)
         self.assertEqual(ports[0]["host_ip"], "127.0.0.1")

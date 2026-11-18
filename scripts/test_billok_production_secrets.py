@@ -72,7 +72,7 @@ class ProductionSecretsTests(unittest.TestCase):
              "config", "--format", "json"],
             capture_output=True, text=True, check=True, timeout=15,
         ).stdout
-        app = json.loads(output)["services"]["sharetab"]
+        app = json.loads(output)["services"]["billok"]
         self.assertTrue(SENSITIVE.isdisjoint(app.get("environment", {})))
         mounts = [m for m in app["volumes"] if m["target"] == "/run/billok-secrets"]
         self.assertEqual(len(mounts), 1)

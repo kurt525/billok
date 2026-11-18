@@ -63,8 +63,8 @@ class ContainerIsolationTests(unittest.TestCase):
                    "config", "--format", "json"]
         cfg = json.loads(subprocess.run(command, text=True, capture_output=True,
                                         check=True, timeout=15).stdout)
-        self.assertEqual(set(cfg["services"]), {"sharetab"})
-        app = cfg["services"]["sharetab"]
+        self.assertEqual(set(cfg["services"]), {"billok"})
+        app = cfg["services"]["billok"]
         self.assertEqual(app["labels"]["ru.billok.project"], "billok")
         self.assertEqual(app["labels"]["ru.billok.component"], "application")
         self.assertEqual(set(cfg["volumes"]), {"pgdata", "uploads"})
@@ -85,7 +85,7 @@ class ContainerIsolationTests(unittest.TestCase):
             ["docker", "compose", "-f", str(ROOT / "docker/docker-compose.yml"),
              "config", "--format", "json"], text=True, capture_output=True,
             check=True, timeout=15).stdout)
-        app = cfg["services"]["sharetab"]
+        app = cfg["services"]["billok"]
         self.assertEqual(int(app["mem_limit"]), 2 * 1024 ** 3)
         self.assertEqual(app["pids_limit"], 256)
         self.assertEqual(str(app["cpus"]), "2")
