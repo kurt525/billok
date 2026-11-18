@@ -137,10 +137,11 @@ describe('Issue #1 6.3.2.2.2: local-only first owner without a password', () => 
         email: env.ADMIN_EMAIL,
         emailVerified: null,
         registrationEmailVerificationRequired: true,
-        locale: 'ru',
       }),
       select: { id: true, email: true },
     });
+    expect(tx.user.create.mock.calls[0]![0].data).not.toHaveProperty('locale');
+    expect(tx.user.create.mock.calls[0]![0].data).not.toHaveProperty('defaultCurrency');
     const invite = tx.systemInvite.create.mock.calls[0]![0].data;
     expect(invite.label).toContain('владельца');
     expect(invite.code).toMatch(/^owner-[a-f0-9]{40}$/);

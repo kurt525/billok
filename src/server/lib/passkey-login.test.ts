@@ -44,7 +44,6 @@ function fixture() {
     suspendedAt: null,
     isPlaceholder: false,
     image: null,
-    locale: 'ru',
     passkeyCredentials: [{ id: 'credential-row' }],
   };
   const passkey = {

@@ -63,6 +63,8 @@ jobs:
         run: python3 scripts/test_billok_ocr_copy_and_export.py
       - name: Verify no obsolete photo file administration (Issue #1 9.3)
         run: python3 scripts/test_billok_no_legacy_photo_admin.py
+      - name: Verify obsolete user columns are removed (Issue #1 9.4)
+        run: python3 scripts/test_billok_postgres_schema_cleanup.py
       - name: Verify SBP registry auto-update safety tests
         run: npm run sbp:sync:test
       - name: Verify translation keys

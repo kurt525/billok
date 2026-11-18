@@ -66,7 +66,6 @@ async function performInitialOwnerBootstrap(input: {
           name: 'Владелец',
           emailVerified: null,
           registrationEmailVerificationRequired: true,
-          locale: 'ru',
         },
         select: { id: true, email: true },
       });

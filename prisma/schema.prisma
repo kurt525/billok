@@ -198,8 +198,6 @@ model User {
   // Rotate to terminate all JWTs issued before an account recovery.
   sessionSecurityVersion Int @default(0)
   image           String?
-  defaultCurrency String    @default("RUB")
-  locale          String    @default("ru")
   venmoUsername   String?
   sbpPhone        String? // normalized Russian number; no SMS validation
   sbpBankId       String? // selected bank ID, not a verified account

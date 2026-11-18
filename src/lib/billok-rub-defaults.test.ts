@@ -52,9 +52,9 @@ describe('BillOK RUB and ru-RU defaults', () => {
 
     const schema = read('prisma/schema.prisma');
     expect(schema).not.toContain('@default("USD")');
-    expect((schema.match(/@default\("RUB"\)/g) ?? []).length).toBe(4);
-    expect(schema).toMatch(/defaultCurrency\s+String\s+@default\("RUB"\)/);
-    expect(schema).toMatch(/locale\s+String\s+@default\("ru"\)/);
+    expect((schema.match(/@default\("RUB"\)/g) ?? []).length).toBe(3);
+    expect(schema).not.toMatch(/defaultCurrency\s+String/);
+    expect(schema).not.toMatch(/\blocale\s+String/);
   });
   it('does not expose deprecated external payment-provider functionality', () => {
     const adminPage = read('src/app/[locale]/(app)/admin/page.tsx');
