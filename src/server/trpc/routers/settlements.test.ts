@@ -209,7 +209,6 @@ describe('a payment with someone removed from the group', () => {
     {
       paidById: 'hal',
       amount: 1000,
-      baseCurrencyAmount: null,
       shares: [
         { userId: 'alice', amount: 500 },
         { userId: 'hal', amount: 500 },

@@ -783,14 +783,13 @@ describe('removing a placeholder', () => {
     {
       paidById: 'p1',
       amount: 1000,
-      baseCurrencyAmount: null,
       shares: [
         { userId: 'owner', amount: 500 },
         { userId: 'p1', amount: 500 },
       ],
     },
   ];
-  const ownerPaidAlice = [{ fromId: 'owner', toId: 'p1', amount: 500, baseCurrencyAmount: null }];
+  const ownerPaidAlice = [{ fromId: 'owner', toId: 'p1', amount: 500 }];
 
   function setUp({
     shares = 0,
@@ -931,14 +930,13 @@ describe('leaving a group', () => {
     {
       paidById: 'owner',
       amount: 1000,
-      baseCurrencyAmount: null,
       shares: [
         { userId: 'owner', amount: 500 },
         { userId: 'bob', amount: 500 },
       ],
     },
   ];
-  const bobPaidBack = [{ fromId: 'bob', toId: 'owner', amount: 500, baseCurrencyAmount: null }];
+  const bobPaidBack = [{ fromId: 'bob', toId: 'owner', amount: 500 }];
 
   // The caller's user lookup, then the target's user row
   function setUp(
@@ -1611,7 +1609,6 @@ describe('archiving a group', () => {
   const expense = (paidById: string, shares: { userId: string; amount: number }[]) => ({
     paidById,
     amount: shares.reduce((sum, s) => sum + s.amount, 0),
-    baseCurrencyAmount: null,
     shares,
   });
   // The owner paid $10.00 split with Bob, so Bob owes the owner $5.00.
@@ -1663,9 +1660,7 @@ describe('archiving a group', () => {
 
   test('goes ahead once everyone is settled up', async () => {
     // Bob paid the owner back.
-    mockDb.settlement.findMany.mockResolvedValue([
-      { fromId: 'bob', toId: 'owner', amount: 500, baseCurrencyAmount: null },
-    ]);
+    mockDb.settlement.findMany.mockResolvedValue([{ fromId: 'bob', toId: 'owner', amount: 500 }]);
     const api = await caller();
     await expect(api.archive({ groupId: 'g1' })).resolves.toMatchObject({ id: 'g1', name: 'Trip' });
     expect(mockDb.group.updateMany).toHaveBeenCalledWith({

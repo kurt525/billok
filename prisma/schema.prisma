@@ -198,7 +198,6 @@ model User {
   // Rotate to terminate all JWTs issued before an account recovery.
   sessionSecurityVersion Int @default(0)
   image           String?
-  venmoUsername   String?
   sbpPhone        String? // normalized Russian number; no SMS validation
   sbpBankId       String? // selected bank ID, not a verified account
   suspendedAt     DateTime?
@@ -307,10 +306,8 @@ model Expense {
   groupId     String
   title       String
   description String?   @db.Text
-  amount      Int       // total in cents (in expense currency)
+  amount      Int       // total in kopecks (RUB)
   currency    String    @default("RUB")
-  exchangeRate        Float   @default(1.0) // rate: 1 unit of expense currency = X units of group currency
-  baseCurrencyAmount  Int?    // amount converted to group currency (cents); null = same currency
   expenseDate DateTime  @default(now())
   splitMode   SplitMode @default(EQUAL)
   paidById    String
@@ -423,10 +420,8 @@ model Settlement {
   groupId  String
   fromId   String
   toId     String
-  amount   Int     // cents (in settlement currency)
+  amount   Int     // total in kopecks (RUB)
   currency String  @default("RUB")
-  exchangeRate        Float   @default(1.0) // rate: 1 unit of settlement currency = X units of group currency
-  baseCurrencyAmount  Int?    // amount converted to group currency (cents); null = same currency
   note     String?
 
   group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
@@ -625,7 +620,6 @@ model GuestSplit {
   assignments Json     // [{itemIndex, personIndices}]
   summary     Json?    // [{name, itemTotal, tax, tip, total}]
   paidByIndex      Int              @default(0)
-  payerVenmoHandle String?
   // Confidential payer-selected SBP destination; not part of the public guest receipt.
   payerSbpPhone    String?
   payerSbpBankId   String?

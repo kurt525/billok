@@ -135,8 +135,6 @@ describe('a group archived while a change was on its way (#289)', () => {
     addedById: 'u1',
     amount: 1000,
     currency: 'RUB',
-    exchangeRate: 1,
-    baseCurrencyAmount: null,
     expenseDate: new Date('2026-10-01T00:00:00Z'),
   };
   const newExpense = {
@@ -317,8 +315,6 @@ describe('editing an expense a removed placeholder is in', () => {
     addedById: 'u1',
     amount: 1000,
     currency: 'RUB',
-    exchangeRate: 1,
-    baseCurrencyAmount: null,
     expenseDate: new Date('2026-10-01T00:00:00Z'),
   };
   const update = { groupId: 'g1', expenseId: 'e1', amount: 1000 };
@@ -385,8 +381,6 @@ describe('RUB-only expense editing API', () => {
     addedById: 'u1',
     amount: 1000,
     currency: 'RUB',
-    exchangeRate: 1,
-    baseCurrencyAmount: null,
     expenseDate: new Date('2026-10-01T00:00:00Z'),
   };
 

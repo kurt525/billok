@@ -27,6 +27,46 @@ class UserSchemaCleanupTests(unittest.TestCase):
         self.assertNotIn("DROP TABLE", migration)
         self.assertNotIn("CASCADE", migration.upper())
 
+    def test_old_venmo_and_fx_fields_are_absent_from_prisma_schema(self):
+        schema = (ROOT / "prisma/schema.prisma").read_text(encoding="utf-8")
+        fields = {
+            "User": ("venmoUsername",),
+            "GuestSplit": ("payerVenmoHandle",),
+            "Expense": ("exchangeRate", "baseCurrencyAmount"),
+            "Settlement": ("exchangeRate", "baseCurrencyAmount"),
+        }
+        for model, obsolete in fields.items():
+            model_body = schema.split("model " + model + " {", 1)[1].split("\n}", 1)[0]
+            for field in obsolete:
+                self.assertNotRegex(model_body, r"(?m)^\s*" + field + r"\s+")
+        for model in ("Expense", "Settlement"):
+            body = schema.split("model " + model + " {", 1)[1].split("\n}", 1)[0]
+            self.assertRegex(body, r"(?m)^\s*amount\s+Int\s+")
+            self.assertRegex(body, r"(?m)^\s*currency\s+String\s+@default\(\"RUB\"\)")
+
+    def test_venmo_fx_migration_drops_only_six_columns_and_is_repeatable(self):
+        path = ROOT / "prisma/migrations/obsolete_venmo_fx_drop.sql"
+        sql = path.read_text(encoding="utf-8")
+        for table in ("User", "GuestSplit", "Expense", "Settlement"):
+            self.assertIn('ALTER TABLE IF EXISTS "' + table + '"', sql)
+        for field in ("venmoUsername", "payerVenmoHandle", "exchangeRate", "baseCurrencyAmount"):
+            self.assertIn('DROP COLUMN IF EXISTS "' + field + '"', sql)
+        self.assertEqual(sql.count('DROP COLUMN IF EXISTS'), 6)
+        self.assertNotIn("CASCADE", sql.upper())
+        self.assertNotIn("DROP TABLE", sql.upper())
+
+    def test_prohibit_fx_and_keep_mobile_api_guard(self):
+        for path in ("src/server/trpc/routers/expenses.ts",
+                     "src/server/trpc/routers/settlements.ts"):
+            content = (ROOT / path).read_text(encoding="utf-8")
+            self.assertIn("exchangeRate: z.never().optional()", content)
+        for path in ("src/server/trpc/routers/expenses.test.ts",
+                     "src/server/trpc/routers/groups.test.ts",
+                     "src/server/trpc/routers/settlements.test.ts",
+                     "e2e/billok-mobile-authenticated.spec.ts"):
+            content = (ROOT / path).read_text(encoding="utf-8")
+            self.assertNotIn("baseCurrencyAmount: null", content, path)
+
     def test_owner_bootstrap_does_not_write_removed_fields(self):
         bootstrap = (ROOT / "src/server/lib/owner-bootstrap.ts").read_text(encoding="utf-8")
         self.assertNotIn("locale: 'ru'", bootstrap)

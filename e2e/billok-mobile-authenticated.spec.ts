@@ -1771,7 +1771,6 @@ test('receipt-linked history layout is usable on six keyboard-sized phones', asy
               to: { name: 'Алексей'.repeat(6) },
               amount: 61728395,
               currency: 'RUB',
-              baseCurrencyAmount: null,
               settledAt: '2026-11-01T00:00:00Z',
               note,
             },
