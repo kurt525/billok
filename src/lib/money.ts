@@ -3,21 +3,11 @@ import { defaultLocale } from '@/i18n/routing';
 /** Maximum monetary value in cents — Postgres int4 max, the DB column type for all money fields. */
 export const MAX_MONEY_CENTS = 2_147_483_647;
 
-const moneyLocales: Record<string, string> = {
-  ru: 'ru-RU',
-  en: 'en-US',
-  es: 'es-ES',
-  sv: 'sv-SE',
-  fr: 'fr-FR',
-  de: 'de-DE',
-  'pt-BR': 'pt-BR',
-  ja: 'ja-JP',
-  'zh-CN': 'zh-CN',
-  ko: 'ko-KR',
-};
-
 export function formatCents(cents: number, currency = 'RUB', locale: string = defaultLocale): string {
-  return new Intl.NumberFormat(moneyLocales[locale] ?? locale, {
+  // Preserve the existing argument for UI callers, but never change the Russian locale.
+  void locale;
+  // Historical currency symbols stay readable until the DB cleanup in 9.4.
+  return new Intl.NumberFormat('ru-RU', {
     style: 'currency',
     currency,
   }).format(cents / 100);

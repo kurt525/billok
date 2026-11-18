@@ -29,6 +29,18 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("locales = ['ru'] as const", source("src/i18n/routing.ts"))
         self.assertNotIn("messages/en", source("src/server/lib/app-error.ts"))
 
+    def test_legacy_money_locales_and_translation_guide_removed(self):
+        self.assertFalse((ROOT / "CONTRIBUTING-TRANSLATIONS.md").exists())
+        money = source("src/lib/money.ts")
+        self.assertIn("Intl.NumberFormat('ru-RU'", money)
+        for unsupported in ("en-US", "es-ES", "sv-SE", "fr-FR", "de-DE",
+                            "pt-BR", "ja-JP", "zh-CN", "ko-KR"):
+            self.assertNotIn(unsupported, money)
+        guide = source("CONTRIBUTING.md")
+        self.assertIn("BillOK", guide)
+        self.assertIn("npm run lint:i18n", guide)
+        self.assertNotIn("sharetab.git", guide)
+
     def test_internal_error_catalog_is_russian_and_safe(self):
         code = source("src/server/lib/app-error.ts")
         self.assertIn("import ru from '../../../messages/ru/errors.json'", code)

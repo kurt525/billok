@@ -20,7 +20,8 @@ describe('BillOK RUB and ru-RU defaults', () => {
     expect(isValidMoneyInput('1 234,56')).toBe(true);
     expect(parseToCents('1,005')).toBe(101);
     expect(parseToCents('-0,005')).toBe(-1);
-    expect(formatCents(100, 'EUR', 'ru')).toContain('€');
+    expect(normalize(formatCents(100, 'EUR', 'ru'))).toBe('1,00 €');
+    expect(normalize(formatCents(100, 'EUR', 'en-US'))).toBe('1,00 €');
   });
 
   it('keeps server, UI and Prisma creation defaults in sync', () => {
