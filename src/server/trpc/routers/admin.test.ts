@@ -471,39 +471,35 @@ describe('admin group totals in group currency', () => {
     vi.unstubAllEnvs();
   });
 
-  test('returns group currency and sums stored converted amounts in kopecks', async () => {
+  test('sums stored RUB kopecks and never requests legacy conversion columns', async () => {
     mockDb.expense.groupBy.mockResolvedValue([
       {
         groupId: 'g-rub',
         currency: 'RUB',
-        _sum: { amount: 10001, baseCurrencyAmount: null },
-        _count: { id: 1, baseCurrencyAmount: 0 },
-      },
-      {
-        groupId: 'g-rub',
-        currency: 'EUR',
-        _sum: { amount: 1000, baseCurrencyAmount: 10725 },
-        _count: { id: 1, baseCurrencyAmount: 1 },
+        _sum: { amount: 10001 },
       },
     ]);
     const api = await callerAs(adminSession);
     const result = await api.listGroups({ limit: 20 });
-    expect(result.groups[0]).toMatchObject({ currency: 'RUB', totalAmount: 20726 });
+    expect(result.groups[0]).toMatchObject({ currency: 'RUB', totalAmount: 10001 });
     expect(mockDb.expense.groupBy).toHaveBeenCalledWith({
       by: ['groupId', 'currency'],
       where: { groupId: { in: ['g-rub'] } },
-      _sum: { amount: true, baseCurrencyAmount: true },
-      _count: { id: true, baseCurrencyAmount: true },
+      _sum: { amount: true },
     });
   });
 
-  test('reports unavailable total for expenses without a conversion', async () => {
+  test('keeps legacy foreign-currency amounts out of RUB group totals', async () => {
     mockDb.expense.groupBy.mockResolvedValue([
       {
         groupId: 'g-rub',
+        currency: 'RUB',
+        _sum: { amount: 10001 },
+      },
+      {
+        groupId: 'g-rub',
         currency: 'EUR',
-        _sum: { amount: 1000, baseCurrencyAmount: null },
-        _count: { id: 1, baseCurrencyAmount: 0 },
+        _sum: { amount: 1000 },
       },
     ]);
     const api = await callerAs(adminSession);

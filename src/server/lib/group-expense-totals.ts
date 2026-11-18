@@ -1,13 +1,13 @@
 /**
- * An expense's amount is stored in its own currency. Only the converted
- * baseCurrencyAmount can be summed with the group's currency when they differ.
- * A missing conversion makes the group's total unknown, not zero.
+ * Aggregate expense totals in the currency stored by each group.
+ * BillOK creates only RUB expenses. Legacy mismatched currencies must not
+ * be added to RUB amounts or converted through abandoned FX fields.
+ * Mark such a group's total unavailable rather than mislabel its kopecks.
  */
 export type ExpenseCurrencyAggregate = {
   groupId: string;
   currency: string;
-  _sum: { amount: number | null; baseCurrencyAmount: number | null };
-  _count: { id: number; baseCurrencyAmount: number };
+  _sum: { amount: number | null };
 };
 
 export function totalsInGroupCurrency(
@@ -21,15 +21,13 @@ export function totalsInGroupCurrency(
     const groupCurrency = currencies.get(entry.groupId);
     if (!groupCurrency) continue;
 
-    const amount =
-      entry.currency === groupCurrency
-        ? (entry._sum.amount ?? 0)
-        : entry._count.baseCurrencyAmount === entry._count.id
-          ? (entry._sum.baseCurrencyAmount ?? 0)
-          : null;
-
-    const old = totals.get(entry.groupId);
-    totals.set(entry.groupId, old == null || amount == null ? null : old + amount);
+    const previous = totals.get(entry.groupId);
+    if (previous == null || entry.currency !== groupCurrency) {
+      totals.set(entry.groupId, null);
+      continue;
+    }
+    totals.set(entry.groupId, previous + (entry._sum.amount ?? 0));
   }
+
   return totals;
 }

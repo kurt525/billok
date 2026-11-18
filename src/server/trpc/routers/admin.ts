@@ -508,8 +508,7 @@ export const adminRouter = createTRPCRouter({
           ? await ctx.db.expense.groupBy({
               by: ['groupId', 'currency'],
               where: { groupId: { in: groupIds } },
-              _sum: { amount: true, baseCurrencyAmount: true },
-              _count: { id: true, baseCurrencyAmount: true },
+              _sum: { amount: true },
             })
           : [];
       const totals = totalsInGroupCurrency(groups, expenseSums);

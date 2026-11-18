@@ -94,6 +94,9 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
             "src/server/lib/group-balances.ts",
             "src/server/trpc/routers/balances.ts",
             "src/components/groups/payments-list.tsx",
+            "src/server/lib/group-expense-totals.ts",
+            "src/server/trpc/routers/admin.ts",
+            "src/app/[locale]/(app)/groups/[groupId]/page.tsx",
         ):
             self.assertNotIn("baseCurrencyAmount", source(path), path)
         code = source("src/server/lib/balance-calculator.ts")

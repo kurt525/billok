@@ -345,11 +345,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
                     data-testid="group-history-expense-amount"
                     className="ml-auto min-w-0 max-w-full text-right text-lg font-semibold tabular-nums [overflow-wrap:anywhere]"
                   >
-                    {formatCents(
-                      expense.amount,
-                      expense.baseCurrencyAmount != null ? expense.currency : g.currency,
-                      locale,
-                    )}
+                    {formatCents(expense.amount, expense.currency, locale)}
                   </p>
                 </div>
               </Link>
