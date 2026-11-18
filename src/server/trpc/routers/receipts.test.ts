@@ -57,9 +57,6 @@ describe('manual group bill authorization and storage', () => {
       data: expect.objectContaining({
         groupId: 'g1',
         uploadedById: 'u1',
-        originalName: 'billok-manual',
-        imagePath: '',
-        fileSize: 0,
         status: 'COMPLETED',
         extractedData: expect.objectContaining({ currency: 'RUB', total: 0 }),
       }),
@@ -170,7 +167,6 @@ describe('Issue 3.2: only members may create and read manual receipts', () => {
       .mockResolvedValueOnce({
         id: 'r1',
         groupId: 'g1',
-        originalName: 'billok-manual',
         extractedData: { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' },
         uploadedById: 'u1',
         status: 'COMPLETED',
@@ -196,7 +192,6 @@ describe('manual group receipt: each member saves only their own voluntary tip',
     id: 'r1',
     groupId: 'g1',
     status: 'COMPLETED',
-    originalName: 'billok-manual',
     extractedData: baseData,
   };
   const input = { groupId: 'g1', receiptId: 'r1', tipCents: 125 };
@@ -340,7 +335,6 @@ describe('manual receipt: only organizer controls optional original portion coun
     groupId: 'g1',
     uploadedById: 'u1',
     status: 'COMPLETED',
-    originalName: 'billok-manual',
     extractedData: base,
   };
   const input = { groupId: 'g1', receiptId: 'r1', itemId: 'pizza', totalParts: 10 };
@@ -425,7 +419,6 @@ describe('manual receipt: consumed portions and creator rounding', () => {
     mockDb.groupMember.findMany.mockResolvedValue([{ userId: 'u1' }, { userId: 'u2' }, { userId: 'u3' }]);
     mockDb.receipt.findUnique.mockResolvedValue({
       id: 'r1',
-      originalName: 'billok-manual',
       uploadedById: 'u1',
       groupId: 'g1',
       status: 'COMPLETED',
@@ -479,7 +472,6 @@ describe('manual receipt: consumed portions and creator rounding', () => {
     ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
     mockDb.receipt.findUnique.mockResolvedValue({
       id: 'r1',
-      originalName: 'billok-manual',
       uploadedById: 'u1',
       groupId: 'g1',
       status: 'COMPLETED',
@@ -505,7 +497,6 @@ describe('manual receipt: consumed portions and creator rounding', () => {
       groupId: 'g1',
       uploadedById: 'u1',
       status: 'COMPLETED',
-      originalName: 'billok-manual',
       extractedData: {
         subtotal: 0,
         tax: 0,
@@ -546,7 +537,6 @@ describe('manual receipt: consumed portions and creator rounding', () => {
       groupId: 'g1',
       uploadedById: 'u1',
       status: 'COMPLETED',
-      originalName: 'billok-manual',
       extractedData: {
         subtotal: 0,
         tax: 0,
@@ -586,7 +576,6 @@ describe('manual receipt: consumed portions and creator rounding', () => {
       groupId: 'g1',
       uploadedById: 'u1',
       status: 'COMPLETED',
-      originalName: 'billok-manual',
       extractedData: {
         subtotal: 0,
         tax: 0,
@@ -623,7 +612,6 @@ describe('manual receipt: consumed portions and creator rounding', () => {
       groupId: 'g1',
       uploadedById: 'u1',
       status: 'COMPLETED',
-      originalName: 'billok-manual',
       items: [{ id: 'pizza', totalPrice: 101 }],
     };
     const extracted = { subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' };
@@ -688,7 +676,6 @@ describe('manual receipt: consumed portions and creator rounding', () => {
     mockDb.groupMember.findMany.mockResolvedValue(['u1', 'u2', 'u3', 'u4', 'u5'].map((userId) => ({ userId })));
     mockDb.receipt.findUnique.mockResolvedValue({
       id: 'r1',
-      originalName: 'billok-manual',
       uploadedById: 'u1',
       groupId: 'g1',
       status: 'COMPLETED',
@@ -751,7 +738,6 @@ describe('manual receipt: consumed portions and creator rounding', () => {
   test('atomically finalizes current personal tips, not the stale pre-lock receipt snapshot', async () => {
     const raw = {
       id: 'r1',
-      originalName: 'billok-manual',
       uploadedById: 'u1',
       groupId: 'g1',
       status: 'COMPLETED',
@@ -805,7 +791,6 @@ describe('manual receipt: consumed portions and creator rounding', () => {
     ]);
     mockDb.receipt.findUnique.mockResolvedValue({
       id: 'r1',
-      originalName: 'billok-manual',
       uploadedById: 'u1',
       groupId: 'g1',
       status: 'COMPLETED',
@@ -822,7 +807,6 @@ describe('manual receipt: consumed portions and creator rounding', () => {
   test('rejects a tip from a removed member without writing an expense', async () => {
     mockDb.receipt.findUnique.mockResolvedValue({
       id: 'r1',
-      originalName: 'billok-manual',
       uploadedById: 'u1',
       groupId: 'g1',
       status: 'COMPLETED',
@@ -846,7 +830,6 @@ describe('manual receipt: consumed portions and creator rounding', () => {
   ])('rejects %s personal tips before creating an expense', async (_name, personalTips) => {
     mockDb.receipt.findUnique.mockResolvedValue({
       id: 'r1',
-      originalName: 'billok-manual',
       uploadedById: 'u1',
       groupId: 'g1',
       status: 'COMPLETED',
@@ -862,7 +845,6 @@ describe('manual receipt: consumed portions and creator rounding', () => {
   test('rejects currency changed after locking manual receipt', async () => {
     const original = {
       id: 'r1',
-      originalName: 'billok-manual',
       uploadedById: 'u1',
       groupId: 'g1',
       status: 'COMPLETED',
@@ -882,7 +864,6 @@ describe('manual receipt: consumed portions and creator rounding', () => {
   test('rejects group detached or receipt finalized before the locked re-read', async () => {
     const original = {
       id: 'r1',
-      originalName: 'billok-manual',
       uploadedById: 'u1',
       groupId: 'g1',
       status: 'COMPLETED',
@@ -930,10 +911,21 @@ describe('RUB-only finalization of a group receipt', () => {
     title: 'Чек',
     paidById: 'u1',
     assignments: [{ receiptItemId: 'i1', userIds: ['u1', 'u2'] }],
+    confirmedPartsSnapshot: manualPartsConfirmationSnapshot({
+      items: [{ id: 'i1', totalPrice: 505 }],
+      assignments: [
+        {
+          receiptItemId: 'i1',
+          people: [
+            { userId: 'u1', parts: 1 },
+            { userId: 'u2', parts: 1 },
+          ],
+        },
+      ],
+    }),
   };
   const receipt = {
     id: 'r1',
-    originalName: 'receipt.jpg',
     status: 'COMPLETED',
     groupId: 'g1',
     uploadedById: 'u1',
@@ -1077,6 +1069,10 @@ describe('a group archived while a receipt was being finished (#289)', () => {
     title: 'Lunch',
     paidById: 'u1',
     assignments: [{ receiptItemId: 'i1', userIds: ['u1'] }],
+    confirmedPartsSnapshot: manualPartsConfirmationSnapshot({
+      items: [{ id: 'i1', totalPrice: 1000 }],
+      assignments: [{ receiptItemId: 'i1', people: [{ userId: 'u1', parts: 1 }] }],
+    }),
   };
   // What the transaction's row locks read: the group, and the receipt (still in the group)
   const locksRead = (group: object, receipt: object | null = { groupId: 'g1' }) =>
@@ -1112,7 +1108,7 @@ describe('a group archived while a receipt was being finished (#289)', () => {
     expect(mockDb.receiptItemAssignment.deleteMany).not.toHaveBeenCalled();
   });
 
-  test('an active group is locked FOR SHARE inside the transaction, before the write', async () => {
+  test('group and manual receipt row locks precede the expense write', async () => {
     locksRead({ archivedAt: null });
     mockDb.expense.create.mockResolvedValue({ id: 'e1' });
     const api = await caller();
@@ -1120,7 +1116,7 @@ describe('a group archived while a receipt was being finished (#289)', () => {
 
     expect(rawSql()).toEqual([
       expect.stringMatching(/FROM "Group" WHERE "id" = \? FOR SHARE/),
-      expect.stringMatching(/FROM "Receipt" WHERE "id" = \? FOR SHARE/),
+      expect.stringMatching(/FROM "Receipt" WHERE "id" = \? FOR UPDATE/),
     ]);
     const [locked] = mockDb.$queryRaw.mock.invocationCallOrder;
     expect(locked).toBeGreaterThan(mockDb.$transaction.mock.invocationCallOrder[0]!);
@@ -1341,7 +1337,6 @@ describe('saving a receipt for later while it is deleted from the pending list (
   test('2.20.1 refuses to persist an over-limit partial draft under the receipt lock', async () => {
     const known = {
       ...inGroup,
-      originalName: 'billok-manual',
       extractedData: {
         subtotal: 101,
         tax: 0,

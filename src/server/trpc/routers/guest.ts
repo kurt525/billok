@@ -785,7 +785,7 @@ export const guestRouter = createTRPCRouter({
         return tx.guestSplit.create({
           data: {
             ...share.stored,
-            ...(receiptId !== undefined ? { receiptId, receiptShared: true } : {}),
+            ...(receiptId !== undefined ? { receiptId } : {}),
             receiptData: input.receiptData as unknown as Prisma.InputJsonValue,
             items: input.items as unknown as Prisma.InputJsonValue,
             people: filteredPeople.map((person, index) => ({
@@ -1059,7 +1059,7 @@ export const guestRouter = createTRPCRouter({
         return tx.guestSplit.create({
           data: {
             ...share.stored,
-            ...(receiptId !== undefined ? { receiptId, receiptShared: true } : {}),
+            ...(receiptId !== undefined ? { receiptId } : {}),
             // New personal-link claims use one cross-item rounding strategy.
             // Direct finalized splits keep their historical settlement rules.
             receiptData: {

@@ -83,8 +83,8 @@ class NoLegacyPhotoAdminTests(unittest.TestCase):
 
     def test_schema_and_db_cleanup_remain_in_issue_94(self):
         schema = read("prisma/schema.prisma")
-        self.assertIn("imagePath", schema)
-        self.assertIn("fileSize", schema)
+        self.assertNotIn("imagePath", schema)
+        self.assertNotIn("fileSize", schema)
         self.assertTrue((ROOT / "src/server/lib/receipt-cleanup.ts").exists())
         self.assertIn("deleteUnusedReceipts", read("src/server/lib/receipt-cleanup.ts"))
 

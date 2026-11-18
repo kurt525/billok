@@ -29,7 +29,6 @@ async function caller() {
 
 const scannedReceipt = {
   id: 'r1',
-  imagePath: '/app/uploads/u1/receipt.jpg',
 };
 
 beforeEach(() => {

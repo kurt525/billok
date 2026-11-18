@@ -58,7 +58,7 @@ class NoReceiptPhotoViewersTests(unittest.TestCase):
 
     def test_image_database_cleanup_stays_in_separate_issue_94(self):
         schema = read("prisma/schema.prisma")
-        self.assertIn("imagePath", schema)
+        self.assertNotIn("imagePath", schema)
         self.assertIn("uploadedById", schema)
         self.assertFalse((ROOT / "src/app/api/uploads/[...path]/route.ts").exists())
         self.assertIn("isManual", read("src/server/trpc/routers/receipts.ts"))

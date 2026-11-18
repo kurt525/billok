@@ -66,10 +66,6 @@ export const receiptsRouter = createTRPCRouter({
           groupId: input.groupId,
           uploadedById: ctx.user.id,
           savedById: ctx.user.id,
-          imagePath: '',
-          originalName: 'billok-manual',
-          mimeType: 'application/x-billok-manual',
-          fileSize: 0,
           status: 'COMPLETED',
           extractedData: { merchantName: '', subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' },
         },
@@ -102,7 +98,7 @@ export const receiptsRouter = createTRPCRouter({
       receipt: {
         id: receiptWithItems.id,
         status: receiptWithItems.status,
-        isManual: receiptWithItems.originalName === 'billok-manual',
+        isManual: true,
         creatorId: receiptWithItems.uploadedById,
         paidById: receiptWithItems.paidById,
         extractedData: receiptWithItems.extractedData as {
@@ -142,7 +138,7 @@ export const receiptsRouter = createTRPCRouter({
         const receipt = await tx.receipt.findUnique({ where: { id: input.receiptId } });
         if (!receipt || receipt.groupId !== input.groupId) throw new AppError('NOT_FOUND');
         if (receipt.uploadedById !== ctx.user.id) throw new AppError('FORBIDDEN');
-        if (receipt.status !== 'COMPLETED' || receipt.originalName !== 'billok-manual') {
+        if (receipt.status !== 'COMPLETED') {
           throw new AppError('BAD_REQUEST', 'receiptNotReady');
         }
         const group = await tx.group.findUnique({
@@ -216,7 +212,7 @@ export const receiptsRouter = createTRPCRouter({
         if (!receipt || receipt.groupId !== input.groupId) {
           throw new AppError('NOT_FOUND');
         }
-        if (receipt.status !== 'COMPLETED' || receipt.originalName !== 'billok-manual') {
+        if (receipt.status !== 'COMPLETED') {
           throw new AppError('BAD_REQUEST', 'receiptNotReady');
         }
 
@@ -456,7 +452,7 @@ export const receiptsRouter = createTRPCRouter({
       if (extractedData.currency.toUpperCase() !== 'RUB') {
         throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
       }
-      if (receipt.originalName === 'billok-manual') {
+      {
         const itemIds = new Set(receipt.items.map((item) => item.id));
         const assigned = input.assignments.map((assignment) => assignment.receiptItemId);
         if (
@@ -488,40 +484,16 @@ export const receiptsRouter = createTRPCRouter({
         }
       }
 
-      // Calculate per-user item subtotals
-      const userSubtotals = new Map<string, number>();
-
-      if (receipt.originalName !== 'billok-manual')
-        for (const assignment of input.assignments) {
-          const item = itemMap.get(assignment.receiptItemId)!;
-
-          const perPerson = Math.floor(item.totalPrice / assignment.userIds.length);
-          const remainder = item.totalPrice - perPerson * assignment.userIds.length;
-
-          for (const [i, userId] of assignment.userIds.entries()) {
-            const amount = perPerson + (i < remainder ? 1 : 0);
-            userSubtotals.set(userId, (userSubtotals.get(userId) ?? 0) + amount);
-          }
-        }
-
-      // Every item is charged at its displayed price without extra tax or a
-      // shared tip. Integer kopeck rounding for manual portions is unchanged.
-      const totalAmount =
-        receipt.originalName === 'billok-manual'
-          ? receipt.items.reduce((sum, item) => sum + item.totalPrice, 0)
-          : [...userSubtotals.values()].reduce((sum, amount) => sum + amount, 0);
-
-      const userTotals =
-        receipt.originalName === 'billok-manual'
-          ? calculateManualReceiptTotals({
-              items: receipt.items,
-              assignments: input.assignments.map((a) => ({
-                receiptItemId: a.receiptItemId,
-                people: a.userIds.map((userId, i) => ({ userId, parts: a.parts?.[i] ?? 1 })),
-              })),
-              creatorId: receipt.uploadedById ?? ctx.user.id,
-            })
-          : userSubtotals;
+      // All BillOK receipts are manual; each share uses integer kopecks.
+      const totalAmount = receipt.items.reduce((sum, item) => sum + item.totalPrice, 0);
+      const userTotals = calculateManualReceiptTotals({
+        items: receipt.items,
+        assignments: input.assignments.map((a) => ({
+          receiptItemId: a.receiptItemId,
+          people: a.userIds.map((userId, i) => ({ userId, parts: a.parts?.[i] ?? 1 })),
+        })),
+        creatorId: receipt.uploadedById ?? ctx.user.id,
+      });
 
       // Save assignments in a single batch (replaces N×M individual upserts)
       const assignmentData = input.assignments.flatMap((a) =>
@@ -544,19 +516,10 @@ export const receiptsRouter = createTRPCRouter({
           throw new AppError('BAD_REQUEST', 'rubOnlyReceipt');
         }
 
-        // Deleting the receipt from the pending list takes it off the group, and keeps it while
-        // a claim session uses it (#318). Under its lock, that either waits for this expense
-        // (and is refused) or finished first and is seen here
-        // A manual receipt's personal tips can be updated by other members.
-        // FOR UPDATE serializes finalization with receipts.setPersonalTip,
-        // which takes the same row lock before changing extractedData.
-        // Other receipt types keep the previous, weaker FOR SHARE lock.
-        const [current] =
-          receipt.originalName === 'billok-manual'
-            ? await tx.$queryRaw<{ groupId: string | null }[]>`
-                SELECT "groupId" FROM "Receipt" WHERE "id" = ${input.receiptId} FOR UPDATE`
-            : await tx.$queryRaw<{ groupId: string | null }[]>`
-                SELECT "groupId" FROM "Receipt" WHERE "id" = ${input.receiptId} FOR SHARE`;
+        // Always serialize manual receipt finalization and personal-tip updates.
+        // This prevents stale claims from finalizing against an outdated receipt.
+        const [current] = await tx.$queryRaw<{ groupId: string | null }[]>`
+          SELECT "groupId" FROM "Receipt" WHERE "id" = ${input.receiptId} FOR UPDATE`;
         if (!current || current.groupId !== receipt.groupId) {
           throw new AppError('CONFLICT', 'receiptRemovedFromGroup');
         }
@@ -585,17 +548,12 @@ export const receiptsRouter = createTRPCRouter({
         // Both expense.amount and the shares must reflect one coherent version.
         let finalTotalAmount = totalAmount;
         let finalUserTotals = userTotals;
-        if (receipt.originalName === 'billok-manual') {
+        {
           const currentReceipt = await tx.receipt.findUnique({
             where: { id: input.receiptId },
             include: { items: { select: { id: true, totalPrice: true } } },
           });
-          if (
-            !currentReceipt ||
-            currentReceipt.groupId !== receipt.groupId ||
-            currentReceipt.status !== 'COMPLETED' ||
-            currentReceipt.originalName !== 'billok-manual'
-          ) {
+          if (!currentReceipt || currentReceipt.groupId !== receipt.groupId || currentReceipt.status !== 'COMPLETED') {
             throw new AppError('CONFLICT', 'receiptRemovedFromGroup');
           }
           const currentData = parseExtractedData(currentReceipt.extractedData);
@@ -812,7 +770,7 @@ export const receiptsRouter = createTRPCRouter({
 
         // A resumable draft can leave known portions unassigned; however an
         // over-limit draft must never be persisted, even via the direct API.
-        if (receipt.originalName === 'billok-manual' && input.assignments) {
+        if (input.assignments) {
           const known = parseExtractedData(receipt.extractedData).declaredTotalPartsByItem;
           if (known !== undefined && known !== null) {
             let balance: ReturnType<typeof manualKnownPartsBalance>;

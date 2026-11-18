@@ -18,10 +18,6 @@ async function main() {
       data: {
         groupId: group.id,
         uploadedById: bob.id,
-        imagePath: '',
-        originalName: 'mobile-qa-fixture.png',
-        mimeType: 'image/png',
-        fileSize: 0,
         status: 'COMPLETED',
         extractedData: {
           merchantName: 'Тестовый чек',

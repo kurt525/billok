@@ -96,8 +96,8 @@ class ObsoleteReceiptMediaCleanupTests(unittest.TestCase):
 
     def test_schema_cleanup_intentionally_stays_in_94(self):
         schema = source("prisma/schema.prisma")
-        self.assertIn("imagePath", schema)
-        self.assertIn("originalName", schema)
+        self.assertNotIn("imagePath", schema)
+        self.assertNotIn("originalName", schema)
         self.assertTrue((ROOT / "src/server/lib/receipt-cleanup.ts").exists())
 
 

@@ -77,11 +77,11 @@ describe('BillOK does not ship OCR or AI service code', () => {
     const receipts = read('src/server/trpc/routers/receipts.ts');
     const manual = receipts.split('createManual:')[1]?.split('getReceiptItems:')[0];
     expect(manual, 'manual receipt procedure must exist').toBeDefined();
-    expect(manual).toContain("imagePath: ''");
-    expect(manual).toContain("originalName: 'billok-manual'");
-    expect(manual).toContain("mimeType: 'application/x-billok-manual'");
-    expect(manual).toContain('fileSize: 0');
     expect(manual).toContain("status: 'COMPLETED'");
+    expect(manual).toContain('uploadedById: ctx.user.id');
+    for (const old of ['imagePath:', 'originalName:', 'mimeType:', 'fileSize:']) {
+      expect(manual).not.toContain(old);
+    }
     expect(manual).not.toMatch(/(?:extract|transcribe|processReceipt|uploadFile)\s*\(/);
   });
 

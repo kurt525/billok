@@ -624,7 +624,7 @@ describe('deleteGroup', () => {
     });
     mockDb.group.findUnique.mockResolvedValue({ id: 'g1', name: 'Trip' });
     mockDb.$queryRaw.mockResolvedValue([]);
-    mockDb.receipt.findMany.mockResolvedValue([{ id: 'r1', imagePath: 'receipts/r1.jpg' }]);
+    mockDb.receipt.findMany.mockResolvedValue([{ id: 'r1' }]);
     mockDb.guestSplit.findMany.mockResolvedValue([]);
     mockDb.groupMember.findMany.mockResolvedValue([{ userId: 'p1' }]);
   });

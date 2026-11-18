@@ -356,10 +356,6 @@ enum SplitMode {
 
 model Receipt {
   id            String        @id @default(cuid())
-  imagePath     String
-  originalName  String
-  mimeType      String
-  fileSize      Int
   status        ReceiptStatus @default(PENDING)
   extractedData Json?
   groupId       String?
@@ -408,9 +404,7 @@ model ReceiptItemAssignment {
 
 enum ReceiptStatus {
   PENDING
-  PROCESSING
   COMPLETED
-  FAILED
 }
 
 // ─── SETTLEMENTS ───────────────────────────────────────────
@@ -610,10 +604,6 @@ model GuestSplit {
   // Authenticated AES-GCM sealed bearer, for creator-only link retrieval.
   shareTokenSealed String?
   receiptId   String?
-  // Its creator could see the receipt when it was made (lockReceiptForSplit), so /api/uploads
-  // serves the receipt's image to anyone while it's open (#318). Splits made before that
-  // check existed stay false
-  receiptShared Boolean @default(false)
   receiptData Json     // {merchantName, date, subtotal, tax, tip, total, currency}
   items       Json     // [{name, quantity, unitPrice, totalPrice}]
   people      Json     // [{id?, name, personToken?, groupSize?, join?, saves?}] (see src/server/lib/guest-people.ts)

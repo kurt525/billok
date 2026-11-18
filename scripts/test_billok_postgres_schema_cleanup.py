@@ -67,6 +67,42 @@ class UserSchemaCleanupTests(unittest.TestCase):
             content = (ROOT / path).read_text(encoding="utf-8")
             self.assertNotIn("baseCurrencyAmount: null", content, path)
 
+    def test_manual_receipt_media_and_ocr_columns_are_gone(self):
+        schema = (ROOT / "prisma/schema.prisma").read_text(encoding="utf-8")
+        receipt = schema.split("model Receipt {", 1)[1].split("\n}", 1)[0]
+        split = schema.split("model GuestSplit {", 1)[1].split("\n}", 1)[0]
+        for obsolete in ("imagePath", "originalName", "mimeType", "fileSize"):
+            self.assertNotRegex(receipt, r"(?m)^\s*" + obsolete + r"\s+")
+        self.assertNotRegex(split, r"(?m)^\s*receiptShared\s+")
+        for required in ("uploadedById", "savedById", "paidById", "groupId",
+                         "extractedData", "status", "items"):
+            self.assertRegex(receipt, r"(?m)^\s*" + required + r"\s+")
+        statuses = schema.split("enum ReceiptStatus {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("PENDING", statuses)
+        self.assertIn("COMPLETED", statuses)
+        self.assertNotIn("PROCESSING", statuses)
+        self.assertNotIn("FAILED", statuses)
+
+    def test_manual_receipt_schema_migration_restricts_changes_to_billok(self):
+        sql = (ROOT / "prisma/migrations/obsolete_receipt_media_drop.sql").read_text(encoding="utf-8")
+        self.assertEqual(sql.count("DROP COLUMN IF EXISTS"), 5)
+        for column in ("imagePath", "originalName", "mimeType", "fileSize", "receiptShared"):
+            self.assertIn('DROP COLUMN IF EXISTS "' + column + '"', sql)
+        self.assertIn('ALTER TABLE IF EXISTS "Receipt"', sql)
+        self.assertIn('ALTER TABLE IF EXISTS "GuestSplit"', sql)
+        self.assertIn('ALTER TYPE "ReceiptStatus" RENAME TO "ReceiptStatus_legacy"', sql)
+        self.assertIn("WHERE t.typname = 'ReceiptStatus'", sql)
+        self.assertNotIn("CASCADE", sql.upper())
+
+    def test_manual_receipt_security_and_row_lock_remain(self):
+        router = (ROOT / "src/server/trpc/routers/receipts.ts").read_text(encoding="utf-8")
+        self.assertNotIn("originalName", router)
+        self.assertIn("uploadedById !== ctx.user.id", router)
+        self.assertIn("FOR UPDATE", router)
+        self.assertIn("manualPartsConfirmationSnapshot", router)
+        self.assertIn("receiptPartsConfirmationRequired", router)
+        self.assertIn("calculateManualReceiptTotals(", router)
+
     def test_owner_bootstrap_does_not_write_removed_fields(self):
         bootstrap = (ROOT / "src/server/lib/owner-bootstrap.ts").read_text(encoding="utf-8")
         self.assertNotIn("locale: 'ru'", bootstrap)
