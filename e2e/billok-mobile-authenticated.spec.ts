@@ -1314,7 +1314,9 @@ test('mobile admin health and manual receipt cards fit six widths', async ({ pag
     const storage = page.getByTestId('admin-storage-stats');
     await expect(health.getByTestId('admin-system-version')).toContainText(longValue);
     await expect(health.getByTestId('admin-system-commit')).toContainText('a'.repeat(96));
-    await expect(storage.getByTestId('unused-receipts-card')).toContainText(longValue);
+    const unusedReceiptsCard = storage.getByTestId('unused-receipts-card');
+    await expect(unusedReceiptsCard).toContainText('Неиспользуемые чеки');
+    await expect(unusedReceiptsCard).toContainText('чеки старше суток');
     for (const section of [health, storage]) {
       await expect(section).toBeVisible();
       const cards = section.locator('[data-slot="card"]');
