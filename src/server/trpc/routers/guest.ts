@@ -2908,7 +2908,11 @@ export const guestRouter = createTRPCRouter({
               actualReceipt: payerActualReceiptSnapshot(
                 paymentPerson,
                 amountCents,
-                group?.tipCents ?? paymentPerson.tipCents ?? 0,
+                group?.tipCents ??
+                  (split.summary as { personIndex: number; total: number; tip: number }[]).find(
+                    (entry) => entry.personIndex === paymentIndex,
+                  )?.tip ??
+                  0,
               ),
             }
           : {}),

@@ -5296,6 +5296,24 @@ describe('BillOK guest payer-only SBP contact (Issue #1 1.3.19)', () => {
   });
 });
 
+/** Expected private 5.22 amounts on a legacy finalized receipt.
+ * Strictly check all returned monetary fields: no accidental tips or extra debt.
+ */
+function expectedReceiptLedger(expectedCents: number, declaredTipCents: number, verified = false) {
+  return {
+    expectedCents,
+    foodCents: expectedCents - declaredTipCents,
+    declaredTipCents,
+    receivedCents: verified ? expectedCents : 0,
+    appliedToDebtCents: verified ? expectedCents : 0,
+    outstandingCents: verified ? 0 : expectedCents,
+    excessCents: 0,
+    extraTipCents: 0,
+    refundDueCents: 0,
+    pendingExcessCents: 0,
+  };
+}
+
 describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
   const payerId = '11111111-1111-4111-8111-111111111111';
   const payerToken = '22222222-2222-4222-8222-222222222222';
@@ -5359,6 +5377,7 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
       declaredPaidAt: result.declaredPaidAt,
       declaredAmountCents: 459,
       verifiedAt: null,
+      actualReceipt: expectedReceiptLedger(459, 125),
     });
   });
 
@@ -5480,6 +5499,7 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
       declaredPaidAt: marked,
       declaredAmountCents: 459,
       verifiedAt: null,
+      actualReceipt: expectedReceiptLedger(459, 125),
     });
     await expect(api.markMyPayment(debtorAuth)).resolves.toEqual({ declaredPaidAt: marked, declaredAmountCents: 459 });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
@@ -5497,6 +5517,7 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
       declaredPaidAt: declared,
       declaredAmountCents: 459,
       verifiedAt: verified,
+      actualReceipt: expectedReceiptLedger(459, 125, true),
       confirmationNotice: {
         payerName: 'Борис',
         amountCents: 459,
@@ -5697,6 +5718,7 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
       declaredPaidAt: null,
       declaredAmountCents: null,
       verifiedAt: null,
+      actualReceipt: expectedReceiptLedger(459, 125),
     });
     const impostors = [
       { ...debtorAuth, personId: payerId },
@@ -5731,6 +5753,7 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
       declaredPaidAt: null,
       declaredAmountCents: null,
       verifiedAt: null,
+      actualReceipt: expectedReceiptLedger(459, 125),
     });
     await expect(api.markMyPayment(debtorAuth)).resolves.toHaveProperty('declaredPaidAt');
   });
@@ -5849,6 +5872,7 @@ describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () =
           personId: debtorId,
           name: 'Анна',
           amount: 459,
+          ...expectedReceiptLedger(459, 125),
           declaredPaidAt: marked,
           verifiedAt: null,
           verifiedByPersonId: null,
@@ -5857,6 +5881,7 @@ describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () =
           personId: anotherId,
           name: 'Виктор',
           amount: 408,
+          ...expectedReceiptLedger(408, 75),
           declaredPaidAt: null,
           verifiedAt: null,
           verifiedByPersonId: null,
@@ -6692,6 +6717,7 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
         personId: wifeId,
         name: 'Жена',
         amount: 951,
+        ...expectedReceiptLedger(951, 50),
         declaredPaidAt: null,
         verifiedAt: null,
         verifiedByPersonId: null,
@@ -6702,7 +6728,15 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
           { personId: childId, personIndex: 3, amountCents: 401, tipCents: 50 },
         ],
       },
-      { personId: soloId, name: 'Друг', amount: 200, declaredPaidAt: null, verifiedAt: null, verifiedByPersonId: null },
+      {
+        personId: soloId,
+        name: 'Друг',
+        amount: 200,
+        ...expectedReceiptLedger(200, 0),
+        declaredPaidAt: null,
+        verifiedAt: null,
+        verifiedByPersonId: null,
+      },
     ]);
     expect(result.payments.reduce((sum, payment) => sum + payment.amount, 0)).toBe(1151);
     expect(start().summary.reduce((sum, person) => sum + person.total, 0)).toBe(1251);
