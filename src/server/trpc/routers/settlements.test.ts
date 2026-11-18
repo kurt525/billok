@@ -334,10 +334,11 @@ describe('RUB-only settlement creation', () => {
         toId: 'alice',
         amount: 505,
         currency: 'RUB',
-        exchangeRate: 1,
-        baseCurrencyAmount: null,
       }),
     });
+    const written = mockDb.settlement.create.mock.calls[0]![0].data;
+    expect(written).not.toHaveProperty('exchangeRate');
+    expect(written).not.toHaveProperty('baseCurrencyAmount');
     expect(mockDb.activityLog.create).toHaveBeenCalledOnce();
   });
 });

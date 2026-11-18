@@ -121,6 +121,20 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("one-kopeck debt remains one kopeck", tests)
         self.assertIn("multiple transfers reduce debt by their exact cumulative kopecks", tests)
 
+    def test_rub_writes_do_not_send_legacy_fx_columns(self):
+        # Legacy database columns remain until 9.4; never write them in 9.3.
+        for path in (
+            "src/server/trpc/routers/expenses.ts",
+            "src/server/trpc/routers/receipts.ts",
+            "src/server/trpc/routers/settlements.ts",
+        ):
+            content = source(path)
+            self.assertNotIn("baseCurrencyAmount", content, path)
+            self.assertNotIn("exchangeRate: 1.0", content, path)
+            self.assertIn("currency: 'RUB'", content, path)
+        self.assertIn("exchangeRate: z.never().optional()", source("src/server/trpc/routers/expenses.ts"))
+        self.assertIn("exchangeRate: z.never().optional()", source("src/server/trpc/routers/settlements.ts"))
+
     def test_package_metadata_and_lock_brand_match(self):
         pkg = json.loads(source("package.json"))
         lock = json.loads(source("package-lock.json"))

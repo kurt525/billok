@@ -217,11 +217,12 @@ describe('a group archived while a change was on its way (#289)', () => {
         data: expect.objectContaining({
           amount: 1000,
           currency: 'RUB',
-          exchangeRate: 1,
-          baseCurrencyAmount: null,
         }),
       }),
     );
+    const written = mockDb.expense.create.mock.calls[0]![0].data;
+    expect(written).not.toHaveProperty('exchangeRate');
+    expect(written).not.toHaveProperty('baseCurrencyAmount');
   });
 
   test('create refuses, writing nothing', async () => {
@@ -453,9 +454,12 @@ describe('RUB-only expense editing API', () => {
     await api.update({ groupId: 'g1', expenseId: 'e1', amount: 2345, shares: [{ userId: 'u1', amount: 2345 }] });
     expect(mockDb.expense.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ amount: 2345, currency: 'RUB', exchangeRate: 1, baseCurrencyAmount: null }),
+        data: expect.objectContaining({ amount: 2345, currency: 'RUB' }),
       }),
     );
+    const updatedFields = mockDb.expense.update.mock.calls[0]![0].data;
+    expect(updatedFields).not.toHaveProperty('exchangeRate');
+    expect(updatedFields).not.toHaveProperty('baseCurrencyAmount');
     expect(mockDb.expenseShare.createMany).toHaveBeenCalledWith({
       data: [{ expenseId: 'e1', userId: 'u1', amount: 2345, shares: 1 }],
     });

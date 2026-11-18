@@ -1021,15 +1021,13 @@ describe('RUB-only finalization of a group receipt', () => {
     expect(mockDb.expense.create).not.toHaveBeenCalled();
   });
 
-  test('stores 505 kopecks exactly in RUB with rate 1 and no converted amount', async () => {
+  test('stores 505 kopecks exactly in RUB without any FX columns', async () => {
     await (await caller()).assignItemsAndCreateExpense(finish);
     expect(mockDb.expense.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         groupId: 'g1',
         amount: 505,
         currency: 'RUB',
-        exchangeRate: 1,
-        baseCurrencyAmount: null,
         splitMode: 'ITEM',
         shares: {
           create: [
@@ -1039,6 +1037,9 @@ describe('RUB-only finalization of a group receipt', () => {
         },
       }),
     });
+    const written = mockDb.expense.create.mock.calls[0]![0].data;
+    expect(written).not.toHaveProperty('exchangeRate');
+    expect(written).not.toHaveProperty('baseCurrencyAmount');
     expect(mockDb.receiptItemAssignment.createMany).toHaveBeenCalledOnce();
     expect(mockDb.activityLog.create).toHaveBeenCalledOnce();
   });

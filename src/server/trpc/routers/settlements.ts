@@ -132,8 +132,6 @@ export const settlementsRouter = createTRPCRouter({
             toId: input.toId,
             amount: input.amount,
             currency: 'RUB',
-            exchangeRate: 1.0,
-            baseCurrencyAmount: null,
             ...(input.note !== undefined ? { note: input.note } : {}),
           },
         });

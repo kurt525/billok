@@ -155,8 +155,6 @@ export const expensesRouter = createTRPCRouter({
             ...(input.description !== undefined ? { description: input.description } : {}),
             amount: input.amount,
             currency: 'RUB',
-            exchangeRate: 1.0,
-            baseCurrencyAmount: null,
             expenseDate: input.expenseDate ? new Date(input.expenseDate) : new Date(),
             paidById: input.paidById,
             addedById: ctx.user.id,
@@ -318,8 +316,6 @@ export const expensesRouter = createTRPCRouter({
           data: {
             ...stripUndefined(data),
             currency: 'RUB',
-            exchangeRate: 1.0,
-            baseCurrencyAmount: null,
             ...(data.expenseDate ? { expenseDate: new Date(data.expenseDate) } : {}),
           },
           include: { shares: true },

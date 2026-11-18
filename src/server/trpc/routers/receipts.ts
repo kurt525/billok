@@ -691,8 +691,6 @@ export const receiptsRouter = createTRPCRouter({
             title: input.title,
             amount: finalTotalAmount,
             currency: 'RUB',
-            exchangeRate: 1.0,
-            baseCurrencyAmount: null,
             splitMode: 'ITEM',
             paidById: input.paidById,
             addedById: ctx.user.id,
