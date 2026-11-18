@@ -4,7 +4,6 @@ import { AppError } from '@/server/lib/app-error';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
 import { checkRateLimit, parsePositiveInt } from '../../lib/rate-limit';
 import { getClientIp } from '../../lib/client-ip';
-import { locales } from '@/i18n/routing';
 import { stripUndefined } from '../../lib/strip-undefined';
 import { readRegistrationEmailConfig } from '../../lib/auth-config';
 import { readRegistrationMode } from '../../lib/registration-mode';
@@ -323,8 +322,6 @@ export const authRouter = createTRPCRouter({
         email: true,
         sbpPhone: true,
         sbpBankId: true,
-        locale: true,
-        defaultCurrency: true,
       },
     });
     if (!user) {
@@ -337,8 +334,6 @@ export const authRouter = createTRPCRouter({
     .input(
       z.strictObject({
         name: z.string().trim().min(1).max(100).optional(),
-        defaultCurrency: z.string().length(3).optional(),
-        locale: z.enum(locales).optional(),
         sbpPhone: z.string().max(24).nullable().optional(),
         sbpBankId: z.string().max(40).nullable().optional(),
       }),
@@ -377,7 +372,6 @@ export const authRouter = createTRPCRouter({
         id: user.id,
         name: user.name,
         email: user.email,
-        locale: user.locale,
         sbpPhone: user.sbpPhone,
         sbpBankId: user.sbpBankId,
       };

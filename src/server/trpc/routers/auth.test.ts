@@ -565,6 +565,15 @@ describe('auth.updateProfile SBP details', () => {
     expect(mockDb.user.update).not.toHaveBeenCalled();
   });
 
+  test('rejects obsolete currency and language profile fields without mutating account', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+    const api = await caller({ user: { id: 'u1' } });
+    for (const input of [{ defaultCurrency: 'USD' }, { defaultCurrency: 'RUB' }, { locale: 'en' }, { locale: 'ru' }]) {
+      await expect(api.updateProfile(input as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.user.update).not.toHaveBeenCalled();
+  });
+
   test('both fields can be cleared and anonymous updates are rejected', async () => {
     mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
     mockDb.user.update.mockResolvedValue({ id: 'u1', sbpPhone: null, sbpBankId: null });
@@ -617,13 +626,15 @@ describe('auth.getProfile', () => {
     mockDb.user.findUnique.mockResolvedValue({
       name: 'Alice',
       email: 'alice@example.com',
-      locale: 'en',
-      defaultCurrency: 'USD',
     });
     const api = await caller({ user: { id: 'user-1' } });
     const profile = await api.getProfile();
     expect(profile).not.toHaveProperty('hasPassword');
     expect(profile).not.toHaveProperty('passwordHash');
+    const selected = mockDb.user.findUnique.mock.calls.at(-1)?.[0]?.select;
+    expect(selected).toEqual(expect.objectContaining({ name: true, sbpPhone: true, sbpBankId: true }));
+    expect(selected).not.toHaveProperty('defaultCurrency');
+    expect(selected).not.toHaveProperty('locale');
   });
 
   test("returns the caller's id, so the client can tell who tRPC acts as while impersonating", async () => {

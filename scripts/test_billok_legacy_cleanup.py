@@ -87,6 +87,19 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         ):
             self.assertIn(scenario, checks)
 
+    def test_legacy_profile_currency_and_locale_preferences_removed(self):
+        auth = source("src/server/trpc/routers/auth.ts")
+        for unused in (
+            "defaultCurrency:",
+            "locale: true,",
+            "locale: z.enum(",
+            "locale: user.locale,",
+        ):
+            self.assertNotIn(unused, auth)
+        self.assertIn("sbpPhone: z.string().max(24)", auth)
+        self.assertIn("sbpBankId: z.string().max(40)", auth)
+        self.assertIn("name: z.string().trim().min(1)", auth)
+
     def test_rub_balance_paths_do_not_reintroduce_foreign_exchange(self):
         # 9.3 removes runtime FX; Prisma columns are handled only in 9.4.
         for path in (
