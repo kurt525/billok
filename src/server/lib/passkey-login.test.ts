@@ -337,11 +337,10 @@ describe('Issue #1 6.3.2.2: browser-bound passkey authentication', () => {
     expect(await consumePasskeyLoginTicket({ db: asDb(db), token: 'invalid', now })).toBeNull();
     const validTicket = 'z'.repeat(43);
     proof.tokenHash = hash(validTicket);
-    expect(await consumePasskeyLoginTicket({ db: asDb(db), token: validTicket, now })).toMatchObject({
-      id: user.id,
-      email: user.email,
-      locale: 'ru',
-    });
+    const redeemed = await consumePasskeyLoginTicket({ db: asDb(db), token: validTicket, now });
+    expect(redeemed).toMatchObject({ id: user.id, email: user.email });
+    expect(redeemed).not.toHaveProperty('locale');
+    expect(db.user.findUnique.mock.calls[0]![0].select).not.toHaveProperty('locale');
     expect(db.$queryRawUnsafe).toHaveBeenCalledWith('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', proof.userId);
     expect(db.passkeyLoginTicket.updateMany).toHaveBeenCalledWith({
       where: {

@@ -25,12 +25,11 @@ interface AuthConfig {
   callbacks: {
     jwt: (input: {
       token: Record<string, unknown>;
-      user?: { id: string; name?: string; locale?: string };
+      user?: { id: string; name?: string };
     }) => Promise<Record<string, unknown>>;
-    session: (input: {
-      session: { user: { id?: string; name?: string | null; locale?: string } };
-      token: Record<string, unknown>;
-    }) => { user: { id?: string; name?: string | null; locale?: string } };
+    session: (input: { session: { user: { id?: string; name?: string | null } }; token: Record<string, unknown> }) => {
+      user: { id?: string; name?: string | null };
+    };
   };
 }
 
@@ -71,7 +70,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   db.user.findUnique.mockResolvedValue({
     name: 'Анна',
-    locale: 'ru',
     email: 'anna@mail.ru',
     emailVerified: new Date('2026-11-01T00:00:00Z'),
     suspendedAt: null,
@@ -118,7 +116,6 @@ describe('Issue #1 6.9: no hidden provider can be enabled by configuration', () 
       id: 'verified-user',
       email: 'anna@example.ru',
       name: 'Анна',
-      locale: 'ru',
     });
     expect(await authorize({ ticket: 'signed-and-consumed-proof' })).toMatchObject({ id: 'verified-user' });
     expect(consumeTicket).toHaveBeenCalledWith({ db, token: 'signed-and-consumed-proof' });
@@ -129,21 +126,21 @@ describe('Issue #1 6.9: no hidden provider can be enabled by configuration', () 
 
   test('profile refresh remains supported without an external linking callback', async () => {
     const config = await loadAuth(externalEnv);
-    const token = await config.callbacks.jwt({ token: {}, user: { id: 'user-1', name: 'Анна', locale: 'ru' } });
+    const token = await config.callbacks.jwt({ token: {}, user: { id: 'user-1', name: 'Анна' } });
     expect(token).toMatchObject({
       id: 'user-1',
       name: 'Анна',
-      locale: 'ru',
       sessionSecurityVersion: 0,
       sessionSecurityValid: true,
     });
     const session = config.callbacks.session({ session: { user: {} }, token });
-    expect(session.user).toMatchObject({ id: 'user-1', name: 'Анна', locale: 'ru' });
+    expect(session.user).toMatchObject({ id: 'user-1', name: 'Анна' });
+    expect(session.user).not.toHaveProperty('locale');
+    expect(token).not.toHaveProperty('locale');
     expect(db.user.findUnique).toHaveBeenCalledWith({
       where: { id: 'user-1' },
       select: {
         name: true,
-        locale: true,
         email: true,
         emailVerified: true,
         suspendedAt: true,
@@ -161,7 +158,6 @@ describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
     for (const email of ['anna@example.com', 'anna@mail.ru.evil.com', 'anna@domain.рф']) {
       db.user.findUnique.mockResolvedValueOnce({
         name: 'Анна',
-        locale: 'ru',
         email,
         emailVerified: new Date(),
         suspendedAt: null,
@@ -179,7 +175,6 @@ describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
     expect(config.callbacks.session({ session: { user: {} }, token: previous }).user?.id).toBe('user-1');
     db.user.findUnique.mockResolvedValueOnce({
       name: 'Анна',
-      locale: 'ru',
       email: 'anna@mail.ru',
       emailVerified: new Date(),
       suspendedAt: null,
@@ -201,8 +196,8 @@ describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
     const config = await loadAuth();
     const token = await config.callbacks.jwt({ token: {}, user: { id: 'user-1' } });
     for (const state of [
-      { name: 'Анна', locale: 'ru', emailVerified: null, suspendedAt: null, sessionSecurityVersion: 0 },
-      { name: 'Анна', locale: 'ru', emailVerified: new Date(), suspendedAt: new Date(), sessionSecurityVersion: 0 },
+      { name: 'Анна', emailVerified: null, suspendedAt: null, sessionSecurityVersion: 0 },
+      { name: 'Анна', emailVerified: new Date(), suspendedAt: new Date(), sessionSecurityVersion: 0 },
       null,
     ]) {
       db.user.findUnique.mockResolvedValueOnce(state);
@@ -218,7 +213,6 @@ describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
     const config = await loadAuth();
     db.user.findUnique.mockResolvedValueOnce({
       name: 'Анна',
-      locale: 'ru',
       email: 'anna@mail.ru',
       emailVerified: new Date(),
       suspendedAt: null,

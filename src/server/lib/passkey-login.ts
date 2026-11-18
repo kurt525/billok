@@ -208,7 +208,6 @@ export async function consumePasskeyLoginTicket(input: { db: PrismaClient; token
         name: true,
         email: true,
         image: true,
-        locale: true,
         emailVerified: true,
         suspendedAt: true,
         isPlaceholder: true,
@@ -230,6 +229,6 @@ export async function consumePasskeyLoginTicket(input: { db: PrismaClient; token
       data: { consumedAt: now },
     });
     if (result.count !== 1) return null;
-    return { id: user.id, name: user.name, email: user.email, image: user.image, locale: user.locale };
+    return { id: user.id, name: user.name, email: user.email, image: user.image };
   });
 }

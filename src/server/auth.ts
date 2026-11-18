@@ -37,7 +37,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           where: { id: token.id },
           select: {
             name: true,
-            locale: true,
             email: true,
             emailVerified: true,
             suspendedAt: true,
@@ -57,7 +56,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           token.sessionSecurityVersion === fresh.sessionSecurityVersion;
         if (token.sessionSecurityValid) {
           token.name = fresh.name;
-          token.locale = fresh.locale;
         }
       } catch (error) {
         token.sessionSecurityValid = false;
@@ -82,7 +80,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (session.user) {
         session.user.id = token.id;
         session.user.name = (token.name as string | null | undefined) ?? session.user.name ?? null;
-        if (typeof token.locale === 'string') session.user.locale = token.locale;
       }
       return session;
     },

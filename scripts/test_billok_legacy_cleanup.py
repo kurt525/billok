@@ -100,7 +100,23 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertIn("sbpBankId: z.string().max(40)", auth)
         self.assertIn("name: z.string().trim().min(1)", auth)
 
-    def test_docker_and_scripts_use_billok_defaults_and_safe_service_name(self):
+    def test_passkey_authentication_exposes_no_obsolete_user_locale(self):
+        auth = source("src/server/auth.ts")
+        login = source("src/server/lib/passkey-login.ts")
+        session_types = source("src/types/next-auth.d.ts")
+        for obsolete in ("locale: true", "token.locale", "fresh.locale", "session.user.locale"):
+            self.assertNotIn(obsolete, auth)
+        self.assertNotIn("locale: true", login)
+        self.assertNotIn("locale: user.locale", login)
+        self.assertNotIn("locale?: string", session_types)
+        for required in ("consumePasskeyLoginTicket", "sessionSecurityVersion",
+                         "sessionSecurityValid", "issueAuthSessionNonce"):
+            self.assertIn(required, auth)
+        for required in ("passkeyLoginTicket.updateMany", "consumedAt: now", "emailVerified",
+                         "isAllowedRegistrationEmailDomain", "passkeyCredentials"):
+            self.assertIn(required, login)
+        self.assertIn("id: string", session_types)
+
         compose = source("docker/docker-compose.yml")
         entrypoint = source("docker/entrypoint.sh")
         smoke = source("scripts/docker-smoke.sh")
