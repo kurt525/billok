@@ -52,6 +52,29 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
             self.assertFalse((ROOT / name).exists(), name)
         self.assertIn("pr:create", scripts, "Keep safe PR creation available")
 
+    def test_redundant_owner_identity_and_unused_environment_helpers_absent(self):
+        # 9.3 removes only never-imported modules. The live owner policy
+        # and its privileged-route regression suite remain mandatory.
+        for dead in (
+            "src/server/lib/owner-identity.ts",
+            "src/server/lib/owner-identity.test.ts",
+            "src/server/lib/env.ts",
+        ):
+            self.assertFalse((ROOT / dead).exists(), dead)
+        policy = source("src/server/lib/owner-access.ts")
+        self.assertIn("export async function requireOwner(", policy)
+        self.assertIn("db.ownerBootstrap.findUnique({", policy)
+        self.assertIn("record?.completedAt", policy)
+        self.assertIn("isAllowedRegistrationEmailDomain(user.email)", policy)
+        checks = source("src/server/lib/owner-access.test.ts")
+        for scenario in (
+            "rejects absent sessions before any database lookup",
+            "rejects matching email, client owner role and forged identity",
+            "rejects missing or incomplete singleton registration",
+            "forces EVERY administrative entrypoint through requireOwner",
+        ):
+            self.assertIn(scenario, checks)
+
     def test_package_metadata_and_lock_brand_match(self):
         pkg = json.loads(source("package.json"))
         lock = json.loads(source("package-lock.json"))
