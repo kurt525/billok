@@ -3342,11 +3342,12 @@ export const guestRouter = createTRPCRouter({
                   ...(representative.paymentReceivedTransfers?.length
                     ? {
                         receivedTransfers: representative.paymentReceivedTransfers.map(
-                          ({ id, amountCents, confirmedAt, cancelledAt }) => ({
+                          ({ id, amountCents, confirmedAt, cancelledAt, correctsTransferId }) => ({
                             id,
                             amountCents,
                             confirmedAt,
                             ...(cancelledAt ? { cancelledAt } : {}),
+                            ...(correctsTransferId ? { correctsTransferId } : {}),
                           }),
                         ),
                       }
@@ -3380,11 +3381,12 @@ export const guestRouter = createTRPCRouter({
                   ...(person.paymentReceivedTransfers?.length
                     ? {
                         receivedTransfers: person.paymentReceivedTransfers.map(
-                          ({ id, amountCents, confirmedAt, cancelledAt }) => ({
+                          ({ id, amountCents, confirmedAt, cancelledAt, correctsTransferId }) => ({
                             id,
                             amountCents,
                             confirmedAt,
                             ...(cancelledAt ? { cancelledAt } : {}),
+                            ...(correctsTransferId ? { correctsTransferId } : {}),
                           }),
                         ),
                       }
@@ -3657,6 +3659,176 @@ export const guestRouter = createTRPCRouter({
       const { delivery: _delivery, ...response } = outcome;
       void _delivery;
       return response;
+    }),
+
+  // 5.22.4: atomic correction of ONE payer-entered bank receipt. Preserve
+  // the original entry as cancelled and append a replacement in one TX.
+  // Never transiently lose debt/tips if a mobile connection drops mid-edit.
+  correctGuestReceivedTransfer: publicProcedure
+    .input(
+      z.strictObject({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: guestLinkSecretSchema,
+        debtorId: personIdSchema,
+        transferId: z.string().uuid(),
+        requestId: z.string().uuid(),
+        correctedAmountCents: z.number().int().min(1).max(MAX_MONEY_CENTS),
+        overpaymentChoice: z.enum(['tip', 'refund']).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-payment-verify', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const outcome = await guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const { people, summary, paymentGroups } = requireGuestPayerReview(split, input.personId, input.personToken);
+        const debtorIndex = people.findIndex((person) => person.id === input.debtorId);
+        const group = paymentGroups?.find((row) => row.representativeId === input.debtorId && row.totalCents > 0);
+        const entry = summary.find((row) => row.personIndex === debtorIndex && row.total > 0);
+        if (debtorIndex < 0 || debtorIndex === split.paidByIndex || (paymentGroups ? !group : !entry)) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        const debtor = people[debtorIndex]!;
+        const expectedCents = group?.totalCents ?? entry!.total;
+        const tipCents = group?.tipCents ?? entry!.tip;
+        const history = debtor.paymentReceivedTransfers ?? [];
+        const retry = history.find((row) => row.id === input.requestId);
+        if (retry) {
+          if (
+            retry.correctsTransferId !== input.transferId ||
+            retry.amountCents !== input.correctedAmountCents ||
+            !!retry.cancelledAt ||
+            (input.overpaymentChoice && input.overpaymentChoice !== debtor.paymentOverpaymentChoice)
+          ) {
+            throw new AppError('CONFLICT', 'splitBusy');
+          }
+          return {
+            ...payerActualReceiptSnapshot(debtor, expectedCents, tipCents),
+            verifiedAt: debtor.paymentVerifiedAt ?? null,
+            correctedTransferId: retry.id,
+            delivery: null,
+          };
+        }
+        if (input.requestId === input.transferId) throw new AppError('CONFLICT', 'splitBusy');
+        const original = history.find((row) => row.id === input.transferId);
+        if (!original || original.cancelledAt || original.confirmedByPersonId !== input.personId) {
+          throw new AppError('CONFLICT', 'splitBusy');
+        }
+        const at = new Date().toISOString();
+        const updatedHistory = [
+          ...history.map((row) =>
+            row.id === input.transferId ? { ...row, cancelledAt: at, cancelledByPersonId: input.personId } : row,
+          ),
+          {
+            id: input.requestId,
+            amountCents: input.correctedAmountCents,
+            confirmedAt: at,
+            confirmedByPersonId: input.personId,
+            correctsTransferId: input.transferId,
+          },
+        ];
+        const choice = input.overpaymentChoice ?? debtor.paymentOverpaymentChoice ?? null;
+        let totals;
+        try {
+          totals = reconcileActualReceiptTransfers(
+            expectedCents,
+            tipCents,
+            updatedHistory,
+            choice,
+            debtor.paymentRefunds ?? [],
+          );
+        } catch {
+          throw new AppError('CONFLICT', 'splitBusy');
+        }
+        if (totals.pendingExcessCents > 0) throw new AppError('BAD_REQUEST', 'splitBusy');
+        const nowVerified = totals.outstandingCents === 0;
+        const wasVerified = !!debtor.paymentVerifiedAt;
+        const verifiedAt = nowVerified ? (debtor.paymentVerifiedAt ?? at) : null;
+        const receiptNameRaw = (split.receiptData as { merchantName?: unknown }).merchantName;
+        const receiptName = typeof receiptNameRaw === 'string' && receiptNameRaw.trim() ? receiptNameRaw.trim() : 'Чек';
+        const notification =
+          nowVerified && !wasVerified
+            ? {
+                id: randomUUID(),
+                payerName: people[split.paidByIndex]!.name,
+                amountCents: expectedCents,
+                receiptName,
+                confirmedAt: verifiedAt!,
+              }
+            : null;
+        const cancellation =
+          !nowVerified && wasVerified
+            ? {
+                id: randomUUID(),
+                payerPersonId: input.personId,
+                payerName: people[split.paidByIndex]!.name,
+                amountCents: expectedCents,
+                receiptName,
+                cancelledAt: at,
+              }
+            : null;
+        const updated = people.map((person, index) => {
+          if (index !== debtorIndex) return person;
+          const next = {
+            ...person,
+            paymentReceivedTransfers: updatedHistory,
+            ...(choice ? { paymentOverpaymentChoice: choice } : {}),
+            ...(notification ? { paymentReceiptNotification: notification } : {}),
+            ...(cancellation
+              ? {
+                  paymentReceiptCancellationNotifications: [
+                    ...(person.paymentReceiptCancellationNotifications ?? []),
+                    cancellation,
+                  ].slice(-20),
+                }
+              : {}),
+          };
+          if (verifiedAt) {
+            next.paymentVerifiedAt = verifiedAt;
+            next.paymentVerifiedByPersonId = input.personId;
+          } else {
+            delete next.paymentVerifiedAt;
+            delete next.paymentVerifiedByPersonId;
+          }
+          return next;
+        });
+        await tx.guestSplit.update({
+          where: { id: split.id },
+          data: { people: updated as unknown as Prisma.InputJsonValue },
+        });
+        const event = notification ?? cancellation;
+        return {
+          ...totals,
+          verifiedAt,
+          correctedTransferId: input.requestId,
+          delivery: event
+            ? {
+                subscriptions: activeGuestPushSubscriptions(debtor.guestPushSubscriptions, debtor.personToken ?? ''),
+                notificationId: event.id,
+                kind: cancellation ? ('cancelled' as const) : ('confirmed' as const),
+              }
+            : null,
+        };
+      });
+      if (outcome.delivery) {
+        try {
+          await sendGuestReceiptPush(
+            outcome.delivery.subscriptions,
+            '/split/' + encodeURIComponent(input.token) + '/claim',
+            outcome.delivery.notificationId,
+            outcome.delivery.kind === 'cancelled' ? 'cancelled' : undefined,
+          );
+        } catch {
+          // Stored audit and addressed notice survive push delivery failures.
+        }
+      }
+      const { delivery: _delivery, ...result } = outcome;
+      void _delivery;
+      return result;
     }),
 
   // 5.22.3: revise the disposition of a real overpayment. Already refunded

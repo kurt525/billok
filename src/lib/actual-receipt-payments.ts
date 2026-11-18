@@ -10,6 +10,8 @@ export type ActualReceiptTransfer = {
   confirmedByPersonId: string;
   cancelledAt?: string;
   cancelledByPersonId?: string;
+  /** Exact transfer row superseded by this corrected entry, for immutable audit. */
+  correctsTransferId?: string;
 };
 
 export type ActualReceiptRefund = {

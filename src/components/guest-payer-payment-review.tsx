@@ -36,7 +36,13 @@ type PaymentRow = {
   verifiedAt: string | null;
   verifiedByPersonId: string | null;
   memberIds?: string[];
-  receivedTransfers?: { id: string; amountCents: number; confirmedAt: string; cancelledAt?: string }[];
+  receivedTransfers?: {
+    id: string;
+    amountCents: number;
+    confirmedAt: string;
+    cancelledAt?: string;
+    correctsTransferId?: string;
+  }[];
   members?: { personId: string; personIndex: number; amountCents: number; tipCents: number }[];
 };
 
@@ -60,6 +66,7 @@ export function GuestPayerPaymentReview({
   const verify = trpc.guest.confirmGuestPaymentReceived.useMutation();
   const record = trpc.guest.recordGuestPaymentReceived.useMutation();
   const cancelActual = trpc.guest.cancelGuestReceivedTransfer.useMutation();
+  const correctActual = trpc.guest.correctGuestReceivedTransfer.useMutation();
   const saveChoice = trpc.guest.setGuestOverpaymentChoice.useMutation();
   const recordRefund = trpc.guest.confirmGuestOverpaymentRefund.useMutation();
   const cancelVerified = trpc.guest.cancelGuestPaymentReceived.useMutation();
@@ -69,6 +76,9 @@ export function GuestPayerPaymentReview({
   const [receiptDrafts, setReceiptDrafts] = useState<Record<string, string>>({});
   const [overpaymentChoices, setOverpaymentChoices] = useState<Record<string, ReceiptOverpaymentChoice | ''>>({});
   const [refundDrafts, setRefundDrafts] = useState<Record<string, string>>({});
+  const [correctingTransferId, setCorrectingTransferId] = useState<string | null>(null);
+  const [correctionDraft, setCorrectionDraft] = useState('');
+  const [correctionChoice, setCorrectionChoice] = useState<ReceiptOverpaymentChoice | ''>('');
   const [choiceDrafts, setChoiceDrafts] = useState<Record<string, ReceiptOverpaymentChoice | ''>>({});
   const latestPayments = useRef<PaymentRow[] | null>(null);
   const latestRead = useRef(0);
@@ -375,6 +385,53 @@ export function GuestPayerPaymentReview({
       toast.success(t('payerRefundRecorded'));
     } catch {
       toast.error(t('payerRefundRecordFailed'));
+    } finally {
+      writeInFlight.current = false;
+      setVerifyingId(null);
+      refreshCurrent.current();
+    }
+  }
+
+  async function correctActualReceipt(debtorId: string, transferId: string) {
+    const payment = payments?.find((row) => row.personId === debtorId);
+    const original = payment?.receivedTransfers?.find((row) => row.id === transferId && !row.cancelledAt);
+    const correctedAmountCents = parseExactReceivedRub(correctionDraft);
+    if (
+      !payment ||
+      !original ||
+      correctingTransferId !== transferId ||
+      correctedAmountCents === null ||
+      correctedAmountCents === original.amountCents ||
+      verifyingId ||
+      writeInFlight.current
+    )
+      return;
+    const projected = payment.receivedCents - original.amountCents + correctedAmountCents;
+    const excessCents = Math.max(0, projected - payment.amount);
+    const choice = correctionChoice || payment.overpaymentChoice;
+    if (excessCents > 0 && !choice) return;
+    if (payment.refundedCents > 0 && choice === 'tip') return;
+    if (!window.confirm(t('payerActualCorrectionConfirm'))) return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
+    setVerifyingId(debtorId);
+    try {
+      await correctActual.mutateAsync({
+        token,
+        personId,
+        personToken,
+        debtorId,
+        transferId,
+        correctedAmountCents,
+        requestId: window.crypto.randomUUID(),
+        ...(excessCents > 0 && choice ? { overpaymentChoice: choice } : {}),
+      });
+      setCorrectingTransferId(null);
+      setCorrectionDraft('');
+      setCorrectionChoice('');
+      toast.success(t('payerActualCorrectionSaved'));
+    } catch {
+      toast.error(t('payerActualCorrectionFailed'));
     } finally {
       writeInFlight.current = false;
       setVerifyingId(null);
@@ -772,18 +829,125 @@ export function GuestPayerPaymentReview({
                               {transfer.cancelledAt ? (
                                 <span className="text-muted-foreground">{t('payerActualTransferCancelled')}</span>
                               ) : (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  className="min-h-11 whitespace-normal"
-                                  disabled={verifyingId !== null}
-                                  onClick={() => {
-                                    void cancelActualReceipt(payment.personId, transfer.id);
-                                  }}
-                                  data-testid={'payer-actual-cancel-' + transfer.id}
+                                <div className="flex min-w-0 flex-wrap gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="min-h-11 whitespace-normal"
+                                    disabled={verifyingId !== null}
+                                    onClick={() => {
+                                      setCorrectingTransferId(transfer.id);
+                                      setCorrectionDraft((transfer.amountCents / 100).toFixed(2));
+                                      setCorrectionChoice(payment.overpaymentChoice ?? '');
+                                    }}
+                                    data-testid={'payer-actual-edit-' + transfer.id}
+                                  >
+                                    {t('payerActualTransferEdit')}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="min-h-11 whitespace-normal"
+                                    disabled={verifyingId !== null}
+                                    onClick={() => {
+                                      void cancelActualReceipt(payment.personId, transfer.id);
+                                    }}
+                                    data-testid={'payer-actual-cancel-' + transfer.id}
+                                  >
+                                    {t('payerActualTransferCancel')}
+                                  </Button>
+                                </div>
+                              )}
+                              {correctingTransferId === transfer.id && !transfer.cancelledAt && (
+                                <div
+                                  className="w-full min-w-0 space-y-2"
+                                  data-testid={'payer-actual-correction-' + transfer.id}
                                 >
-                                  {t('payerActualTransferCancel')}
-                                </Button>
+                                  <label htmlFor={'payer-correct-' + transfer.id} className="block text-sm font-medium">
+                                    {t('payerActualCorrectionLabel')}
+                                  </label>
+                                  <input
+                                    id={'payer-correct-' + transfer.id}
+                                    type="text"
+                                    inputMode="decimal"
+                                    autoComplete="off"
+                                    className="h-11 w-full min-w-0 rounded-md border bg-background px-3 text-base tabular-nums"
+                                    value={correctionDraft}
+                                    onChange={(event) => setCorrectionDraft(event.target.value)}
+                                    disabled={verifyingId !== null}
+                                    data-testid={'payer-actual-correction-input-' + transfer.id}
+                                  />
+                                  {(() => {
+                                    const cents = parseExactReceivedRub(correctionDraft);
+                                    const excess =
+                                      cents === null
+                                        ? 0
+                                        : Math.max(
+                                            0,
+                                            payment.receivedCents - transfer.amountCents + cents - payment.amount,
+                                          );
+                                    return excess > 0 ? (
+                                      <>
+                                        <label
+                                          htmlFor={'payer-correct-choice-' + transfer.id}
+                                          className="block text-sm"
+                                        >
+                                          {t('payerOverpaymentDecision')}
+                                        </label>
+                                        <select
+                                          id={'payer-correct-choice-' + transfer.id}
+                                          className="h-11 w-full min-w-0 rounded-md border bg-background px-2 text-sm"
+                                          value={correctionChoice}
+                                          onChange={(event) =>
+                                            setCorrectionChoice(event.target.value as ReceiptOverpaymentChoice | '')
+                                          }
+                                          disabled={verifyingId !== null || payment.refundedCents > 0}
+                                          data-testid={'payer-actual-correction-choice-' + transfer.id}
+                                        >
+                                          <option value="">{t('payerOverpaymentChoose')}</option>
+                                          <option value="tip">{t('payerOverpaymentTip')}</option>
+                                          <option value="refund">{t('payerOverpaymentRefund')}</option>
+                                        </select>
+                                      </>
+                                    ) : null;
+                                  })()}
+                                  <div className="flex min-w-0 flex-wrap gap-2">
+                                    <Button
+                                      type="button"
+                                      className="min-h-11 min-w-0 whitespace-normal"
+                                      disabled={
+                                        verifyingId !== null ||
+                                        parseExactReceivedRub(correctionDraft) === null ||
+                                        parseExactReceivedRub(correctionDraft) === transfer.amountCents ||
+                                        (payment.receivedCents -
+                                          transfer.amountCents +
+                                          (parseExactReceivedRub(correctionDraft) ?? 0) >
+                                          payment.amount &&
+                                          !correctionChoice &&
+                                          !payment.overpaymentChoice)
+                                      }
+                                      onClick={() => {
+                                        void correctActualReceipt(payment.personId, transfer.id);
+                                      }}
+                                      data-testid={'payer-actual-correction-save-' + transfer.id}
+                                    >
+                                      {t('payerActualCorrectionSave')}
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      className="min-h-11 min-w-0 whitespace-normal"
+                                      onClick={() => {
+                                        setCorrectingTransferId(null);
+                                        setCorrectionDraft('');
+                                        setCorrectionChoice('');
+                                      }}
+                                      data-testid={'payer-actual-correction-dismiss-' + transfer.id}
+                                    >
+                                      {t('payerActualCorrectionDismiss')}
+                                    </Button>
+                                  </div>
+                                </div>
                               )}
                             </div>
                           ))}
