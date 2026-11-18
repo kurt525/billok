@@ -409,6 +409,7 @@ jobs:
                 e2e/confirm-dialogs-people-splits.spec.ts \
                 e2e/confirm-dialogs-final.spec.ts \
                 e2e/billok-mobile-guest-split.spec.ts \
+                e2e/billok-mobile-actual-receipts.spec.ts \
                 --project=parallel --no-deps --workers=2 --retries=0 \
                 --reporter=line --output=/tmp/billok-mobile-playwright-results
             '
