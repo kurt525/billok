@@ -68,6 +68,19 @@ class NoLegacyPhotoAdminTests(unittest.TestCase):
         self.assertNotIn("admin.cleanupOrphans", e2e)
         self.assertIn("[320, 360, 430, 480, 600, 720]", e2e)
 
+    def test_93_no_filesystem_receipt_cleanup(self):
+        cleanup = read("src/server/lib/receipt-cleanup.ts")
+        admin = read("src/server/trpc/routers/admin.ts")
+        group = read("src/server/lib/group-delete.ts")
+        for src in (cleanup, admin, group):
+            self.assertNotIn("removeReceiptFiles", src)
+        for name in ("unlink(", "resolveUploadPath", "fileSize", "imagePath"):
+            self.assertNotIn(name, cleanup)
+        self.assertNotIn("unusedReceiptBytes", admin)
+        self.assertFalse((ROOT / "src/server/lib/upload-dir.ts").exists())
+        self.assertIn("deleteUnusedReceipts", cleanup)
+        self.assertIn("deleteReceiptsNoSplitUses", group)
+
     def test_schema_and_db_cleanup_remain_in_issue_94(self):
         schema = read("prisma/schema.prisma")
         self.assertIn("imagePath", schema)

@@ -14,7 +14,7 @@ import {
 import { MAX_MONEY_CENTS } from '@/lib/money';
 import { manualPartsConfirmationSnapshot } from '@/lib/manual-parts-confirmation';
 import { manualKnownPartsBalance } from '@/lib/manual-known-parts';
-import { deleteUnusedSplitReceipts, removeReceiptFiles } from '../../lib/receipt-cleanup';
+import { deleteUnusedSplitReceipts } from '../../lib/receipt-cleanup';
 
 /**
  * Verify that a receipt exists and the user has access to it (via group membership).
@@ -102,7 +102,6 @@ export const receiptsRouter = createTRPCRouter({
       receipt: {
         id: receiptWithItems.id,
         status: receiptWithItems.status,
-        imagePath: receiptWithItems.imagePath,
         isManual: receiptWithItems.originalName === 'billok-manual',
         creatorId: receiptWithItems.uploadedById,
         paidById: receiptWithItems.paidById,
@@ -937,10 +936,10 @@ export const receiptsRouter = createTRPCRouter({
     }
 
     // It leaves the group's pending list either way. A claim session made from it (the group
-    // scan page's Share Link) still shows its image, so then it stays until no split uses it
+    // scan page's Share Link) still references it, so it stays until no split uses it
     // and deleteUnusedSplitReceipts deletes it (#318); otherwise it's deleted now. The row
     // lock comes first, so an expense or a split being made from it meanwhile is seen.
-    const imagePaths = await ctx.db.$transaction(async (tx) => {
+    await ctx.db.$transaction(async (tx) => {
       const locked = await tx.$queryRaw<unknown[]>`SELECT 1 FROM "Receipt" WHERE "id" = ${input.receiptId} FOR UPDATE`;
       if (locked.length === 0) {
         throw new AppError('NOT_FOUND');
@@ -953,7 +952,6 @@ export const receiptsRouter = createTRPCRouter({
       await tx.receipt.update({ where: { id: input.receiptId }, data: { groupId: null } });
       return deleteUnusedSplitReceipts(tx, [input.receiptId]);
     });
-    await removeReceiptFiles(imagePaths);
 
     return { success: true };
   }),

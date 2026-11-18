@@ -57,11 +57,6 @@ vi.mock('@/server/db', () => ({ db: mockDb }));
 vi.mock('@/server/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
-const { removeReceiptFiles } = vi.hoisted(() => ({ removeReceiptFiles: vi.fn() }));
-vi.mock('@/server/lib/receipt-cleanup', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/server/lib/receipt-cleanup')>()),
-  removeReceiptFiles,
-}));
 
 async function caller(userId = 'owner') {
   const { groupsRouter } = await import('./groups');
@@ -1250,40 +1245,28 @@ describe('deleting a group', () => {
     });
     expect(mockDb.group.delete).not.toHaveBeenCalled();
     expect(mockDb.receipt.deleteMany).not.toHaveBeenCalled();
-    expect(removeReceiptFiles).not.toHaveBeenCalled();
   });
 
   // #265: the group's scanned receipts stayed behind, with their items, assignments
-  // and image files
-  test("deletes the group's receipts, and their image files once that's committed", async () => {
+
+  test('deletes unreferenced group receipt records atomically', async () => {
     mockMemberships({ owner: member('owner', 'OWNER') });
-    mockDb.receipt.findMany.mockResolvedValue([
-      { id: 'r1', imagePath: 'receipts/r1.jpg' },
-      { id: 'r2', imagePath: 'receipts/r2.jpg' },
-    ]);
+    mockDb.receipt.findMany.mockResolvedValue([{ id: 'r1' }, { id: 'r2' }]);
     const api = await caller('owner');
     await api.delete({ groupId: 'g1' });
 
     expect(mockDb.receipt.findMany).toHaveBeenCalledWith({
       where: { groupId: 'g1' },
-      select: { id: true, imagePath: true },
+      select: { id: true },
     });
     expect(mockDb.receipt.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['r1', 'r2'] } } });
-    expect(removeReceiptFiles).toHaveBeenCalledWith(['receipts/r1.jpg', 'receipts/r2.jpg']);
-    // Only once the transaction is over, so a rollback can't leave a receipt without its image
-    expect(removeReceiptFiles.mock.invocationCallOrder[0]!).toBeGreaterThan(
-      mockDb.group.delete.mock.invocationCallOrder[0]!,
-    );
   });
 
-  // The claim page shows the receipt's image, so the receipt stays until its last
+  // A claim session references this receipt until its last
   // split goes (guest.deleteSplit)
   test('keeps a receipt that a Quick Split or claim session still shows', async () => {
     mockMemberships({ owner: member('owner', 'OWNER') });
-    mockDb.receipt.findMany.mockResolvedValue([
-      { id: 'r1', imagePath: 'receipts/r1.jpg' },
-      { id: 'r2', imagePath: 'receipts/r2.jpg' },
-    ]);
+    mockDb.receipt.findMany.mockResolvedValue([{ id: 'r1' }, { id: 'r2' }]);
     mockDb.guestSplit.findMany.mockResolvedValue([{ receiptId: 'r2' }]);
     const api = await caller('owner');
     await api.delete({ groupId: 'g1' });
@@ -1293,7 +1276,6 @@ describe('deleting a group', () => {
       select: { receiptId: true },
     });
     expect(mockDb.receipt.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['r1'] } } });
-    expect(removeReceiptFiles).toHaveBeenCalledWith(['receipts/r1.jpg']);
   });
 
   // Nothing new can join the group or be scanned into it once its receipts are read,

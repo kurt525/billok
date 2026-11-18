@@ -6,9 +6,6 @@ vi.mock('next/headers', () => ({
   cookies: vi.fn().mockResolvedValue({ get: vi.fn().mockReturnValue(null) }),
 }));
 vi.mock('@/server/auth', () => ({ auth: vi.fn() }));
-const unlink = vi.fn();
-vi.mock('fs/promises', async (importOriginal) => ({ ...(await importOriginal<object>()), unlink }));
-
 const mockDb = {
   user: { findUnique: vi.fn() },
   group: { findUnique: vi.fn() },
@@ -1184,11 +1181,10 @@ describe('deleting a pending receipt (#318)', () => {
       groupId: 'g1',
       uploadedById: 'u1',
       savedById: null,
-      imagePath: 'receipts/r1.jpg',
     });
     mockDb.expense.findUnique.mockResolvedValue(null);
     // Off the group, with no expense: what the cleanup finds under the lock
-    mockDb.receipt.findMany.mockResolvedValue([{ id: 'r1', imagePath: 'receipts/r1.jpg' }]);
+    mockDb.receipt.findMany.mockResolvedValue([{ id: 'r1' }]);
     mockDb.guestSplit.findMany.mockResolvedValue([]);
   });
 
@@ -1200,23 +1196,17 @@ describe('deleting a pending receipt (#318)', () => {
     expect(mockDb.receipt.update).toHaveBeenCalledWith({ where: { id: 'r1' }, data: { groupId: null } });
     expect(mockDb.receipt.delete).not.toHaveBeenCalled();
     expect(mockDb.receipt.deleteMany).not.toHaveBeenCalled();
-    expect(unlink).not.toHaveBeenCalled();
   });
 
-  test('one nothing else uses is deleted, its file once the transaction has committed', async () => {
-    let committed = false;
-    mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockDb) => unknown) => {
-      const result = await fn(mockDb);
-      committed = true;
-      return result;
-    });
-    unlink.mockImplementation(async () => expect(committed).toBe(true));
+  test('deletes a pending receipt record only after checking its live references', async () => {
     const api = await caller();
     await api.deletePending({ receiptId: 'r1' });
 
     expect(mockDb.receipt.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['r1'] } } });
-    expect(unlink).toHaveBeenCalledTimes(1);
-    expect(unlink.mock.calls[0]![0]).toMatch(/receipts\/r1\.jpg$/);
+    expect(mockDb.guestSplit.findMany).toHaveBeenCalledWith({
+      where: { receiptId: { in: ['r1'] } },
+      select: { receiptId: true },
+    });
   });
 
   test('locks the receipt before checking for an expense, so one made meanwhile is seen', async () => {
@@ -1240,7 +1230,6 @@ describe('deleting a pending receipt (#318)', () => {
     expect(mockDb.receipt.update).not.toHaveBeenCalled();
     expect(mockDb.receipt.delete).not.toHaveBeenCalled();
     expect(mockDb.receipt.deleteMany).not.toHaveBeenCalled();
-    expect(unlink).not.toHaveBeenCalled();
   });
 
   test('one deleted by someone else in the meantime is NOT_FOUND', async () => {

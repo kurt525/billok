@@ -9,12 +9,7 @@ import { type AdminAction, type PrismaClient, GuestSplitStatus, Prisma } from '@
 import { getRecentLogs } from '@/server/lib/logger';
 import { deleteGroupWithData } from '@/server/lib/group-delete';
 import { lockGroupMembers } from '@/server/lib/group-balances';
-import {
-  countUnusedReceipts,
-  deleteExpiredSplits,
-  deleteUnusedReceipts,
-  removeReceiptFiles,
-} from '@/server/lib/receipt-cleanup';
+import { countUnusedReceipts, deleteExpiredSplits, deleteUnusedReceipts } from '@/server/lib/receipt-cleanup';
 import { getBuildInfo } from '@/server/lib/build-info';
 import { REGISTRATION_MODES, readRegistrationMode } from '@/server/lib/registration-mode';
 import { activeSystemInviteWindow, SYSTEM_INVITE_TTL_MS } from '@/server/lib/system-invite-lifetime';
@@ -544,12 +539,11 @@ export const adminRouter = createTRPCRouter({
       throw new AppError('NOT_FOUND', 'groupNotFound');
     }
 
-    const imagePaths = await ctx.db.$transaction(async (tx) => {
+    await ctx.db.$transaction(async (tx) => {
       // Waits for balance changes, removals and transfers in flight, as the owner's delete does
       await lockGroupMembers(tx, input.groupId);
       return deleteGroupWithData(tx, input.groupId);
     });
-    await removeReceiptFiles(imagePaths);
 
     await logAdminAction(ctx.db, ctx.user.id, 'GROUP_DELETED', input.groupId, { name: group.name });
 
@@ -883,12 +877,10 @@ export const adminRouter = createTRPCRouter({
     return {
       receiptCount,
       unusedReceiptCount: unused.count,
-      unusedReceiptBytes: unused.bytes,
-      unusedReceiptBytesFormatted: formatBytes(unused.bytes),
     };
   }),
 
-  // Receipts no group, expense or split uses, a day or more old (#312), with their files
+  // Receipts no group, expense or split uses, a day or more old (#312)
   cleanupUnusedReceipts: adminProcedure.mutation(async ({ ctx }) => {
     const deletedCount = await deleteUnusedReceipts(ctx.db, 500);
     if (deletedCount > 0) {
@@ -945,11 +937,3 @@ export const adminRouter = createTRPCRouter({
       });
     }),
 });
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
-}

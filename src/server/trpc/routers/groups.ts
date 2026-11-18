@@ -5,7 +5,6 @@ import { createTRPCRouter, protectedProcedure, groupMemberProcedure } from '../i
 import { stripUndefined } from '../../lib/strip-undefined';
 import { loadGroupBalances, lockGroupMembers } from '../../lib/group-balances';
 import { deleteGroupWithData } from '../../lib/group-delete';
-import { removeReceiptFiles } from '../../lib/receipt-cleanup';
 import { mergePlaceholderIntoUser } from '../../lib/placeholder-merge';
 import { checkRateLimit } from '../../lib/rate-limit';
 import { normalizeGuestName } from '@/lib/guest-session';
@@ -183,7 +182,7 @@ export const groupsRouter = createTRPCRouter({
     if (ctx.membership.role !== 'OWNER') {
       throw notOwner;
     }
-    const imagePaths = await ctx.db.$transaction(async (tx) => {
+    await ctx.db.$transaction(async (tx) => {
       // A transfer of ownership takes the same lock, so the role read below is
       // current: a delete the old owner sent while handing the group over is
       // refused, rather than deleting a group someone else now owns (#309).
@@ -197,7 +196,6 @@ export const groupsRouter = createTRPCRouter({
       }
       return deleteGroupWithData(tx, input.groupId);
     });
-    await removeReceiptFiles(imagePaths);
     return { success: true };
   }),
 

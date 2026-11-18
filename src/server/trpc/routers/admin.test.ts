@@ -106,15 +106,13 @@ vi.mock('@/server/lib/owner-passkey-action-approval', async (importOriginal) => 
 vi.mock('@/server/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
-const { removeReceiptFiles, deleteExpiredSplits, countUnusedReceipts, deleteUnusedReceipts } = vi.hoisted(() => ({
-  removeReceiptFiles: vi.fn(),
+const { deleteExpiredSplits, countUnusedReceipts, deleteUnusedReceipts } = vi.hoisted(() => ({
   deleteExpiredSplits: vi.fn(),
   countUnusedReceipts: vi.fn(),
   deleteUnusedReceipts: vi.fn(),
 }));
 vi.mock('@/server/lib/receipt-cleanup', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/server/lib/receipt-cleanup')>()),
-  removeReceiptFiles,
   deleteExpiredSplits,
   countUnusedReceipts,
   deleteUnusedReceipts,
@@ -635,7 +633,7 @@ describe('deleteGroup', () => {
     vi.unstubAllEnvs();
   });
 
-  test('deletes the group with its receipts and placeholder members, then the image files', async () => {
+  test('deletes the group, orphaned receipt rows and placeholder members', async () => {
     const api = await callerAs(adminSession);
     await expect(api.deleteGroup({ groupId: 'g1' })).resolves.toEqual({ deleted: true, groupId: 'g1' });
 
@@ -645,10 +643,6 @@ describe('deleteGroup', () => {
     expect(mockDb.user.deleteMany).toHaveBeenCalledWith({
       where: expect.objectContaining({ id: { in: ['p1'] }, isPlaceholder: true }),
     });
-    expect(removeReceiptFiles).toHaveBeenCalledWith(['receipts/r1.jpg']);
-    expect(removeReceiptFiles.mock.invocationCallOrder[0]!).toBeGreaterThan(
-      mockDb.group.delete.mock.invocationCallOrder[0]!,
-    );
   });
 });
 
@@ -710,16 +704,14 @@ describe('unused receipts', () => {
     vi.unstubAllEnvs();
   });
 
-  test('storage stats count them, with their size', async () => {
+  test('storage stats count only orphaned receipt records', async () => {
     mockDb.receipt.count.mockResolvedValue(5);
-    countUnusedReceipts.mockResolvedValue({ count: 2, bytes: 2048 });
+    countUnusedReceipts.mockResolvedValue({ count: 2 });
     const api = await callerAs(adminSession);
 
     await expect(api.getStorageStats()).resolves.toEqual({
       receiptCount: 5,
       unusedReceiptCount: 2,
-      unusedReceiptBytes: 2048,
-      unusedReceiptBytesFormatted: '2 KB',
     });
     expect(countUnusedReceipts).toHaveBeenCalledWith(mockDb);
     expect(mockDb.receipt.findMany).not.toHaveBeenCalled();

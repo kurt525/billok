@@ -26,12 +26,7 @@ import {
   validGuestPushSubscription,
   validStoredGuestPushSubscriptions,
 } from '../../lib/guest-web-push';
-import {
-  deleteExpiredSplits,
-  deleteUnusedSplitReceipts,
-  lockReceiptForSplit,
-  removeReceiptFiles,
-} from '../../lib/receipt-cleanup';
+import { deleteExpiredSplits, deleteUnusedSplitReceipts, lockReceiptForSplit } from '../../lib/receipt-cleanup';
 import {
   parseExtractedData,
   parseGuestItems,
@@ -613,11 +608,10 @@ export const guestRouter = createTRPCRouter({
       throw new AppError('NOT_FOUND', 'splitNotFound');
     }
     // Its receipt goes too, unless a group or another split still uses it (#265)
-    const imagePaths = await ctx.db.$transaction(async (tx) => {
+    await ctx.db.$transaction(async (tx) => {
       await tx.guestSplit.delete({ where: { id: input.id } });
       return deleteUnusedSplitReceipts(tx, split.receiptId ? [split.receiptId] : []);
     });
-    await removeReceiptFiles(imagePaths);
     return { success: true };
   }),
 
@@ -691,7 +685,6 @@ export const guestRouter = createTRPCRouter({
       receipt: {
         id: receipt.id,
         status: receipt.status,
-        imagePath: receipt.imagePath,
         extractedData: receipt.extractedData as {
           merchantName?: string;
           date?: string;

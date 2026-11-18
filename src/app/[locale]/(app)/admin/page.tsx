@@ -242,7 +242,7 @@ function StorageStatsSection() {
           <CardContent>
             <p className="min-w-0 text-2xl font-bold [overflow-wrap:anywhere]">{data?.unusedReceiptCount ?? 0}</p>
             <p className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-              {t('storage.unusedDescription', { size: data?.unusedReceiptBytesFormatted ?? '0 B' })}
+              {t('storage.unusedDescription')}
             </p>
             {cleanupUnused.isSuccess && (
               <p className="mt-2 text-sm text-green-600">

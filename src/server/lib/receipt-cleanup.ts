@@ -1,26 +1,16 @@
-import { unlink } from 'fs/promises';
 import { AppError } from './app-error';
 import { GuestSplitStatus, Prisma } from '@/generated/prisma/client';
-import { logger } from './logger';
-import { resolveUploadPath } from './upload-dir';
 
-type ReceiptFile = { id: string; imagePath: string };
+type ReceiptRef = { id: string };
 
 /**
- * A receipt is used by its group, by the expense made from it, and by every Quick
- * Split or claim session made from it (`GuestSplit.receiptId`, whose claim page shows
- * the image). When a group or a split is deleted, its receipts that nothing else uses
- * go with it, their items and assignments by cascade (#265).
- *
- * Deletes the given receipts that no split uses, in the caller's transaction, which
- * must already hold their rows `FOR UPDATE`. Returns their image paths, for
- * `removeReceiptFiles` once the transaction commits.
+ * Remove receipt records that no split references, under the caller's transaction.
+ * A group or expense record's ownership and deletion constraints are checked by
+ * the caller; related items and assignments are cascaded with the receipt.
+ * Returns the number of records removed, without filesystem operations.
  */
-export async function deleteReceiptsNoSplitUses(
-  tx: Prisma.TransactionClient,
-  receipts: ReceiptFile[],
-): Promise<string[]> {
-  if (receipts.length === 0) return [];
+export async function deleteReceiptsNoSplitUses(tx: Prisma.TransactionClient, receipts: ReceiptRef[]): Promise<number> {
+  if (receipts.length === 0) return 0;
   const splits = await tx.guestSplit.findMany({
     where: { receiptId: { in: receipts.map((r) => r.id) } },
     select: { receiptId: true },
@@ -30,24 +20,20 @@ export async function deleteReceiptsNoSplitUses(
   if (unused.length > 0) {
     await tx.receipt.deleteMany({ where: { id: { in: unused.map((r) => r.id) } } });
   }
-  return unused.map((r) => r.imagePath);
+  return unused.length;
 }
 
 /**
- * After the caller deleted splits made from these receipts, in its transaction:
- * deletes the receipts nothing else uses (no group, no expense, no other split).
- * `deleteUnusedReceipts` passes it receipts it found unused, to check them again
- * under their row locks, with `unchangedSince` to keep one changed since (scanned
- * again, say). Returns their image paths, for `removeReceiptFiles` once the
- * transaction commits.
+ * Recheck orphan receipt records after the caller deletes referencing splits.
+ * Row locks and the unchangedSince cutoff prevent accidental concurrent deletes.
  */
 export async function deleteUnusedSplitReceipts(
   tx: Prisma.TransactionClient,
   receiptIds: string[],
   unchangedSince?: Date,
-): Promise<string[]> {
+): Promise<number> {
   const ids = [...new Set(receiptIds)];
-  if (ids.length === 0) return [];
+  if (ids.length === 0) return 0;
   // Two splits made from one receipt, deleted at the same moment, would otherwise each
   // still see the other and both keep it; so would a split and the group the receipt
   // came from. The checks below run once the other deletion has committed.
@@ -59,7 +45,7 @@ export async function deleteUnusedSplitReceipts(
       expense: { is: null },
       ...(unchangedSince ? { updatedAt: { lt: unchangedSince } } : {}),
     },
-    select: { id: true, imagePath: true },
+    select: { id: true },
   });
   return deleteReceiptsNoSplitUses(tx, receipts);
 }
@@ -114,16 +100,16 @@ type Db = { $transaction<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): P
  * Deletes only abandoned CLAIMING drafts past their expiry. FINALIZED receipts,
  * including items, allocations and payer-verified transfers, are durable history.
  * Recheck the status at DELETE to protect drafts finalized after selection.
- * Orphan receipt images are removed only if no group, expense or split uses them.
+ * Unused receipt records are removed only if no group, expense or split uses them.
  */
 export async function deleteExpiredSplits(db: Db, batchSize: number): Promise<number> {
-  const { count, imagePaths } = await db.$transaction(async (tx) => {
+  return db.$transaction(async (tx) => {
     const expired = await tx.guestSplit.findMany({
       where: { status: GuestSplitStatus.CLAIMING, expiresAt: { lt: new Date() } },
       select: { id: true, receiptId: true },
       take: batchSize,
     });
-    if (expired.length === 0) return { count: 0, imagePaths: [] };
+    if (expired.length === 0) return 0;
     const { count } = await tx.guestSplit.deleteMany({
       where: {
         id: { in: expired.map((s) => s.id) },
@@ -132,22 +118,17 @@ export async function deleteExpiredSplits(db: Db, batchSize: number): Promise<nu
       },
     });
     const receiptIds = expired.flatMap((s) => (s.receiptId ? [s.receiptId] : []));
-    return { count, imagePaths: await deleteUnusedSplitReceipts(tx, receiptIds) };
+    await deleteUnusedSplitReceipts(tx, receiptIds);
+    return count;
   });
-  await removeReceiptFiles(imagePaths);
-  return count;
 }
 
-// Quick Split keeps a scan only in the page until a split is made from it, and the group
-// scan page saves its upload to the group once processing starts, so a receipt nothing
-// uses yet may still be on its way. Only ones nothing changed for a day count as unused.
-// Scanning one again marks it PROCESSING first, which updates `updatedAt`, so a receipt
-// being scanned is newer than the cutoff and isn't counted
+// Preserve a one-day grace period for detached records before garbage collection.
 const UNUSED_RECEIPT_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 const unusedReceiptCutoff = () => new Date(Date.now() - UNUSED_RECEIPT_MIN_AGE_MS);
 
 // Receipts (as `r`) no group, expense or split uses, unchanged since the cutoff (#312):
-// ones left behind before #265, and scans never saved to a group or made into a split
+// orphaned draft rows with no current references
 const unusedReceipts = (cutoff: Date) => Prisma.sql`"Receipt" r
   WHERE r."updatedAt" < ${cutoff}
     AND r."groupId" IS NULL
@@ -156,16 +137,16 @@ const unusedReceipts = (cutoff: Date) => Prisma.sql`"Receipt" r
 
 type RawDb = { $queryRaw<T>(query: Prisma.Sql): Promise<T> };
 
-/** How many receipts nothing uses there are, and their image files' total size. */
-export async function countUnusedReceipts(db: RawDb): Promise<{ count: number; bytes: number }> {
-  const [row] = await db.$queryRaw<{ count: number; bytes: number }[]>(
-    Prisma.sql`SELECT count(*)::int AS "count", coalesce(sum(r."fileSize"), 0)::float8 AS "bytes" FROM ${unusedReceipts(unusedReceiptCutoff())}`,
+/** Counts unused receipt records; image files are no longer used. */
+export async function countUnusedReceipts(db: RawDb): Promise<{ count: number }> {
+  const [row] = await db.$queryRaw<{ count: number }[]>(
+    Prisma.sql`SELECT count(*)::int AS "count" FROM ${unusedReceipts(unusedReceiptCutoff())}`,
   );
-  return { count: row?.count ?? 0, bytes: row?.bytes ?? 0 };
+  return { count: row?.count ?? 0 };
 }
 
 /**
- * Deletes the receipts nothing uses, `batchSize` at a time, with their image files.
+ * Deletes unused receipt rows in batches.
  * Each batch checks its receipts again under their row locks (`deleteUnusedSplitReceipts`),
  * so one saved to a group, made into an expense or split, or scanned again meanwhile
  * stays; it then no longer counts as unused, so the batches go on until none are left.
@@ -175,7 +156,7 @@ export async function deleteUnusedReceipts(db: Db, batchSize: number): Promise<n
   const cutoff = unusedReceiptCutoff();
   let deletedCount = 0;
   for (;;) {
-    const imagePaths = await db.$transaction(async (tx) => {
+    const deleted = await db.$transaction(async (tx) => {
       const picked = await tx.$queryRaw<{ id: string }[]>(
         Prisma.sql`SELECT r."id" FROM ${unusedReceipts(cutoff)} ORDER BY r."id" LIMIT ${batchSize}`,
       );
@@ -186,24 +167,7 @@ export async function deleteUnusedReceipts(db: Db, batchSize: number): Promise<n
         cutoff,
       );
     });
-    if (imagePaths === null) return deletedCount;
-    await removeReceiptFiles(imagePaths);
-    deletedCount += imagePaths.length;
+    if (deleted === null) return deletedCount;
+    deletedCount += deleted;
   }
-}
-
-/**
- * Removes deleted receipts' image files. Their rows are gone by then, so a file that
- * can't be removed is only logged (the admin dashboard's orphan cleanup finds it).
- */
-export async function removeReceiptFiles(imagePaths: string[]): Promise<void> {
-  await Promise.all(
-    imagePaths.map(async (imagePath) => {
-      try {
-        await unlink(resolveUploadPath(imagePath));
-      } catch {
-        logger.warn('receipt.fileCleanupFailed', { imagePath });
-      }
-    }),
-  );
 }

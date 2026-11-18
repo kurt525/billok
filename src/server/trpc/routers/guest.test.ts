@@ -45,13 +45,11 @@ vi.mock('@/server/db', () => ({ db: mockDb }));
 vi.mock('@/server/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
-const { removeReceiptFiles, deleteExpiredSplits } = vi.hoisted(() => ({
-  removeReceiptFiles: vi.fn(),
+const { deleteExpiredSplits } = vi.hoisted(() => ({
   deleteExpiredSplits: vi.fn(),
 }));
 vi.mock('@/server/lib/receipt-cleanup', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/server/lib/receipt-cleanup')>()),
-  removeReceiptFiles,
   deleteExpiredSplits,
 }));
 
@@ -4869,16 +4867,16 @@ describe('guest.finalizeSession', () => {
   });
 });
 
-// #265: deleting a Quick Split left its scanned receipt behind, with its items and image file
+// #265: deleting a Quick Split removes an unreferenced receipt record
 describe('deleting a split', () => {
   beforeEach(() => {
     mockDb.guestSplit.findUnique.mockResolvedValue({ userId: 'user-1', receiptId: 'r1' });
-    mockDb.receipt.findMany.mockResolvedValue([{ id: 'r1', imagePath: 'receipts/r1.jpg' }]);
+    mockDb.receipt.findMany.mockResolvedValue([{ id: 'r1' }]);
     mockDb.guestSplit.findMany.mockResolvedValue([]);
     mockDb.$queryRaw.mockResolvedValue([]);
   });
 
-  test("deletes its receipt, and the image file once that's committed", async () => {
+  test('deletes an unreferenced receipt record with its split', async () => {
     const api = await caller(signedIn);
     await expect(api.deleteSplit({ id: 's1' })).resolves.toEqual({ success: true });
 
@@ -4886,13 +4884,9 @@ describe('deleting a split', () => {
     // A group's receipt stays with the group, and so does one an expense was made from
     expect(mockDb.receipt.findMany).toHaveBeenCalledWith({
       where: { id: { in: ['r1'] }, groupId: null, expense: { is: null } },
-      select: { id: true, imagePath: true },
+      select: { id: true },
     });
     expect(mockDb.receipt.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['r1'] } } });
-    expect(removeReceiptFiles).toHaveBeenCalledWith(['receipts/r1.jpg']);
-    expect(removeReceiptFiles.mock.invocationCallOrder[0]!).toBeGreaterThan(
-      mockDb.receipt.deleteMany.mock.invocationCallOrder[0]!,
-    );
   });
 
   test('keeps a receipt another split still shows', async () => {
@@ -4902,7 +4896,6 @@ describe('deleting a split', () => {
 
     expect(mockDb.guestSplit.delete).toHaveBeenCalledWith({ where: { id: 's1' } });
     expect(mockDb.receipt.deleteMany).not.toHaveBeenCalled();
-    expect(removeReceiptFiles).toHaveBeenCalledWith([]);
   });
 
   // Two splits made from one receipt, deleted at the same moment, would each still
@@ -4937,7 +4930,6 @@ describe('deleting a split', () => {
     await expect(api.deleteSplit({ id: 's1' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect(mockDb.guestSplit.delete).not.toHaveBeenCalled();
     expect(mockDb.receipt.deleteMany).not.toHaveBeenCalled();
-    expect(removeReceiptFiles).not.toHaveBeenCalled();
   });
 });
 

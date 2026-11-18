@@ -1298,8 +1298,6 @@ test('mobile admin health and manual receipt cards fit six widths', async ({ pag
         json: {
           receiptCount: 5,
           unusedReceiptCount: 0,
-          unusedReceiptBytes: 0,
-          unusedReceiptBytesFormatted: longValue,
         },
       };
       storageReads++;
@@ -1362,8 +1360,6 @@ test('mobile unused receipt cleanup confirmation cancels without deleting at six
       json: {
         receiptCount: 12,
         unusedReceiptCount: 4,
-        unusedReceiptBytes: 2048,
-        unusedReceiptBytesFormatted: '2 KB',
       },
     };
     await route.fulfill({ response, json: Array.isArray(data) ? entries : entries[0] });
