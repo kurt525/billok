@@ -437,198 +437,156 @@ describe('computeBalances + simplifyDebts integration', () => {
   });
 });
 
-// ── Multi-currency: computeBalances with baseCurrencyAmount ──
+// ── Issue 9.3: RUB-only balance accounting without legacy FX ──
 
-describe('computeBalances with multi-currency (baseCurrencyAmount)', () => {
-  test('uses baseCurrencyAmount for payer credit when set', () => {
-    // Expense: 100 EUR (= 110 USD at 1.1 rate), split between Alice and Bob
+describe('computeBalances: exact RUB kopecks without conversion', () => {
+  test('payer credit and dish shares stay unchanged, including the residual kopeck', () => {
+    const balances = computeBalances(
+      [
+        {
+          paidById: 'payer',
+          amount: 10001,
+          shares: [
+            { userId: 'payer', amount: 3334 },
+            { userId: 'guest1', amount: 3333 },
+            { userId: 'guest2', amount: 3334 },
+          ],
+        },
+      ],
+      [],
+    );
+    expect(balances).toEqual([
+      { userId: 'payer', paid: 10001, owes: 3334, net: 6667 },
+      { userId: 'guest1', paid: 0, owes: 3333, net: -3333 },
+      { userId: 'guest2', paid: 0, owes: 3334, net: -3334 },
+    ]);
+    expect(balances.reduce((sum, person) => sum + person.net, 0)).toBe(0);
+  });
+
+  test('one-kopeck debt remains one kopeck, never rounded away', () => {
+    expect(
+      simplifyDebts(
+        computeBalances(
+          [
+            {
+              paidById: 'payer',
+              amount: 1,
+              shares: [{ userId: 'guest', amount: 1 }],
+            },
+          ],
+          [],
+        ),
+      ),
+    ).toEqual([{ from: 'guest', to: 'payer', amount: 1 }]);
+  });
+
+  test('multiple transfers reduce debt by their exact cumulative kopecks', () => {
+    const expense = {
+      paidById: 'payer',
+      amount: 459,
+      shares: [
+        { userId: 'payer', amount: 125 },
+        { userId: 'guest', amount: 334 },
+      ],
+    };
+    const payments = [
+      { fromId: 'guest', toId: 'payer', amount: 200 },
+      { fromId: 'guest', toId: 'payer', amount: 133 },
+    ];
+    expect(simplifyDebts(computeBalances([expense], payments))).toEqual([{ from: 'guest', to: 'payer', amount: 1 }]);
+    expect(
+      simplifyDebts(computeBalances([expense], [...payments, { fromId: 'guest', toId: 'payer', amount: 1 }])),
+    ).toEqual([]);
+  });
+
+  test('two RUB expenses sum exact shares without re-scaling', () => {
     const balances = computeBalances(
       [
         {
           paidById: 'alice',
-          amount: 10000, // 100 EUR in cents
-          baseCurrencyAmount: 11000, // 110 USD in cents
+          amount: 10001,
           shares: [
-            { userId: 'alice', amount: 5000 },
+            { userId: 'alice', amount: 5001 },
             { userId: 'bob', amount: 5000 },
           ],
         },
-      ],
-      [],
-    );
-
-    const alice = balances.find((b) => b.userId === 'alice')!;
-    const bob = balances.find((b) => b.userId === 'bob')!;
-
-    // Alice paid 110 USD (baseCurrencyAmount), owes 55 USD (scaled from 50 EUR)
-    expect(alice.paid).toBe(11000);
-    expect(alice.owes).toBe(5500);
-    expect(alice.net).toBe(5500);
-
-    // Bob paid 0, owes 55 USD (scaled from 50 EUR)
-    expect(bob.paid).toBe(0);
-    expect(bob.owes).toBe(5500);
-    expect(bob.net).toBe(-5500);
-  });
-
-  test('scales shares proportionally with rounding remainder on last share', () => {
-    // 100 EUR at 1.1 = 110 USD, split 3 ways (33.33 EUR each)
-    // Scaled: 33.33 * 1.1 = 36.67 -> 3667 cents each, but 3667*3 = 11001 != 11000
-    // Last share should get the remainder
-    const balances = computeBalances(
-      [
-        {
-          paidById: 'alice',
-          amount: 10000,
-          baseCurrencyAmount: 11000,
-          shares: [
-            { userId: 'alice', amount: 3334 },
-            { userId: 'bob', amount: 3333 },
-            { userId: 'charlie', amount: 3333 },
-          ],
-        },
-      ],
-      [],
-    );
-
-    // Sum of all owes should equal baseCurrencyAmount
-    const totalOwes = balances.reduce((sum, b) => sum + b.owes, 0);
-    expect(totalOwes).toBe(11000);
-
-    // Net should sum to 0
-    const netSum = balances.reduce((sum, b) => sum + b.net, 0);
-    expect(netSum).toBe(0);
-  });
-
-  test('null baseCurrencyAmount falls back to amount (backwards compatible)', () => {
-    const balances = computeBalances(
-      [
-        {
-          paidById: 'alice',
-          amount: 1000,
-          baseCurrencyAmount: null,
-          shares: [
-            { userId: 'alice', amount: 500 },
-            { userId: 'bob', amount: 500 },
-          ],
-        },
-      ],
-      [],
-    );
-
-    const alice = balances.find((b) => b.userId === 'alice')!;
-    expect(alice.paid).toBe(1000);
-    expect(alice.owes).toBe(500);
-    expect(alice.net).toBe(500);
-  });
-
-  test('undefined baseCurrencyAmount falls back to amount (backwards compatible)', () => {
-    const balances = computeBalances(
-      [
-        {
-          paidById: 'alice',
-          amount: 1000,
-          // baseCurrencyAmount not set at all
-          shares: [
-            { userId: 'alice', amount: 500 },
-            { userId: 'bob', amount: 500 },
-          ],
-        },
-      ],
-      [],
-    );
-
-    const alice = balances.find((b) => b.userId === 'alice')!;
-    expect(alice.paid).toBe(1000);
-    expect(alice.net).toBe(500);
-  });
-
-  test('settlement with baseCurrencyAmount uses converted amount', () => {
-    // Settlement: Bob pays Alice 50 EUR (= 55 USD)
-    const balances = computeBalances(
-      [],
-      [
-        {
-          fromId: 'bob',
-          toId: 'alice',
-          amount: 5000, // 50 EUR
-          baseCurrencyAmount: 5500, // 55 USD
-        },
-      ],
-    );
-
-    const bob = balances.find((b) => b.userId === 'bob')!;
-    const alice = balances.find((b) => b.userId === 'alice')!;
-
-    expect(bob.paid).toBe(5500); // Uses baseCurrencyAmount
-    expect(alice.owes).toBe(5500);
-  });
-
-  test('mixed single-currency and multi-currency expenses', () => {
-    const balances = computeBalances(
-      [
-        // USD expense (no conversion) - $100 split 2 ways
-        {
-          paidById: 'alice',
-          amount: 10000,
-          shares: [
-            { userId: 'alice', amount: 5000 },
-            { userId: 'bob', amount: 5000 },
-          ],
-        },
-        // EUR expense converted to USD - 50 EUR = 55 USD, split 2 ways
         {
           paidById: 'bob',
-          amount: 5000,
-          baseCurrencyAmount: 5500,
+          amount: 501,
           shares: [
-            { userId: 'alice', amount: 2500 },
-            { userId: 'bob', amount: 2500 },
+            { userId: 'alice', amount: 250 },
+            { userId: 'bob', amount: 251 },
           ],
         },
       ],
       [],
     );
-
-    const alice = balances.find((b) => b.userId === 'alice')!;
-    const bob = balances.find((b) => b.userId === 'bob')!;
-
-    // Alice: paid 10000 USD, owes 5000 + 2750 (scaled) = 7750
-    expect(alice.paid).toBe(10000);
-    expect(alice.owes).toBe(7750);
-    expect(alice.net).toBe(2250);
-
-    // Bob: paid 5500 USD (converted), owes 5000 + 2750 (scaled) = 7750
-    expect(bob.paid).toBe(5500);
-    expect(bob.owes).toBe(7750);
-    expect(bob.net).toBe(-2250);
-
-    // Net sums to zero
-    expect(alice.net + bob.net).toBe(0);
+    expect(balances.find((b) => b.userId === 'alice')).toEqual({
+      userId: 'alice',
+      paid: 10001,
+      owes: 5251,
+      net: 4750,
+    });
+    expect(balances.find((b) => b.userId === 'bob')).toEqual({
+      userId: 'bob',
+      paid: 501,
+      owes: 5251,
+      net: -4750,
+    });
   });
 
-  test('baseCurrencyAmount equal to amount does not trigger scaling', () => {
-    // Edge case: baseCurrencyAmount set but equals amount (same currency recorded with explicit rate)
+  test('a RUB transfer moves equal paid and owed amounts without FX', () => {
     const balances = computeBalances(
+      [],
       [
-        {
-          paidById: 'alice',
-          amount: 1000,
-          baseCurrencyAmount: 1000,
-          shares: [
-            { userId: 'alice', amount: 500 },
-            { userId: 'bob', amount: 500 },
-          ],
-        },
+        { fromId: 'sender', toId: 'payer', amount: 1 },
+        { fromId: 'sender', toId: 'payer', amount: 99 },
       ],
+    );
+    expect(balances).toEqual([
+      { userId: 'sender', paid: 100, owes: 0, net: 100 },
+      { userId: 'payer', paid: 0, owes: 100, net: -100 },
+    ]);
+  });
+
+  test('a self-paid one-person receipt yields no external debt', () => {
+    const balances = computeBalances(
+      [{ paidById: 'owner', amount: 1357, shares: [{ userId: 'owner', amount: 1357 }] }],
       [],
     );
+    expect(balances).toEqual([{ userId: 'owner', paid: 1357, owes: 1357, net: 0 }]);
+    expect(simplifyDebts(balances)).toEqual([]);
+  });
 
-    const alice = balances.find((b) => b.userId === 'alice')!;
-    const bob = balances.find((b) => b.userId === 'bob')!;
-
-    expect(alice.paid).toBe(1000);
-    expect(alice.owes).toBe(500);
-    expect(bob.owes).toBe(500);
+  test('total paid equals total owed after multiple RUB receipts and transfers', () => {
+    const receipts = [
+      {
+        paidById: 'a',
+        amount: 777,
+        shares: [
+          { userId: 'a', amount: 1 },
+          { userId: 'b', amount: 222 },
+          { userId: 'c', amount: 554 },
+        ],
+      },
+      {
+        paidById: 'b',
+        amount: 10003,
+        shares: [
+          { userId: 'a', amount: 3001 },
+          { userId: 'b', amount: 3001 },
+          { userId: 'c', amount: 4001 },
+        ],
+      },
+    ];
+    const transfers = [
+      { fromId: 'c', toId: 'a', amount: 333 },
+      { fromId: 'a', toId: 'b', amount: 100 },
+    ];
+    const result = computeBalances(receipts, transfers);
+    expect(result.reduce((sum, b) => sum + b.paid, 0)).toBe(11213);
+    expect(result.reduce((sum, b) => sum + b.owes, 0)).toBe(11213);
+    expect(result.reduce((sum, b) => sum + b.net, 0)).toBe(0);
+    for (const person of result) expect(Number.isInteger(person.net)).toBe(true);
   });
 });

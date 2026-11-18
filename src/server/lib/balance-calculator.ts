@@ -19,8 +19,6 @@ export type SimplifiedDebt = {
 export type Expense = {
   paidById: string;
   amount: number;
-  /** Amount in group currency (cents). When set, used instead of amount for balance math. */
-  baseCurrencyAmount?: number | null;
   shares: { userId: string; amount: number }[];
 };
 
@@ -28,8 +26,6 @@ export type Settlement = {
   fromId: string;
   toId: string;
   amount: number;
-  /** Amount in group currency (cents). When set, used instead of amount for balance math. */
-  baseCurrencyAmount?: number | null;
 };
 
 /**
@@ -94,41 +90,20 @@ export function computeBalances(expenses: Expense[], settlements: Settlement[]):
 
   for (const expense of expenses) {
     const payer = getOrCreate(expense.paidById);
-    const effectiveAmount = expense.baseCurrencyAmount ?? expense.amount;
-    payer.paid += effectiveAmount;
-
-    // If currency was converted, scale each share proportionally
-    if (expense.baseCurrencyAmount != null && expense.baseCurrencyAmount !== expense.amount) {
-      const ratio = expense.baseCurrencyAmount / expense.amount;
-      let distributed = 0;
-      const sortedShares = [...expense.shares].sort((a, b) => a.userId.localeCompare(b.userId));
-      const scaledShares = sortedShares.map((share, i) => {
-        if (i === sortedShares.length - 1) {
-          // Last share gets the remainder to avoid rounding drift
-          return { userId: share.userId, amount: effectiveAmount - distributed };
-        }
-        const scaled = Math.round(share.amount * ratio);
-        distributed += scaled;
-        return { userId: share.userId, amount: scaled };
-      });
-      for (const share of scaledShares) {
-        const member = getOrCreate(share.userId);
-        member.owes += share.amount;
-      }
-    } else {
-      for (const share of expense.shares) {
-        const member = getOrCreate(share.userId);
-        member.owes += share.amount;
-      }
+    // Amounts and individual shares are already fixed integer RUB kopecks.
+    // Never multiply or re-round settled receipt shares via a legacy FX rate.
+    payer.paid += expense.amount;
+    for (const share of expense.shares) {
+      const member = getOrCreate(share.userId);
+      member.owes += share.amount;
     }
   }
 
   for (const settlement of settlements) {
     const from = getOrCreate(settlement.fromId);
     const to = getOrCreate(settlement.toId);
-    const effectiveAmount = settlement.baseCurrencyAmount ?? settlement.amount;
-    from.paid += effectiveAmount;
-    to.owes += effectiveAmount;
+    from.paid += settlement.amount;
+    to.owes += settlement.amount;
   }
 
   for (const b of balanceMap.values()) {

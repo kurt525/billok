@@ -23,12 +23,11 @@ export const balancesRouter = createTRPCRouter({
           select: {
             paidById: true,
             amount: true,
-            baseCurrencyAmount: true,
             shares: { select: { userId: true, amount: true } },
           },
         },
         settlements: {
-          select: { fromId: true, toId: true, amount: true, baseCurrencyAmount: true },
+          select: { fromId: true, toId: true, amount: true },
         },
         members: {
           select: { user: { select: { id: true, name: true } } },
@@ -113,12 +112,11 @@ export const balancesRouter = createTRPCRouter({
           select: {
             paidById: true,
             amount: true,
-            baseCurrencyAmount: true,
             shares: { select: { userId: true, amount: true } },
           },
         },
         settlements: {
-          select: { fromId: true, toId: true, amount: true, baseCurrencyAmount: true },
+          select: { fromId: true, toId: true, amount: true },
         },
       },
     });

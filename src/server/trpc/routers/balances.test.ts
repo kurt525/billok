@@ -20,7 +20,7 @@ async function caller() {
   return balancesRouter.createCaller(ctx as unknown as Parameters<typeof balancesRouter.createCaller>[0]);
 }
 
-// Bob owes me $5.00 in an archived group (an archived group can still hold a
+// Bob owes me 5.00 RUB in an archived group (an archived group can still hold a
 // balance: archived earlier, or a write racing the archive), and Carol owes me
 // $3.00 in an active one.
 const group = (
@@ -33,13 +33,13 @@ const group = (
   id,
   name,
   emoji: '💰',
-  currency: 'USD',
+  currency: 'RUB',
   archivedAt,
   expenses: [
     {
       paidById: 'me',
       amount: amount * 2,
-      baseCurrencyAmount: null,
+
       shares: [
         { userId: 'me', amount },
         { userId: debtor.id, amount },
@@ -82,8 +82,8 @@ describe('dashboard balances include archived groups', () => {
     expect(totalOwed).toBe(800);
     // Flagged so the dashboard can show the archived one, which its group list leaves out
     expect(perGroup).toEqual([
-      { groupId: 'g2', groupName: 'Flat', emoji: '💰', currency: 'USD', balance: 300, archived: false },
-      { groupId: 'g1', groupName: 'Old trip', emoji: '💰', currency: 'USD', balance: 500, archived: true },
+      { groupId: 'g2', groupName: 'Flat', emoji: '💰', currency: 'RUB', balance: 300, archived: false },
+      { groupId: 'g1', groupName: 'Old trip', emoji: '💰', currency: 'RUB', balance: 500, archived: true },
     ]);
   });
 });

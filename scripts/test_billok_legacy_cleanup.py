@@ -75,6 +75,24 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         ):
             self.assertIn(scenario, checks)
 
+    def test_rub_balance_paths_do_not_reintroduce_foreign_exchange(self):
+        # 9.3 removes runtime FX; Prisma columns are handled only in 9.4.
+        for path in (
+            "src/server/lib/balance-calculator.ts",
+            "src/server/lib/group-balances.ts",
+            "src/server/trpc/routers/balances.ts",
+            "src/components/groups/payments-list.tsx",
+        ):
+            self.assertNotIn("baseCurrencyAmount", source(path), path)
+        code = source("src/server/lib/balance-calculator.ts")
+        self.assertIn("payer.paid += expense.amount", code)
+        self.assertIn("member.owes += share.amount", code)
+        self.assertIn("from.paid += settlement.amount", code)
+        self.assertIn("to.owes += settlement.amount", code)
+        tests = source("src/server/lib/balance-calculator.test.ts")
+        self.assertIn("one-kopeck debt remains one kopeck", tests)
+        self.assertIn("multiple transfers reduce debt by their exact cumulative kopecks", tests)
+
     def test_package_metadata_and_lock_brand_match(self):
         pkg = json.loads(source("package.json"))
         lock = json.loads(source("package-lock.json"))

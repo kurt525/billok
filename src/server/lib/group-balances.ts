@@ -14,13 +14,12 @@ export async function loadGroupBalances(db: Prisma.TransactionClient, groupId: s
       select: {
         paidById: true,
         amount: true,
-        baseCurrencyAmount: true,
         shares: { select: { userId: true, amount: true } },
       },
     }),
     db.settlement.findMany({
       where: { groupId },
-      select: { fromId: true, toId: true, amount: true, baseCurrencyAmount: true },
+      select: { fromId: true, toId: true, amount: true },
     }),
   ]);
   return computeBalances(expenses, settlements);

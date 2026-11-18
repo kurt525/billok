@@ -71,8 +71,8 @@ export function PaymentsList({
         {items.map((p, index) => {
           const from = p.from.name ?? p.from.email ?? t('detail.unknown');
           const to = p.to.name ?? p.to.email ?? t('detail.unknown');
-          // Same rule as the expense list: a payment in the group's currency has no base amount
-          const amount = formatCents(p.amount, p.baseCurrencyAmount != null ? p.currency : groupCurrency, locale);
+          // Settlements are recorded directly in RUB kopecks; no legacy FX conversion.
+          const amount = formatCents(p.amount, groupCurrency, locale);
           const date = new Date(p.settledAt).toLocaleDateString(locale);
           const canDelete = !archived && (isOwnerOrAdmin || p.fromId === currentUserId);
           return (
