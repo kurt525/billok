@@ -754,6 +754,7 @@ export function ItemAssignment({
                         size="sm"
                         className="min-h-11"
                         onClick={() => saveEdit(item.id)}
+                        data-testid={'item-edit-save-' + item.id}
                         disabled={updateItem.isPending}
                       >
                         {t('save')}

@@ -76,7 +76,8 @@ test('group receipt: add, edit, cancel, split, assign, save, delete and finalize
   await bun.locator('input').nth(0).fill('Булочка большая');
   await bun.locator('input').nth(1).fill('3');
   await bun.locator('input').nth(2).fill('18,90');
-  await bun.getByRole('button', { name: 'Сохранить' }).click();
+  // The original-portions editor has a second "Сохранить"; target the item edit action only.
+  await bun.locator('[data-testid^="item-edit-save-"]').click();
   const updated = item(page, 'Булочка большая');
   await expect(updated).toHaveCount(1);
   await expect(updated).toContainText('x3');
