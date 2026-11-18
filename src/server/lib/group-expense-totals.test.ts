@@ -44,6 +44,8 @@ describe('admin group totals without legacy FX conversion', () => {
 
   it('returns zero for an empty group or empty aggregation', () => {
     expect(totalsInGroupCurrency([{ id: 'empty', currency: 'RUB' }], []).get('empty')).toBe(0);
-    expect(totalsInGroupCurrency([{ id: 'empty', currency: 'RUB' }], [aggregate('empty', 'RUB', null)]).get('empty')).toBe(0);
+    expect(
+      totalsInGroupCurrency([{ id: 'empty', currency: 'RUB' }], [aggregate('empty', 'RUB', null)]).get('empty'),
+    ).toBe(0);
   });
 });
