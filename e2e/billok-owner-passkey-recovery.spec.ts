@@ -192,17 +192,29 @@ test('owner mobile Passkey lifecycle: signed rename, revoke, email reset, add 2/
       for (const width of widths) {
         await page.setViewportSize({ width, height: 410 });
         await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
-        for (const element of [
-          page.getByTestId('owner-users-page'),
-          page.getByTestId('owner-users-search'),
-          page.getByTestId('owner-users-sort'),
-          targetCard,
-        ]) {
-          await element.scrollIntoViewIfNeeded();
-          const rect = await element.boundingBox();
-          if (!rect) throw new Error('Missing owner users control at ' + width);
-          expect(rect.x, 'left overflow: ' + width).toBeGreaterThanOrEqual(-1);
-          expect(rect.x + rect.width, 'right overflow: ' + width).toBeLessThanOrEqual(width + 1);
+        // React can refresh the results list between Playwright's stability
+        // wait and scrollIntoViewIfNeeded(). Resolve the locator afresh and
+        // scroll+measure the SAME attached DOM node in one synchronous eval.
+        // Retry only transient DOM replacement; never skip overflow assertions.
+        for (const [control, element] of [
+          ['owner-users-page', page.getByTestId('owner-users-page')],
+          ['owner-users-search', page.getByTestId('owner-users-search')],
+          ['owner-users-sort', page.getByTestId('owner-users-sort')],
+          ['owner-user-target', targetCard],
+        ] as const) {
+          await expect(async () => {
+            const rect = await element.evaluate((node) => {
+              if (!node.isConnected) throw new Error('Owner control was replaced during layout inspection');
+              node.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+              const box = node.getBoundingClientRect();
+              return { x: box.x, width: box.width };
+            });
+            expect(rect.width, 'invisible control ' + control + ' at ' + width).toBeGreaterThan(0);
+            expect(rect.x, 'left overflow for ' + control + ' at ' + width).toBeGreaterThanOrEqual(-1);
+            expect(rect.x + rect.width, 'right overflow for ' + control + ' at ' + width).toBeLessThanOrEqual(
+              width + 1,
+            );
+          }).toPass({ timeout: 10_000, intervals: [100, 250, 500] });
         }
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
       }
