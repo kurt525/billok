@@ -543,6 +543,21 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
 
 
 
+    def test_dashboard_uses_only_rubles_without_legacy_mixed_currency_branch(self):
+        dashboard = source("src/app/[locale]/(app)/dashboard/page.tsx")
+        messages = json.loads(source("messages/ru/dashboard.json"))
+        for removed in ("hasMixedCurrencies", "groupCurrencies", "aggregateCurrency",
+                        "mixedCurrencies", "mixedCurrenciesDebts", "balance.currency", "g.currency"):
+            self.assertNotIn(removed, dashboard)
+        self.assertNotIn("mixedCurrencies", messages)
+        self.assertNotIn("mixedCurrenciesDebts", messages)
+        self.assertEqual(dashboard.count("formatCents("), 6)
+        self.assertEqual(dashboard.count("'RUB', locale)"), 6)
+        self.assertIn("overallDebts.data?.owedToYou.map", dashboard)
+        self.assertIn("overallDebts.data?.youOwe.map", dashboard)
+        self.assertIn("dashboard.data.totalOwed", dashboard)
+        self.assertIn("dashboard.data.totalOwing", dashboard)
+
     def test_sharetab_demo_and_unused_ocr_fixtures_absent(self):
         self.assertFalse((ROOT / "e2e/generate-receipt-images.mjs").exists())
         self.assertFalse(any((ROOT / "demo").glob("*.gif")))
