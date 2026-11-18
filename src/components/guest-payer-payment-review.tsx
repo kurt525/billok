@@ -32,6 +32,7 @@ type PaymentRow = {
   verifiedAt: string | null;
   verifiedByPersonId: string | null;
   memberIds?: string[];
+  receivedTransfers?: { id: string; amountCents: number; confirmedAt: string; cancelledAt?: string }[];
   members?: { personId: string; personIndex: number; amountCents: number; tipCents: number }[];
 };
 
@@ -54,6 +55,7 @@ export function GuestPayerPaymentReview({
   const read = trpc.guest.getMyPayerPaymentReview.useMutation();
   const verify = trpc.guest.confirmGuestPaymentReceived.useMutation();
   const record = trpc.guest.recordGuestPaymentReceived.useMutation();
+  const cancelActual = trpc.guest.cancelGuestReceivedTransfer.useMutation();
   const cancelVerified = trpc.guest.cancelGuestPaymentReceived.useMutation();
   const [payments, setPayments] = useState<PaymentRow[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -309,6 +311,56 @@ export function GuestPayerPaymentReview({
     }
   }
 
+  async function cancelActualReceipt(debtorId: string, transferId: string) {
+    if (
+      verifyingId ||
+      writeInFlight.current ||
+      !payments?.some(
+        (payment) =>
+          payment.personId === debtorId &&
+          payment.receivedTransfers?.some((transfer) => transfer.id === transferId && !transfer.cancelledAt),
+      ) ||
+      !window.confirm(t('payerActualCancelConfirm'))
+    )
+      return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
+    setVerifyingId(debtorId);
+    try {
+      const result = await cancelActual.mutateAsync({ token, personId, personToken, debtorId, transferId });
+      const updated =
+        latestPayments.current?.map((payment) =>
+          payment.personId === debtorId
+            ? {
+                ...payment,
+                verifiedAt: result.verifiedAt,
+                verifiedByPersonId: result.verifiedAt ? payment.verifiedByPersonId : null,
+                receivedCents: result.receivedCents,
+                outstandingCents: result.outstandingCents,
+                extraTipCents: result.extraTipCents,
+                refundDueCents: result.refundDueCents,
+                ...(payment.receivedTransfers
+                  ? {
+                      receivedTransfers: payment.receivedTransfers.map((transfer) =>
+                        transfer.id === transferId ? { ...transfer, cancelledAt: result.cancelledAt } : transfer,
+                      ),
+                    }
+                  : {}),
+              }
+            : payment,
+        ) ?? null;
+      latestPayments.current = updated;
+      setPayments(updated);
+      toast.success(t('payerActualCancelSuccess'));
+    } catch {
+      toast.error(t('payerActualCancelFailed'));
+    } finally {
+      writeInFlight.current = false;
+      setVerifyingId(null);
+      refreshCurrent.current();
+    }
+  }
+
   async function cancelReceipt(debtorId: string) {
     if (
       verifyingId ||
@@ -525,6 +577,44 @@ export function GuestPayerPaymentReview({
                               ? t('payerPaymentDeclared')
                               : t('payerPaymentNotDeclared')}
                       </p>
+                      {!!payment.receivedTransfers?.length && (
+                        <section
+                          className="min-w-0 space-y-2 rounded-md border p-2"
+                          data-testid={'payer-received-transfers-' + payment.personId}
+                        >
+                          <h4 className="text-xs font-medium">{t('payerActualTransferHistory')}</h4>
+                          {payment.receivedTransfers.map((transfer) => (
+                            <div
+                              key={transfer.id}
+                              className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t pt-2 text-xs"
+                            >
+                              <span className="min-w-0 break-words tabular-nums">
+                                {formatCents(transfer.amountCents, 'RUB', locale)}
+                                {' · '}
+                                <time dateTime={transfer.confirmedAt}>
+                                  {new Date(transfer.confirmedAt).toLocaleString('ru-RU')}
+                                </time>
+                              </span>
+                              {transfer.cancelledAt ? (
+                                <span className="text-muted-foreground">{t('payerActualTransferCancelled')}</span>
+                              ) : (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="min-h-11 whitespace-normal"
+                                  disabled={verifyingId !== null}
+                                  onClick={() => {
+                                    void cancelActualReceipt(payment.personId, transfer.id);
+                                  }}
+                                  data-testid={'payer-actual-cancel-' + transfer.id}
+                                >
+                                  {t('payerActualTransferCancel')}
+                                </Button>
+                              )}
+                            </div>
+                          ))}
+                        </section>
+                      )}
                       {payment.verifiedAt && (
                         <>
                           <Button
@@ -548,18 +638,20 @@ export function GuestPayerPaymentReview({
                               at: new Date(payment.verifiedAt).toLocaleString('ru-RU'),
                             })}
                           </p>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="min-h-11 w-full min-w-0 whitespace-normal border-amber-600 text-center text-amber-800 [overflow-wrap:anywhere] dark:border-amber-500 dark:text-amber-300"
-                            disabled={verifyingId !== null}
-                            onClick={() => {
-                              void cancelReceipt(payment.personId);
-                            }}
-                            data-testid={'guest-payer-cancel-' + payment.personId}
-                          >
-                            {t('payerPaymentCancelAction')}
-                          </Button>
+                          {!payment.receivedTransfers?.length && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="min-h-11 w-full min-w-0 whitespace-normal border-amber-600 text-center text-amber-800 [overflow-wrap:anywhere] dark:border-amber-500 dark:text-amber-300"
+                              disabled={verifyingId !== null}
+                              onClick={() => {
+                                void cancelReceipt(payment.personId);
+                              }}
+                              data-testid={'guest-payer-cancel-' + payment.personId}
+                            >
+                              {t('payerPaymentCancelAction')}
+                            </Button>
+                          )}
                         </>
                       )}
                       {!payment.verifiedAt && (

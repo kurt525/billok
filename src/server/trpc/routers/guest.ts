@@ -3328,6 +3328,18 @@ export const guestRouter = createTRPCRouter({
                   verifiedByPersonId: representative.paymentVerifiedAt
                     ? (representative.paymentVerifiedByPersonId ?? null)
                     : null,
+                  ...(representative.paymentReceivedTransfers?.length
+                    ? {
+                        receivedTransfers: representative.paymentReceivedTransfers.map(
+                          ({ id, amountCents, confirmedAt, cancelledAt }) => ({
+                            id,
+                            amountCents,
+                            confirmedAt,
+                            ...(cancelledAt ? { cancelledAt } : {}),
+                          }),
+                        ),
+                      }
+                    : {}),
                   ...(group.grouped ? { memberIds: group.memberIds, members: group.members } : {}),
                 };
               })
@@ -3344,6 +3356,18 @@ export const guestRouter = createTRPCRouter({
                   ...(person.paymentUnmarkedAt ? { unmarkedAt: person.paymentUnmarkedAt } : {}),
                   verifiedAt: person.paymentVerifiedAt ?? null,
                   verifiedByPersonId: person.paymentVerifiedAt ? (person.paymentVerifiedByPersonId ?? null) : null,
+                  ...(person.paymentReceivedTransfers?.length
+                    ? {
+                        receivedTransfers: person.paymentReceivedTransfers.map(
+                          ({ id, amountCents, confirmedAt, cancelledAt }) => ({
+                            id,
+                            amountCents,
+                            confirmedAt,
+                            ...(cancelledAt ? { cancelledAt } : {}),
+                          }),
+                        ),
+                      }
+                    : {}),
                 };
               }),
       };
@@ -3467,6 +3491,127 @@ export const guestRouter = createTRPCRouter({
           );
         } catch {
           // A push outage cannot undo a recorded incoming bank transfer.
+        }
+      }
+      const { delivery: _delivery, ...response } = outcome;
+      void _delivery;
+      return response;
+    }),
+
+  // 5.22.4: void ONE erroneous payer-attested transfer without erasing the
+  // other deposits. Keep the original record and the payer identity for audit.
+  cancelGuestReceivedTransfer: publicProcedure
+    .input(
+      z.strictObject({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: guestLinkSecretSchema,
+        debtorId: personIdSchema,
+        transferId: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-payment-verify', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const outcome = await guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const { people, summary, paymentGroups } = requireGuestPayerReview(split, input.personId, input.personToken);
+        const debtorIndex = people.findIndex((person) => person.id === input.debtorId);
+        const validGroup = paymentGroups?.find(
+          (group) => group.representativeId === input.debtorId && group.totalCents > 0,
+        );
+        const entry = summary.find((row) => row.personIndex === debtorIndex && row.total > 0);
+        if (debtorIndex < 0 || debtorIndex === split.paidByIndex || (paymentGroups ? !validGroup : !entry)) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        const debtor = people[debtorIndex]!;
+        const transfers = debtor.paymentReceivedTransfers ?? [];
+        const target = transfers.find((record) => record.id === input.transferId);
+        if (!target) throw new AppError('NOT_FOUND', 'paymentNotDeclared');
+        const expectedCents = validGroup?.totalCents ?? entry!.total;
+        const declaredTipCents = validGroup?.tipCents ?? entry!.tip;
+        if (target.cancelledAt) {
+          return {
+            ...payerActualReceiptSnapshot(debtor, expectedCents, declaredTipCents),
+            verifiedAt: debtor.paymentVerifiedAt ?? null,
+            cancelledAt: target.cancelledAt,
+            delivery: null,
+          };
+        }
+        if (target.confirmedByPersonId !== input.personId) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        const cancelledAt = new Date().toISOString();
+        const corrected = transfers.map((record) =>
+          record.id === input.transferId ? { ...record, cancelledAt, cancelledByPersonId: input.personId } : record,
+        );
+        const totals = reconcileActualReceiptTransfers(
+          expectedCents,
+          declaredTipCents,
+          corrected,
+          debtor.paymentOverpaymentChoice ?? null,
+        );
+        const lostFullConfirmation = !!debtor.paymentVerifiedAt && totals.outstandingCents > 0;
+        const receiptName = (split.receiptData as { merchantName?: unknown }).merchantName;
+        const cancellationEvent = lostFullConfirmation
+          ? {
+              id: randomUUID(),
+              payerPersonId: input.personId,
+              payerName: people[split.paidByIndex]!.name,
+              amountCents: expectedCents,
+              receiptName: typeof receiptName === 'string' && receiptName.trim() ? receiptName.trim() : 'Чек',
+              cancelledAt,
+            }
+          : null;
+        const updated = people.map((person, index) => {
+          if (index !== debtorIndex) return person;
+          const next = {
+            ...person,
+            paymentReceivedTransfers: corrected,
+            ...(cancellationEvent
+              ? {
+                  paymentReceiptCancellationNotifications: [
+                    ...(person.paymentReceiptCancellationNotifications ?? []),
+                    cancellationEvent,
+                  ].slice(-20),
+                }
+              : {}),
+          };
+          if (lostFullConfirmation) {
+            delete next.paymentVerifiedAt;
+            delete next.paymentVerifiedByPersonId;
+          }
+          return next;
+        });
+        await tx.guestSplit.update({
+          where: { id: split.id },
+          data: { people: updated as unknown as Prisma.InputJsonValue },
+        });
+        return {
+          ...totals,
+          verifiedAt: lostFullConfirmation ? null : (debtor.paymentVerifiedAt ?? null),
+          cancelledAt,
+          delivery: cancellationEvent
+            ? {
+                subscriptions: activeGuestPushSubscriptions(debtor.guestPushSubscriptions, debtor.personToken ?? ''),
+                notificationId: cancellationEvent.id,
+              }
+            : null,
+        };
+      });
+      if (outcome.delivery) {
+        try {
+          await sendGuestReceiptPush(
+            outcome.delivery.subscriptions,
+            '/split/' + encodeURIComponent(input.token) + '/claim',
+            outcome.delivery.notificationId,
+            'cancelled',
+          );
+        } catch {
+          // The saved addressed cancellation remains available without push.
         }
       }
       const { delivery: _delivery, ...response } = outcome;

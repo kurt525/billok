@@ -9,6 +9,7 @@ export type ActualReceiptTransfer = {
   confirmedAt: string;
   confirmedByPersonId: string;
   cancelledAt?: string;
+  cancelledByPersonId?: string;
 };
 
 export type ActualReceiptReconciliation = {

@@ -5864,6 +5864,131 @@ describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () =
     mockDb.guestSplit.update.mockResolvedValue({ id: base.id });
   });
 
+  test('5.22.4: payer cancels only the mistaken partial transfer; history and other debts stay intact', async () => {
+    const transferId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const confirmedAt = '2026-11-18T06:20:00.000Z';
+    const transfer = { id: transferId, amountCents: 200, confirmedAt, confirmedByPersonId: payerId };
+    const split = {
+      ...base,
+      people: [{ ...base.people[0], paymentReceivedTransfers: [transfer] }, ...base.people.slice(1)],
+    };
+    mockDb.guestSplit.findUnique.mockResolvedValue(split);
+    const api = await caller();
+    const args = { ...payerAuth, debtorId, transferId };
+    const result = await api.cancelGuestReceivedTransfer(args);
+    expect(result).toMatchObject({
+      expectedCents: 459,
+      declaredTipCents: 125,
+      receivedCents: 0,
+      outstandingCents: 459,
+      extraTipCents: 0,
+      verifiedAt: null,
+      cancelledAt: expect.any(String),
+    });
+    const saved = mockDb.guestSplit.update.mock.calls[0]![0].data;
+    expect(saved.people[0].paymentReceivedTransfers).toEqual([
+      { ...transfer, cancelledAt: result.cancelledAt, cancelledByPersonId: payerId },
+    ]);
+    expect(saved.people[1]).toEqual(base.people[1]);
+    expect(saved.people[2]).toEqual(base.people[2]);
+    expect(saved).not.toHaveProperty('summary');
+    expect(saved).not.toHaveProperty('receiptData');
+
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...split, people: saved.people });
+    mockDb.guestSplit.update.mockClear();
+    await expect(api.cancelGuestReceivedTransfer(args)).resolves.toMatchObject({
+      cancelledAt: result.cancelledAt,
+      receivedCents: 0,
+      outstandingCents: 459,
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    await expect(api.getMyPayerPaymentReview(payerAuth)).resolves.toMatchObject({
+      payments: [
+        {
+          personId: debtorId,
+          receivedTransfers: [expect.objectContaining({ id: transferId, cancelledAt: result.cancelledAt })],
+        },
+        { personId: anotherId, amount: 408 },
+      ],
+    });
+  });
+
+  test('5.22.4: cancelling one of two verified transfers revokes full-payment status and preserves the other', async () => {
+    const first = {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      amountCents: 200,
+      confirmedAt: marked,
+      confirmedByPersonId: payerId,
+    };
+    const second = {
+      id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      amountCents: 259,
+      confirmedAt: marked,
+      confirmedByPersonId: payerId,
+    };
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...base,
+      people: [
+        {
+          ...base.people[0],
+          paymentReceivedTransfers: [first, second],
+          paymentVerifiedAt: marked,
+          paymentVerifiedByPersonId: payerId,
+        },
+        ...base.people.slice(1),
+      ],
+    });
+    const api = await caller();
+    const result = await api.cancelGuestReceivedTransfer({ ...payerAuth, debtorId, transferId: first.id });
+    expect(result).toMatchObject({ receivedCents: 259, outstandingCents: 200, verifiedAt: null, extraTipCents: 0 });
+    const people = mockDb.guestSplit.update.mock.calls[0]![0].data.people;
+    expect(people[0].paymentReceivedTransfers[0]).toMatchObject({
+      id: first.id,
+      cancelledAt: expect.any(String),
+      cancelledByPersonId: payerId,
+    });
+    expect(people[0].paymentReceivedTransfers[1]).toEqual(second);
+    expect(people[0].paymentVerifiedAt).toBeUndefined();
+    expect(people[0].paymentVerifiedByPersonId).toBeUndefined();
+    expect(people[0].paymentReceiptCancellationNotifications).toEqual([
+      expect.objectContaining({ payerPersonId: payerId, amountCents: 459, cancelledAt: result.cancelledAt }),
+    ]);
+    expect(people[1]).toEqual(base.people[1]);
+    expect(people[2]).toEqual(base.people[2]);
+  });
+
+  test('5.22.4: only the actual payer may correct a transfer; unknown and foreign IDs are rejected', async () => {
+    const transferId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...base,
+      people: [
+        {
+          ...base.people[0],
+          paymentReceivedTransfers: [
+            { id: transferId, amountCents: 200, confirmedAt: marked, confirmedByPersonId: payerId },
+          ],
+        },
+        ...base.people.slice(1),
+      ],
+    });
+    const api = await caller(signedIn);
+    const args = { ...payerAuth, debtorId, transferId };
+    for (const invalid of [
+      { ...args, personToken: debtorToken },
+      { ...args, personId: debtorId, personToken: debtorToken },
+      { ...args, debtorId: payerId },
+    ]) {
+      await expect(api.cancelGuestReceivedTransfer(invalid)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    await expect(
+      api.cancelGuestReceivedTransfer({ ...args, transferId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(api.cancelGuestReceivedTransfer({ ...args, transferId: 'not-a-uuid' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
   test('payer sees declared and undeclared balances but never sees their own debt as a transfer', async () => {
     const api = await caller();
     await expect(api.getMyPayerPaymentReview(payerAuth)).resolves.toEqual({
@@ -6708,6 +6833,46 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
   beforeEach(() => {
     mockDb.guestSplit.findUnique.mockImplementation(async () => structuredClone(start()));
     mockDb.guestSplit.update.mockResolvedValue({ id: 'family-split-1' });
+  });
+
+  test('5.22.4: only the receipt payer can void one group transfer; individual dish shares stay untouched', async () => {
+    const transferId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const original = start();
+    const transfer = {
+      id: transferId,
+      amountCents: 500,
+      confirmedAt: '2026-11-18T06:40:00.000Z',
+      confirmedByPersonId: payerId,
+    };
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...original,
+      people: original.people.map((person, index) =>
+        index === 1 ? { ...person, paymentReceivedTransfers: [transfer] } : person,
+      ),
+    });
+    const api = await caller();
+    await expect(api.cancelGuestReceivedTransfer({ ...wifeAuth, debtorId: wifeId, transferId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      api.cancelGuestReceivedTransfer({ ...husbandAuth, debtorId: wifeId, transferId }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const result = await api.cancelGuestReceivedTransfer({ ...payerAuth, debtorId: wifeId, transferId });
+    expect(result).toMatchObject({
+      expectedCents: 951,
+      declaredTipCents: 50,
+      receivedCents: 0,
+      outstandingCents: 951,
+      extraTipCents: 0,
+    });
+    const saved = mockDb.guestSplit.update.mock.calls[0]![0].data;
+    expect(saved).not.toHaveProperty('summary');
+    expect(saved.people[1].paymentReceivedTransfers).toEqual([
+      { ...transfer, cancelledAt: result.cancelledAt, cancelledByPersonId: payerId },
+    ]);
+    expect(saved.people[2]).toEqual(original.people[2]);
+    expect(saved.people[3]).toEqual(original.people[3]);
+    expect(saved.people[4]).toEqual(original.people[4]);
   });
 
   test('payer sees ONE 951-kopeck family transfer, 200-kopeck solo debt and no duplicated debt', async () => {
