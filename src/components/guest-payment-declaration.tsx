@@ -55,6 +55,12 @@ export function GuestPaymentDeclaration({
   const [declaredAt, setDeclaredAt] = useState<string | null>(null);
   const [declaredAmountCents, setDeclaredAmountCents] = useState<number | null>(null);
   const [verifiedAt, setVerifiedAt] = useState<string | null>(null);
+  const [actualReceipt, setActualReceipt] = useState<{
+    receivedCents: number;
+    outstandingCents: number;
+    extraTipCents: number;
+    refundDueCents: number;
+  } | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const lastVerified = useRef<string | null | undefined>(undefined);
@@ -133,6 +139,7 @@ export function GuestPaymentDeclaration({
           setDeclaredAt(data.declaredPaidAt);
           setDeclaredAmountCents(data.declaredAmountCents);
           setVerifiedAt(data.verifiedAt);
+          setActualReceipt(data.actualReceipt ?? null);
           setReceiptNotification(data.notification ?? null);
           setCancellationNotifications(data.cancellationNotifications ?? []);
           setLoaded(true);
@@ -436,6 +443,32 @@ export function GuestPaymentDeclaration({
         </section>
       )}
       {canDeclare && <GuestWebPushControls token={token} personId={personId} personToken={personToken} />}
+      {actualReceipt && actualReceipt.receivedCents > 0 && (
+        <dl className="min-w-0 space-y-1 rounded-md border p-3 text-xs" data-testid="guest-actual-receipt-status">
+          <div className="flex flex-wrap justify-between gap-2">
+            <dt>{t('payerActuallyReceived')}</dt>
+            <dd className="tabular-nums">{formatCents(actualReceipt.receivedCents, 'RUB', locale)}</dd>
+          </div>
+          {actualReceipt.outstandingCents > 0 && (
+            <div className="flex flex-wrap justify-between gap-2">
+              <dt>{t('payerStillOwed')}</dt>
+              <dd className="tabular-nums">{formatCents(actualReceipt.outstandingCents, 'RUB', locale)}</dd>
+            </div>
+          )}
+          {actualReceipt.extraTipCents > 0 && (
+            <div className="flex flex-wrap justify-between gap-2">
+              <dt>{t('payerAdditionalTips')}</dt>
+              <dd className="tabular-nums">{formatCents(actualReceipt.extraTipCents, 'RUB', locale)}</dd>
+            </div>
+          )}
+          {actualReceipt.refundDueCents > 0 && (
+            <div className="flex flex-wrap justify-between gap-2">
+              <dt>{t('payerRefundDue')}</dt>
+              <dd className="tabular-nums">{formatCents(actualReceipt.refundDueCents, 'RUB', locale)}</dd>
+            </div>
+          )}
+        </dl>
+      )}
       {verifiedAt ? (
         <>
           <p className="text-sm font-semibold text-green-700 dark:text-green-400" data-testid="guest-payment-verified">

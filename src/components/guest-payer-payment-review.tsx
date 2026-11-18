@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { formatCents } from '@/lib/money';
+import { parseExactReceivedRub, type ReceiptOverpaymentChoice } from '@/lib/actual-receipt-payments';
 import { groupGuestPayerPayments, type GuestPayerPaymentGroup } from '@/lib/guest-payer-payment-groups';
 import { summarizeGuestPayerPaymentGroups } from '@/lib/guest-payer-payment-summary';
 import {
@@ -20,6 +21,12 @@ type PaymentRow = {
   personId: string;
   name: string;
   amount: number;
+  foodCents: number;
+  declaredTipCents: number;
+  receivedCents: number;
+  outstandingCents: number;
+  extraTipCents: number;
+  refundDueCents: number;
   declaredPaidAt: string | null;
   unmarkedAt?: string;
   verifiedAt: string | null;
@@ -46,10 +53,13 @@ export function GuestPayerPaymentReview({
   const locale = useLocale();
   const read = trpc.guest.getMyPayerPaymentReview.useMutation();
   const verify = trpc.guest.confirmGuestPaymentReceived.useMutation();
+  const record = trpc.guest.recordGuestPaymentReceived.useMutation();
   const cancelVerified = trpc.guest.cancelGuestPaymentReceived.useMutation();
   const [payments, setPayments] = useState<PaymentRow[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const [receiptDrafts, setReceiptDrafts] = useState<Record<string, string>>({});
+  const [overpaymentChoices, setOverpaymentChoices] = useState<Record<string, ReceiptOverpaymentChoice | ''>>({});
   const latestPayments = useRef<PaymentRow[] | null>(null);
   const latestRead = useRef(0);
   const writeInFlight = useRef(false);
@@ -251,6 +261,54 @@ export function GuestPayerPaymentReview({
     }
   }
 
+  async function recordReceipt(debtorId: string) {
+    const payment = payments?.find((row) => row.personId === debtorId && !row.verifiedAt);
+    if (!payment || verifyingId || writeInFlight.current) return;
+    const receivedAmountCents = parseExactReceivedRub(receiptDrafts[debtorId] ?? '');
+    if (receivedAmountCents === null) return;
+    const extra = Math.max(0, payment.receivedCents + receivedAmountCents - payment.amount);
+    const choice = overpaymentChoices[debtorId];
+    if (extra > 0 && !choice) return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
+    setVerifyingId(debtorId);
+    try {
+      const result = await record.mutateAsync({
+        token,
+        personId,
+        personToken,
+        debtorId,
+        receivedAmountCents,
+        requestId: window.crypto.randomUUID(),
+        ...(extra > 0 ? { overpaymentChoice: choice as ReceiptOverpaymentChoice } : {}),
+      });
+      const updated =
+        latestPayments.current?.map((entry) =>
+          entry.personId === debtorId
+            ? {
+                ...entry,
+                verifiedAt: result.verifiedAt,
+                receivedCents: result.receivedCents,
+                outstandingCents: result.outstandingCents,
+                extraTipCents: result.extraTipCents,
+                refundDueCents: result.refundDueCents,
+              }
+            : entry,
+        ) ?? null;
+      latestPayments.current = updated;
+      setPayments(updated);
+      setReceiptDrafts((values) => ({ ...values, [debtorId]: '' }));
+      setOverpaymentChoices((values) => ({ ...values, [debtorId]: '' }));
+      toast.success(result.verifiedAt ? t('payerPaymentVerifiedToast') : t('payerPartialReceiptSaved'));
+    } catch {
+      toast.error(t('payerPaymentVerifyFailed'));
+    } finally {
+      writeInFlight.current = false;
+      setVerifyingId(null);
+      refreshCurrent.current();
+    }
+  }
+
   async function cancelReceipt(debtorId: string) {
     if (
       verifyingId ||
@@ -288,6 +346,8 @@ export function GuestPayerPaymentReview({
 
   const paymentGroups = groupGuestPayerPayments(payments ?? [], personId);
   const paymentSummary = summarizeGuestPayerPaymentGroups(paymentGroups);
+  const additionalTipsCents = payments?.reduce((sum, payment) => sum + payment.extraTipCents, 0) ?? 0;
+
   const groupLabels: Record<GuestPayerPaymentGroup, string> = {
     verified: t('payerPaymentGroupVerified'),
     awaiting: t('payerPaymentGroupAwaiting'),
@@ -343,6 +403,14 @@ export function GuestPayerPaymentReview({
                     </dd>
                   </div>
                 ))}
+                {additionalTipsCents > 0 && Number.isSafeInteger(additionalTipsCents) && (
+                  <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-2 text-green-700 dark:text-green-400">
+                    <dt>{t('payerAdditionalTips')}</dt>
+                    <dd className="font-semibold tabular-nums" data-testid="guest-payer-total-extra-tips">
+                      {formatCents(additionalTipsCents, 'RUB', locale)}
+                    </dd>
+                  </div>
+                )}
               </dl>
             ) : (
               <p className="text-sm text-destructive" data-testid="guest-payer-summary-invalid">
@@ -387,6 +455,26 @@ export function GuestPayerPaymentReview({
                           {formatCents(payment.amount, 'RUB', locale)}
                         </span>
                       </div>
+                      <dl
+                        className="min-w-0 space-y-1 text-xs text-muted-foreground"
+                        data-testid={'payer-breakdown-' + payment.personId}
+                      >
+                        {(
+                          [
+                            ['payerFoodShare', payment.foodCents],
+                            ['payerDeclaredTips', payment.declaredTipCents],
+                            ['payerActuallyReceived', payment.receivedCents],
+                            ...(payment.receivedCents > 0 ? [['payerStillOwed', payment.outstandingCents]] : []),
+                            ...(payment.extraTipCents > 0 ? [['payerAdditionalTips', payment.extraTipCents]] : []),
+                            ...(payment.refundDueCents > 0 ? [['payerRefundDue', payment.refundDueCents]] : []),
+                          ] as [string, number][]
+                        ).map(([key, amount]) => (
+                          <div key={key} className="flex min-w-0 flex-wrap justify-between gap-2">
+                            <dt>{t(key as 'payerFoodShare')}</dt>
+                            <dd className="tabular-nums">{formatCents(amount, 'RUB', locale)}</dd>
+                          </div>
+                        ))}
+                      </dl>
                       {payment.members && (
                         <div
                           className="min-w-0 space-y-1 text-xs text-muted-foreground"
@@ -431,9 +519,11 @@ export function GuestPayerPaymentReview({
                       >
                         {payment.verifiedAt
                           ? t('payerPaymentVerified')
-                          : payment.declaredPaidAt
-                            ? t('payerPaymentDeclared')
-                            : t('payerPaymentNotDeclared')}
+                          : payment.receivedCents > 0
+                            ? t('payerPartialReceiptSaved')
+                            : payment.declaredPaidAt
+                              ? t('payerPaymentDeclared')
+                              : t('payerPaymentNotDeclared')}
                       </p>
                       {payment.verifiedAt && (
                         <>
@@ -473,13 +563,85 @@ export function GuestPayerPaymentReview({
                         </>
                       )}
                       {!payment.verifiedAt && (
+                        <div className="min-w-0 space-y-2 rounded-md border p-3">
+                          <label htmlFor={'payer-amount-' + payment.personId} className="block text-sm font-medium">
+                            {t('payerActualInputLabel')}
+                          </label>
+                          <input
+                            id={'payer-amount-' + payment.personId}
+                            type="text"
+                            inputMode="decimal"
+                            autoComplete="off"
+                            value={receiptDrafts[payment.personId] ?? ''}
+                            onChange={(event) =>
+                              setReceiptDrafts((current) => ({
+                                ...current,
+                                [payment.personId]: event.target.value,
+                              }))
+                            }
+                            placeholder={t('payerActualInputExample')}
+                            disabled={verifyingId !== null}
+                            className="h-11 w-full min-w-0 rounded-md border bg-background px-3 text-base tabular-nums"
+                            data-testid={'guest-payer-received-input-' + payment.personId}
+                          />
+                          {payment.receivedCents + (parseExactReceivedRub(receiptDrafts[payment.personId] ?? '') ?? 0) >
+                            payment.amount && (
+                            <div className="min-w-0 space-y-2" data-testid={'payer-excess-choice-' + payment.personId}>
+                              <p className="text-xs text-amber-800 dark:text-amber-300">
+                                {t('payerOverpaymentAmount', {
+                                  amount: formatCents(
+                                    payment.receivedCents +
+                                      (parseExactReceivedRub(receiptDrafts[payment.personId] ?? '') ?? 0) -
+                                      payment.amount,
+                                    'RUB',
+                                    locale,
+                                  ),
+                                })}
+                              </p>
+                              <label htmlFor={'payer-excess-' + payment.personId} className="block text-sm">
+                                {t('payerOverpaymentDecision')}
+                              </label>
+                              <select
+                                id={'payer-excess-' + payment.personId}
+                                value={overpaymentChoices[payment.personId] ?? ''}
+                                onChange={(event) =>
+                                  setOverpaymentChoices((current) => ({
+                                    ...current,
+                                    [payment.personId]: event.target.value as ReceiptOverpaymentChoice | '',
+                                  }))
+                                }
+                                className="h-11 w-full min-w-0 rounded-md border bg-background px-2 text-sm"
+                                data-testid={'guest-payer-excess-choice-' + payment.personId}
+                              >
+                                <option value="">{t('payerOverpaymentChoose')}</option>
+                                <option value="tip">{t('payerOverpaymentTip')}</option>
+                                <option value="refund">{t('payerOverpaymentRefund')}</option>
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {!payment.verifiedAt && (
                         <Button
                           type="button"
                           variant="outline"
                           className="min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center"
-                          disabled={verifyingId !== null}
+                          disabled={
+                            verifyingId !== null ||
+                            (payment.receivedCents > 0 && !(receiptDrafts[payment.personId] ?? '').trim()) ||
+                            (!!(receiptDrafts[payment.personId] ?? '').trim() &&
+                              (parseExactReceivedRub(receiptDrafts[payment.personId]!) === null ||
+                                (payment.receivedCents +
+                                  (parseExactReceivedRub(receiptDrafts[payment.personId]!) ?? 0) >
+                                  payment.amount &&
+                                  !overpaymentChoices[payment.personId])))
+                          }
                           onClick={() => {
-                            void confirmReceipt(payment.personId);
+                            if ((receiptDrafts[payment.personId] ?? '').trim()) {
+                              void recordReceipt(payment.personId);
+                            } else {
+                              void confirmReceipt(payment.personId);
+                            }
                           }}
                           data-testid={'guest-payer-verify-' + payment.personId}
                         >

@@ -84,6 +84,30 @@ describe('Issue #1 5.7: exact private payer receipt summary in kopecks', () => {
     });
   });
 
+  it('5.22: partial bank receipts reduce the remaining debt but do not change its original total', () => {
+    const partiallyReceived = { ...anna, receivedCents: 200 };
+    const groups = groupGuestPayerPayments([payer, partiallyReceived, victor], payer.personId);
+    expect(groups.awaiting).toEqual([partiallyReceived]);
+    expect(summarizeGuestPayerPaymentGroups(groups)).toEqual({
+      total: 867,
+      verified: 200,
+      awaiting: 259,
+      unpaid: 408,
+      outstanding: 667,
+    });
+  });
+
+  it('5.22: money over the expected debt does not change reimbursement totals', () => {
+    const extra = { ...anna, receivedCents: 999, verifiedAt: '2026-11-18T00:00:00.000Z' };
+    expect(summarizeGuestPayerPaymentGroups(groupGuestPayerPayments([payer, extra, victor], payer.personId))).toEqual({
+      total: 867,
+      verified: 459,
+      awaiting: 0,
+      unpaid: 408,
+      outstanding: 408,
+    });
+  });
+
   it('keeps all five totals at zero if no participant owes the payer', () => {
     expect(summarize([payer])).toEqual({
       total: 0,

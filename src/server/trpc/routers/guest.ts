@@ -56,6 +56,7 @@ import {
 import { hasDuplicateGuestNames, normalizeGuestName } from '@/lib/guest-session';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { MAX_MONEY_CENTS } from '@/lib/money';
+import { reconcileActualReceiptTransfers, type ReceiptOverpaymentChoice } from '@/lib/actual-receipt-payments';
 import {
   aggregateReceiptPaymentGroups,
   receiptPaymentMemberships,
@@ -516,6 +517,27 @@ function requireGuestPayerReview(
     groupDebts: paymentGroups,
   });
   return { people, summary, paymentGroups };
+}
+
+/** Private payer snapshot: never publish unverified amounts through the shared receipt URL. */
+function payerActualReceiptSnapshot(person: GuestSessionPerson, amountCents: number, tipCents: number) {
+  const history = person.paymentReceivedTransfers ?? [];
+  const computed = reconcileActualReceiptTransfers(
+    amountCents,
+    tipCents,
+    history,
+    person.paymentOverpaymentChoice ?? null,
+  );
+  // Receipts confirmed before 5.22 did not store a transfer ledger.
+  if (history.length === 0 && person.paymentVerifiedAt) {
+    return {
+      ...computed,
+      receivedCents: amountCents,
+      appliedToDebtCents: amountCents,
+      outstandingCents: 0,
+    };
+  }
+  return computed;
 }
 
 // ─── Shared Zod schemas (Finding #27) ────────────────────────────
@@ -2844,7 +2866,7 @@ export const guestRouter = createTRPCRouter({
       });
       if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
       if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
-      const { people, personIndex, paymentIndex, paymentPerson, amountCents } = requireGuestDebtor(
+      const { people, personIndex, paymentIndex, paymentPerson, amountCents, group } = requireGuestDebtor(
         split,
         input.personId,
         input.personToken,
@@ -2880,6 +2902,16 @@ export const guestRouter = createTRPCRouter({
           ? (paymentPerson.paymentDeclaredAmountCents ?? amountCents)
           : null,
         verifiedAt,
+        // 5.22: the actual sender sees only their own incoming bank reconciliation.
+        ...(personIndex === paymentIndex
+          ? {
+              actualReceipt: payerActualReceiptSnapshot(
+                paymentPerson,
+                amountCents,
+                group?.tipCents ?? paymentPerson.tipCents ?? 0,
+              ),
+            }
+          : {}),
         ...(notification ? { notification } : {}),
         ...(cancellationNotifications.length ? { cancellationNotifications } : {}),
         ...(verifiedAt && personIndex === paymentIndex
@@ -3285,6 +3317,7 @@ export const guestRouter = createTRPCRouter({
                   personId: representative.id!,
                   name: representative.name,
                   amount: group.totalCents,
+                  ...payerActualReceiptSnapshot(representative, group.totalCents, group.tipCents),
                   declaredPaidAt: representative.paymentDeclaredAt ?? null,
                   ...(representative.paymentUnmarkedAt ? { unmarkedAt: representative.paymentUnmarkedAt } : {}),
                   verifiedAt: representative.paymentVerifiedAt ?? null,
@@ -3302,6 +3335,7 @@ export const guestRouter = createTRPCRouter({
                   personId: person.id!,
                   name: person.name,
                   amount: entry.total,
+                  ...payerActualReceiptSnapshot(person, entry.total, entry.tip),
                   declaredPaidAt: person.paymentDeclaredAt ?? null,
                   ...(person.paymentUnmarkedAt ? { unmarkedAt: person.paymentUnmarkedAt } : {}),
                   verifiedAt: person.paymentVerifiedAt ?? null,
@@ -3309,6 +3343,131 @@ export const guestRouter = createTRPCRouter({
                 };
               }),
       };
+    }),
+
+  // 5.22.1–5.22.2: an actual incoming RUB transfer is recorded ONLY by the
+  // finalized receipt's real payer, not by a sender/organizer/share-link holder.
+  // Multiple transfers are separate immutable receipt records, never new expenses.
+  recordGuestPaymentReceived: publicProcedure
+    .input(
+      z.strictObject({
+        token: shareTokenSchema,
+        personId: personIdSchema,
+        personToken: guestLinkSecretSchema,
+        debtorId: personIdSchema,
+        requestId: z.string().uuid(),
+        receivedAmountCents: z.number().int().min(1).max(MAX_MONEY_CENTS),
+        overpaymentChoice: z.enum(['tip', 'refund']).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!checkClaimWriteRateLimit('payer-payment-verify', input.token, input.personToken)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      const outcome = await guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
+        if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const { people, summary, paymentGroups } = requireGuestPayerReview(split, input.personId, input.personToken);
+        const debtorIndex = people.findIndex((person) => person.id === input.debtorId);
+        const validGroup = paymentGroups?.find(
+          (group) => group.representativeId === input.debtorId && group.totalCents > 0,
+        );
+        const entry = summary.find((row) => row.personIndex === debtorIndex && row.total > 0);
+        if (debtorIndex < 0 || debtorIndex === split.paidByIndex || (paymentGroups ? !validGroup : !entry)) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        const expectedCents = validGroup?.totalCents ?? entry!.total;
+        const declaredTipCents = validGroup?.tipCents ?? entry!.tip;
+        const debtor = people[debtorIndex]!;
+        const prior = debtor.paymentReceivedTransfers ?? [];
+        const duplicate = prior.find((record) => record.id === input.requestId);
+        if (duplicate) {
+          if (
+            duplicate.amountCents !== input.receivedAmountCents ||
+            duplicate.cancelledAt ||
+            (input.overpaymentChoice && input.overpaymentChoice !== debtor.paymentOverpaymentChoice)
+          ) {
+            throw new AppError('CONFLICT', 'splitBusy');
+          }
+          const current = payerActualReceiptSnapshot(debtor, expectedCents, declaredTipCents);
+          return { ...current, verifiedAt: debtor.paymentVerifiedAt ?? null, delivery: null };
+        }
+        // An old confirmation did not record actual transfers. Never append to
+        // an unknown bank total or invent its historical deposits.
+        if (debtor.paymentVerifiedAt && prior.length === 0) {
+          throw new AppError('CONFLICT', 'splitBusy');
+        }
+        const confirmedAt = new Date().toISOString();
+        const transfers = [
+          ...prior,
+          {
+            id: input.requestId,
+            amountCents: input.receivedAmountCents,
+            confirmedAt,
+            confirmedByPersonId: input.personId,
+          },
+        ];
+        const choice: ReceiptOverpaymentChoice | null =
+          input.overpaymentChoice ?? debtor.paymentOverpaymentChoice ?? null;
+        const totals = reconcileActualReceiptTransfers(expectedCents, declaredTipCents, transfers, choice);
+        // The payer explicitly decides whether surplus funds are tips or due
+        // back. Never silently misclassify an accidental extra transfer.
+        if (totals.pendingExcessCents > 0) throw new AppError('BAD_REQUEST', 'splitBusy');
+
+        const fullyCovered = totals.outstandingCents === 0;
+        const verifiedAt = fullyCovered ? (debtor.paymentVerifiedAt ?? confirmedAt) : null;
+        const receiptName = (split.receiptData as { merchantName?: unknown }).merchantName;
+        const receiptNotification =
+          fullyCovered && !debtor.paymentVerifiedAt
+            ? {
+                id: randomUUID(),
+                payerName: people[split.paidByIndex]!.name,
+                amountCents: expectedCents,
+                receiptName: typeof receiptName === 'string' && receiptName.trim() ? receiptName.trim() : 'Чек',
+                confirmedAt: verifiedAt!,
+              }
+            : null;
+        const updated = people.map((person, index) =>
+          index === debtorIndex
+            ? {
+                ...person,
+                paymentReceivedTransfers: transfers,
+                ...(choice ? { paymentOverpaymentChoice: choice } : {}),
+                ...(verifiedAt ? { paymentVerifiedAt: verifiedAt, paymentVerifiedByPersonId: input.personId } : {}),
+                ...(receiptNotification ? { paymentReceiptNotification: receiptNotification } : {}),
+              }
+            : person,
+        );
+        await tx.guestSplit.update({
+          where: { id: split.id },
+          data: { people: updated as unknown as Prisma.InputJsonValue },
+        });
+        return {
+          ...totals,
+          verifiedAt,
+          delivery: receiptNotification
+            ? {
+                subscriptions: activeGuestPushSubscriptions(debtor.guestPushSubscriptions, debtor.personToken ?? ''),
+                notificationId: receiptNotification.id,
+              }
+            : null,
+        };
+      });
+      if (outcome.delivery) {
+        try {
+          await sendGuestReceiptPush(
+            outcome.delivery.subscriptions,
+            '/split/' + encodeURIComponent(input.token) + '/claim',
+            outcome.delivery.notificationId,
+          );
+        } catch {
+          // A push outage cannot undo a recorded incoming bank transfer.
+        }
+      }
+      const { delivery: _delivery, ...response } = outcome;
+      void _delivery;
+      return response;
     }),
 
   // Both manual payer actions retain an independent request history on the
@@ -3351,6 +3510,10 @@ export const guestRouter = createTRPCRouter({
         if (previouslyHandled) {
           if (previouslyHandled.action !== 'confirm') throw new AppError('CONFLICT', 'splitBusy');
           return { verifiedAt: previouslyHandled.at, delivery: null };
+        }
+        // Never replace a previously recorded partial bank amount with a guessed full amount.
+        if (debtor.paymentReceivedTransfers?.some((record) => !record.cancelledAt)) {
+          throw new AppError('CONFLICT', 'splitBusy');
         }
         // 5.14: the payer attests money received, not the sender's own button.
         // A forgotten declaration never invents a participant action.
@@ -3489,6 +3652,13 @@ export const guestRouter = createTRPCRouter({
           const next = { ...person };
           delete next.paymentVerifiedAt;
           delete next.paymentVerifiedByPersonId;
+          if (next.paymentReceivedTransfers) {
+            next.paymentReceivedTransfers = next.paymentReceivedTransfers.map((record) =>
+              record.cancelledAt ? record : { ...record, cancelledAt },
+            );
+            delete next.paymentOverpaymentChoice;
+          }
+
           return {
             ...next,
             paymentReceiptCancellationNotifications: [...prior, event].slice(-20),
