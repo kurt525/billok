@@ -125,6 +125,10 @@ describe('Issue 6.12.4.5: each administrative JSON export needs an exact one-tim
     expect(data.exportedBy).toBe('owner@mail.ru');
     expect(data.data).toHaveProperty('users');
     expect(data.data).not.toHaveProperty('password');
+    // 9.3: exporting protected user data must not reintroduce the obsolete currency preference.
+    const userSelection = models.user!.findMany.mock.calls[0]![0] as { select: Record<string, boolean> };
+    expect(userSelection.select).not.toHaveProperty('defaultCurrency');
+    expect(userSelection.select).toMatchObject({ id: true, email: true, suspendedAt: true });
   });
 
   test('a token for different target/action/session, expired or used cannot return data or record export', async () => {

@@ -79,7 +79,6 @@ async function performAuditedOwnerPost(req: Request, session: Session | null) {
               email: true,
               emailVerified: true,
               image: true,
-              defaultCurrency: true,
               isPlaceholder: true,
               placeholderName: true,
               createdByUserId: true,

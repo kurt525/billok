@@ -80,6 +80,20 @@ class ObsoleteReceiptMediaCleanupTests(unittest.TestCase):
         self.assertIn("tx.receiptItem.findMany()", code)
         self.assertIn("Cache-Control': 'no-store, private'", code)
 
+    def test_owner_user_export_excludes_obsolete_currency_preference(self):
+        code = source("src/app/api/admin/export/route.ts")
+        match = re.search(
+            r"tx\.user\.findMany\(\{\s*select:\s*\{(?P<select>.*?)\}\s*,?\s*\}\)",
+            code, re.S,
+        )
+        self.assertIsNotNone(match)
+        selection = match.group("select")
+        self.assertNotIn("defaultCurrency", selection)
+        for field in ("id", "email", "suspendedAt", "createdAt", "updatedAt"):
+            self.assertIn(field + ": true", selection)
+        self.assertIn("consumeOwnerPasskeyActionProof", code)
+        self.assertIn("await requireOwner(tx, session.user.id)", code)
+
     def test_schema_cleanup_intentionally_stays_in_94(self):
         schema = source("prisma/schema.prisma")
         self.assertIn("imagePath", schema)
