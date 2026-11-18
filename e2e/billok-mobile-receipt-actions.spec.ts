@@ -35,7 +35,7 @@ test('group receipt: add, edit, cancel, split, assign, save, delete and finalize
 
   await page.goto(receiptUrl!, { waitUntil: 'networkidle' });
   await expect(page.getByTestId('item-assignment-form')).toBeVisible();
-  // Historical photo receipts remain readable, but OCR/upload/retry are no longer available.
+  // Manual receipts are file-free: no upload, OCR or retry controls exist.
   await expect(page.getByTestId('scan-rescan-btn')).toHaveCount(0);
   await expect(page.getByTestId('scan-file-input')).toHaveCount(0);
   await expect(item(page, 'Суп')).toHaveCount(1);
@@ -124,8 +124,13 @@ test('group receipt: add, edit, cancel, split, assign, save, delete and finalize
   await dialog.getByRole('button', { name: 'Удалить' }).click();
   await expect(item(page, 'Булочка большая')).toHaveCount(0);
 
-  // Complete the receipt and verify the newly created expense in the group.
+  // The creator must explicitly approve the complete portions after editing.
+  // Removing photo metadata does not relax that mandatory manual-check safeguard.
   await page.getByTestId('split-all-btn').click();
+  const creatorConfirmation = page.getByTestId('group-parts-confirm-checkbox');
+  await expect(creatorConfirmation).toBeEnabled();
+  await expect(page.getByTestId('create-expense-btn')).toBeDisabled();
+  await creatorConfirmation.check();
   await expect(page.getByTestId('create-expense-btn')).toBeEnabled();
   await page.getByTestId('create-expense-btn').click();
   await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'));
