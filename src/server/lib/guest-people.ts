@@ -1,7 +1,11 @@
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import type { GuestWebPushSubscription } from './guest-web-push';
-import type { ActualReceiptTransfer, ReceiptOverpaymentChoice } from '@/lib/actual-receipt-payments';
+import type {
+  ActualReceiptTransfer,
+  ActualReceiptRefund,
+  ReceiptOverpaymentChoice,
+} from '@/lib/actual-receipt-payments';
 
 /** A person id as requests send it (personId / targetId), and as stored ids must be */
 // Exactly RFC 4122 CSPRNG UUIDv4: neither timestamps nor counters.
@@ -77,6 +81,15 @@ export type GuestSessionPerson = {
   // Separate from original receipt shares/tips, sender declarations and push.
   paymentReceivedTransfers?: ActualReceiptTransfer[];
   paymentOverpaymentChoice?: ReceiptOverpaymentChoice;
+  // An actual return to the sender; only the payer can record it after checking their bank.
+  paymentRefunds?: ActualReceiptRefund[];
+  // Preserve explicit changes to the classification of a surplus for audit.
+  paymentOverpaymentChoiceEvents?: {
+    id: string;
+    choice: ReceiptOverpaymentChoice;
+    changedAt: string;
+    changedByPersonId: string;
+  }[];
 
   // 5.16: bounded, private receipt-status action history, used to reject a
   // delayed HTTP retry after a newer explicit confirm/cancel has committed.

@@ -27,6 +27,10 @@ type PaymentRow = {
   outstandingCents: number;
   extraTipCents: number;
   refundDueCents: number;
+  refundedCents: number;
+  excessCents: number;
+  overpaymentChoice: ReceiptOverpaymentChoice | null;
+  confirmedRefunds?: { id: string; amountCents: number; confirmedAt: string }[];
   declaredPaidAt: string | null;
   unmarkedAt?: string;
   verifiedAt: string | null;
@@ -56,12 +60,16 @@ export function GuestPayerPaymentReview({
   const verify = trpc.guest.confirmGuestPaymentReceived.useMutation();
   const record = trpc.guest.recordGuestPaymentReceived.useMutation();
   const cancelActual = trpc.guest.cancelGuestReceivedTransfer.useMutation();
+  const saveChoice = trpc.guest.setGuestOverpaymentChoice.useMutation();
+  const recordRefund = trpc.guest.confirmGuestOverpaymentRefund.useMutation();
   const cancelVerified = trpc.guest.cancelGuestPaymentReceived.useMutation();
   const [payments, setPayments] = useState<PaymentRow[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const [receiptDrafts, setReceiptDrafts] = useState<Record<string, string>>({});
   const [overpaymentChoices, setOverpaymentChoices] = useState<Record<string, ReceiptOverpaymentChoice | ''>>({});
+  const [refundDrafts, setRefundDrafts] = useState<Record<string, string>>({});
+  const [choiceDrafts, setChoiceDrafts] = useState<Record<string, ReceiptOverpaymentChoice | ''>>({});
   const latestPayments = useRef<PaymentRow[] | null>(null);
   const latestRead = useRef(0);
   const writeInFlight = useRef(false);
@@ -311,6 +319,69 @@ export function GuestPayerPaymentReview({
     }
   }
 
+  async function saveOverpaymentChoice(debtorId: string) {
+    const payment = payments?.find((row) => row.personId === debtorId);
+    const choice = choiceDrafts[debtorId];
+    if (!payment || !choice || payment.overpaymentChoice === choice || verifyingId || writeInFlight.current) return;
+    if (choice === 'tip' && payment.refundedCents > 0) return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
+    setVerifyingId(debtorId);
+    try {
+      await saveChoice.mutateAsync({
+        token,
+        personId,
+        personToken,
+        debtorId,
+        choice,
+        requestId: window.crypto.randomUUID(),
+      });
+      toast.success(t('payerChoiceUpdated'));
+    } catch {
+      toast.error(t('payerChoiceUpdateFailed'));
+    } finally {
+      writeInFlight.current = false;
+      setVerifyingId(null);
+      refreshCurrent.current();
+    }
+  }
+
+  async function confirmRefund(debtorId: string) {
+    const payment = payments?.find((row) => row.personId === debtorId);
+    const amountCents = parseExactReceivedRub(refundDrafts[debtorId] ?? '');
+    if (
+      !payment ||
+      verifyingId ||
+      writeInFlight.current ||
+      payment.overpaymentChoice !== 'refund' ||
+      amountCents === null ||
+      amountCents > payment.refundDueCents ||
+      !window.confirm(t('payerRefundConfirm'))
+    )
+      return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
+    setVerifyingId(debtorId);
+    try {
+      await recordRefund.mutateAsync({
+        token,
+        personId,
+        personToken,
+        debtorId,
+        amountCents,
+        requestId: window.crypto.randomUUID(),
+      });
+      setRefundDrafts((current) => ({ ...current, [debtorId]: '' }));
+      toast.success(t('payerRefundRecorded'));
+    } catch {
+      toast.error(t('payerRefundRecordFailed'));
+    } finally {
+      writeInFlight.current = false;
+      setVerifyingId(null);
+      refreshCurrent.current();
+    }
+  }
+
   async function cancelActualReceipt(debtorId: string, transferId: string) {
     if (
       verifyingId ||
@@ -519,6 +590,7 @@ export function GuestPayerPaymentReview({
                             ...(payment.receivedCents > 0 ? [['payerStillOwed', payment.outstandingCents]] : []),
                             ...(payment.extraTipCents > 0 ? [['payerAdditionalTips', payment.extraTipCents]] : []),
                             ...(payment.refundDueCents > 0 ? [['payerRefundDue', payment.refundDueCents]] : []),
+                            ...(payment.refundedCents > 0 ? [['payerRefundedTotal', payment.refundedCents]] : []),
                           ] as [string, number][]
                         ).map(([key, amount]) => (
                           <div key={key} className="flex min-w-0 flex-wrap justify-between gap-2">
@@ -577,6 +649,108 @@ export function GuestPayerPaymentReview({
                               ? t('payerPaymentDeclared')
                               : t('payerPaymentNotDeclared')}
                       </p>
+                      {payment.excessCents > 0 && (
+                        <section
+                          className="min-w-0 space-y-2 rounded-md border p-3"
+                          data-testid={'payer-surplus-actions-' + payment.personId}
+                        >
+                          <label htmlFor={'payer-choice-' + payment.personId} className="block text-sm font-medium">
+                            {t('payerChoiceCorrection')}
+                          </label>
+                          <select
+                            id={'payer-choice-' + payment.personId}
+                            value={choiceDrafts[payment.personId] ?? payment.overpaymentChoice ?? ''}
+                            onChange={(event) =>
+                              setChoiceDrafts((current) => ({
+                                ...current,
+                                [payment.personId]: event.target.value as ReceiptOverpaymentChoice | '',
+                              }))
+                            }
+                            disabled={verifyingId !== null || payment.refundedCents > 0}
+                            className="h-11 w-full min-w-0 rounded-md border bg-background px-2 text-sm"
+                            data-testid={'payer-choice-edit-' + payment.personId}
+                          >
+                            <option value="">{t('payerOverpaymentChoose')}</option>
+                            <option value="tip">{t('payerOverpaymentTip')}</option>
+                            <option value="refund">{t('payerOverpaymentRefund')}</option>
+                          </select>
+                          {payment.refundedCents > 0 && (
+                            <p className="text-xs text-muted-foreground">{t('payerChoiceLockedAfterRefund')}</p>
+                          )}
+                          {payment.refundedCents === 0 && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="min-h-11 w-full min-w-0 whitespace-normal"
+                              disabled={
+                                verifyingId !== null ||
+                                !choiceDrafts[payment.personId] ||
+                                choiceDrafts[payment.personId] === payment.overpaymentChoice
+                              }
+                              onClick={() => {
+                                void saveOverpaymentChoice(payment.personId);
+                              }}
+                              data-testid={'payer-choice-save-' + payment.personId}
+                            >
+                              {t('payerChoiceSave')}
+                            </Button>
+                          )}
+                          {payment.overpaymentChoice === 'refund' && payment.refundDueCents > 0 && (
+                            <div className="space-y-2 border-t pt-2">
+                              <label htmlFor={'payer-refund-' + payment.personId} className="block text-sm font-medium">
+                                {t('payerRefundInputLabel')}
+                              </label>
+                              <input
+                                id={'payer-refund-' + payment.personId}
+                                type="text"
+                                inputMode="decimal"
+                                autoComplete="off"
+                                value={refundDrafts[payment.personId] ?? ''}
+                                onChange={(event) =>
+                                  setRefundDrafts((current) => ({
+                                    ...current,
+                                    [payment.personId]: event.target.value,
+                                  }))
+                                }
+                                placeholder={t('payerActualInputExample')}
+                                disabled={verifyingId !== null}
+                                className="h-11 w-full min-w-0 rounded-md border bg-background px-3 text-base tabular-nums"
+                                data-testid={'payer-refund-input-' + payment.personId}
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="min-h-11 w-full min-w-0 whitespace-normal"
+                                disabled={
+                                  verifyingId !== null ||
+                                  parseExactReceivedRub(refundDrafts[payment.personId] ?? '') === null ||
+                                  (parseExactReceivedRub(refundDrafts[payment.personId] ?? '') ?? 0) >
+                                    payment.refundDueCents
+                                }
+                                onClick={() => {
+                                  void confirmRefund(payment.personId);
+                                }}
+                                data-testid={'payer-refund-confirm-' + payment.personId}
+                              >
+                                {t('payerRefundConfirmAction')}
+                              </Button>
+                            </div>
+                          )}
+                          {!!payment.confirmedRefunds?.length && (
+                            <div className="space-y-1 text-xs" data-testid={'payer-refund-history-' + payment.personId}>
+                              {payment.confirmedRefunds.map((refund) => (
+                                <p key={refund.id} className="min-w-0 break-words tabular-nums">
+                                  {formatCents(refund.amountCents, 'RUB', locale)}
+                                  {' · '}
+                                  <time dateTime={refund.confirmedAt}>
+                                    {new Date(refund.confirmedAt).toLocaleString('ru-RU')}
+                                  </time>
+                                </p>
+                              ))}
+                            </div>
+                          )}
+                        </section>
+                      )}
                       {!!payment.receivedTransfers?.length && (
                         <section
                           className="min-w-0 space-y-2 rounded-md border p-2"

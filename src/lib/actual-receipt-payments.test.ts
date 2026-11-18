@@ -44,6 +44,7 @@ describe('5.22: immutable dish debt, separate additional tips and refunds', () =
       excessCents: 15000,
       extraTipCents: 15000,
       refundDueCents: 0,
+      refundedCents: 0,
       pendingExcessCents: 0,
     });
   });
@@ -85,6 +86,38 @@ describe('5.22: immutable dish debt, separate additional tips and refunds', () =
     expect(() => reconcileActualReceiptTransfers(-1, 0, [])).toThrow();
     expect(() => reconcileActualReceiptTransfers(100, 0, [transfer(-1)])).toThrow();
     expect(() => reconcileActualReceiptTransfers(100, 0, [transfer(MAX_MONEY_CENTS), transfer(1, 't2')])).toThrow();
+  });
+
+  it('5.22.3: confirmed returned amount reduces only the pending refund, not the dish debt', () => {
+    const refund = {
+      id: 'r1',
+      amountCents: 10000,
+      confirmedAt: '2026-11-18T10:15:00Z',
+      confirmedByPersonId: 'payer-id',
+    };
+    const x = reconcileActualReceiptTransfers(130000, 10000, [transfer(145000)], 'refund', [refund]);
+    expect([x.receivedCents, x.appliedToDebtCents, x.excessCents]).toEqual([145000, 130000, 15000]);
+    expect([x.refundedCents, x.refundDueCents, x.extraTipCents]).toEqual([10000, 5000, 0]);
+  });
+
+  it('5.22.3: refund is capped at surplus, duplicate refunds are forbidden', () => {
+    const refund = {
+      id: 'r1',
+      amountCents: 15000,
+      confirmedAt: '2026-11-18T10:15:00Z',
+      confirmedByPersonId: 'payer-id',
+    };
+    expect(reconcileActualReceiptTransfers(130000, 10000, [transfer(145000)], 'refund', [refund]).refundDueCents).toBe(
+      0,
+    );
+    expect(() =>
+      reconcileActualReceiptTransfers(130000, 10000, [transfer(145000)], 'refund', [refund, refund]),
+    ).toThrow();
+    expect(() => reconcileActualReceiptTransfers(130000, 10000, [transfer(145000)], 'tip', [refund])).toThrow();
+    expect(() =>
+      reconcileActualReceiptTransfers(130000, 10000, [transfer(145000)], 'refund', [{ ...refund, amountCents: 15001 }]),
+    ).toThrow();
+    expect(() => reconcileActualReceiptTransfers(130000, 10000, [transfer(125000)], 'refund', [refund])).toThrow();
   });
 
   it('keeps a grouped transfer as one debt, with members separate outside the ledger', () => {

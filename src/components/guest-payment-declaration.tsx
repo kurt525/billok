@@ -60,6 +60,7 @@ export function GuestPaymentDeclaration({
     outstandingCents: number;
     extraTipCents: number;
     refundDueCents: number;
+    refundedCents: number;
   } | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -459,6 +460,12 @@ export function GuestPaymentDeclaration({
             <div className="flex flex-wrap justify-between gap-2">
               <dt>{t('payerAdditionalTips')}</dt>
               <dd className="tabular-nums">{formatCents(actualReceipt.extraTipCents, 'RUB', locale)}</dd>
+            </div>
+          )}
+          {actualReceipt.refundedCents > 0 && (
+            <div className="flex flex-wrap justify-between gap-2">
+              <dt>{t('payerRefundedTotal')}</dt>
+              <dd className="tabular-nums">{formatCents(actualReceipt.refundedCents, 'RUB', locale)}</dd>
             </div>
           )}
           {actualReceipt.refundDueCents > 0 && (

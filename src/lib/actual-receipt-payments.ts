@@ -12,6 +12,13 @@ export type ActualReceiptTransfer = {
   cancelledByPersonId?: string;
 };
 
+export type ActualReceiptRefund = {
+  id: string;
+  amountCents: number;
+  confirmedAt: string;
+  confirmedByPersonId: string;
+};
+
 export type ActualReceiptReconciliation = {
   expectedCents: number;
   foodCents: number;
@@ -22,6 +29,7 @@ export type ActualReceiptReconciliation = {
   excessCents: number;
   extraTipCents: number;
   refundDueCents: number;
+  refundedCents: number;
   pendingExcessCents: number;
 };
 
@@ -50,6 +58,7 @@ export function reconcileActualReceiptTransfers(
   declaredTipCents: number,
   transfers: readonly ActualReceiptTransfer[],
   choice: ReceiptOverpaymentChoice | null = null,
+  refunds: readonly ActualReceiptRefund[] = [],
 ): ActualReceiptReconciliation {
   if (!safeCents(expectedCents) || !safeCents(declaredTipCents) || declaredTipCents > expectedCents) {
     throw new Error('Invalid finalized payment amount or declared tips');
@@ -78,9 +87,32 @@ export function reconcileActualReceiptTransfers(
     receivedCents += entry.amountCents;
     if (!safeCents(receivedCents)) throw new Error('Incoming amount exceeds monetary limit');
   }
+  let refundedCents = 0;
+  const refundIds = new Set<string>();
+  for (const refund of refunds) {
+    if (
+      typeof refund.id !== 'string' ||
+      !refund.id ||
+      refundIds.has(refund.id) ||
+      !safeCents(refund.amountCents) ||
+      refund.amountCents <= 0 ||
+      typeof refund.confirmedAt !== 'string' ||
+      !refund.confirmedAt ||
+      typeof refund.confirmedByPersonId !== 'string' ||
+      !refund.confirmedByPersonId
+    ) {
+      throw new Error('Invalid or duplicated refund');
+    }
+    refundIds.add(refund.id);
+    refundedCents += refund.amountCents;
+    if (!safeCents(refundedCents)) throw new Error('Refund total exceeds monetary limit');
+  }
   const appliedToDebtCents = Math.min(expectedCents, receivedCents);
   const outstandingCents = expectedCents - appliedToDebtCents;
   const excessCents = receivedCents - appliedToDebtCents;
+  if (refundedCents > excessCents || (refundedCents > 0 && choice !== 'refund')) {
+    throw new Error('Confirmed refunds cannot exceed the refundable excess or become tips');
+  }
   return {
     expectedCents,
     foodCents: expectedCents - declaredTipCents,
@@ -90,7 +122,8 @@ export function reconcileActualReceiptTransfers(
     outstandingCents,
     excessCents,
     extraTipCents: choice === 'tip' ? excessCents : 0,
-    refundDueCents: choice === 'refund' ? excessCents : 0,
+    refundDueCents: choice === 'refund' ? excessCents - refundedCents : 0,
+    refundedCents,
     pendingExcessCents: choice === null ? excessCents : 0,
   };
 }
