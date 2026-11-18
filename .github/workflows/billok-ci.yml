@@ -65,6 +65,8 @@ jobs:
         run: python3 scripts/test_billok_no_legacy_photo_admin.py
       - name: Verify obsolete user columns are removed (Issue #1 9.4)
         run: python3 scripts/test_billok_postgres_schema_cleanup.py
+      - name: Verify disposable database reset safeguards (Issue #1 9.5)
+        run: python3 scripts/test_billok_qa_database_reset.py
       - name: Verify SBP registry auto-update safety tests
         run: npm run sbp:sync:test
       - name: Verify translation keys
@@ -155,6 +157,8 @@ jobs:
           qa_db="billok-mobile-qa-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "BILLOK_QA_DB_CONTAINER=$qa_db" >> "$GITHUB_ENV"
           docker run -d --rm --name "$qa_db" \
+            --label billok.qa.disposable=true \
+            --tmpfs /var/lib/postgresql/data:rw,size=536870912 \
             -e POSTGRES_USER=billokqa -e POSTGRES_PASSWORD=billokqa_local_only \
             -e POSTGRES_DB=billokqa -p 127.0.0.1::5432 \
             postgres:16-alpine
@@ -179,6 +183,26 @@ jobs:
           docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
             -v ON_ERROR_STOP=1 < scripts/qa-prelaunch-clean-schema.sql
           echo 'BILLOK_94_FRESH_SCHEMA=PASS'
+          # 9.5: only this run's disposable, loopback-only, volume-free database.
+          test "$BILLOK_QA_DB_CONTAINER" = "billok-mobile-qa-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test "$(docker inspect -f '{{index .Config.Labels "billok.qa.disposable"}}' "$BILLOK_QA_DB_CONTAINER")" = true
+          # PostgreSQL PGDATA exists only in container tmpfs; no Docker volumes.
+          test "$(docker inspect -f '{{json .Mounts}}' "$BILLOK_QA_DB_CONTAINER")" = '[]'
+          test "$(docker inspect -f '{{index .HostConfig.Tmpfs "/var/lib/postgresql/data"}}' "$BILLOK_QA_DB_CONTAINER")" = 'rw,size=536870912'
+          [[ "$DATABASE_URL" =~ ^postgresql://billokqa:billokqa_local_only@127\.0\.0\.1:[0-9]+/billokqa$ ]]
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < scripts/qa-disposable-reset-fixture.sql
+          docker exec "$BILLOK_QA_DB_CONTAINER" dropdb -U billokqa --if-exists billokqa
+          docker exec "$BILLOK_QA_DB_CONTAINER" createdb -U billokqa billokqa
+          npx prisma db push
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < prisma/migrations/prelaunch_schema_cleanup.sql
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < scripts/qa-prelaunch-clean-schema.sql
+          docker exec -i "$BILLOK_QA_DB_CONTAINER" psql -U billokqa -d billokqa \
+            -v ON_ERROR_STOP=1 < scripts/qa-billok-empty-db.sql
+          echo 'BILLOK_95_RESET_EMPTY_OWNER=PASS'
+          # Only after the empty check do normal disposable CI fixtures run.
           # 6.14.3: same mandatory email CHECK and lower(email) unique index
           # as production, applied twice to prove idempotence.
           for attempt in 1 2; do
