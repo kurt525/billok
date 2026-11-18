@@ -237,7 +237,6 @@ model Group {
   description   String? @db.Text
   currency      String  @default("RUB")
   emoji         String? @default("💰")
-  simplifyDebts Boolean @default(true)
   archivedAt    DateTime?
 
   members      GroupMember[]
@@ -518,7 +517,6 @@ enum AdminAction {
   USER_SUSPENDED
   USER_UNSUSPENDED
   GROUP_DELETED
-  ORPHANS_CLEANED
   IMPERSONATION_STARTED
   IMPERSONATION_ENDED
   OWNER_BOOTSTRAP_STARTED
@@ -537,14 +535,6 @@ enum AdminAction {
   EXPORT_CREATED
   TEST_EMAIL_SENT
   EXPIRED_SPLITS_CLEANED
-  MERIDIAN_LOGIN_STARTED
-  MERIDIAN_LOGIN_COMPLETED
-  MERIDIAN_LOGIN_FAILED
-  MERIDIAN_LOGOUT
-  MERIDIAN_NOTIFY_PREFERENCE_CHANGED
-  AI_PROVIDER_TESTED
-  VENMO_SETTING_CHANGED
-  GUEST_UPLOADS_SETTING_CHANGED
   UNUSED_RECEIPTS_CLEANED
 }
 
@@ -623,7 +613,6 @@ model GuestSplit {
 
   @@index([userId])
   @@index([expiresAt])
-  // /api/uploads looks up a receipt's splits on every non-guest image load (#318), and the
-  // receipt cleanups check whether a split uses a receipt
+  // Receipt cleanup checks whether any guest split references a receipt.
   @@index([receiptId])
 }

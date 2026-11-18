@@ -6,6 +6,13 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 
+CLEANUP_SQL = ROOT / "prisma/migrations/prelaunch_schema_cleanup.sql"
+
+
+def cleanup_section(name: str) -> str:
+    full = CLEANUP_SQL.read_text(encoding="utf-8")
+    return full.split("-- BEGIN " + name + "\n", 1)[1].split("-- END " + name, 1)[0]
+
 
 class UserSchemaCleanupTests(unittest.TestCase):
     def test_user_has_no_currency_or_locale_column(self):
@@ -19,7 +26,7 @@ class UserSchemaCleanupTests(unittest.TestCase):
             self.assertRegex(user, r"(?m)^\s*" + required + r"\s+")
 
     def test_sql_migration_only_drops_two_user_columns_and_is_idempotent(self):
-        migration = (ROOT / "prisma/migrations/user_currency_locale_drop.sql").read_text(encoding="utf-8")
+        migration = cleanup_section("currency")
         self.assertIn('ALTER TABLE IF EXISTS "User"', migration)
         self.assertIn('DROP COLUMN IF EXISTS "defaultCurrency"', migration)
         self.assertIn('DROP COLUMN IF EXISTS "locale"', migration)
@@ -45,8 +52,7 @@ class UserSchemaCleanupTests(unittest.TestCase):
             self.assertRegex(body, r"(?m)^\s*currency\s+String\s+@default\(\"RUB\"\)")
 
     def test_venmo_fx_migration_drops_only_six_columns_and_is_repeatable(self):
-        path = ROOT / "prisma/migrations/obsolete_venmo_fx_drop.sql"
-        sql = path.read_text(encoding="utf-8")
+        sql = cleanup_section("venmo_fx")
         for table in ("User", "GuestSplit", "Expense", "Settlement"):
             self.assertIn('ALTER TABLE IF EXISTS "' + table + '"', sql)
         for field in ("venmoUsername", "payerVenmoHandle", "exchangeRate", "baseCurrencyAmount"):
@@ -84,7 +90,7 @@ class UserSchemaCleanupTests(unittest.TestCase):
         self.assertNotIn("FAILED", statuses)
 
     def test_manual_receipt_schema_migration_restricts_changes_to_billok(self):
-        sql = (ROOT / "prisma/migrations/obsolete_receipt_media_drop.sql").read_text(encoding="utf-8")
+        sql = cleanup_section("receipt_media")
         self.assertEqual(sql.count("DROP COLUMN IF EXISTS"), 5)
         for column in ("imagePath", "originalName", "mimeType", "fileSize", "receiptShared"):
             self.assertIn('DROP COLUMN IF EXISTS "' + column + '"', sql)
@@ -102,6 +108,59 @@ class UserSchemaCleanupTests(unittest.TestCase):
         self.assertIn("manualPartsConfirmationSnapshot", router)
         self.assertIn("receiptPartsConfirmationRequired", router)
         self.assertIn("calculateManualReceiptTotals(", router)
+
+    def test_retired_admin_audit_actions_are_removed_but_ongoing_audit_survives(self):
+        schema = (ROOT / "prisma/schema.prisma").read_text(encoding="utf-8")
+        values = schema.split("enum AdminAction {", 1)[1].split("\n}", 1)[0]
+        retired = (
+            "ORPHANS_CLEANED", "MERIDIAN_LOGIN_STARTED", "MERIDIAN_LOGIN_COMPLETED",
+            "MERIDIAN_LOGIN_FAILED", "MERIDIAN_LOGOUT", "MERIDIAN_NOTIFY_PREFERENCE_CHANGED",
+            "AI_PROVIDER_TESTED", "VENMO_SETTING_CHANGED", "GUEST_UPLOADS_SETTING_CHANGED",
+        )
+        for item in retired:
+            self.assertNotRegex(values, r"(?m)^\s*" + item + r"\s*$")
+        for required in ("OWNER_BOOTSTRAP_COMPLETED", "OWNER_PASSKEY_REVOKED",
+                         "OWNER_PASSKEY_ADDED", "OWNER_PASSKEY_APPROVAL_VERIFIED",
+                         "INVITE_CREATED", "EXPORT_CREATED", "UNUSED_RECEIPTS_CLEANED",
+                         "IMPERSONATION_STARTED"):
+            self.assertRegex(values, r"(?m)^\s*" + required + r"\s*$")
+        sql = cleanup_section("retired_admin_actions")
+        for retired_action in retired:
+            self.assertIn("'" + retired_action + "'", sql)
+        for action in ("OWNER_PASSKEY_ADDED", "UNUSED_RECEIPTS_CLEANED"):
+            self.assertIn("'" + action + "'", sql)
+        self.assertIn('ALTER TABLE "AdminAuditLog" ALTER COLUMN "action"', sql)
+        self.assertIn('ALTER TYPE "AdminAction" RENAME TO "AdminAction_legacy"', sql)
+        self.assertNotIn("CASCADE", sql.upper())
+
+    def test_unused_group_setting_not_recreated_but_live_balances_are_retained(self):
+        schema = (ROOT / "prisma/schema.prisma").read_text(encoding="utf-8")
+        group = schema.split("model Group {", 1)[1].split("\n}", 1)[0]
+        self.assertNotRegex(group, r"(?m)^\s*simplifyDebts\s+")
+        self.assertIn('DROP COLUMN IF EXISTS "simplifyDebts"', cleanup_section("last_unused_group_column"))
+        self.assertNotIn("simplifyDebts: z.boolean()", (ROOT / "src/server/trpc/routers/groups.ts").read_text())
+        self.assertIn("simplifyDebts(", (ROOT / "src/server/trpc/routers/balances.ts").read_text())
+        self.assertIn("image", schema, "User.image is still consumed by active session/UI")
+
+    def test_legacy_migrations_are_consolidated_but_security_migrations_retained(self):
+        for old in ("expense_category_drop.sql", "user_currency_locale_drop.sql",
+                    "obsolete_venmo_fx_drop.sql", "obsolete_receipt_media_drop.sql"):
+            self.assertFalse((ROOT / "prisma/migrations" / old).exists())
+        self.assertIn('DROP COLUMN IF EXISTS "category"', cleanup_section("category"))
+        self.assertIn("prelaunch_schema_cleanup.sql", (ROOT / "scripts/dev.mjs").read_text())
+        self.assertTrue((ROOT / "prisma/migrations/password_auth_drop.sql").exists())
+        self.assertTrue((ROOT / "prisma/after-push/user_email_ru_su_guard.sql").exists())
+        self.assertTrue((ROOT / "prisma/after-push/owner_bootstrap_identity_guard.sql").exists())
+
+    def test_clean_database_catalog_guard_is_connected_to_CI(self):
+        guard = ROOT / "scripts/qa-prelaunch-clean-schema.sql"
+        sql = guard.read_text(encoding="utf-8")
+        for name in ("AdminAction", "Group", "Expense", "User", "Receipt", "GuestSplit"):
+            self.assertIn(name, sql)
+        self.assertIn("RAISE EXCEPTION", sql)
+        ci = (ROOT / ".github/workflows/billok-ci.yml").read_text(encoding="utf-8")
+        self.assertIn("qa-prelaunch-clean-schema.sql", ci)
+        self.assertIn("prelaunch_schema_cleanup.sql", ci)
 
     def test_owner_bootstrap_does_not_write_removed_fields(self):
         bootstrap = (ROOT / "src/server/lib/owner-bootstrap.ts").read_text(encoding="utf-8")

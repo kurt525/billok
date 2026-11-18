@@ -1730,13 +1730,20 @@ describe('RUB-only group API', () => {
     expect(mockDb.group.findUnique).not.toHaveBeenCalled();
   });
 
+  test('rejects obsolete per-group debt simplification setting, keeping the global algorithm intact', async () => {
+    const api = await caller();
+    const invalidPayload = { groupId: 'g1', simplifyDebts: false } as unknown as Parameters<typeof api.update>[0];
+    await expect(api.update(invalidPayload)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.group.update).not.toHaveBeenCalled();
+  });
+
   test('updates allowed fields without modifying currency or querying conversion-related tables', async () => {
     mockDb.group.update.mockResolvedValue({ id: 'g1', currency: 'RUB', name: 'Новое название' });
     const api = await caller();
-    await api.update({ groupId: 'g1', name: 'Новое название', description: 'Общие покупки', simplifyDebts: true });
+    await api.update({ groupId: 'g1', name: 'Новое название', description: 'Общие покупки' });
     expect(mockDb.group.update).toHaveBeenCalledWith({
       where: { id: 'g1' },
-      data: { name: 'Новое название', description: 'Общие покупки', simplifyDebts: true },
+      data: { name: 'Новое название', description: 'Общие покупки' },
     });
     expect(mockDb.expense.count).not.toHaveBeenCalled();
     expect(mockDb.settlement.count).not.toHaveBeenCalled();

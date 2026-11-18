@@ -39,9 +39,10 @@ describe('BillOK manual group expenses do not use the inherited ShareTab categor
   });
 
   test('existing test databases discard only the obsolete category column', () => {
-    const migration = read('prisma/migrations/expense_category_drop.sql');
+    const migration = read('prisma/migrations/prelaunch_schema_cleanup.sql');
     expect(migration).toContain('ALTER TABLE IF EXISTS "Expense" DROP COLUMN IF EXISTS "category";');
     expect(migration).not.toMatch(/DROP\s+TABLE/i);
-    expect(read('scripts/dev.mjs')).toContain('prisma/migrations/expense_category_drop.sql');
+    expect(read('scripts/dev.mjs')).toContain('prisma/migrations/prelaunch_schema_cleanup.sql');
+    expect(() => read('prisma/migrations/expense_category_drop.sql')).toThrow();
   });
 });

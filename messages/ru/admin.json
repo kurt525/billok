@@ -183,7 +183,6 @@
     "actionUserSuspended": "Заблокирован пользователь",
     "actionUserUnsuspended": "Разблокирован пользователь",
     "actionGroupDeleted": "Удалена группа",
-    "actionOrphansCleaned": "Удалены несвязанные файлы",
     "actionImpersonation": "Вход от имени пользователя",
     "actionInviteCreated": "Создано приглашение",
     "actionInviteRevoked": "Отозвано приглашение",
@@ -192,7 +191,7 @@
     "actionTestEmail": "Отправлено тестовое письмо",
     "actionSplitsCleaned": "Удалены просроченные чеки",
     "actionUnusedReceiptsCleaned": "Удалены неиспользуемые чеки",
-    "filesDeleted": "Файлов: {count}",
+    "filesDeleted": "Записей: {count}",
     "actionExportCreated": "Создан экспорт данных"
   },
   "impersonation": {

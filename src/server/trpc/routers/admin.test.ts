@@ -184,12 +184,12 @@ describe('logAdminAction helper', () => {
     const { logAdminAction } = await import('./admin');
     mockDb.adminAuditLog.create.mockResolvedValue({});
 
-    await logAdminAction(mockDb as never, 'admin-1', 'ORPHANS_CLEANED' as never, null, null);
+    await logAdminAction(mockDb as never, 'admin-1', 'UNUSED_RECEIPTS_CLEANED' as never, null, null);
 
     expect(mockDb.adminAuditLog.create).toHaveBeenCalledWith({
       data: {
         adminId: 'admin-1',
-        action: 'ORPHANS_CLEANED',
+        action: 'UNUSED_RECEIPTS_CLEANED',
       },
     });
   });

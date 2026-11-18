@@ -161,7 +161,6 @@ export const groupsRouter = createTRPCRouter({
         // A group's currency is immutable in RUB-only BillOK.
         currency: z.never().optional(),
         emoji: z.string().max(4).optional(),
-        simplifyDebts: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
