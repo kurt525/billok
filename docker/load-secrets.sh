@@ -39,7 +39,18 @@ read_billok_secret() {
     cat -- "$secret_path"
 }
 
-DB_PASSWORD=$(read_billok_secret database-password) || exit 1
+case "$BILLOK_DB_PHASE" in
+  prod|test) : ;;
+  *) echo "ERROR: Set BILLOK_DB_PHASE=prod or test" >&2; exit 1 ;;
+esac
+db_parent="$BILLOK_SECRETS_DIR/postgres"
+if [ ! -d "$db_parent" ] || [ -L "$db_parent" ] ||
+  [ "$(stat -c '%u' "$db_parent")" != 0 ] ||
+  [ "$(stat -c '%a' "$db_parent")" != 700 ]; then
+  echo "ERROR: PostgreSQL secret directory requires root ownership and 0700" >&2
+  exit 1
+fi
+DB_PASSWORD=$(read_billok_secret "postgres/$BILLOK_DB_PHASE.password") || exit 1
 AUTH_SECRET=$(read_billok_secret auth-secret) || exit 1
 NEXTAUTH_SECRET=$(read_billok_secret nextauth-secret) || exit 1
 EMAIL_SERVER_PASSWORD=$(read_billok_secret reg-ru-smtp-password) || exit 1

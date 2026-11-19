@@ -14,8 +14,7 @@ services:
     ports:
       - "127.0.0.1:${BILLOK_INTERNAL_PORT:-3000}:3000"
     environment:
-      - DB_USER=${DB_USER:-billok}
-      - DB_NAME=${DB_NAME:-billok}
+      - BILLOK_DB_PHASE=prod
       - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
       - AUTH_TRUST_HOST=${AUTH_TRUST_HOST:-false}
       - EMAIL_SERVER_HOST=${EMAIL_SERVER_HOST:-}
@@ -29,8 +28,8 @@ services:
       - REGISTER_RATE_LIMIT_MAX=${REGISTER_RATE_LIMIT_MAX:-10}
       - GUEST_RATE_LIMIT_MAX=${GUEST_RATE_LIMIT_MAX:-60}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+    networks: [default, billok_pg_prod_net]
     volumes:
-      - pgdata:/var/lib/postgresql/data
       - uploads:/app/uploads
       # 8.11: secrets only in root-owned host files, not container environment.
       - type: bind
@@ -40,7 +39,7 @@ services:
         bind:
           create_host_path: false
     restart: unless-stopped
-    # Combined PostgreSQL + Next.js container. No production deployment in 8.9.
+    # App only; production database is the pre-existing billok_pg_prod.
     mem_limit: 2g
     mem_reservation: 512m
     cpus: "2.0"
@@ -50,26 +49,23 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    # Give the entrypoint time to stop Node and shut PostgreSQL down cleanly
     stop_grace_period: 30s
     healthcheck:
-      # Healthy only when both the bundled PostgreSQL and web process respond.
+      # PostgreSQL has an independent healthcheck.
       test:
         - CMD-SHELL
-        - su-exec postgres pg_isready -q -h /run/postgresql && wget -qO- http://127.0.0.1:3000/api/health >/dev/null
+        - wget -qO- http://127.0.0.1:3000/api/health >/dev/null
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
 
-# Explicitly named, independently recoverable BillOK-only volumes.
-# Do not use docker compose down --volumes or reuse another project's volumes.
+# Docker must find the already-provisioned production DB network.
+networks:
+  billok_pg_prod_net:
+    name: billok_pg_prod_net
+    external: true
 volumes:
-  pgdata:
-    name: billok_pgdata
-    labels:
-      ru.billok.project: billok
-      ru.billok.data: postgres
   uploads:
     name: billok_uploads
     labels:

@@ -40,32 +40,34 @@ def digest(path):
 
 
 def inspect_container(name):
-    response = docker("inspect", name, capture_output=True, text=True)
-    objects = json.loads(response.stdout)
-    if len(objects) != 1:
-        raise ValueError("Expected exactly one container")
-    info = objects[0]
-    labels = info.get("Config", {}).get("Labels") or {}
-    if (labels.get("ru.billok.project"), labels.get("ru.billok.component")) != ("billok", "application"):
+    app=json.loads(docker("inspect",name,capture_output=True,text=True).stdout)[0]
+    labels=app.get("Config",{}).get("Labels") or {}
+    if (labels.get("ru.billok.project"),labels.get("ru.billok.component")) != ("billok","application"):
         raise ValueError("Container is not a labeled BillOK application")
-    if not info.get("State", {}).get("Running", False):
-        raise ValueError("BillOK application container is not running")
-    mounts = {m.get("Destination"): m for m in info.get("Mounts", [])}
-    volumes = []
-    for destination, component in ((PG_PATH, "postgres"), (UPLOAD_PATH, "uploads")):
-        m = mounts.get(destination)
-        if not m or m.get("Type") != "volume" or not m.get("Name"):
-            raise ValueError("Missing BillOK " + component + " named volume")
-        name = m["Name"]
-        metadata = json.loads(docker("volume", "inspect", name, capture_output=True, text=True).stdout)[0]
-        vl = metadata.get("Labels") or {}
-        if (vl.get("ru.billok.project"), vl.get("ru.billok.data")) != ("billok", component):
-            raise ValueError("Volume lacks BillOK ownership labels: " + component)
-        volumes.append(name)
-    if volumes[0] == volumes[1]:
-        raise ValueError("PostgreSQL and uploads must use separate named volumes")
-    return volumes
-
+    if not app.get("State",{}).get("Running",False):
+        raise ValueError("BillOK application not running")
+    mounts={m.get("Destination"):m for m in app.get("Mounts",[])}
+    m=mounts.get(UPLOAD_PATH)
+    if not m or m.get("Type")!="volume" or m.get("Name")!="billok_uploads":
+        raise ValueError("Missing BillOK uploads volume")
+    meta=json.loads(docker("volume","inspect","billok_uploads",capture_output=True,text=True).stdout)[0]
+    lab=meta.get("Labels") or {}
+    if (lab.get("ru.billok.project"),lab.get("ru.billok.data"))!=("billok","uploads"):
+        raise ValueError("Uploads volume lacks BillOK ownership labels")
+    pg=json.loads(docker("inspect","billok_pg_prod",capture_output=True,text=True).stdout)[0]
+    if pg.get("Name","").lstrip("/")!="billok_pg_prod" or pg.get("Config",{}).get("Image")!=PG_IMAGE:
+        raise ValueError("Unexpected production PostgreSQL")
+    if not pg.get("State",{}).get("Running",False):
+        raise ValueError("Production PostgreSQL unavailable")
+    if set(pg.get("NetworkSettings",{}).get("Networks") or {})!={"billok_pg_prod_net"}:
+        raise ValueError("Production PostgreSQL network mismatch")
+    if any(x for x in (pg.get("NetworkSettings",{}).get("Ports") or {}).values()):
+        raise ValueError("Production PostgreSQL exposes a host port")
+    mounts={m.get("Destination"):m for m in pg.get("Mounts",[])}
+    m=mounts.get(PG_PATH)
+    if not m or m.get("Type")!="volume" or m.get("Name")!="billok_pg_prod_data":
+        raise ValueError("Production PostgreSQL volume mismatch")
+    return ["billok_pg_prod_data","billok_uploads"]
 
 def snapshot_location(parent):
     if not parent.is_absolute() or parent.is_symlink():
@@ -130,14 +132,13 @@ def backup(container, parent):
     try:
         dump = temp / "database.dump"
         with dump.open("wb") as target:
-            docker("exec", container, "sh", "-c",
-                   'exec su-exec postgres pg_dump -h /run/postgresql -d "$DB_NAME" -Fc --no-owner --no-acl',
-                   stdout=target, stderr=subprocess.PIPE)
+            docker("exec","billok_pg_prod","pg_dump","-U","billok_prod","-d","billok_prod",
+                   "-Fc","--no-owner","--no-acl",stdout=target,stderr=subprocess.PIPE)
         if not dump.stat().st_size:
             raise ValueError("Empty PostgreSQL dump")
         with dump.open("rb") as source:
-            docker("exec", "-i", container, "su-exec", "postgres",
-                   "pg_restore", "--list", stdin=source, stdout=subprocess.DEVNULL)
+            docker("exec","-i","billok_pg_prod","pg_restore","--list",
+                   stdin=source,stdout=subprocess.DEVNULL)
         upload_dir = temp / "uploads"
         upload_dir.mkdir(mode=0o700)
         docker("cp", container + ":/app/uploads/.", str(upload_dir))

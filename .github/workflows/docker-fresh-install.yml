@@ -1,6 +1,6 @@
-name: Docker Fresh Install
+name: Docker External PostgreSQL Smoke
 
-# Builds the production image and runs scripts/docker-smoke.sh against it:
+# Manual smoke requires preprovisioned billok_pg_test and root-owned secrets:
 # a fresh install on an empty data volume, restarts the way every existing
 # install does on upgrade, including schema creation and manual receipts. The Test workflow runs the app with
 # `npm run start` against its own database, so it never exercises the

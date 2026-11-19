@@ -1,4 +1,4 @@
-FROM node:22-alpine AS base
+FROM public.ecr.aws/docker/library/node:22-alpine AS base
 ENV NPM_CONFIG_FETCH_RETRIES=5 \
     NPM_CONFIG_FETCH_RETRY_FACTOR=2 \
     NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000 \
@@ -24,9 +24,9 @@ FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# Install PostgreSQL
+# Only the application is in this image: PostgreSQL exists separately.
 # hadolint ignore=DL3018
-RUN apk add --no-cache postgresql16 postgresql16-contrib su-exec
+RUN apk add --no-cache su-exec
 
 # Create users
 RUN addgroup --system --gid 1001 nodejs && \
@@ -40,29 +40,21 @@ COPY --from=builder /app/.commit-sha ./.commit-sha
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/prisma.config.ts ./
 COPY --from=builder /app/src/generated ./src/generated
-# Install Prisma CLI in isolated dir to avoid conflict with standalone node_modules
-WORKDIR /prisma-cli
-RUN npm init -y && \
-    npm install --legacy-peer-deps prisma@7.6.0 dotenv@17.3.1
-WORKDIR /app
-
 COPY docker/entrypoint.sh /app/entrypoint.sh
 COPY docker/load-secrets.sh /app/load-secrets.sh
 
 # Create directories
-RUN mkdir -p /app/uploads/receipts /var/lib/postgresql/data /run/postgresql && \
+RUN mkdir -p /app/uploads/receipts && \
     chown -R nextjs:nodejs /app/uploads && \
-    chown -R postgres:postgres /var/lib/postgresql/data /run/postgresql && \
     chmod +x /app/entrypoint.sh
 
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
-ENV PGDATA=/var/lib/postgresql/data
 
-VOLUME ["/var/lib/postgresql/data", "/app/uploads"]
+VOLUME ["/app/uploads"]
 
-# start-period covers first-boot initdb + user creation + schema push
+# Application has no PostgreSQL init or automatic DDL on startup.
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
   CMD wget -qO- http://127.0.0.1:3000/api/health || exit 1
 

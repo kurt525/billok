@@ -47,7 +47,7 @@ def make_snapshot(root, malicious=False, symlink=False):
     payload = {
         "format": "billok-8.9-v1",
         "created_utc": "2026-11-16T00:00:00+00:00",
-        "source_volumes": {"postgres": "billok_pgdata", "uploads": "billok_uploads"},
+        "source_volumes": {"postgres": "billok_pg_prod_data", "uploads": "billok_uploads"},
         "sha256": {
             name: hashlib.sha256((snapshot / name).read_bytes()).hexdigest()
             for name in ("database.dump", "uploads.tar.gz")
@@ -58,43 +58,45 @@ def make_snapshot(root, malicious=False, symlink=False):
 
 
 class ContainerIsolationTests(unittest.TestCase):
-    def test_compose_valid_and_named_separate_billok_volumes_only(self):
-        command = ["docker", "compose", "-f", str(ROOT / "docker/docker-compose.yml"),
-                   "config", "--format", "json"]
-        cfg = json.loads(subprocess.run(command, text=True, capture_output=True,
-                                        check=True, timeout=15).stdout)
-        self.assertEqual(set(cfg["services"]), {"billok"})
-        app = cfg["services"]["billok"]
+    def test_compose_connects_preexisting_prod_pg_and_no_new_pg_volume(self):
+        c=json.loads(subprocess.run(["docker","compose","-f",str(ROOT/"docker/docker-compose.yml"),
+             "config","--format","json"],capture_output=True,text=True,check=True,timeout=15).stdout)
+        self.assertEqual(set(c["services"]), {"billok"})
+        app=c["services"]["billok"]
         self.assertEqual(app["labels"]["ru.billok.project"], "billok")
         self.assertEqual(app["labels"]["ru.billok.component"], "application")
-        self.assertEqual(set(cfg["volumes"]), {"pgdata", "uploads"})
-        for key, name, kind in (
-            ("pgdata", "billok_pgdata", "postgres"),
-            ("uploads", "billok_uploads", "uploads"),
-        ):
-            volume = cfg["volumes"][key]
-            self.assertEqual(volume["name"], name)
-            self.assertEqual(volume["labels"]["ru.billok.project"], "billok")
-            self.assertEqual(volume["labels"]["ru.billok.data"], kind)
-        mounts = {m["target"]: m["source"] for m in app["volumes"]}
-        self.assertEqual(mounts["/var/lib/postgresql/data"], "pgdata")
+        self.assertEqual(app["environment"]["BILLOK_DB_PHASE"], "prod")
+        self.assertEqual(set(c["volumes"]), {"uploads"})
+        self.assertEqual(c["volumes"]["uploads"]["name"], "billok_uploads")
+        self.assertEqual(c["volumes"]["uploads"]["labels"]["ru.billok.data"], "uploads")
+        self.assertTrue(c["networks"]["billok_pg_prod_net"]["external"])
+        self.assertEqual(c["networks"]["billok_pg_prod_net"]["name"], "billok_pg_prod_net")
+        self.assertIn("billok_pg_prod_net",app["networks"])
+        mounts={m["target"]:m["source"] for m in app["volumes"]}
         self.assertEqual(mounts["/app/uploads"], "uploads")
-
-    def test_resource_limits_logs_and_both_process_healthcheck(self):
-        cfg = json.loads(subprocess.run(
-            ["docker", "compose", "-f", str(ROOT / "docker/docker-compose.yml"),
-             "config", "--format", "json"], text=True, capture_output=True,
-            check=True, timeout=15).stdout)
-        app = cfg["services"]["billok"]
-        self.assertEqual(int(app["mem_limit"]), 2 * 1024 ** 3)
-        self.assertEqual(app["pids_limit"], 256)
-        self.assertEqual(str(app["cpus"]), "2")
-        self.assertEqual(app["logging"]["driver"], "json-file")
-        self.assertEqual(app["logging"]["options"], {"max-size": "10m", "max-file": "3"})
-        health = app["healthcheck"]["test"]
-        self.assertEqual(health[0], "CMD-SHELL")
-        self.assertIn("pg_isready", health[1])
-        self.assertIn("/api/health", health[1])
+        self.assertNotIn("/var/lib/postgresql/data", mounts)
+    def test_runtime_cannot_create_embedded_pg(self):
+        df=(ROOT/"docker/Dockerfile").read_text()
+        entry=(ROOT/"docker/entrypoint.sh").read_text()
+        for token in ("postgresql16","PGDATA=","/var/lib/postgresql/data","/prisma-cli"):
+            self.assertNotIn(token,df)
+        for token in ("initdb","pg_ctl","CREATE DATABASE","prisma db push","psql "):
+            self.assertNotIn(token,entry)
+        self.assertIn("billok_pg_$BILLOK_DB_PHASE:5432",entry)
+        self.assertIn("exec su-exec nextjs node server.js",entry)
+    def test_resource_limits_logs_and_healthcheck(self):
+        c=json.loads(subprocess.run(["docker","compose","-f",str(ROOT/"docker/docker-compose.yml"),
+             "config","--format","json"],capture_output=True,text=True,check=True,timeout=15).stdout)
+        app=c["services"]["billok"]
+        self.assertEqual(int(app["mem_limit"]), 2*1024**3)
+        self.assertEqual(app["pids_limit"],256)
+        self.assertEqual(str(app["cpus"]),"2")
+        self.assertEqual(app["logging"]["driver"],"json-file")
+        self.assertEqual(app["logging"]["options"],{"max-size":"10m","max-file":"3"})
+        h=app["healthcheck"]["test"]
+        self.assertEqual(h[0],"CMD-SHELL")
+        self.assertNotIn("pg_isready",h[1])
+        self.assertIn("/api/health",h[1])
 
     def test_backup_verification_detects_corruption(self):
         with tempfile.TemporaryDirectory(prefix="billok-89-test-") as parent:

@@ -19,7 +19,7 @@ SENSITIVE = {
     "EMAIL_SERVER_PASSWORD", "WEB_PUSH_VAPID_PRIVATE_KEY",
 }
 DUMMY = {
-    "database-password": "a" * 64,
+    "postgres/prod.password": "a" * 64,
     "auth-secret": "b" * 64,
     "nextauth-secret": "c" * 64,
     "reg-ru-smtp-password": "qa-only-not-production",
@@ -31,6 +31,7 @@ def run_fixture(changes=None, missing=None, extra_env=None, link=None, insecure=
         root = Path(tmp)
         folder = root / "secret-files"
         folder.mkdir(mode=0o700)
+        (folder / "postgres").mkdir(mode=0o700)
         for name, default in DUMMY.items():
             if name != missing:
                 f = folder / name
@@ -38,7 +39,7 @@ def run_fixture(changes=None, missing=None, extra_env=None, link=None, insecure=
                 f.chmod(0o644 if name == insecure else 0o600)
         if link:
             (folder / link).unlink()
-            (folder / link).symlink_to(folder / "database-password")
+            (folder / link).symlink_to(folder / "postgres/prod.password")
         bindir = root / "bin"
         bindir.mkdir()
         fake_stat = bindir / "stat"
@@ -53,7 +54,7 @@ def run_fixture(changes=None, missing=None, extra_env=None, link=None, insecure=
             LOADER.read_text(encoding="utf-8").replace("/run/billok-secrets", str(folder))
         )
         staged.chmod(0o600)
-        env = {"PATH": str(bindir) + ":" + os.environ["PATH"]}
+        env = {"PATH": str(bindir) + ":" + os.environ["PATH"], "BILLOK_DB_PHASE":"prod"}
         env.update(extra_env or {})
         result = subprocess.run(
             ["/bin/sh", "-c", '. "$1"; echo BILLOK_RUNTIME_SECRETS=VALID',
@@ -94,18 +95,16 @@ class ProductionSecretsTests(unittest.TestCase):
         ):
             self.assertIn(pattern, ignore)
 
-    def test_entrypoint_imports_secret_files_before_postgres(self):
-        s = ENTRYPOINT.read_text()
-        self.assertLess(s.index(". /app/load-secrets.sh"), s.index("PGDATA="))
-        self.assertIn('PGPASSWORD="$DB_PASSWORD" postgres_command psql', s)
-        self.assertIn('env -u DB_PASSWORD -u AUTH_SECRET -u NEXTAUTH_SECRET', s)
-        self.assertIn('-u EMAIL_SERVER_PASSWORD -u WEB_PUSH_VAPID_PRIVATE_KEY', s)
-        self.assertNotIn('psql "$DATABASE_URL"', s)
-        self.assertNotIn('-v db_password="$DB_PASSWORD"', s)
-        self.assertIn("WITH PASSWORD '$DB_PASSWORD'", s)
-        self.assertNotIn('echo "$DATABASE_URL"', s)
-        self.assertIn('echo "  Database:       local PostgreSQL; credentials not logged"', s)
-
+    def test_secret_files_choose_external_postgres(self):
+        entry=ENTRYPOINT.read_text()
+        loader=LOADER.read_text()
+        self.assertLess(entry.index(". /app/load-secrets.sh"),entry.index("export DATABASE_URL="))
+        self.assertIn("billok_pg_$BILLOK_DB_PHASE:5432",entry)
+        self.assertNotIn("initdb",entry)
+        self.assertNotIn("pg_ctl",entry)
+        self.assertNotIn("prisma db push",entry)
+        self.assertIn('read_billok_secret "postgres/$BILLOK_DB_PHASE.password"',loader)
+        self.assertNotIn('echo "$DATABASE_URL"',entry)
     def test_shell_scripts_parse_correctly(self):
         for name in ("docker/load-secrets.sh", "docker/entrypoint.sh"):
             subprocess.run(["sh", "-n", str(ROOT / name)], check=True, timeout=5)
@@ -121,7 +120,7 @@ class ProductionSecretsTests(unittest.TestCase):
                 self.assertNotEqual(run_fixture(missing=name).returncode, 0)
         for changed in (
             {"auth-secret": "short"},
-            {"database-password": "x" * 64},
+            {"postgres/prod.password": "x" * 64},
             {"nextauth-secret": ""},
             {"reg-ru-smtp-password": "row1\nrow2"},
         ):
@@ -129,6 +128,7 @@ class ProductionSecretsTests(unittest.TestCase):
                 self.assertNotEqual(run_fixture(changes=changed).returncode, 0)
         self.assertNotEqual(run_fixture(link="auth-secret").returncode, 0)
         self.assertNotEqual(run_fixture(insecure="auth-secret").returncode, 0)
+        self.assertNotEqual(run_fixture(extra_env={"BILLOK_DB_PHASE":"wrong"}).returncode, 0)
 
     def test_preexisting_environment_secrets_are_rejected(self):
         for name in SENSITIVE:
