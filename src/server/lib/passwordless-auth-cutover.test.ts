@@ -47,11 +47,13 @@ describe('Issue #1 6.10.4: passwordless cutover must not leave a hidden sign-in 
     const migration = source('prisma/migrations/password_auth_drop.sql');
     expect(migration).toMatch(/DROP TABLE IF EXISTS "PasswordResetRequest"\s*;/u);
     expect(migration).toMatch(/ALTER TABLE IF EXISTS "User" DROP COLUMN IF EXISTS "passwordHash"\s*;/u);
+    // The password-removal SQL is applied when provisioning the database,
+    // never from the web application entrypoint.
     const entrypoint = source('docker/entrypoint.sh');
-    expect(entrypoint.indexOf('for sqlfile in /app/prisma/migrations/*.sql')).toBeGreaterThanOrEqual(0);
-    expect(entrypoint.indexOf('for sqlfile in /app/prisma/migrations/*.sql')).toBeLessThan(
-      entrypoint.indexOf('prisma/build/index.js db push'),
-    );
+    expect(entrypoint).not.toMatch(/(?:initdb|pg_ctl|prisma db push|prisma\/build\/index\.js|for sqlfile in)/u);
+    expect(entrypoint).toContain('billok_pg_$BILLOK_DB_PHASE:5432');
+    expect(entrypoint).toContain('exec su-exec nextjs node server.js');
+    expect(source('docker/Dockerfile')).not.toMatch(/(?:postgresql16|\/var\/lib\/postgresql\/data)/u);
   });
 
   it('has no undeclared login or password reset route, even if someone knows the old URL', () => {

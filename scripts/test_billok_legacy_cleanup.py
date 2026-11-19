@@ -126,12 +126,17 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
             self.assertNotIn("sharetab", content.lower())
         self.assertIn("  billok:", compose)
         self.assertIn("image: billok:latest", compose)
-        self.assertIn("DB_USER=", compose)
-        self.assertIn("DB_NAME=", compose)
-        self.assertIn("DB_USER=", entrypoint)
-        self.assertIn("DB_NAME=", entrypoint)
-        self.assertIn('IMAGE="billok:smoke"', smoke)
-        self.assertIn('CONTAINER="billok-smoke-', smoke)
+        # The app only connects to an already provisioned PostgreSQL.
+        self.assertIn("BILLOK_DB_PHASE=prod", compose)
+        self.assertIn("billok_pg_prod_net", compose)
+        self.assertIn("external: true", compose)
+        self.assertNotIn("DB_USER=", compose)
+        self.assertNotIn("DB_NAME=", compose)
+        self.assertIn("billok_pg_$BILLOK_DB_PHASE:5432", entrypoint)
+        for forbidden in ("initdb", "pg_ctl", "CREATE DATABASE", "prisma db push"):
+            self.assertNotIn(forbidden, entrypoint)
+        self.assertIn("IMAGE=billok:smoke", smoke)
+        self.assertIn('container="billok-smoke-', smoke)
         self.assertIn("BillOK Dev Server", dev)
         self.assertIn("billok-pr-body", pr_create)
         for testpath in ("scripts/test_billok_container_isolation.py",
