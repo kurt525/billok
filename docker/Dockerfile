@@ -33,7 +33,9 @@ RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
 # Copy app
-COPY --from=builder /app/public ./public
+# Public assets must be accessible to the unprivileged nextjs process even if
+# the source archive was staged by root with restrictive directory modes.
+COPY --chown=nextjs:nodejs --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/.commit-sha ./.commit-sha

@@ -84,6 +84,10 @@ class ContainerIsolationTests(unittest.TestCase):
             self.assertNotIn(token,entry)
         self.assertIn("billok_pg_$BILLOK_DB_PHASE:5432",entry)
         self.assertIn("exec su-exec nextjs node server.js",entry)
+        # Runtime never elevates permissions to work around private asset dirs.
+        # Files served from /public must be traversable by uid=nextjs.
+        self.assertIn("COPY --chown=nextjs:nodejs --from=builder /app/public ./public",df)
+        self.assertNotIn("USER root",df)
     def test_resource_limits_logs_and_healthcheck(self):
         c=json.loads(subprocess.run(["docker","compose","-f",str(ROOT/"docker/docker-compose.yml"),
              "config","--format","json"],capture_output=True,text=True,check=True,timeout=15).stdout)
