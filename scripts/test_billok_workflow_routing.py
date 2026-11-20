@@ -15,7 +15,8 @@ class BillokWorkflowRoutingTests(unittest.TestCase):
 
     def test_only_five_required_ci_jobs_on_trusted_self_hosted_runner(self):
         workflow = (WORKFLOWS / "billok-ci.yml").read_text(encoding="utf-8")
-        self.assertIn("branches: [main, 'billok/**']", workflow)
+        self.assertIn("branches: [main, 'billok/**', 'task/billok-002-create-receipt']", workflow)
+        self.assertNotIn("'task/**'", workflow)
         self.assertNotIn("pull_request:", workflow)
         self.assertNotIn("ubuntu-latest", workflow)
         self.assertEqual(workflow.count("runs-on: [self-hosted, Linux, X64, billok]"), 5)
