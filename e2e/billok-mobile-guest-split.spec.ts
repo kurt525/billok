@@ -129,8 +129,7 @@ test('TASK-BILLOK-002: one mobile flow keeps all dish names and expands guests a
   await loginWithPasskey(page, 'alice@qa.billok.ru');
   await page.goto('/split', { waitUntil: 'networkidle' });
   await expect(page.getByTestId('manual-split-title')).toContainText('Разделить чек');
-  await expect(page.getByTestId('workflow-manual')).toHaveCount(0);
-  await expect(page.getByTestId('workflow-invite')).toHaveCount(0);
+  await expect(page.getByTestId('guest-count-input')).toBeVisible();
   await page.getByTestId('manual-receipt-name').fill('Ужин в кафе');
   await page.getByTestId('guest-count-input').fill('2');
   await page.locator('#invite-payer').selectOption('0');
@@ -182,6 +181,22 @@ test('TASK-BILLOK-002: one mobile flow keeps all dish names and expands guests a
   await expect(page).toHaveURL(/\/split\/[^/]+\/claim(?:\?.*)?$/);
   await expect(page.getByTestId('creator-add-guest-place')).toBeVisible();
   await expect(page.getByTestId('guest-color-person-2')).toContainText('Гость 2');
+
+  // The obsolete "distribute immediately" form is gone. A creator can still
+  // assign a dish after creating the receipt in the real claim interface.
+  await expect(page.getByTestId('claim-item-0')).toBeVisible();
+  await page.getByTestId('claim-item-0').click();
+  await expect(page.getByTestId('save-claims-btn')).toBeEnabled();
+  await page.getByTestId('save-claims-btn').click();
+  const createdShareToken = new URL(page.url()).pathname.split('/').at(-2)!;
+  await expect
+    .poll(async () => {
+      const saved = await trpcResult(await trpcQuery(page.request, 'guest.getSession', { token: createdShareToken }));
+      return (saved.assignments as { itemIndex: number; personIndices: number[] }[])
+        .find((assignment) => assignment.itemIndex === 0)
+        ?.personIndices.includes(0);
+    })
+    .toBe(true);
 
   // Both initial guests join using the same public link before it is expanded.
   // The creator's SSE view must reflect each join without a page reload.
@@ -396,6 +411,48 @@ test('TASK-BILLOK-002 10–15: one public link auto-expands after two occupied s
     expect(tooLate.ok()).toBe(false);
   } finally {
     await Promise.all(contexts.map((ctx) => ctx.close()));
+  }
+});
+
+test('TASK-BILLOK-002: obsolete create API is closed while existing finalized summary reader works', async () => {
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  try {
+    // A logged-in user cannot revive the removed direct-finalized endpoint.
+    const denied = await trpcMutation(owner, 'guest.createSplit', {
+      receiptData: { merchantName: 'Заблокированный путь', subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'RUB' },
+      items: [{ name: 'Блюдо', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
+      people: [{ name: 'Илья' }],
+      assignments: [{ itemIndex: 0, personIndices: [0] }],
+    });
+    expect((await trpcError(denied))?.data?.code).toBe('NOT_FOUND');
+
+    // The only supported creation method is a claim session with an
+    // account-bound creator. The finalized read route must remain available.
+    const created = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Чек после очистки', subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'RUB' },
+      items: [{ name: 'Блюдо', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
+      guestCount: 0, joinCreator: true,
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    const { shareToken, creator } = (await created.json()).result.data.json;
+    for (const [operation, payload] of [
+      ['guest.claimItems', {
+        token: shareToken, personId: creator.personId,
+        personToken: creator.personToken, claimedItemIndices: [0],
+      }],
+      ['guest.confirmSessionParts', { token: shareToken }],
+      ['guest.finalizeSession', { token: shareToken }],
+    ] as const) {
+      const response = await trpcMutation(owner, operation, payload);
+      expect(response.ok(), operation + ': ' + await response.text()).toBe(true);
+    }
+    const finalized = await trpcResult(await trpcQuery(owner, 'guest.getSplit', { token: shareToken }));
+    expect(finalized.receiptData.merchantName).toBe('Чек после очистки');
+    expect(finalized.receiptData.total).toBe(1000);
+    expect(finalized.summary).toHaveLength(1);
+    expect(finalized.summary[0].total).toBe(1000);
+  } finally {
+    await owner.dispose();
   }
 });
 
@@ -2532,17 +2589,7 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
         {
           receiptData: { subtotal: 100, total: 100, tax: 0, tip: 0, currency: 'RUB' },
           items: [{ name: 'Чай', quantity: 1, unitPrice: 100, totalPrice: 100 }],
-          creatorName: 'Борис',
-          paidByName: 'Борис',
-        },
-      ],
-      [
-        'guest.createSplit',
-        {
-          receiptData: { subtotal: 100, total: 100, tax: 0, tip: 0, currency: 'RUB' },
-          items: [{ name: 'Чай', quantity: 1, unitPrice: 100, totalPrice: 100 }],
-          people: [{ name: 'Борис' }],
-          assignments: [{ itemIndex: 0, personIndices: [0] }],
+          guestCount: 0,
         },
       ],
       ['groups.create', { name: 'Недоступная группа' }],
@@ -2552,6 +2599,16 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
       const error = await trpcError(denied);
       expect(error?.data?.code, proc).toBe('UNAUTHORIZED');
     }
+
+    // TASK-BILLOK-002 16–19: the obsolete direct-finalized creation
+    // procedure must not exist, even for an authenticated user.
+    const removedLegacyCreate = await trpcMutation(page.request, 'guest.createSplit', {
+      receiptData: { subtotal: 100, total: 100, tax: 0, tip: 0, currency: 'RUB' },
+      items: [{ name: 'Чай', quantity: 1, unitPrice: 100, totalPrice: 100 }],
+      people: [{ name: 'Борис' }],
+      assignments: [{ itemIndex: 0, personIndices: [0] }],
+    });
+    expect((await trpcError(removedLegacyCreate))?.data?.code).toBe('NOT_FOUND');
   } finally {
     await owner.dispose();
   }

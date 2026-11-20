@@ -1,204 +1,165 @@
+import { randomUUID } from 'node:crypto';
 import { test, expect, request } from '@playwright/test';
+import {
+  authedContext,
+  createUnifiedReceiptFixture,
+  finalizeUnifiedReceiptFixture,
+  trpcMutation,
+  trpcQuery,
+  trpcResult,
+} from './helpers';
 
-const BASE = process.env.BASE_URL || 'http://localhost:3001';
-
-test.describe('Guest Bill Split — API happy path', () => {
-  test('createSplit creates a shareable split and getSplit retrieves it', async () => {
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    // Create a split via the API
-    const createRes = await ctx.post('/api/trpc/guest.createSplit', {
-      data: {
-        json: {
-          receiptData: {
-            merchantName: 'Test Restaurant',
-            date: '2026-03-30',
-            subtotal: 3000,
-            tax: 240,
-            tip: 500,
-            total: 3740,
-            currency: 'USD',
-          },
-          items: [
-            { name: 'Burger', quantity: 1, unitPrice: 1500, totalPrice: 1500 },
-            { name: 'Salad', quantity: 1, unitPrice: 1000, totalPrice: 1000 },
-            { name: 'Fries', quantity: 1, unitPrice: 500, totalPrice: 500 },
-          ],
-          people: [{ name: 'Alice' }, { name: 'Bob' }],
-          assignments: [
-            { itemIndex: 0, personIndices: [0] },
-            { itemIndex: 1, personIndices: [1] },
-            { itemIndex: 2, personIndices: [0, 1] },
-          ],
-          paidByIndex: 0,
-        },
-      },
-    });
-
-    expect(createRes.ok()).toBe(true);
-    const createBody = await createRes.json();
-    const shareToken = createBody.result?.data?.json?.shareToken;
-    expect(shareToken).toBeTruthy();
-
-    // Retrieve the split
-    const getRes = await ctx.get(
-      `/api/trpc/guest.getSplit?batch=1&input=${encodeURIComponent(
-        JSON.stringify({ '0': { json: { token: shareToken } } }),
-      )}`,
-    );
-    expect(getRes.ok()).toBe(true);
-    const getBody = await getRes.json();
-    const split = getBody[0]?.result?.data?.json;
-
-    expect(split.shareToken).toBe(shareToken);
-    expect(split.receiptData.merchantName).toBe('Test Restaurant');
-    expect(split.receiptData.total).toBe(3740);
-    expect(split.items).toHaveLength(3);
-    expect(split.people).toHaveLength(2);
-    expect(split.summary).toHaveLength(2);
-    expect(split.paidByIndex).toBe(0);
-
-    // Verify summary has correct person names
-    const names = split.summary.map((s: { name: string }) => s.name).sort();
-    expect(names).toEqual(['Alice', 'Bob']);
-
-    // Verify totals add up
-    const totalFromSummary = split.summary.reduce((sum: number, s: { total: number }) => sum + s.total, 0);
-    expect(totalFromSummary).toBe(3740);
-
-    await ctx.dispose();
+test.describe('BillOK — only unified receipt creation and legacy finalized reader', () => {
+  test('creator, guest places and payer are stable after creation', async () => {
+    const ctx = await authedContext('alice@qa.billok.ru');
+    try {
+      const receipt = await createUnifiedReceiptFixture(ctx, {
+        merchantName: 'Кафе Тест',
+        guestCount: 2,
+        items: [
+          { name: 'Бургер', quantity: 1, unitPrice: 1500, totalPrice: 1500 },
+          { name: 'Салат', quantity: 1, unitPrice: 1000, totalPrice: 1000 },
+          { name: 'Картофель', quantity: 1, unitPrice: 500, totalPrice: 500 },
+        ],
+      });
+      const data = await trpcResult(await trpcQuery(ctx, 'guest.getSession', { token: receipt.shareToken }));
+      expect(data.shareToken).toBe(receipt.shareToken);
+      expect(data.receiptData.merchantName).toBe('Кафе Тест');
+      expect(data.receiptData.total).toBe(3000);
+      expect(data.items).toHaveLength(3);
+      expect(data.people).toHaveLength(3);
+      expect(data.people[0].id).toBe(receipt.creator.personId);
+      expect(data.paidByIndex).toBe(0);
+      expect(data.status).toBe('CLAIMING');
+    } finally {
+      await ctx.dispose();
+    }
   });
 
-  test('claim session finalization persists overridden tip and total', async () => {
-    const ctx = await request.newContext({ baseURL: BASE });
+  test('creator can claim, confirm, finalize and fetch the old read-only getSplit endpoint', async () => {
+    const ctx = await authedContext('alice@qa.billok.ru');
+    try {
+      const receipt = await createUnifiedReceiptFixture(ctx, {
+        merchantName: 'Кафе на углу',
+        items: [
+          { name: 'Завтрак', quantity: 1, unitPrice: 3000, totalPrice: 3000 },
+          { name: 'Чай', quantity: 1, unitPrice: 500, totalPrice: 500 },
+        ],
+      });
+      await finalizeUnifiedReceiptFixture(ctx, receipt, [0, 1]);
+      const split = await trpcResult(await trpcQuery(ctx, 'guest.getSplit', { token: receipt.shareToken }));
+      expect(split.receiptData.merchantName).toBe('Кафе на углу');
+      expect(split.receiptData.total).toBe(3500);
+      expect(split.items).toHaveLength(2);
+      expect(split.people).toHaveLength(1);
+      expect(split.summary).toHaveLength(1);
+      expect(split.summary[0].total).toBe(3500);
+    } finally {
+      await ctx.dispose();
+    }
+  });
 
-    const createRes = await ctx.post('/api/trpc/guest.createClaimSession', {
-      data: {
-        json: {
-          receiptData: {
-            merchantName: 'Tip Test Cafe',
-            subtotal: 3000,
-            tax: 300,
-            tip: 300,
-            total: 3600,
-            currency: 'USD',
-          },
-          items: [{ name: 'Brunch', quantity: 1, unitPrice: 3000, totalPrice: 3000 }],
-          creatorName: 'Alice',
-          paidByName: 'Alice',
-        },
-      },
-    });
-
-    expect(createRes.ok()).toBe(true);
-    const shareToken = (await createRes.json()).result?.data?.json?.shareToken as string;
-    expect(shareToken).toBeTruthy();
-
-    const joinRes = await ctx.post('/api/trpc/guest.joinSession', {
-      data: {
-        json: {
-          token: shareToken,
-          name: 'Alice',
-        },
-      },
-    });
-    expect(joinRes.ok()).toBe(true);
-    const joinBody = await joinRes.json();
-    const { personId, personToken } = joinBody.result?.data?.json as {
-      personId: string;
-      personToken: string;
-    };
-
-    const claimRes = await ctx.post('/api/trpc/guest.claimItems', {
-      data: {
-        json: {
-          token: shareToken,
-          personId,
-          personToken,
-          claimedItemIndices: [0],
-        },
-      },
-    });
-    expect(claimRes.ok()).toBe(true);
-
-    const finalizeRes = await ctx.post('/api/trpc/guest.finalizeSession', {
-      data: {
-        json: {
-          token: shareToken,
-          personId,
-          personToken,
-          tipOverride: 600,
-        },
-      },
-    });
-    expect(finalizeRes.ok()).toBe(true);
-
-    const splitRes = await ctx.get(
-      `/api/trpc/guest.getSplit?batch=1&input=${encodeURIComponent(
-        JSON.stringify({ '0': { json: { token: shareToken } } }),
-      )}`,
-    );
-    expect(splitRes.ok()).toBe(true);
-    const splitBody = await splitRes.json();
-    const split = splitBody[0]?.result?.data?.json;
-
-    expect(split.receiptData.tip).toBe(600);
-    expect(split.receiptData.total).toBe(3900);
-    expect(split.summary[0]?.total).toBe(3900);
-
-    await ctx.dispose();
+  test('two participants can share one dish, and their finalized totals add up', async () => {
+    const ctx = await authedContext('alice@qa.billok.ru');
+    try {
+      const receipt = await createUnifiedReceiptFixture(ctx, {
+        merchantName: 'Общая закуска',
+        guestCount: 1,
+        items: [{ name: 'Пицца', quantity: 1, unitPrice: 375, totalPrice: 375 }],
+      });
+      const session = await trpcResult(await trpcQuery(ctx, 'guest.getSession', { token: receipt.shareToken }));
+      const anonymous = await request.newContext({ baseURL: process.env.BASE_URL || 'http://localhost:3001' });
+      const res = await trpcMutation(anonymous, 'guest.joinGuestSlot', {
+        token: receipt.shareToken,
+        slotId: session.people[1].id,
+        name: 'Борис',
+        joinKey: randomUUID(),
+      });
+      expect(res.ok(), await res.text()).toBe(true);
+      const guest = (await res.json()).result.data.json;
+      const ownerClaim = await trpcMutation(ctx, 'guest.claimItems', {
+        token: receipt.shareToken,
+        personId: receipt.creator.personId,
+        personToken: receipt.creator.personToken,
+        claimedItemIndices: [0],
+      });
+      expect(ownerClaim.ok(), await ownerClaim.text()).toBe(true);
+      const guestClaim = await trpcMutation(anonymous, 'guest.claimItems', {
+        token: receipt.shareToken,
+        personId: guest.personId,
+        personToken: guest.personToken,
+        claimedItemIndices: [0],
+      });
+      expect(guestClaim.ok(), await guestClaim.text()).toBe(true);
+      const approved = await trpcMutation(ctx, 'guest.confirmSessionParts', { token: receipt.shareToken });
+      expect(approved.ok(), await approved.text()).toBe(true);
+      const finalized = await trpcMutation(ctx, 'guest.finalizeSession', { token: receipt.shareToken });
+      expect(finalized.ok(), await finalized.text()).toBe(true);
+      const split = await trpcResult(await trpcQuery(ctx, 'guest.getSplit', { token: receipt.shareToken }));
+      expect(split.assignments[0].personIndices).toEqual([0, 1]);
+      expect(split.summary.reduce((sum: number, row: { total: number }) => sum + row.total, 0)).toBe(375);
+      expect(split.summary).toHaveLength(2);
+      await anonymous.dispose();
+    } finally {
+      await ctx.dispose();
+    }
   });
 });
 
-test.describe('Guest Bill Split — Share Page', () => {
-  let shareToken: string;
-
-  test.beforeAll(async () => {
-    // Create a split to test the share page
-    const ctx = await request.newContext({ baseURL: BASE });
-    const res = await ctx.post('/api/trpc/guest.createSplit', {
-      data: {
-        json: {
-          receiptData: {
-            merchantName: 'Pizza Place',
-            subtotal: 2400,
-            tax: 200,
-            tip: 400,
-            total: 3000,
-            currency: 'USD',
-          },
-          items: [{ name: 'Large Pizza', quantity: 1, unitPrice: 2400, totalPrice: 2400 }],
-          people: [{ name: 'Charlie' }, { name: 'Dave' }],
-          assignments: [{ itemIndex: 0, personIndices: [0, 1] }],
-          paidByIndex: 0,
-        },
-      },
-    });
-    const body = await res.json();
-    shareToken = body.result?.data?.json?.shareToken;
-    await ctx.dispose();
+test.describe('BillOK — share-link UI of the unified receipt', () => {
+  test('the open receipt displays its item and a copyable shared link', async ({ page }) => {
+    const ctx = await authedContext('alice@qa.billok.ru');
+    try {
+      const receipt = await createUnifiedReceiptFixture(ctx, {
+        merchantName: 'Пиццерия',
+        guestCount: 1,
+        items: [{ name: 'Большая пицца', quantity: 1, unitPrice: 2400, totalPrice: 2400 }],
+      });
+      await page.goto('/split/' + receipt.shareToken + '/claim');
+      await expect(page.getByText('Пиццерия').first()).toBeVisible();
+      await expect(page.getByText('Большая пицца').first()).toBeVisible();
+      await expect(page.getByTestId('copy-link-btn')).toBeVisible();
+    } finally {
+      await ctx.dispose();
+    }
   });
 
-  test('share page displays split summary', async ({ page }) => {
-    await page.goto(`/split/${shareToken}`);
-    await expect(page.getByText('Pizza Place')).toBeVisible();
-    await expect(page.getByText('Charlie').first()).toBeVisible();
-    await expect(page.getByText('Dave').first()).toBeVisible();
-    await expect(page.getByText('$30.00').first()).toBeVisible();
+  test('two independent guests cannot occupy the same reserved slot', async () => {
+    const ctx = await authedContext('alice@qa.billok.ru');
+    try {
+      const receipt = await createUnifiedReceiptFixture(ctx, {
+        merchantName: 'Общий чек',
+        guestCount: 1,
+        items: [{ name: 'Чай', quantity: 1, unitPrice: 150, totalPrice: 150 }],
+      });
+      const session = await trpcResult(await trpcQuery(ctx, 'guest.getSession', { token: receipt.shareToken }));
+      const slotId = session.people[1].id;
+      const anonymous = await request.newContext({ baseURL: process.env.BASE_URL || 'http://localhost:3001' });
+      const first = await trpcMutation(anonymous, 'guest.joinGuestSlot', {
+        token: receipt.shareToken,
+        slotId,
+        name: 'Анна',
+        joinKey: randomUUID(),
+      });
+      expect(first.ok(), await first.text()).toBe(true);
+      const denied = await trpcMutation(anonymous, 'guest.joinGuestSlot', {
+        token: receipt.shareToken,
+        slotId,
+        name: 'Борис',
+        joinKey: randomUUID(),
+      });
+      expect(denied.ok(), await denied.text()).toBe(false);
+      const still = await trpcResult(await trpcQuery(ctx, 'guest.getSession', { token: receipt.shareToken }));
+      expect(still.people[1].name).toBe('Анна');
+      await anonymous.dispose();
+    } finally {
+      await ctx.dispose();
+    }
   });
 
-  test('share page has copy link and share buttons', async ({ page }) => {
-    await page.goto(`/split/${shareToken}`);
-    await expect(page.getByRole('button', { name: /copy/i })).toBeVisible();
-  });
-
-  test('share page shows split your own bill link', async ({ page }) => {
-    await page.goto(`/split/${shareToken}`);
-    await expect(page.getByText('Split your own bill')).toBeVisible();
-  });
-
-  test('invalid share token shows not found', async ({ page }) => {
-    await page.goto('/en/split/nonexistent-token-abc123');
-    await expect(page.getByText('Split not found')).toBeVisible();
+  test('an invented share token does not reveal a receipt', async ({ page }) => {
+    await page.goto('/split/nonexistent-token-abc123/claim');
+    await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
+    await expect(page.getByText('Пиццерия')).toHaveCount(0);
   });
 });

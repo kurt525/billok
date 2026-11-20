@@ -1561,7 +1561,7 @@ test('TASK-BILLOK-002: unified item creation and editing fit six mobile keyboard
     await page.setViewportSize({ width, height: 300 });
     await page.goto('/split', { waitUntil: 'networkidle' });
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
-    await expect(page.getByTestId('workflow-manual')).toHaveCount(0);
+    await expect(page.getByTestId('guest-count-input')).toBeVisible();
     await page.getByTestId('next-assign-btn').click();
     await expect(page.getByTestId('guest-assign-step')).toBeVisible();
     await expect(page.getByTestId('guest-assign-actions')).toBeVisible();

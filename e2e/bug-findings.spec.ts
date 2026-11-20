@@ -1,177 +1,174 @@
+import { randomUUID } from 'node:crypto';
 import { test, expect, request } from '@playwright/test';
-import { personIdByName, rememberClaimIdentity, trpcMutation, trpcResult, trpcQuery } from './helpers';
+import { loginWithPasskey } from './passkey-auth';
+import { authedContext, rememberClaimIdentity, trpcMutation, trpcResult, trpcQuery } from './helpers';
 
 const BASE = process.env.BASE_URL || 'http://localhost:3001';
 
-test.describe('Finding #3: removePerson index state', () => {
-  test("removing a person doesn't break claiming for remaining people", async ({ browser }) => {
-    const ctx = await request.newContext({ baseURL: BASE });
+test.describe('Finding #3: removal must not corrupt stable person IDs', () => {
+  test('removing a joined guest preserves the creator’s already saved dish allocation', async ({ page }) => {
+    test.setTimeout(120_000);
+    await loginWithPasskey(page, 'alice@qa.billok.ru');
+    const owner = await authedContext('alice@qa.billok.ru');
+    const guestCtx = await request.newContext({ baseURL: BASE });
+    try {
+      const created = await trpcMutation(owner, 'guest.createClaimSession', {
+        receiptData: {
+          merchantName: 'Проверка удаления',
+          subtotal: 3000,
+          tax: 0,
+          tip: 0,
+          total: 3000,
+          currency: 'RUB',
+        },
+        items: [
+          { name: 'Блюдо А', quantity: 1, unitPrice: 1000, totalPrice: 1000 },
+          { name: 'Блюдо Б', quantity: 1, unitPrice: 1000, totalPrice: 1000 },
+          { name: 'Блюдо В', quantity: 1, unitPrice: 1000, totalPrice: 1000 },
+        ],
+        guestCount: 1,
+        joinCreator: true,
+      });
+      expect(created.ok(), await created.text()).toBe(true);
+      const { shareToken, creator } = (await created.json()).result.data.json;
+      const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: shareToken }));
+      const bobRes = await trpcMutation(guestCtx, 'guest.joinGuestSlot', {
+        token: shareToken,
+        slotId: initial.people[1].id,
+        name: 'Борис',
+        joinKey: randomUUID(),
+      });
+      expect(bobRes.ok(), await bobRes.text()).toBe(true);
+      const bob = (await bobRes.json()).result.data.json;
+      await rememberClaimIdentity(page.context(), shareToken, {
+        name: creator.name,
+        personToken: creator.personToken,
+      });
+      await page.goto('/split/' + shareToken + '/claim');
+      await expect(page.getByTestId('claim-item-0')).toBeVisible();
+      await page.getByTestId('claim-item-0').click();
+      await page.getByTestId('save-claims-btn').click();
+      await expect
+        .poll(async () => {
+          const saved = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: shareToken }));
+          return saved.assignments.some(
+            (assignment: { itemIndex: number; personIndices: number[] }) =>
+              assignment.itemIndex === 0 && assignment.personIndices.includes(0),
+          );
+        })
+        .toBe(true);
 
-    // Create session with 3 people
-    const createRes = await trpcMutation(ctx, 'guest.createClaimSession', {
-      receiptData: {
-        merchantName: 'Index Test',
-        subtotal: 3000,
-        tax: 300,
-        tip: 0,
-        total: 3300,
-        currency: 'USD',
-      },
-      items: [
-        { name: 'Item A', quantity: 1, unitPrice: 1000, totalPrice: 1000 },
-        { name: 'Item B', quantity: 1, unitPrice: 1000, totalPrice: 1000 },
-        { name: 'Item C', quantity: 1, unitPrice: 1000, totalPrice: 1000 },
-      ],
-      creatorName: 'Alice',
-      paidByName: 'Alice',
-    });
-    const shareToken = (await createRes.json()).result?.data?.json?.shareToken;
-
-    // Join Alice and Bob
-    const joinAlice = await trpcMutation(ctx, 'guest.joinSession', {
-      token: shareToken,
-      name: 'Alice',
-    });
-    const aliceToken = (await joinAlice.json()).result?.data?.json?.personToken;
-
-    await trpcMutation(ctx, 'guest.joinSession', {
-      token: shareToken,
-      name: 'Bob',
-    });
-
-    await ctx.dispose();
-
-    // Open in a browser that holds Alice's identity; the claim page rejoins as her
-    const browserCtx = await browser.newContext();
-    await rememberClaimIdentity(browserCtx, shareToken, { name: 'Alice', personToken: aliceToken });
-    const page = await browserCtx.newPage();
-    await page.goto(`/en/split/${shareToken}/claim`);
-
-    await expect(page.locator('[data-testid^="claim-item-"]').first()).toBeVisible({ timeout: 15000 });
-
-    // Claim item 0 for Alice
-    await page.getByTestId('claim-item-0').click();
-    await expect(page.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'true');
-
-    // Save
-    const saveBtn = page.getByTestId('save-claims-btn');
-    await saveBtn.scrollIntoViewIfNeeded();
-    await saveBtn.click();
-    await expect(saveBtn).toContainText(/saved/i, { timeout: 10000 });
-
-    // Remove Bob (person index 1) via API
-    const apiCtx = await request.newContext({ baseURL: BASE });
-    const removeRes = await trpcMutation(apiCtx, 'guest.removePerson', {
-      token: shareToken,
-      personToken: aliceToken,
-      targetId: await personIdByName(apiCtx, shareToken, 'Bob'),
-    });
-    expect(removeRes.ok()).toBe(true);
-    await apiCtx.dispose();
-
-    // Wait for polling to pick up the change
-    await page.waitForTimeout(4000);
-
-    // Alice's claim on item 0 should still show (via polling refresh)
-    // The page should not be in a broken state
-    await expect(page.locator('[data-testid^="claim-item-"]').first()).toBeVisible();
-
-    await page.close();
-    await browserCtx.close();
+      const removed = await trpcMutation(owner, 'guest.removePerson', {
+        token: shareToken,
+        personToken: creator.personToken,
+        targetId: bob.personId,
+      });
+      expect(removed.ok(), await removed.text()).toBe(true);
+      await expect(page.getByTestId('claim-item-0')).toBeVisible();
+      const after = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: shareToken }));
+      expect(after.people).toHaveLength(1);
+      expect(after.people[0].id).toBe(creator.personId);
+      expect(after.assignments[0].personIndices).toContain(0);
+    } finally {
+      await guestCtx.dispose();
+      await owner.dispose();
+    }
   });
 });
 
-test.describe('Finding #5: paidByIndex mapping', () => {
-  test('createSplit stores correct paidByIndex and people', async () => {
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    // Create a split where people[0] is blank, people[1] is "Alice"
-    // paidByIndex=1 should map to validPeople[0] after filtering
-    // The server-side createSplit already handles this via its own filtering,
-    // but the client should send the correct remapped index
-    const createRes = await trpcMutation(ctx, 'guest.createSplit', {
-      receiptData: {
-        merchantName: 'Blank People Test',
-        subtotal: 1000,
-        tax: 100,
-        tip: 0,
-        total: 1100,
-        currency: 'USD',
-      },
-      items: [{ name: 'Item', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
-      // Only valid people (server filters blanks)
-      people: [{ name: 'Alice' }],
-      assignments: [{ itemIndex: 0, personIndices: [0] }],
-      paidByIndex: 0,
-    });
-    expect(createRes.ok()).toBe(true);
-    const { shareToken } = (await createRes.json()).result?.data?.json;
-
-    const getRes = await trpcQuery(ctx, 'guest.getSplit', { token: shareToken });
-    const data = await trpcResult(getRes);
-    expect(data.paidByIndex).toBe(0);
-    expect(data.people[0].name).toBe('Alice');
-
-    await ctx.dispose();
+test.describe('Finding #5: payer index in unified receipt creation', () => {
+  test('creator remains row 0 while a selected guest place is the sole payer', async () => {
+    const ctx = await authedContext('alice@qa.billok.ru');
+    try {
+      const res = await trpcMutation(ctx, 'guest.createClaimSession', {
+        receiptData: {
+          merchantName: 'Плательщик — гость',
+          subtotal: 1000,
+          tax: 0,
+          tip: 0,
+          total: 1000,
+          currency: 'RUB',
+        },
+        items: [{ name: 'Блюдо', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
+        guestCount: 1,
+        paidByGuestSlot: 1,
+        joinCreator: true,
+      });
+      expect(res.ok(), await res.text()).toBe(true);
+      const { shareToken } = (await res.json()).result.data.json;
+      const session = await trpcResult(await trpcQuery(ctx, 'guest.getSession', { token: shareToken }));
+      expect(session.people).toHaveLength(2);
+      expect(session.paidByIndex).toBe(1);
+      expect(session.people[0].isRegistered).toBe(true);
+      expect(session.people[1].guestSlotNumber).toBe(1);
+      expect(session.people[1].hasJoined).toBe(false);
+    } finally {
+      await ctx.dispose();
+    }
   });
 });
 
-test.describe('Finding #6: shared item assignment', () => {
-  test('split with shared items distributes totals correctly across people', async () => {
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    // Create a split with 2 valid people assigned to 1 item
-    const createRes = await trpcMutation(ctx, 'guest.createSplit', {
-      receiptData: {
-        merchantName: 'Assign All Test',
-        subtotal: 1000,
-        tax: 100,
-        tip: 0,
-        total: 1100,
-        currency: 'USD',
-      },
-      items: [{ name: 'Shared Item', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
-      people: [{ name: 'Alice' }, { name: 'Bob' }],
-      assignments: [{ itemIndex: 0, personIndices: [0, 1] }],
-      paidByIndex: 0,
-    });
-    expect(createRes.ok()).toBe(true);
-    const { shareToken } = (await createRes.json()).result?.data?.json;
-
-    const getRes = await trpcQuery(ctx, 'guest.getSplit', { token: shareToken });
-    const data = await trpcResult(getRes);
-
-    // Both people should be in the assignment
-    expect(data.summary).toHaveLength(2);
-    // Totals should sum correctly
-    const totalSum = data.summary.reduce((sum: number, s: { total: number }) => sum + s.total, 0);
-    expect(totalSum).toBe(1100);
-
-    await ctx.dispose();
+test.describe('Finding #6: shared items in the unified claiming flow', () => {
+  test('creator and guest share the same item, without deleting either assignment', async () => {
+    const ctx = await authedContext('alice@qa.billok.ru');
+    try {
+      const created = await trpcMutation(ctx, 'guest.createClaimSession', {
+        receiptData: {
+          merchantName: 'Общее блюдо',
+          subtotal: 1000,
+          tax: 0,
+          tip: 0,
+          total: 1000,
+          currency: 'RUB',
+        },
+        items: [{ name: 'Общее блюдо', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
+        guestCount: 1,
+        joinCreator: true,
+      });
+      expect(created.ok(), await created.text()).toBe(true);
+      const { shareToken, creator } = (await created.json()).result.data.json;
+      const initial = await trpcResult(await trpcQuery(ctx, 'guest.getSession', { token: shareToken }));
+      const guest = await trpcMutation(ctx, 'guest.joinGuestSlot', {
+        token: shareToken,
+        slotId: initial.people[1].id,
+        name: 'Гость',
+        joinKey: randomUUID(),
+      });
+      expect(guest.ok(), await guest.text()).toBe(true);
+      const joined = (await guest.json()).result.data.json;
+      for (const person of [creator, joined]) {
+        const saved = await trpcMutation(ctx, 'guest.claimItems', {
+          token: shareToken,
+          personId: person.personId,
+          personToken: person.personToken,
+          claimedItemIndices: [0],
+        });
+        expect(saved.ok(), await saved.text()).toBe(true);
+      }
+      const session = await trpcResult(await trpcQuery(ctx, 'guest.getSession', { token: shareToken }));
+      expect(session.receiptData.total).toBe(1000);
+      const share = session.assignments.find((a: { itemIndex: number }) => a.itemIndex === 0);
+      expect(share.personIndices).toEqual([0, 1]);
+      expect(session.people).toHaveLength(2);
+    } finally {
+      await ctx.dispose();
+    }
   });
 });
 
 test.describe('Finding #7: empty items submit guard', () => {
-  test('createSplit rejects empty items array', async () => {
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    const createRes = await trpcMutation(ctx, 'guest.createSplit', {
-      receiptData: {
-        merchantName: 'Empty Items Test',
-        subtotal: 0,
-        tax: 0,
-        tip: 0,
-        total: 0,
-        currency: 'USD',
-      },
-      items: [],
-      people: [{ name: 'Alice' }],
-      assignments: [],
-      paidByIndex: 0,
-    });
-    // Server should reject empty items (Zod validation or business logic)
-    expect(createRes.ok()).toBe(false);
-
-    await ctx.dispose();
+  test('the single supported creation API rejects empty item arrays', async () => {
+    const ctx = await authedContext('alice@qa.billok.ru');
+    try {
+      const refused = await trpcMutation(ctx, 'guest.createClaimSession', {
+        receiptData: { merchantName: 'Пусто', subtotal: 0, tax: 0, tip: 0, total: 0, currency: 'RUB' },
+        items: [],
+        guestCount: 0,
+        joinCreator: true,
+      });
+      expect(refused.ok(), await refused.text()).toBe(false);
+    } finally {
+      await ctx.dispose();
+    }
   });
 });

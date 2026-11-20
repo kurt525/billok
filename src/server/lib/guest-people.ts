@@ -20,7 +20,7 @@ export type GuestSessionPerson = {
   // Identifies the person for as long as they are in the session. Their array index changes
   // when someone listed before them is removed, so the claim page targets people by id.
   // Public (getSession lists everyone's). People saved without one (claim sessions from before
-  // ids existed, and quick splits from guest.createSplit) get one the first time getSession,
+  // ids existed, including previously finalized legacy receipts) get one the first time getSession,
   // resumeSession or joinSession loads them (see assignPersonIds).
   id?: string;
   name: string;

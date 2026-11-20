@@ -106,12 +106,6 @@ describe('BillOK participant display names: 1–40 chars per receipt', () => {
   const receiptData = { subtotal: 100, tax: 0, tip: 0, total: 100, currency: 'RUB' };
   const items = [{ name: 'Чай', quantity: 1, unitPrice: 100, totalPrice: 100 }];
   const base = {
-    createSplit: {
-      receiptData,
-      items,
-      people: [{ name: 'Илья' }],
-      assignments: [{ itemIndex: 0, personIndices: [0] }],
-    },
     createClaimSession: { receiptData, items, people: ['Илья'], creatorName: 'Илья', paidByName: 'Илья' },
     joinSession: { token: 'session', name: 'Илья' },
     editPersonName: {
@@ -123,7 +117,6 @@ describe('BillOK participant display names: 1–40 chars per receipt', () => {
   };
   type NameInput = (typeof base)[keyof typeof base];
   test.each([
-    ['createSplit', 'people'],
     ['createClaimSession', 'creatorName'],
     ['createClaimSession', 'paidByName'],
     ['createClaimSession', 'people'],
@@ -136,7 +129,7 @@ describe('BillOK participant display names: 1–40 chars per receipt', () => {
     };
     const schema = procedure._def.inputs[0]!;
     const makeInput = (name: string): NameInput => {
-      const nameField = field === 'people' ? (operation === 'createSplit' ? [{ name }] : [name]) : name;
+      const nameField = field === 'people' ? [name] : name;
       return { ...base[operation], [field]: nameField } as NameInput;
     };
     expect(() => schema.parse(makeInput('Я'.repeat(40)))).not.toThrow();
@@ -258,13 +251,6 @@ describe('BillOK creation permissions', () => {
   const items = [{ name: 'Tea', quantity: 1, unitPrice: 100, totalPrice: 100 }];
   type Api = Awaited<ReturnType<typeof caller>>;
   const operations = {
-    createSplit: (api: Api) =>
-      api.createSplit({
-        receiptData,
-        items,
-        people: [{ name: 'Pat' }],
-        assignments: [{ itemIndex: 0, personIndices: [0] }],
-      }),
     createClaimSession: (api: Api) =>
       api.createClaimSession({ receiptData, items, creatorName: 'Pat', paidByName: 'Pat' }),
   };
@@ -307,13 +293,6 @@ describe('Issue 3.23: shared account-based receipt creation burst', () => {
   const receiptData = { merchantName: 'Ужин', subtotal: 100, total: 100, tax: 0, tip: 0, currency: 'RUB' };
   const items = [{ name: 'Чай', quantity: 1, unitPrice: 100, totalPrice: 100 }];
   const operations = {
-    createSplit: (api: Awaited<ReturnType<typeof caller>>) =>
-      api.createSplit({
-        receiptData,
-        items,
-        people: [{ name: 'Анна' }],
-        assignments: [{ itemIndex: 0, personIndices: [0] }],
-      }),
     createClaimSession: (api: Awaited<ReturnType<typeof caller>>) =>
       api.createClaimSession({ receiptData, items, creatorName: 'Анна', paidByName: 'Анна' }),
   };
@@ -350,16 +329,6 @@ describe('new shared receipts use RUB exclusively', () => {
   const rubData = { merchantName: 'Ужин', subtotal: 505, tax: 0, tip: 0, total: 505 };
   const items = [{ name: 'Чай', quantity: 1, unitPrice: 505, totalPrice: 505 }];
   const create = {
-    createSplit: (
-      api: Awaited<ReturnType<typeof caller>>,
-      receiptData: Omit<typeof rubData, 'tax' | 'tip'> & { tax?: number; tip?: number; currency?: string },
-    ) =>
-      api.createSplit({
-        receiptData,
-        items,
-        people: [{ name: 'Анна' }],
-        assignments: [{ itemIndex: 0, personIndices: [0] }],
-      }),
     createClaimSession: (
       api: Awaited<ReturnType<typeof caller>>,
       receiptData: Omit<typeof rubData, 'tax' | 'tip'> & { tax?: number; tip?: number; currency?: string },
@@ -418,20 +387,9 @@ describe('new shared receipts use RUB exclusively', () => {
     },
   );
 
-  test('createSplit rejects shared tipOverride, including zero', async () => {
-    const api = await caller(signedIn);
-    const base = {
-      receiptData: rubData,
-      items,
-      people: [{ name: 'Анна' }],
-      assignments: [{ itemIndex: 0, personIndices: [0] }],
-    };
-    for (const tipOverride of [0, 100]) {
-      await expect(
-        api.createSplit({ ...base, tipOverride } as unknown as Parameters<typeof api.createSplit>[0]),
-      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    }
-    expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+  test('obsolete direct-finalized createSplit is absent from the exposed router', async () => {
+    const { guestRouter } = await import('./guest');
+    expect(Object.keys(guestRouter._def.procedures)).not.toContain('createSplit');
   });
 
   test('finalization cannot impose a shared tip on a claim session', async () => {
@@ -1506,47 +1464,73 @@ describe('Issue 3.6: no two people share a display name inside one receipt', () 
 
   test.each([
     [' Алексей ', 'алексей'],
-    ['Cafe\u0301', 'CAFÉ'],
+    ['Café', 'CAFÉ'],
     ['Ａｌｅｘ', 'alex'],
-  ])('direct split refuses normalized collision: %s vs %s', async (first, second) => {
+  ])('unified shared-link joining refuses normalized name collision: %s vs %s', async (first, second) => {
+    claimSession(
+      [
+        { name: 'Создатель', accountUserId: 'user-1' },
+        { name: 'Гость 1', guestSlotNumber: 1 },
+        { name: 'Гость 2', guestSlotNumber: 2 },
+      ],
+      { receiptData: { ...receiptData, guestSlotsMode: true, guestCount: 2 } },
+    );
+    const api = await caller();
+    const joined = await api.joinGuestSlot({
+      token: 'share-1',
+      slotId: pid(1),
+      name: first,
+      joinKey: '55555555-5555-4555-8555-555555555551',
+    });
+    const assigned = savedPeople() as TestPerson[];
+    claimSession(assigned, { receiptData: { ...receiptData, guestSlotsMode: true, guestCount: 2 } });
+    mockDb.guestSplit.update.mockClear();
     await expect(
-      (await caller(signedIn)).createSplit({
-        receiptData,
-        items,
-        people: [{ name: first }, { name: second }],
-        assignments: [{ itemIndex: 0, personIndices: [0, 1] }],
-        paidByIndex: 0,
+      api.joinGuestSlot({
+        token: 'share-1',
+        slotId: pid(2),
+        name: second,
+        joinKey: '55555555-5555-4555-8555-555555555552',
       }),
     ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'nameTaken' });
-    expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+    expect(joined.personId).toBe(pid(1));
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
-  test('a different unique qualifier creates two separate people and assigned portions', async () => {
-    await (
-      await caller(signedIn)
-    ).createSplit({
-      receiptData,
-      items,
-      people: [{ name: 'Алексей' }, { name: 'Алексей П.' }],
-      assignments: [{ itemIndex: 0, personIndices: [0, 1] }],
-      paidByIndex: 0,
+  test('different qualifier joins two separate guest slots and their IDs stay distinct', async () => {
+    claimSession(
+      [
+        { name: 'Создатель', accountUserId: 'user-1' },
+        { name: 'Гость 1', guestSlotNumber: 1 },
+        { name: 'Гость 2', guestSlotNumber: 2 },
+      ],
+      { receiptData: { ...receiptData, guestSlotsMode: true, guestCount: 2 } },
+    );
+    const api = await caller();
+    const one = await api.joinGuestSlot({
+      token: 'share-1',
+      slotId: pid(1),
+      name: 'Алексей',
+      joinKey: '55555555-5555-4555-8555-555555555551',
     });
-    const created = mockDb.guestSplit.create.mock.calls[0]?.[0]?.data;
-    expect((created?.people as { name: string }[]).map((p) => p.name)).toEqual(['Алексей', 'Алексей П.']);
-    expect(created?.assignments).toEqual([{ itemIndex: 0, personIndices: [0, 1] }]);
+    claimSession(savedPeople() as TestPerson[], {
+      receiptData: { ...receiptData, guestSlotsMode: true, guestCount: 2 },
+    });
+    const two = await api.joinGuestSlot({
+      token: 'share-1',
+      slotId: pid(2),
+      name: 'Алексей П.',
+      joinKey: '55555555-5555-4555-8555-555555555552',
+    });
+    expect(one.personId).not.toBe(two.personId);
+    expect((savedPeople() as TestPerson[]).map((p) => p.name)).toEqual(['Создатель', 'Алексей', 'Алексей П.']);
   });
 
-  test('a new receipt may reuse a name used in a different receipt', async () => {
+  test('separate receipts can use the same guest name without sharing identities', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ name: 'Создатель', suspendedAt: null });
     const api = await caller(signedIn);
-    for (let i = 0; i < 2; i++) {
-      await api.createSplit({
-        receiptData,
-        items,
-        people: [{ name: 'Алексей' }],
-        assignments: [{ itemIndex: 0, personIndices: [0] }],
-        paidByIndex: 0,
-      });
-    }
+    await api.createClaimSession({ receiptData, items, guestCount: 1 });
+    await api.createClaimSession({ receiptData, items, guestCount: 1 });
     expect(mockDb.guestSplit.create).toHaveBeenCalledTimes(2);
   });
 
@@ -5236,12 +5220,12 @@ describe('deleting a split', () => {
 describe('creating a split', () => {
   test('clears a batch of expired splits with their receipts', async () => {
     mockDb.guestSplit.create.mockResolvedValue({ id: 's1', shareToken: 'tok' });
+    mockDb.user.findUnique.mockResolvedValue({ name: 'Pat', suspendedAt: null });
     const api = await caller(signedIn);
-    await api.createSplit({
+    await api.createClaimSession({
       receiptData: { subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'RUB' },
       items: [{ name: 'Pizza', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
-      people: [{ name: 'Pat' }],
-      assignments: [{ itemIndex: 0, personIndices: [0] }],
+      guestCount: 0,
     });
     expect(deleteExpiredSplits).toHaveBeenCalledWith(mockDb, 100);
     expect(mockDb.$queryRaw).not.toHaveBeenCalled();
@@ -5255,14 +5239,6 @@ describe('making a split from a receipt', () => {
   const items = [{ name: 'Pizza', quantity: 1, unitPrice: 1000, totalPrice: 1000 }];
   type Api = Awaited<ReturnType<typeof caller>>;
   const makeSplit = {
-    createSplit: (api: Api) =>
-      api.createSplit({
-        receiptId: 'r1',
-        receiptData,
-        items,
-        people: [{ name: 'Pat' }],
-        assignments: [{ itemIndex: 0, personIndices: [0] }],
-      }),
     createClaimSession: (api: Api) =>
       api.createClaimSession({ receiptId: 'r1', receiptData, items, creatorName: 'Pat', paidByName: 'Pat' }),
   };

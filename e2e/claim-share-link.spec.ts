@@ -14,7 +14,7 @@ async function signIn(page: Page) {
 
 async function startUnifiedReceipt(page: Page, initialGuests: number, payerGuestSlot: number) {
   await page.goto('/split');
-  await expect(page.getByTestId('workflow-manual')).toHaveCount(0);
+  await expect(page.getByTestId('guest-count-input')).toBeVisible();
   await page.getByTestId('manual-receipt-name').fill('Общий ужин');
   await page.getByTestId('guest-count-input').fill(String(initialGuests));
   await page.locator('#invite-payer').selectOption(String(payerGuestSlot));

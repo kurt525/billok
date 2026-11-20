@@ -49,7 +49,7 @@ test('9.3: group manual receipt shows different names on assignment chips', asyn
 test('TASK-BILLOK-002: creator can distinguish and rename long guest names on a phone', async ({ page }) => {
   await signIn(page);
   await page.goto('/split');
-  await expect(page.getByTestId('workflow-manual')).toHaveCount(0);
+  await expect(page.getByTestId('guest-count-input')).toBeVisible();
   await page.getByTestId('manual-receipt-name').fill('Тест имён');
   await page.getByTestId('guest-count-input').fill('4');
   await page.getByTestId('next-assign-btn').click();

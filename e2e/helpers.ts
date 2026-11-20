@@ -296,3 +296,72 @@ export const FAKE_PNG = Buffer.from([
   0x53,
   0xde, // bit depth, color type, CRC
 ]);
+
+/** Existing public, supported creation flow used by migrated receipt E2E.
+ * Never fabricates a finalized split and never calls the removed direct API.
+ * Each receipt starts in CLAIMING and can be finalized only through the
+ * creator's authorized claim -> confirmation -> finalization steps.
+ */
+export async function createUnifiedReceiptFixture(
+  ctx: Awaited<ReturnType<typeof request.newContext>>,
+  input: {
+    merchantName: string;
+    items: { name: string; quantity: number; unitPrice: number; totalPrice: number }[];
+    guestCount?: number;
+    paidByGuestSlot?: number;
+  },
+) {
+  const subtotal = input.items.reduce((sum, item) => sum + item.totalPrice, 0);
+  const response = await trpcMutation(ctx, 'guest.createClaimSession', {
+    receiptData: {
+      merchantName: input.merchantName,
+      subtotal,
+      tax: 0,
+      tip: 0,
+      total: subtotal,
+      currency: 'RUB',
+    },
+    items: input.items,
+    guestCount: input.guestCount ?? 0,
+    ...(input.paidByGuestSlot ? { paidByGuestSlot: input.paidByGuestSlot } : {}),
+    joinCreator: true,
+  });
+  const text = await response.text();
+  if (!response.ok()) throw new Error('Unified receipt creation failed: ' + text);
+  const result = JSON.parse(text)?.result?.data?.json as
+    { shareToken: string; creator: { personId: string; personToken: string; name: string } } | undefined;
+  if (!result?.shareToken || !result?.creator?.personId || !result?.creator?.personToken) {
+    throw new Error('Unified receipt creation returned no active creator identity');
+  }
+  return result;
+}
+
+/** Preserve the finalized-result regressions without resurrecting quick-split.
+ * The server requires the creator to confirm the exact allocation digest.
+ */
+export async function finalizeUnifiedReceiptFixture(
+  ctx: Awaited<ReturnType<typeof request.newContext>>,
+  receipt: {
+    shareToken: string;
+    creator: { personId: string; personToken: string };
+  },
+  claimedItemIndices: number[],
+) {
+  for (const [operation, payload] of [
+    [
+      'guest.claimItems',
+      {
+        token: receipt.shareToken,
+        personId: receipt.creator.personId,
+        personToken: receipt.creator.personToken,
+        claimedItemIndices,
+      },
+    ],
+    ['guest.confirmSessionParts', { token: receipt.shareToken }],
+    ['guest.finalizeSession', { token: receipt.shareToken }],
+  ] as const) {
+    const response = await trpcMutation(ctx, operation, payload);
+    const body = await response.text();
+    if (!response.ok()) throw new Error(operation + ' rejected finalized receipt fixture: ' + body);
+  }
+}
