@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { loginWithPasskey } from './passkey-auth';
 import { expect, test, type Page } from '@playwright/test';
 import {
@@ -239,6 +240,163 @@ test('TASK-BILLOK-002: one mobile flow keeps all dish names and expands guests a
   }
   await expect(page.getByTestId('guest-color-person-3')).toContainText('Борис');
   expect(remoteCalls).toEqual([]);
+});
+
+test('TASK-BILLOK-002 10–15: one public link auto-expands after two occupied slots and keeps prior people', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(190_000);
+  await loginWithPasskey(page, 'alice@qa.billok.ru');
+  await page.goto('/split');
+  await page.getByTestId('manual-receipt-name').fill('Общий чек с новыми гостями');
+  await page.getByTestId('guest-count-input').fill('2');
+  await page.getByTestId('next-assign-btn').click();
+  await page.getByTestId('guest-add-item-btn').click();
+  const form = page.getByTestId('manual-item-entry-form');
+  await form.locator('input').nth(0).fill('Пицца');
+  await form.locator('input').nth(1).fill('1');
+  await form.locator('input').nth(2).fill('1100,00');
+  await page.getByTestId('guest-add-item-submit').click();
+  await page.getByTestId('share-for-claiming-btn').click();
+  await expect(page).toHaveURL(/\/split\/[^/]+\/claim(?:\?.*)?$/);
+  const url = page.url();
+  const shareToken = new URL(url).pathname.split('/').at(-2)!;
+  const readSession = () => trpcQuery(page.request, 'guest.getSession', { token: shareToken }).then(trpcResult);
+
+  // A guest merely opening the link does not create any person.
+  const contexts = [] as Awaited<ReturnType<typeof browser.newContext>>[];
+  async function guestBrowser() {
+    const context = await browser.newContext({
+      baseURL: new URL(url).origin,
+      viewport: { width: 320, height: 800 },
+      isMobile: true,
+      hasTouch: true,
+    });
+    contexts.push(context);
+    return { context, guest: await context.newPage() };
+  }
+  try {
+    const preview = await guestBrowser();
+    await preview.guest.goto(url);
+    await expect(preview.guest.getByTestId('claim-join-form')).toBeVisible();
+    await expect(preview.guest.getByTestId('guest-slot-option-2')).toContainText('Гость 2');
+    expect((await readSession()).people).toHaveLength(3);
+
+    const joinApi = async (name: string, key = randomUUID()) => {
+      const context = await browser.newContext({
+        baseURL: new URL(url).origin,
+        viewport: { width: 320, height: 800 },
+      });
+      contexts.push(context);
+      const response = await trpcMutation(context.request, 'guest.joinGuestSlot', {
+        token: shareToken,
+        name,
+        joinKey: key,
+      });
+      const body = await response.text();
+      expect(response.ok(), body).toBe(true);
+      const joined = JSON.parse(body).result.data.json as {
+        personId: string;
+        personToken: string;
+        name: string;
+        personIndex: number;
+      };
+      return { joined, context, key };
+    };
+
+    const first = await joinApi('Лена');
+    const second = await joinApi('Павел');
+    expect([first.joined.personIndex, second.joined.personIndex]).toEqual([1, 2]);
+    await expect(page.getByTestId('guest-color-person-1')).toContainText('Лена');
+    await expect(page.getByTestId('guest-color-person-2')).toContainText('Павел');
+    expect((await readSession()).people).toHaveLength(3);
+
+    // With no free original slots the next visitor simply enters a name and
+    // confirms: the server must create a new place without creator approval.
+    const third = await guestBrowser();
+    await third.guest.goto(url);
+    await expect(third.guest.getByTestId('no-free-guest-slots')).toBeVisible();
+    await third.guest.getByTestId('claim-name-input').fill('Мария');
+    await expect(third.guest.getByTestId('claim-join-btn')).toBeEnabled();
+    await third.guest.getByTestId('claim-join-btn').click();
+    await expect(third.guest.getByTestId('claim-join-form')).toHaveCount(0);
+    await expect(page.getByTestId('guest-color-person-3')).toContainText('Мария');
+
+    const fourth = await guestBrowser();
+    await fourth.guest.goto(url);
+    await fourth.guest.getByTestId('claim-name-input').fill('Никита');
+    await fourth.guest.getByTestId('claim-join-btn').click();
+    await expect(fourth.guest.getByTestId('claim-join-form')).toHaveCount(0);
+    await expect(page.getByTestId('guest-color-person-4')).toContainText('Никита');
+    const afterFour = await readSession();
+    expect(afterFour.people).toHaveLength(5);
+    expect(afterFour.receiptData.guestCount).toBe(4);
+    await fitsPhone(third.guest);
+    await fitsPhone(fourth.guest);
+
+    // Two arrivals compete for the same once-full shared receipt. Their
+    // transactions must serialize into distinct cryptographic identities.
+    const [fifth, sixth] = await Promise.all([joinApi('Таня'), joinApi('Саша')]);
+    expect(fifth.joined.personId).not.toBe(sixth.joined.personId);
+    expect(fifth.joined.personToken).not.toBe(sixth.joined.personToken);
+    expect(new Set([fifth.joined.personIndex, sixth.joined.personIndex]).size).toBe(2);
+    const full = await readSession();
+    expect(full.people).toHaveLength(7);
+    expect(full.receiptData.guestCount).toBe(6);
+    expect(full.people.map((person: { name: string }) => person.name)).toContain('Мария');
+    expect(full.people.map((person: { name: string }) => person.name)).toContain('Никита');
+
+    // A lost response replay cannot insert an eighth guest or return someone
+    // else's secret. An old personal link still resumes its original holder.
+    const retry = await trpcMutation(fifth.context.request, 'guest.joinGuestSlot', {
+      token: shareToken,
+      name: ' ТАНЯ ',
+      joinKey: fifth.key,
+    });
+    expect(retry.ok(), await retry.text()).toBe(true);
+    const retried = (await retry.json()).result.data.json;
+    expect(retried.personId).toBe(fifth.joined.personId);
+    expect(retried.personToken).toBe(fifth.joined.personToken);
+    expect((await readSession()).people).toHaveLength(7);
+    const resumed = await trpcMutation(first.context.request, 'guest.resumeSession', {
+      token: shareToken,
+      personToken: first.joined.personToken,
+    });
+    expect(resumed.ok(), await resumed.text()).toBe(true);
+    expect((await resumed.json()).result.data.json.personId).toBe(first.joined.personId);
+
+    // Creator addition coexists with auto-join without moving earlier people.
+    const added = await trpcMutation(page.request, 'guest.addGuestPlace', {
+      token: shareToken,
+      requestKey: randomUUID(),
+    });
+    expect(added.ok(), await added.text()).toBe(true);
+    const invited = await joinApi('Валера');
+    expect(invited.joined.personId).toBe((await added.json()).result.data.json.personId);
+    expect((await readSession()).people).toHaveLength(8);
+
+    // Empty names, duplicate names, and a closed receipt must not expand.
+    for (const badName of ['', ' Лена ']) {
+      const bad = await trpcMutation(preview.context.request, 'guest.joinGuestSlot', {
+        token: shareToken,
+        name: badName,
+        joinKey: randomUUID(),
+      });
+      expect(bad.ok(), 'Invalid or duplicate name must fail: ' + badName).toBe(false);
+    }
+    expect((await readSession()).people).toHaveLength(8);
+    const ended = await trpcMutation(page.request, 'guest.expireSession', { token: shareToken });
+    expect(ended.ok(), await ended.text()).toBe(true);
+    const tooLate = await trpcMutation(preview.context.request, 'guest.joinGuestSlot', {
+      token: shareToken,
+      name: 'Поздний гость',
+      joinKey: randomUUID(),
+    });
+    expect(tooLate.ok()).toBe(false);
+  } finally {
+    await Promise.all(contexts.map((ctx) => ctx.close()));
+  }
 });
 
 test('anonymous participant chooses only own voluntary tips on mobile', async ({ page, browser }) => {

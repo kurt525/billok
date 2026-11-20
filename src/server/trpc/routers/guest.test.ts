@@ -2178,6 +2178,211 @@ describe('Issue 3.8.1: personal link only after the guest saves a real change', 
   });
 });
 
+describe('TASK-BILLOK-002 10–15: shared invitation auto-selects and safely expands slots', () => {
+  const receiptData = {
+    subtotal: 1100,
+    tax: 0,
+    tip: 0,
+    total: 1100,
+    currency: 'RUB',
+    guestSlotsMode: true,
+    guestCount: 2,
+    organizerPersonId: pid(0),
+    partsApprovalHash: 'existing-approval',
+  };
+  const basePeople: TestPerson[] = [
+    { name: 'Создатель', accountUserId: 'user-1', personToken: ALICE_TOKEN },
+    { name: 'Гость 1', guestSlotNumber: 1, tipCents: 25 },
+    { name: 'Гость 2', guestSlotNumber: 2, tipCents: 30 },
+  ];
+  const assignments = [{ itemIndex: 0, personIndices: [1] }];
+  const items = [{ name: 'Салат', quantity: 1, unitPrice: 1100, totalPrice: 1100 }];
+
+  async function persistentSession(people = basePeople, overrides: Parameters<typeof claimSession>[1] = {}) {
+    claimSession(people, { receiptData, assignments, items, paidByIndex: 0, ...overrides });
+    let saved = structuredClone(await mockDb.guestSplit.findUnique());
+    mockDb.guestSplit.findUnique.mockImplementation(async () => structuredClone(saved));
+    mockDb.guestSplit.update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      saved = { ...saved, ...data };
+      return structuredClone(saved);
+    });
+    return () => structuredClone(saved);
+  }
+
+  const auto = (name: string, joinKey: string) => ({ token: 'share-1', name, joinKey });
+
+  test('looking up the public share URL never creates an unclaimed guest', async () => {
+    const readSaved = await persistentSession();
+    const before = readSaved();
+    const view = await (await caller()).getSession({ token: 'share-1' });
+    expect(view.people).toHaveLength(3);
+    expect(readSaved()).toEqual(before);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('uses two free slots first, then creates two independent joined places without changing old money', async () => {
+    const readSaved = await persistentSession();
+    const api = await caller();
+    const first = await api.joinGuestSlot(auto('Анна', 'a1f8df2e-6713-4bd0-9e1f-f002a246cd10'));
+    const second = await api.joinGuestSlot(auto('Борис', 'a1f8df2e-6713-4bd0-9e1f-f002a246cd11'));
+    expect([first.personIndex, second.personIndex]).toEqual([1, 2]);
+    expect([first.personId, second.personId]).toEqual([pid(1), pid(2)]);
+    expect(readSaved().receiptData).toEqual(receiptData);
+
+    const third = await api.joinGuestSlot(auto('Вера', 'a1f8df2e-6713-4bd0-9e1f-f002a246cd12'));
+    const fourth = await api.joinGuestSlot(auto('Глеб', 'a1f8df2e-6713-4bd0-9e1f-f002a246cd13'));
+    const final = readSaved();
+    expect([third.personIndex, fourth.personIndex]).toEqual([3, 4]);
+    expect(new Set([first.personId, second.personId, third.personId, fourth.personId]).size).toBe(4);
+    expect(new Set([first.personToken, second.personToken, third.personToken, fourth.personToken]).size).toBe(4);
+    expect(third.personId).toMatch(UUID);
+    expect(fourth.personId).toMatch(UUID);
+    expect(final.people).toHaveLength(5);
+    expect((final.people as TestPerson[]).map((p) => p.guestSlotNumber)).toEqual([undefined, 1, 2, 3, 4]);
+    expect(final.receiptData).toMatchObject({ ...receiptData, guestCount: 4 });
+    expect(final.assignments).toEqual(assignments);
+    expect(final.paidByIndex).toBe(0);
+    expect((final.people as TestPerson[])[1]).toMatchObject({
+      name: 'Анна',
+      tipCents: 25,
+      personToken: first.personToken,
+    });
+    expect((final.people as TestPerson[])[2]).toMatchObject({
+      name: 'Борис',
+      tipCents: 30,
+      personToken: second.personToken,
+    });
+    const publicView = await api.getSession({ token: 'share-1' });
+    expect(publicView.people).toHaveLength(5);
+    expect(publicView.receiptData.guestCount).toBe(4);
+    const publicJson = JSON.stringify(publicView);
+    for (const privateValue of [
+      first.personToken,
+      third.personToken,
+      first.personId === 'x' ? 'x' : third.personToken,
+    ]) {
+      expect(publicJson).not.toContain(privateValue);
+    }
+  });
+
+  test('zero initially requested guests still lets the first real visitor join', async () => {
+    const readSaved = await persistentSession([basePeople[0]!], {
+      receiptData: { ...receiptData, guestCount: 0 },
+    });
+    const result = await (await caller()).joinGuestSlot(auto('Первый гость', 'a1f8df2e-6713-4bd0-9e1f-f002a246cd20'));
+    expect(result).toMatchObject({ personIndex: 1, name: 'Первый гость' });
+    expect(result.personId).toMatch(UUID);
+    expect(readSaved().people).toHaveLength(2);
+    expect(readSaved().receiptData).toMatchObject({ guestCount: 1 });
+    expect((readSaved().people as TestPerson[])[1]).toMatchObject({
+      id: result.personId,
+      name: 'Первый гость',
+      guestSlotNumber: 1,
+      personToken: result.personToken,
+    });
+    expect(readSaved().paidByIndex).toBe(0);
+  });
+
+  test('replay after a lost response is exactly one person, name and token', async () => {
+    const readSaved = await persistentSession(
+      basePeople.map((p, i) =>
+        i > 0 ? { ...p, personToken: i === 1 ? OTHER_TOKEN : '33333333-3333-4333-8333-333333333333' } : p,
+      ),
+    );
+    const api = await caller();
+    const key = 'b1f8df2e-6713-4bd0-9e1f-f002a246cd12';
+    const first = await api.joinGuestSlot(auto('Нина', key));
+    mockDb.guestSplit.update.mockClear();
+    const repeat = await api.joinGuestSlot(auto(' НИНА ', key));
+    expect(repeat).toEqual(first);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    expect(readSaved().people).toHaveLength(4);
+    await expect(api.joinGuestSlot(auto('Другая', key))).rejects.toMatchObject({
+      code: 'CONFLICT',
+      messageKey: 'joinKeyReused',
+    });
+  });
+
+  test('empty, overlong, duplicate and reused names cannot consume a place', async () => {
+    const readSaved = await persistentSession([
+      basePeople[0]!,
+      { ...basePeople[1]!, name: 'Анна', personToken: OTHER_TOKEN },
+      basePeople[2]!,
+    ]);
+    const api = await caller();
+    const key = 'c1f8df2e-6713-4bd0-9e1f-f002a246cd12';
+    for (const invalid of ['', ' ', 'Я'.repeat(41)]) {
+      await expect(api.joinGuestSlot(auto(invalid, key))).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    await expect(api.joinGuestSlot(auto(' аннА ', key))).rejects.toMatchObject({
+      code: 'CONFLICT',
+      messageKey: 'nameTaken',
+    });
+    expect(readSaved().people).toHaveLength(3);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('creator-created free place and late personal link coexist with auto joins', async () => {
+    const readSaved = await persistentSession();
+    const api = await caller();
+    const added = await (
+      await caller(signedIn)
+    ).addGuestPlace({
+      token: 'share-1',
+      requestKey: 'd1f8df2e-6713-4bd0-9e1f-f002a246cd12',
+    });
+    expect(added.guestSlotNumber).toBe(3);
+    const first = await api.joinGuestSlot(auto('Анна', 'd1f8df2e-6713-4bd0-9e1f-f002a246cd13'));
+    await api.joinGuestSlot(auto('Борис', 'd1f8df2e-6713-4bd0-9e1f-f002a246cd14'));
+    const extra = await api.joinGuestSlot(auto('Вера', 'd1f8df2e-6713-4bd0-9e1f-f002a246cd15'));
+    expect(extra.personId).toBe(added.personId);
+    const beyond = await api.joinGuestSlot(auto('Олег', 'd1f8df2e-6713-4bd0-9e1f-f002a246cd16'));
+    expect(beyond.personIndex).toBe(4);
+    const prior = await api.resumeSession({ token: 'share-1', personToken: first.personToken });
+    expect(prior).toMatchObject({ personId: first.personId, name: first.name });
+    expect(readSaved().people).toHaveLength(5);
+    expect(readSaved().paidByIndex).toBe(0);
+    expect(readSaved().assignments).toEqual(assignments);
+  });
+
+  test('closed, expired, non-slot and full 100-person receipts cannot accept auto joins', async () => {
+    const api = await caller();
+    const input = auto('Олег', 'e1f8df2e-6713-4bd0-9e1f-f002a246cd12');
+    const readFinalized = await persistentSession(basePeople, { status: 'FINALIZED' });
+    await expect(api.joinGuestSlot(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(readFinalized().people).toHaveLength(3);
+    const readExpired = await persistentSession(basePeople, { expiresAt: new Date(0) });
+    await expect(api.joinGuestSlot(input)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(readExpired().people).toHaveLength(3);
+    await persistentSession(basePeople, {
+      receiptData: { subtotal: 1100, tax: 0, tip: 0, total: 1100, currency: 'RUB' },
+    });
+    await expect(api.joinGuestSlot(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    const people = [
+      basePeople[0]!,
+      ...Array.from({ length: 99 }, (_, i) => ({
+        name: 'Занятый ' + (i + 1),
+        guestSlotNumber: i + 1,
+        personToken: 'token-' + (i + 1),
+      })),
+    ];
+    await persistentSession(people, { receiptData: { ...receiptData, guestCount: 99 } });
+    await expect(api.joinGuestSlot(input)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      messageKey: 'sessionFull',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('automatic joining requires a stable retry key', async () => {
+    await persistentSession();
+    await expect((await caller()).joinGuestSlot({ token: 'share-1', name: 'Ирина' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('Issue 3.7.2: atomic fixed guest slot reservation with a shared link', () => {
   const account = { user: { id: 'registered-guest' } };
   const anotherAccount = { user: { id: 'second-account' } };

@@ -957,18 +957,18 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // The join key is kept (in memory) until this device becomes someone, and reused only to retry
   // the same name, so a join whose response was lost (e.g. a network drop) is replayed as the
   // same person. The server mints new people's tokens itself.
-  function startGuestSlotJoin(input: { slotId: string; name: string }) {
+  function startGuestSlotJoin(input: { slotId?: string; name: string }) {
     if (joinInFlight.current) return;
     joinInFlight.current = true;
     const stored = getStoredClaimIdentity(token);
     storedWhenSent.current = stored?.personToken;
     // The retry key is scoped to *both* the name and selected slot. Changing
     // either after a failed network request starts a fresh join attempt.
-    const pending = joinKeyFor(input.name + '|' + input.slotId, pendingJoin.current);
+    const pending = joinKeyFor(input.name + '|' + (input.slotId ?? 'auto'), pendingJoin.current);
     pendingJoin.current = pending;
     joinGuestSlot.mutate({
       token,
-      slotId: input.slotId,
+      ...(input.slotId ? { slotId: input.slotId } : {}),
       name: input.name,
       joinKey: pending.joinKey,
       ...(stored ? { personToken: stored.personToken } : {}),
@@ -1240,11 +1240,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       const selected = session.data.people.find(
         (person) => person.id === selectedGuestSlotId && person.guestSlotNumber && !person.hasJoined,
       );
-      if (!selected) {
-        toast.error(t('guestPlaceSelectionRequired'));
-        return;
-      }
-      startGuestSlotJoin({ slotId: selected.id, name: trimmed });
+      // A selected free slot remains an option, but selection is not
+      // required. With none selected the server atomically claims the first
+      // available slot or creates a new one when the original places are full.
+      startGuestSlotJoin({ ...(selected ? { slotId: selected.id } : {}), name: trimmed });
       return;
     }
     startJoin({ name: trimmed, ...(groupSize > 1 ? { groupSize } : {}) });
@@ -2440,15 +2439,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             <Button
               className="min-h-11 w-full text-base"
               onClick={handleJoin}
-              disabled={
-                !(name.trim() || (data.receiptData.guestSlotsMode && authSession?.user?.name)) ||
-                joining ||
-                (data.receiptData.guestSlotsMode === true &&
-                  !data.people.some(
-                    (person) =>
-                      person.id === selectedGuestSlotId && person.guestSlotNumber !== undefined && !person.hasJoined,
-                  ))
-              }
+              disabled={!(name.trim() || (data.receiptData.guestSlotsMode && authSession?.user?.name)) || joining}
               data-testid="claim-join-btn"
             >
               {joining ? (

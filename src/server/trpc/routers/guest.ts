@@ -1160,13 +1160,19 @@ export const guestRouter = createTRPCRouter({
     .input(
       z.object({
         token: shareTokenSchema,
-        slotId: personIdSchema,
+        // Optional for the shared-link auto-join; an explicit id still selects
+        // a specific legacy/preallocated free guest place.
+        slotId: personIdSchema.optional(),
         name: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
         personToken: guestLinkSecretSchema.optional(),
         joinKey: z.string().uuid().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // Automatic selection must always be replayable after a lost response.
+      if (!input.slotId && !input.joinKey) {
+        throw new AppError('BAD_REQUEST', 'invalidData', { label: 'join key' });
+      }
       if (!checkJoinRateLimit(input.token, input.name, input.personToken)) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
@@ -1196,6 +1202,9 @@ export const guestRouter = createTRPCRouter({
           throw new AppError('CONFLICT', 'nameTaken');
         }
         const people = assignPersonIds(stored);
+        // An automatic link join expands the receipt only after a successful
+        // confirmation, not on getSession/read or when the link is opened.
+        let addedGuestSlotNumber: number | null = null;
         const save = async () => {
           enforceGuestKnownParts(
             parseGuestItems(session.items),
@@ -1210,10 +1219,21 @@ export const guestRouter = createTRPCRouter({
               // Selecting a place changes neither dish portions nor voluntary
               // tip amounts: an already approved allocation stays approved.
               people: people as unknown as Prisma.InputJsonValue,
+              ...(addedGuestSlotNumber === null
+                ? {}
+                : {
+                    receiptData: {
+                      ...(session.receiptData as Record<string, unknown>),
+                      guestCount: Math.max(
+                        typeof receipt.guestCount === 'number' ? receipt.guestCount : 0,
+                        addedGuestSlotNumber,
+                      ),
+                    } as Prisma.InputJsonValue,
+                  }),
             },
           });
         };
-        const targetIndex = people.findIndex((p) => p.id === input.slotId && typeof p.guestSlotNumber === 'number');
+        let targetIndex = people.findIndex((p) => p.id === input.slotId && typeof p.guestSlotNumber === 'number');
         // A registered creator can re-enter their own reserved row using
         // their account, but cannot bind that row to a second guest slot.
         const accountIndex = accountUserId ? people.findIndex((p) => p.accountUserId === accountUserId) : -1;
@@ -1255,7 +1275,7 @@ export const guestRouter = createTRPCRouter({
         if (replayIndex >= 0) {
           const replayed = people[replayIndex]!;
           if (
-            replayed.id !== input.slotId ||
+            (input.slotId !== undefined && replayed.id !== input.slotId) ||
             replayed.join!.name !== normalizeGuestName(input.name) ||
             replayed.accountUserId !== undefined ||
             accountUserId !== null
@@ -1270,6 +1290,32 @@ export const guestRouter = createTRPCRouter({
           };
         }
 
+        if (input.slotId === undefined) {
+          // The shared link is valid even when all originally created slots
+          // have been occupied. Take an existing free slot first. When none
+          // remains, append the next independent slot inside this exact
+          // Repeatable Read transaction (serializing concurrent joins).
+          targetIndex = people.findIndex((p) => p.guestSlotNumber !== undefined && !p.personToken && !p.accountUserId);
+          if (targetIndex < 0) {
+            if (people.length >= MAX_SESSION_PEOPLE) {
+              throw new AppError('BAD_REQUEST', 'sessionFull', { max: MAX_SESSION_PEOPLE });
+            }
+            const nextSlot = Math.max(0, ...people.map((p) => p.guestSlotNumber ?? 0)) + 1;
+            let placeholderName = 'Гость ' + nextSlot;
+            let suffix = 2;
+            while (people.some((p) => normalizeGuestName(p.name) === normalizeGuestName(placeholderName))) {
+              placeholderName = 'Гость ' + nextSlot + ' (' + suffix++ + ')';
+            }
+            people.push({
+              id: newGuestPersonId(people.map((p) => p.id)),
+              name: placeholderName,
+              guestSlotNumber: nextSlot,
+              visualColorId: Math.max(-1, ...people.map((p) => p.visualColorId ?? -1)) + 1,
+            });
+            addedGuestSlotNumber = nextSlot;
+            targetIndex = people.length - 1;
+          }
+        }
         if (targetIndex < 0) throw new AppError('CONFLICT', 'personGone');
         const target = people[targetIndex]!;
         if (target.personToken || target.accountUserId) {
