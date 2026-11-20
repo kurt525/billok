@@ -14,20 +14,34 @@ describe('Mobile receipt item forms, guest and group', () => {
       expect(source).toContain('inputMode="numeric"');
       expect(source).toContain('inputMode="decimal"');
       expect(source).toContain('min-h-11');
-      expect(source).toContain('parseReceiptQuantity(newItem.quantity)');
-      expect(source).toContain('parseReceiptQuantity(editValues.quantity)');
+      if (path.endsWith('/split/page.tsx')) {
+        expect(source).toContain('parseReceiptQuantity(draft.quantity)');
+      } else {
+        expect(source).toContain('parseReceiptQuantity(newItem.quantity)');
+        expect(source).toContain('parseReceiptQuantity(editValues.quantity)');
+      }
       expect(source).not.toContain('parseInt(newItem.quantity) || 1');
       expect(source).not.toContain('parseInt(editValues.quantity)');
     });
 
     it(path + ': has touch-size item actions, participant chips and split controls', () => {
       const source = read(path);
-      expect(source).toContain('flex size-11 shrink-0 items-center justify-center rounded-lg');
-      expect(source).toContain('min-h-11 max-w-full items-center');
-      expect(source).toContain('className="min-h-11"');
-      expect(source).toContain('h-11 w-20 text-base');
-      expect(source).toContain('flex flex-wrap items-center gap-2');
-      expect(source).toContain('min-w-0 break-words font-medium');
+      if (path.endsWith('/split/page.tsx')) {
+        // Creation now contains dish rows; participant chips live in the
+        // claim page after creation, not in an obsolete second creation mode.
+        expect(source).toContain('data-testid="receipt-items-list"');
+        expect(source).toContain("data-testid={'receipt-item-name-' + index}");
+        expect(source).toContain('[overflow-wrap:anywhere] font-medium');
+        expect(source).toContain('guest-split-submit-');
+        expect(source).toContain('min-h-11');
+      } else {
+        expect(source).toContain('flex size-11 shrink-0 items-center justify-center rounded-lg');
+        expect(source).toContain('min-h-11 max-w-full items-center');
+        expect(source).toContain('className="min-h-11"');
+        expect(source).toContain('h-11 w-20 text-base');
+        expect(source).toContain('flex flex-wrap items-center gap-2');
+        expect(source).toContain('min-w-0 break-words font-medium');
+      }
     });
   }
 });
@@ -89,11 +103,14 @@ describe('Guest participant name inputs stay within 40 characters', () => {
   it('limits creator-provided names, join name, guest self-rename and organizer correction in all forms', () => {
     const create = read('src/app/[locale]/split/page.tsx');
     const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
-    expect(create).toContain('maxLength={MAX_GUEST_NAME_LENGTH}');
+    // Creation now chooses an initial number of slots, not any guest names.
+    // Full 40-character name validation lives in the subsequent claim form.
+    expect(create).toContain('data-testid="guest-count-input"');
+    expect(create).not.toContain('person-input-');
     // 3.6.2 adds a separate no-guest-token rename form for the bill creator.
     expect(claim.match(/maxLength=\{MAX_GUEST_NAME_LENGTH\}/g)).toHaveLength(3);
     expect(claim).toContain("data-testid={'creator-edit-name-input-' + idx}");
-    expect(create).toContain("import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit'");
+    expect(create).toContain('const [guestCount, setGuestCount] = useState(2)');
     expect(claim).toContain("import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit'");
   });
 });
@@ -103,7 +120,7 @@ describe('Long participant names on mobile guest receipts', () => {
     const split = read('src/app/[locale]/split/page.tsx');
     const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
     const result = read('src/app/[locale]/split/[token]/page.tsx');
-    expect(split).toContain('h-12 min-w-0 flex-1 text-base');
+    expect(split).toContain('min-w-0 font-semibold [overflow-wrap:anywhere]');
     expect(result).toContain('min-w-0 font-semibold [overflow-wrap:anywhere]');
     expect(claim).toContain('min-w-0 flex-wrap items-center gap-2 rounded-lg');
     expect(claim).toContain('min-w-0 font-medium [overflow-wrap:anywhere]');

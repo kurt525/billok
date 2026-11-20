@@ -114,257 +114,130 @@ async function requireNoPaintedPayerReviewDuplicates(page: Page) {
 
 test.use({ viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
 
-test('authenticated manual receipt: add, edit, allocate, share with a second anonymous device', async ({
+test('TASK-BILLOK-002: one mobile flow keeps all dish names and expands guests after creation', async ({
   page,
   browser,
 }) => {
-  test.setTimeout(135_000);
+  test.setTimeout(160_000);
   const remoteCalls: string[] = [];
   page.on('request', (request) => {
     if (/guest\.processReceipt|\/api\/upload|guest\.getUploadStatus|api\.openai/.test(request.url())) {
       remoteCalls.push(request.url());
     }
   });
-
   await loginWithPasskey(page, 'alice@qa.billok.ru');
-
   await page.goto('/split', { waitUntil: 'networkidle' });
   await expect(page.getByTestId('manual-split-title')).toContainText('Разделить чек');
-  await expect(page.getByTestId('guest-people-step')).toBeVisible();
-  await expect(page.getByTestId('guest-file-input')).toHaveCount(0);
-  // The accepted direct-allocation flow remains available under the manual tab.
-  await page.getByTestId('workflow-manual').click();
+  await expect(page.getByTestId('workflow-manual')).toHaveCount(0);
+  await expect(page.getByTestId('workflow-invite')).toHaveCount(0);
   await page.getByTestId('manual-receipt-name').fill('Ужин в кафе');
-  await page.getByTestId('person-input-0').fill('Анна');
-  await page.getByTestId('add-person-btn').click();
-  // A full 40-character name without spaces must not widen the 320px screen.
-  const longGuestName = 'Борис'.repeat(8);
-  await page.getByTestId('person-input-1').fill(longGuestName);
-  await page.locator('#who-paid').selectOption('0');
+  await page.getByTestId('guest-count-input').fill('2');
+  await page.locator('#invite-payer').selectOption('0');
   await page.getByTestId('next-assign-btn').click();
-  await expect(page.getByTestId('guest-assign-step')).toBeVisible();
   await expect(page.getByTestId('manual-no-items')).toBeVisible();
-  await expect(page.getByTestId('create-split-btn')).toBeDisabled();
+  await expect(page.getByTestId('share-for-claiming-btn')).toBeDisabled();
   await fitsPhone(page);
 
-  await page.getByTestId('guest-add-item-btn').click();
-  const form = page.getByTestId('guest-add-item-submit').locator('xpath=ancestor::form');
-  await form.locator('input').nth(0).fill('Суп');
-  await form.locator('input').nth(1).fill('2');
-  await form.locator('input').nth(2).fill('90,00');
-  await page.getByTestId('guest-add-item-submit').click();
-  await expect(page.getByText('Суп', { exact: true })).toBeVisible();
-
-  await page.getByTestId('guest-add-item-btn').click();
-  const form2 = page.getByTestId('guest-add-item-submit').locator('xpath=ancestor::form');
-  await form2.locator('input').nth(0).fill('Чай');
-  await form2.locator('input').nth(1).fill('1');
-  await form2.locator('input').nth(2).fill('20,50');
-  await page.getByTestId('guest-add-item-submit').click();
-
-  const soup = page.locator('[data-testid^="guest-item-card-"]').filter({
-    has: page.getByText('Суп', { exact: true }),
-  });
-  await soup.locator('[data-testid^="guest-split-btn-"]').click();
-  await soup.locator('[data-testid^="guest-split-qty-"]').fill('1');
-  await soup.locator('[data-testid^="guest-split-submit-"]').click();
-  await expect(page.getByText('Суп', { exact: true })).toHaveCount(2);
-
-  await page.getByTestId('guest-split-all-btn').click();
-  const tea = page.locator('[data-testid^="guest-item-card-"]').filter({
-    has: page.getByText('Чай', { exact: true }),
-  });
-  // The second participant alone owes the tea.
-  await tea.getByRole('button', { name: /Анна/ }).click();
-  await expect(tea.getByRole('button', { name: /Анна/ })).not.toHaveClass(/bg-primary/);
-  await expect(tea.getByRole('button', { name: /БорисБорис/ })).toHaveClass(/bg-primary/);
-
-  // Extremely short viewport simulates a software keyboard covering most of
-  // the screen: the action panel must scroll internally, not extend above it.
-  await page.setViewportSize({ width: 320, height: 180 });
-  const assignActions = page.getByTestId('guest-assign-actions');
-  const panelBounds = await assignActions.boundingBox();
-  expect(panelBounds).not.toBeNull();
-  expect(panelBounds!.y).toBeGreaterThanOrEqual(0);
-  expect(panelBounds!.height).toBeLessThanOrEqual(164);
-  await page.getByTestId('share-for-claiming-btn').scrollIntoViewIfNeeded();
-  await expect(page.getByTestId('share-for-claiming-btn')).toBeInViewport();
-  await page.getByTestId('create-split-btn').scrollIntoViewIfNeeded();
-  await expect(page.getByTestId('create-split-btn')).toBeInViewport();
-
-  await page.setViewportSize({ width: 412, height: 460 });
-  await fitsPhone(page);
-  await page.getByTestId('create-split-btn').scrollIntoViewIfNeeded();
-  await expect(page.getByTestId('create-split-btn')).toBeEnabled();
-  await page.getByTestId('create-split-btn').click();
-
-  await expect(page).toHaveURL(/\/split\/[^/]+$/);
-  await expect(page.getByTestId('split-result')).toBeVisible();
-  await expect(page.getByText('Ужин в кафе').first()).toBeVisible();
-  await expect(page.getByTestId('person-card-1')).toContainText('Чай');
-  await expect(page.getByTestId('person-card-1')).toContainText(longGuestName);
-  await expect(page.getByTestId('person-card-0')).not.toContainText('Чай');
-  const shareUrl = page.url();
-
-  // Unfolded Android widths with enlarged system text: long guest names and
-  // receipt totals must remain inside one centered column without sideways
-  // scrolling. Sharing buttons stay touch-size at every width.
-  await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
-  for (const width of [430, 480, 600, 720]) {
-    await page.setViewportSize({ width, height: 460 });
-    await fitsPhone(page);
-    for (const index of [0, 1]) {
-      const card = page.getByTestId('person-card-' + index);
-      const bounds = await card.boundingBox();
-      expect(bounds, 'Guest receipt card ' + index + ' at ' + width + 'px').not.toBeNull();
-      expect(bounds!.x).toBeGreaterThanOrEqual(0);
-      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-      if (width === 720) expect(bounds!.width).toBeLessThan(width - 16);
-    }
-    await expect(page.getByTestId('person-card-1')).toContainText(longGuestName);
-    for (const button of [page.getByTestId('copy-link-btn'), page.getByTestId('share-btn')]) {
-      const bounds = await button.boundingBox();
-      expect(bounds).not.toBeNull();
-      expect(bounds!.height).toBeGreaterThanOrEqual(44);
-      expect(bounds!.x).toBeGreaterThanOrEqual(0);
-      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-    }
-  }
-
-  // Rotate an enlarged-text phone from portrait to landscape and back,
-  // then simulate the shortened viewport left above the Android keyboard.
-  // Resizing must not hide the share controls or expand the receipt sideways.
-  for (const [width, height] of [
-    [360, 720],
-    [720, 360],
-    [360, 360],
+  for (const [title, qty, price] of [
+    ['Суп', '2', '90,00'],
+    ['Чай', '1', '20,50'],
   ] as const) {
-    await page.setViewportSize({ width, height });
-    await fitsPhone(page);
-    await expect(page.getByTestId('person-card-1')).toContainText(longGuestName);
-    for (const button of [page.getByTestId('copy-link-btn'), page.getByTestId('share-btn')]) {
-      const rect = await button.boundingBox();
-      expect(rect, 'Share action at ' + width + 'x' + height).not.toBeNull();
-      expect(rect!.height).toBeGreaterThanOrEqual(44);
-      expect(rect!.x).toBeGreaterThanOrEqual(0);
-      expect(rect!.x + rect!.width).toBeLessThanOrEqual(width);
-      expect(rect!.y).toBeGreaterThanOrEqual(0);
-      expect(rect!.y + rect!.height).toBeLessThanOrEqual(height);
-    }
+    await page.getByTestId('guest-add-item-btn').click();
+    const form = page.getByTestId('manual-item-entry-form');
+    await form.locator('input').nth(0).fill(title);
+    await form.locator('input').nth(1).fill(qty);
+    await form.locator('input').nth(2).fill(price);
+    await page.getByTestId('guest-add-item-submit').click();
+    await expect(form).toHaveCount(0);
+    await expect(page.getByText(title, { exact: true })).toBeVisible();
   }
+  await expect(page.getByTestId('guest-item-card-0')).toContainText('Суп');
+  await expect(page.getByTestId('guest-item-card-1')).toContainText('Чай');
+  await expect(page.getByTestId('guest-assign-step')).toContainText('110,50');
 
-  // Simulate the shorter visual height left above an Android soft keyboard:
-  // both sharing actions must stay inside the visible viewport and remain tappable.
-  await page.setViewportSize({ width: 320, height: 360 });
-  const actions = page.getByTestId('split-result-actions');
-  await expect(actions).toBeVisible();
-  await fitsPhone(page);
-  for (const button of [page.getByTestId('copy-link-btn'), page.getByTestId('share-btn')]) {
-    const rect = await button.boundingBox();
-    expect(rect).not.toBeNull();
-    expect(rect!.height).toBeGreaterThanOrEqual(44);
-    expect(rect!.y).toBeGreaterThanOrEqual(0);
-    expect(rect!.y + rect!.height).toBeLessThanOrEqual(360);
-  }
-  await page.setViewportSize({ width: 412, height: 460 });
+  // Splitting a quantity preserves both row names, exact totals, and previously added rows.
+  await page.getByTestId('guest-split-btn-0').click();
+  await page.getByTestId('guest-split-qty-0').fill('1');
+  await page.getByTestId('guest-split-submit-0').click();
+  await expect(page.getByTestId('guest-item-card-0')).toContainText('Суп');
+  await expect(page.getByTestId('guest-item-card-1')).toContainText('Суп');
+  await expect(page.getByTestId('guest-item-card-2')).toContainText('Чай');
 
-  // The creator's own history must fit small phones, and the delete action
-  // must be reachable without relying on a mouse or accidentally deleting.
-  const receiptToken = new URL(shareUrl).pathname.split('/').at(-1);
   for (const width of [320, 360, 430, 480, 600, 720]) {
-    await page.setViewportSize({ width, height: 460 });
-    await page.goto('/splits', { waitUntil: 'networkidle' });
+    await page.setViewportSize({ width, height: 640 });
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
-    await expect(page.getByTestId('splits-page')).toBeVisible();
-    const historyLink = page.locator('a[href$="/split/' + receiptToken + '"]');
-    const historyCard = page.locator('[data-testid^="split-card-"]').filter({
-      has: historyLink,
-    });
-    await expect(historyCard).toBeVisible();
-    await expect(historyCard).toContainText('Ужин в кафе');
     await fitsPhone(page);
-    const cardRect = await historyCard.boundingBox();
-    expect(cardRect).not.toBeNull();
-    expect(cardRect!.x).toBeGreaterThanOrEqual(0);
-    expect(cardRect!.x + cardRect!.width).toBeLessThanOrEqual(width);
-    const linkRect = await historyLink.boundingBox();
-    expect(linkRect).not.toBeNull();
-    expect(linkRect!.height).toBeGreaterThanOrEqual(44);
-    expect(linkRect!.x).toBeGreaterThanOrEqual(0);
-    expect(linkRect!.x + linkRect!.width).toBeLessThanOrEqual(width);
-    const remove = historyCard.locator('button[aria-label]');
-    expect((await remove.boundingBox())!.width).toBeGreaterThanOrEqual(44);
-    expect((await remove.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-    if (width === 320) {
-      await remove.click();
-      const dialog = page.getByRole('alertdialog');
-      await expect(dialog).toBeVisible();
-      // An Android keyboard leaves a much smaller visual viewport. The
-      // destructive-action dialog must not escape its bounds; the cancel
-      // action remains reachable without closing or deleting the receipt.
-      await page.setViewportSize({ width: 320, height: 240 });
-      const alertBounds = await dialog.boundingBox();
-      expect(alertBounds).not.toBeNull();
-      expect(alertBounds!.y).toBeGreaterThanOrEqual(0);
-      expect(alertBounds!.y + alertBounds!.height).toBeLessThanOrEqual(240);
-      const cancel = dialog.getByRole('button', { name: 'Отмена' });
-      await cancel.scrollIntoViewIfNeeded();
-      await expect(cancel).toBeInViewport();
-      const cancelBounds = await cancel.boundingBox();
-      expect(cancelBounds).not.toBeNull();
-      expect(cancelBounds!.height).toBeGreaterThanOrEqual(44);
-      expect(cancelBounds!.width).toBeGreaterThanOrEqual(44);
-      await cancel.click();
-      await page.setViewportSize({ width: 320, height: 460 });
-      await expect(historyCard).toBeVisible();
+    for (const index of [0, 1, 2]) {
+      const name = page.getByTestId('receipt-item-name-' + index);
+      await expect(name).toBeVisible();
+      const rect = await name.boundingBox();
+      expect(rect).not.toBeNull();
+      expect(rect!.x).toBeGreaterThanOrEqual(-1);
+      expect(rect!.x + rect!.width).toBeLessThanOrEqual(width + 1);
     }
-
-    // Open the finalized saved receipt from history with a real touch click.
-    // This must work on all six widths, not just by typing the public URL.
-    await historyLink.click();
-    await expect(page).toHaveURL(new RegExp('/split/' + receiptToken + '$'));
-    await expect(page.getByTestId('split-result')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId('person-card-1')).toContainText(longGuestName);
-    await fitsPhone(page);
   }
 
-  const otherDevice = await browser.newContext({
+  await page.getByTestId('share-for-claiming-btn').click();
+  await expect(page).toHaveURL(/\/split\/[^/]+\/claim(?:\?.*)?$/);
+  await expect(page.getByTestId('creator-add-guest-place')).toBeVisible();
+  await expect(page.getByTestId('guest-color-person-2')).toContainText('Гость 2');
+
+  // Both initial guests join using the same public link before it is expanded.
+  // The creator's SSE view must reflect each join without a page reload.
+  for (const [personName, slot] of [
+    ['Первый гость', 1],
+    ['Второй гость', 2],
+  ] as const) {
+    const context = await browser.newContext({
+      viewport: { width: 320, height: 800 },
+      isMobile: true,
+      hasTouch: true,
+    });
+    try {
+      const visitor = await context.newPage();
+      await visitor.goto(page.url());
+      await expect(visitor.getByTestId('claim-join-form')).toBeVisible();
+      await visitor.getByTestId('claim-name-input').fill(personName);
+      await visitor.getByTestId('guest-slot-option-' + slot).click();
+      await visitor.getByTestId('claim-join-btn').click();
+      await expect(visitor.getByTestId('claim-join-form')).toHaveCount(0);
+    } finally {
+      await context.close();
+    }
+    await expect(page.getByTestId('guest-color-person-' + slot)).toContainText(personName);
+  }
+
+  // Two original places were created for guests. Expanding never changes their
+  // stable names/identities or the account-bound creator and payer.
+  await page.getByTestId('creator-add-guest-place').click();
+  await expect(page.getByTestId('guest-color-person-3')).toContainText('Гость 3');
+  await page.getByTestId('creator-add-guest-place').click();
+  await expect(page.getByTestId('guest-color-person-4')).toContainText('Гость 4');
+  await expect(page.getByTestId('guest-color-person-1')).toContainText('Первый гость');
+  await expect(page.getByTestId('guest-color-person-2')).toContainText('Второй гость');
+  await fitsPhone(page);
+
+  // The public link stays usable for all four guests; occupying one must not
+  // grant permission to claim any other person's private place.
+  const visitorContext = await browser.newContext({
     viewport: { width: 320, height: 800 },
     isMobile: true,
     hasTouch: true,
   });
   try {
-    // A separate anonymous API read proves the saved split has committed and
-    // is accessible without any of the creator's session cookies. This also
-    // distinguishes server persistence/auth failures from rendering failures.
-    const publicResponse = await trpcQuery(otherDevice.request, 'guest.getSplit', { token: receiptToken });
-    const publicBody = await publicResponse.text();
-    expect(publicResponse.ok(), 'Anonymous guest.getSplit failed: ' + publicBody).toBe(true);
-    const publicSplit = await trpcResult({ json: async () => JSON.parse(publicBody) });
-    expect(publicSplit?.shareToken).toBe(receiptToken);
-    expect(publicSplit?.receiptData?.merchantName).toBe('Ужин в кафе');
-
-    const otherPage = await otherDevice.newPage();
-    const pageErrors: string[] = [];
-    otherPage.on('pageerror', (error) => pageErrors.push(error.message));
-    otherPage.on('response', (response) => {
-      if (response.status() >= 400 && response.url().includes('/api/trpc/')) {
-        pageErrors.push('tRPC ' + response.status() + ' ' + new URL(response.url()).pathname);
-      }
-    });
-    await otherPage.goto(shareUrl, { waitUntil: 'networkidle' });
-    await expect(otherPage).toHaveURL(new RegExp('/split/' + receiptToken + '$'));
-    await expect(
-      otherPage.getByTestId('split-result'),
-      'Anonymous public split did not render: ' + JSON.stringify(pageErrors),
-    ).toBeVisible({ timeout: 30_000 });
-    await expect(otherPage.getByTestId('person-card-1')).toContainText('Чай');
-    await expect(otherPage.getByTestId('person-card-1')).toContainText(longGuestName);
-    await fitsPhone(otherPage);
+    const visitor = await visitorContext.newPage();
+    await visitor.goto(page.url(), { waitUntil: 'networkidle' });
+    await expect(visitor.getByTestId('claim-join-form')).toBeVisible();
+    await visitor.getByTestId('claim-name-input').fill('Борис');
+    await visitor.getByTestId('guest-slot-option-3').click();
+    await visitor.getByTestId('claim-join-btn').click();
+    await expect(visitor.getByTestId('claim-join-form')).toHaveCount(0);
+    await expect(visitor.getByTestId('guest-color-person-3')).toContainText('Борис');
+    await fitsPhone(visitor);
   } finally {
-    await otherDevice.close();
+    await visitorContext.close();
   }
-
+  await expect(page.getByTestId('guest-color-person-3')).toContainText('Борис');
   expect(remoteCalls).toEqual([]);
 });
 

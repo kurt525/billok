@@ -196,6 +196,39 @@ function OrganizerPresence({
   );
 }
 
+// Only the signed-in creator of this exact receipt can expand its guest slots.
+function CreatorAddGuestPlace({ token }: { token: string }) {
+  const t = useTranslations('split.claim');
+  const tc = useTranslations('common');
+  const utils = trpc.useUtils();
+  // Keep the key through a failed network attempt; the same tap is idempotent.
+  const pendingKey = useRef<string | null>(null);
+  const addPlace = trpc.guest.addGuestPlace.useMutation({
+    onSuccess: () => {
+      pendingKey.current = null;
+      toast.success(t('creatorGuestPlaceAdded'));
+      void utils.guest.getSession.invalidate({ token });
+    },
+    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
+  });
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      className="min-h-12 w-full min-w-0 whitespace-normal text-base"
+      disabled={addPlace.isPending}
+      data-testid="creator-add-guest-place"
+      onClick={() => {
+        pendingKey.current ??= newRequestKey();
+        addPlace.mutate({ token, requestKey: pendingKey.current });
+      }}
+    >
+      <Users className="mr-2 size-4 shrink-0" />
+      {addPlace.isPending ? t('saving') : t('creatorAddGuestPlace')}
+    </Button>
+  );
+}
+
 export default function ClaimPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = use(params);
   const locale = useLocale();
@@ -2123,6 +2156,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           {t('copyLink')}
         </Button>
 
+        {data.isCreator && data.status === 'CLAIMING' && <CreatorAddGuestPlace token={token} />}
+
         {/* People already in session */}
         {data.people.length > 0 && (
           <Card>
@@ -2545,6 +2580,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       )}
 
       {data.isCreator && <GuestPaymentGroupsEditor token={token} people={data.people} paidByIndex={data.paidByIndex} />}
+
+      {data.isCreator && data.status === 'CLAIMING' && <CreatorAddGuestPlace token={token} />}
 
       {/* People in session */}
       <Card>

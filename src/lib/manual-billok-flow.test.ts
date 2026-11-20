@@ -5,13 +5,13 @@ import { describe, expect, it } from 'vitest';
 const read = (name: string) => readFileSync(resolve(process.cwd(), name), 'utf8');
 
 describe('BillOK manual-only customer journey', () => {
-  it('creates anonymous RUB receipts without image, OCR, or remote AI', () => {
+  it('creates Russian manual RUB claim receipts without image, OCR, or remote AI', () => {
     const guest = read('src/app/[locale]/split/page.tsx');
-    expect(guest).toContain("useState<Step>('people')");
-    expect(guest).toContain("currency: 'RUB'");
+    expect(guest).toContain("useState<'people' | 'assign'>('people')");
+    expect(guest).toContain("const currency = 'RUB'");
     expect(guest).toContain('manual-receipt-name');
-    expect(guest).toContain('parseReceiptQuantity(newItem.quantity)');
-    expect(guest).toContain('createSplit.mutateAsync');
+    expect(guest).toContain('parseReceiptQuantity(draft.quantity)');
+    expect(guest).toContain('createClaimSession.mutateAsync');
     expect(guest).not.toContain('processReceipt');
     expect(guest).not.toContain('guest.getUploadStatus');
     expect(guest).not.toContain('/api/upload');

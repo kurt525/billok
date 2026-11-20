@@ -31,6 +31,8 @@ export type GuestSessionPerson = {
   // 3.7: fixed guest place, distinct from a legacy unjoined named person.
   // A place can be renamed without changing its number or stable person id.
   guestSlotNumber?: number;
+  // Server-only idempotency key for a creator-added empty guest place.
+  guestPlaceRequestKey?: string;
   // 3.9: immutable per-receipt visual key. Names and array indices may
   // change; this ID must remain on the same person.
   visualColorId?: number;

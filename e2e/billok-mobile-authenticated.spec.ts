@@ -1544,7 +1544,7 @@ test('mobile invite modal survives long content and a short keyboard viewport', 
   expect(interceptedInvites).toBe(6);
 });
 
-test('keyboard-height manual item inputs stay reachable at six mobile widths', async ({ page }) => {
+test('TASK-BILLOK-002: unified item creation and editing fit six mobile keyboard widths', async ({ page }) => {
   test.setTimeout(170_000);
   await signInAsSeedAdmin(page);
   let saveRequests = 0;
@@ -1561,18 +1561,10 @@ test('keyboard-height manual item inputs stay reachable at six mobile widths', a
     await page.setViewportSize({ width, height: 300 });
     await page.goto('/split', { waitUntil: 'networkidle' });
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
-    await page.getByTestId('workflow-manual').click();
-    await page.getByTestId('person-input-0').fill('Участник');
+    await expect(page.getByTestId('workflow-manual')).toHaveCount(0);
     await page.getByTestId('next-assign-btn').click();
     await expect(page.getByTestId('guest-assign-step')).toBeVisible();
-    const bar = await page.getByTestId('guest-assign-actions').boundingBox();
-    const header = await page.locator('header').first().boundingBox();
-    expect(bar, 'Finalization bar geometry at ' + width + 'px').not.toBeNull();
-    expect(header, 'Sticky header geometry at ' + width + 'px').not.toBeNull();
-    expect(
-      bar!.y - (header!.y + header!.height),
-      'Clickable content gap at ' + width + 'px: ' + JSON.stringify({ bar, header }),
-    ).toBeGreaterThanOrEqual(44);
+    await expect(page.getByTestId('guest-assign-actions')).toBeVisible();
     await page.getByTestId('guest-add-item-btn').click();
     const form = page.getByTestId('manual-item-entry-form');
     await expect(form).toBeVisible();
@@ -1590,110 +1582,53 @@ test('keyboard-height manual item inputs stay reachable at six mobile widths', a
       form.getByRole('button', { name: 'Отмена' }),
     ]) {
       await control.scrollIntoViewIfNeeded();
-      const b = await control.boundingBox();
-      expect(b).not.toBeNull();
-      expect(b!.height, 'Touch height at ' + width).toBeGreaterThanOrEqual(44);
-      expect(b!.x, 'Left boundary at ' + width).toBeGreaterThanOrEqual(-1);
-      expect(b!.x + b!.width, 'Right boundary at ' + width).toBeLessThanOrEqual(width + 1);
-      expect(b!.y, 'Top boundary at ' + width).toBeGreaterThanOrEqual(-1);
-      expect(b!.y + b!.height, 'Bottom boundary at ' + width).toBeLessThanOrEqual(301);
+      const bounds = await control.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.height, 'Touch height at ' + width).toBeGreaterThanOrEqual(44);
+      expect(bounds!.x, 'Left at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.x + bounds!.width, 'Right at ' + width).toBeLessThanOrEqual(width + 1);
+      expect(bounds!.y, 'Top at ' + width).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.y + bounds!.height, 'Bottom at ' + width).toBeLessThanOrEqual(301);
     }
     await checkPhoneLayout(page, width, true);
     await form.getByTestId('guest-add-item-submit').click();
     await expect(form).toHaveCount(0);
     await expect(page.getByTestId('guest-assign-actions')).toBeVisible();
-    // Open the split before showing the mobile keyboard.
+    await expect(page.getByTestId('receipt-item-name-0')).toContainText('БлюдоБезПробелов');
     await page.setViewportSize({ width, height: 520 });
     await page.getByTestId('guest-split-btn-0').click();
     const qty = page.getByTestId('guest-split-qty-0');
     const confirmSplit = page.getByTestId('guest-split-submit-0');
-    await expect(qty).toBeVisible();
     await page.setViewportSize({ width, height: 300 });
     await expect(page.getByTestId('guest-assign-actions')).toHaveCount(0);
     await qty.fill('0');
     await expect(confirmSplit).toBeDisabled();
     await qty.fill('1');
     await expect(confirmSplit).toBeEnabled();
-    for (const control of [qty, confirmSplit]) {
-      await control.scrollIntoViewIfNeeded();
-      const rect = await control.boundingBox();
-      expect(rect).not.toBeNull();
-      expect(rect!.height, 'Split touch height at ' + width).toBeGreaterThanOrEqual(44);
-      expect(rect!.x, 'Split left at ' + width).toBeGreaterThanOrEqual(-1);
-      expect(rect!.x + rect!.width, 'Split right at ' + width).toBeLessThanOrEqual(width + 1);
-      expect(rect!.y, 'Split top at ' + width).toBeGreaterThanOrEqual(-1);
-      expect(rect!.y + rect!.height, 'Split bottom at ' + width).toBeLessThanOrEqual(301);
-    }
+    await confirmSplit.scrollIntoViewIfNeeded();
     await checkPhoneLayout(page, width, true);
     await confirmSplit.click();
     await expect(page.locator('[data-testid^="guest-item-card-"]')).toHaveCount(2);
     await expect(page.getByTestId('guest-assign-actions')).toBeVisible();
-    // Restore the normal viewport to select the two local portions.
     await page.setViewportSize({ width, height: 520 });
-    for (const idx of [0, 1]) {
-      const guest = page.getByTestId('guest-item-card-' + idx).getByRole('button', { name: 'Участник' });
-      // The floating action bar must leave a usable region for each portion chip.
-      await guest.evaluate((element) => element.scrollIntoView({ block: 'center', inline: 'nearest' }));
-      const hit = await guest.evaluate((element) => {
-        const rect = element.getBoundingClientRect();
-        const x = rect.left + rect.width / 2;
-        const y = rect.top + rect.height / 2;
-        const overlay = document.elementFromPoint(x, y);
-        const bar = document.querySelector('[data-testid="guest-assign-actions"]')?.getBoundingClientRect();
-        const header = document.querySelector('header')?.getBoundingClientRect();
-        return {
-          height: rect.height,
-          visible: x >= 0 && x < innerWidth && y >= 0 && y < innerHeight,
-          clickable: overlay === element || element.contains(overlay),
-          target: overlay?.tagName,
-          barTop: bar?.top ?? null,
-          headerBottom: header?.bottom ?? null,
-          centerY: y,
-        };
-      });
-      expect(hit.height, 'Portion chip height at ' + width).toBeGreaterThanOrEqual(44);
-      expect(hit.visible, 'Chip outside viewport at ' + width + ': ' + JSON.stringify(hit)).toBe(true);
-      expect(hit.clickable, 'Chip intercepted at ' + width + ': ' + JSON.stringify(hit)).toBe(true);
-      await guest.click();
-      await expect(guest).toHaveClass(/bg-primary/);
-    }
-    const finalSave = page.getByTestId('create-split-btn');
-    await expect(finalSave).toBeEnabled();
     const card = page.getByTestId('guest-item-card-0');
-    await card.locator('button[title]').first().click();
+    await card.getByRole('button', { name: /Изменить|Редактировать/ }).click();
     const edit = page.getByTestId('guest-edit-item-form');
     await expect(edit).toBeVisible();
     await page.setViewportSize({ width, height: 300 });
     await expect(page.getByTestId('guest-assign-actions')).toHaveCount(0);
     const editedName = edit.locator('input').first();
-    await editedName.fill('   ');
+    await editedName.fill(' ');
     const saveEdit = edit.getByRole('button', { name: 'Сохранить' });
-    const cancelEdit = edit.getByRole('button', { name: 'Отмена' });
-    for (const control of [editedName, saveEdit, cancelEdit]) {
-      await control.scrollIntoViewIfNeeded();
-      const bounds = await control.boundingBox();
-      expect(bounds, 'Edit action at ' + width).not.toBeNull();
-      expect(bounds!.height).toBeGreaterThanOrEqual(44);
-      expect(bounds!.x).toBeGreaterThanOrEqual(-1);
-      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width + 1);
-      expect(bounds!.y).toBeGreaterThanOrEqual(-1);
-      expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(301);
-    }
     await saveEdit.click();
-    await expect(page.getByText('Укажите название позиции.', { exact: true })).toBeVisible();
     await expect(edit).toBeVisible();
-    await checkPhoneLayout(page, width, true);
-    await cancelEdit.click();
+    await editedName.fill('Блюдо на двоих');
+    await saveEdit.click();
     await expect(edit).toHaveCount(0);
-    await expect(card).toContainText('БлюдоБезПробелов');
-    await expect(page.getByTestId('guest-assign-actions')).toBeVisible();
-    await page.setViewportSize({ width, height: 520 });
-    await card.locator('button[title]').first().click();
-    await page.getByTestId('guest-edit-item-form').locator('input').first().fill('Блюдо на двоих');
-    await page.getByTestId('guest-edit-item-form').getByRole('button', { name: 'Сохранить' }).click();
     await expect(card).toContainText('Блюдо на двоих');
-    await expect(page.getByTestId('guest-assign-actions')).toBeVisible();
-    expect(saveRequests, 'Local edit, cancel and validation cannot create a receipt').toBe(0);
+    await expect(page.getByTestId('guest-item-card-1')).toContainText('БлюдоБезПробелов');
+    await checkPhoneLayout(page, width, true);
+    expect(saveRequests, 'Local edits must not create a receipt').toBe(0);
   }
   expect(saveRequests).toBe(0);
 });

@@ -1086,6 +1086,70 @@ export const guestRouter = createTRPCRouter({
       return { shareToken: share.token, creator };
     }),
 
+  // TASK-BILLOK-002: expand the guest list without replacing old identities,
+  // allocations, settlement state, or the creator/payer. Repeated clicks and
+  // network retries with the same request key return the original empty place.
+  addGuestPlace: protectedProcedure
+    .input(z.object({ token: shareTokenSchema, requestKey: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.impersonating) throw new AppError('FORBIDDEN', 'notParticipant');
+      if (!checkTokenRateLimit('guest-creator-add-place:' + ctx.user.id, 30, 60_000).allowed) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({
+          where: { shareToken: shareLookupHash(input.token) },
+        });
+        // A share link, a guest token, and a payer are NOT creator authority.
+        if (!session || session.userId !== ctx.user.id) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) {
+          throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+        }
+        const receipt = parseExtractedData(session.receiptData);
+        if (receipt.guestSlotsMode !== true) {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'guest slots mode' });
+        }
+
+        const people = assignPersonIds(session.people as GuestSessionPerson[]);
+        const replayed = people.find((person) => person.guestPlaceRequestKey === input.requestKey);
+        if (replayed) {
+          return { personId: replayed.id, guestSlotNumber: replayed.guestSlotNumber! };
+        }
+        if (people.length >= MAX_SESSION_PEOPLE) {
+          throw new AppError('BAD_REQUEST', 'sessionFull', { max: MAX_SESSION_PEOPLE });
+        }
+
+        const slot = Math.max(0, ...people.map((person) => person.guestSlotNumber ?? 0)) + 1;
+        let displayName = 'Гость ' + slot;
+        let suffix = 2;
+        while (people.some((person) => normalizeGuestName(person.name) === normalizeGuestName(displayName))) {
+          displayName = 'Гость ' + slot + ' (' + suffix++ + ')';
+        }
+        const personId = newGuestPersonId(people.map((person) => person.id));
+        people.push({
+          id: personId,
+          name: displayName,
+          guestSlotNumber: slot,
+          guestPlaceRequestKey: input.requestKey,
+          visualColorId: Math.max(-1, ...people.map((person) => person.visualColorId ?? -1)) + 1,
+        });
+        // Keep the original JSON fields, including private settlement metadata.
+        // No changes to assignments, paidByIndex, tips, payments, or tokens.
+        await tx.guestSplit.update({
+          where: { id: session.id },
+          data: {
+            people: people as unknown as Prisma.InputJsonValue,
+            receiptData: {
+              ...(session.receiptData as Record<string, unknown>),
+              guestCount: slot,
+            } as Prisma.InputJsonValue,
+          },
+        });
+        return { personId, guestSlotNumber: slot };
+      });
+    }),
+
   /** 3.7.2: join one of N preallocated guest slots by *stable person id*.
    * The shareToken reveals available places but provides no ownership of a
    * taken place. This is intentionally separate from legacy name-based joining.

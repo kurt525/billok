@@ -11,9 +11,6 @@
     "whoPaid": "Кто оплатил общий чек?",
     "nextAssign": "Далее: распределить позиции",
     "cancel": "Отмена",
-    "workflowLabel": "Способ распределения чека",
-    "workflowInvite": "Пригласить гостей",
-    "workflowManual": "Распределить сразу",
     "creatorAlwaysIncluded": "Создатель чека — вы, всегда участвуете",
     "creatorProfileName": "Имя из вашей учётной записи",
     "guestCountLabel": "Количество гостей (без вас)",
@@ -54,7 +51,8 @@
     "validationPricePositive": "Цена должна быть больше нуля.",
     "validationQtyPositive": "Количество должно быть положительным целым числом.",
     "createSplitFailed": "Не удалось создать чек.",
-    "createSessionFailed": "Не удалось создать сеанс распределения."
+    "createSessionFailed": "Не удалось создать сеанс распределения.",
+    "createReceipt": "Создать чек"
   },
   "claim": {
     "loadingSession": "Загрузка сеанса…",
@@ -381,7 +379,9 @@
     "paymentCancelNoticeToast": "Подтверждение поступления денег отозвано получателем.",
     "payerPaymentDeclarationRevokedNotice": "Сообщение об оплате {amount} от участника «{name}» отозвано. Сумма снова числится неоплаченной.",
     "paymentSettlementLockedNotice": "Сумма зафиксирована при завершении чека. После завершения распределение изменить нельзя.",
-    "payerSettlementLockedNotice": "Суммы возмещений закреплены при завершении чека. Сообщения об оплате и подтверждения относятся только к этим суммам."
+    "payerSettlementLockedNotice": "Суммы возмещений закреплены при завершении чека. Сообщения об оплате и подтверждения относятся только к этим суммам.",
+    "creatorAddGuestPlace": "Добавить участника",
+    "creatorGuestPlaceAdded": "Место для нового гостя добавлено"
   },
   "result": {
     "loading": "Загрузка расчёта…",

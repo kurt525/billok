@@ -763,6 +763,99 @@ describe('Issue 3.25.4.2: public REST responses redact every guest credential', 
   });
 });
 
+describe('TASK-BILLOK-002: creator expands an existing fixed-slot receipt', () => {
+  const data = {
+    subtotal: 2000,
+    tax: 0,
+    tip: 0,
+    total: 2000,
+    currency: 'RUB',
+    guestSlotsMode: true,
+    guestCount: 2,
+    organizerPersonId: pid(0),
+  };
+  const initial = [
+    { name: 'Анна', accountUserId: 'user-1', personToken: ALICE_TOKEN },
+    { name: 'Борис', guestSlotNumber: 1, personToken: OTHER_TOKEN, tipCents: 100 },
+    { name: 'Гость 2', guestSlotNumber: 2 },
+  ];
+
+  test('keeps creator, payer, prior tokens, shares and tips unchanged', async () => {
+    claimSession(initial, {
+      receiptData: data,
+      paidByIndex: 1,
+      items: [{ name: 'Пицца', quantity: 1, unitPrice: 2000, totalPrice: 2000 }],
+      assignments: [{ itemIndex: 0, personIndices: [1] }],
+    });
+    const requestKey = '98dd2ae9-034b-48e5-af10-6e57ef64bd12';
+    const result = await (await caller(signedIn)).addGuestPlace({ token: 'share-1', requestKey });
+    expect(result).toMatchObject({ personId: expect.stringMatching(UUID), guestSlotNumber: 3 });
+    const people = savedPeople() as (TestPerson & { guestPlaceRequestKey?: string })[];
+    expect(people).toHaveLength(4);
+    expect(people.slice(0, 3)).toMatchObject(withIds(initial));
+    expect(people[3]).toMatchObject({
+      id: result.personId,
+      name: 'Гость 3',
+      guestSlotNumber: 3,
+      guestPlaceRequestKey: requestKey,
+    });
+    expect(people[3]?.personToken).toBeUndefined();
+    const saved = mockDb.guestSplit.update.mock.lastCall?.[0] as {
+      data: { receiptData: { guestCount: number }; people: TestPerson[]; assignments?: unknown; paidByIndex?: number };
+    };
+    expect(saved.data.receiptData).toMatchObject({ guestSlotsMode: true, guestCount: 3 });
+    expect(saved.data.assignments).toBeUndefined();
+    expect(saved.data.paidByIndex).toBeUndefined();
+  });
+
+  test('retries the same request without creating another guest place', async () => {
+    claimSession(initial, { receiptData: data });
+    const storedBefore = await mockDb.guestSplit.findUnique();
+    const request = { token: 'share-1', requestKey: 'c65e4a13-8d32-4f54-90f4-209c6fdd2cc3' };
+    const first = await (await caller(signedIn)).addGuestPlace(request);
+    const nextPeople = savedPeople();
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...storedBefore,
+      people: nextPeople,
+      receiptData: { ...data, guestCount: 3 },
+    });
+    mockDb.guestSplit.update.mockClear();
+    const second = await (await caller(signedIn)).addGuestPlace(request);
+    expect(second).toEqual(first);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    const publicView = await (await caller()).getSession({ token: 'share-1' });
+    expect(JSON.stringify(publicView)).not.toContain(request.requestKey);
+  });
+
+  test('anonymous guests and unrelated signed-in accounts cannot expand a receipt', async () => {
+    claimSession(initial, { receiptData: data });
+    const input = { token: 'share-1', requestKey: '92add332-a2ac-4cb0-9554-b6918ef6d610' };
+    await expect((await caller()).addGuestPlace(input)).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    await expect((await caller({ user: { id: 'other-user' } })).addGuestPlace(input)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('cannot extend finalized receipts or bypass the 100-person guard', async () => {
+    const input = { token: 'share-1', requestKey: '9ac8626e-b94b-4990-8f6b-46247ed428eb' };
+    claimSession(initial, { receiptData: data, status: 'FINALIZED' });
+    await expect((await caller(signedIn)).addGuestPlace(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    claimSession(
+      [
+        { name: 'Анна', accountUserId: 'user-1' },
+        ...Array.from({ length: 99 }, (_, i) => ({ name: 'Гость ' + (i + 1), guestSlotNumber: i + 1 })),
+      ],
+      { receiptData: { ...data, guestCount: 99 } },
+    );
+    await expect((await caller(signedIn)).addGuestPlace(input)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      messageKey: 'sessionFull',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('guest.joinSession', () => {
   test('adds a new name with a fresh token', async () => {
     claimSession([{ name: 'Host' }]);

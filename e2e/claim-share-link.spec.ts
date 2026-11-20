@@ -12,15 +12,12 @@ async function signIn(page: Page) {
   }
 }
 
-async function startManualReceipt(page: Page, names: string[], payerIndex: number) {
+async function startUnifiedReceipt(page: Page, initialGuests: number, payerGuestSlot: number) {
   await page.goto('/split');
-  await page.getByTestId('workflow-manual').click();
+  await expect(page.getByTestId('workflow-manual')).toHaveCount(0);
   await page.getByTestId('manual-receipt-name').fill('Общий ужин');
-  for (const [index, name] of names.entries()) {
-    if (index > 0) await page.getByTestId('add-person-btn').click();
-    await page.getByTestId('person-input-' + index).fill(name);
-  }
-  await page.locator('#who-paid').selectOption(String(payerIndex));
+  await page.getByTestId('guest-count-input').fill(String(initialGuests));
+  await page.locator('#invite-payer').selectOption(String(payerGuestSlot));
   await page.getByTestId('next-assign-btn').click();
   await page.getByTestId('guest-add-item-btn').click();
   const inputs = page.getByTestId('guest-add-item-submit').locator('xpath=ancestor::form').locator('input');
@@ -28,6 +25,7 @@ async function startManualReceipt(page: Page, names: string[], payerIndex: numbe
   await inputs.nth(1).fill('1');
   await inputs.nth(2).fill('500,00');
   await page.getByTestId('guest-add-item-submit').click();
+  await expect(page.getByTestId('receipt-item-name-0')).toHaveText('Ужин');
   await expect(page.getByTestId('share-for-claiming-btn')).toBeEnabled();
   await page.getByTestId('share-for-claiming-btn').click();
   await expect(page).toHaveURL(/\/split\/[^/]+\/claim(?:\?.*)?$/);
@@ -35,12 +33,14 @@ async function startManualReceipt(page: Page, names: string[], payerIndex: numbe
 
 test.use({ viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
 
-test('9.3: sharing a manual receipt reserves the payer for its creator', async ({ page, browser }) => {
+test('TASK-BILLOK-002: a unified receipt keeps creator ownership and allows guest places', async ({
+  page,
+  browser,
+}) => {
   await signIn(page);
-  await startManualReceipt(page, ['Антон', 'Павел'], 1);
+  await startUnifiedReceipt(page, 2, 1);
+  await expect(page.getByTestId('creator-add-guest-place')).toBeVisible();
   await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
-  await expect(page.getByTestId('switch-person-1')).toBeEnabled();
-  // Создатель распределяет позиции всех участников, но гости не могут занять его место.
   await expect(page.getByTestId('switch-person-0')).toBeEnabled();
 
   const visitorContext = await browser.newContext({
@@ -52,24 +52,26 @@ test('9.3: sharing a manual receipt reserves the payer for its creator', async (
     const visitor = await visitorContext.newPage();
     await visitor.goto(page.url());
     await expect(visitor.getByTestId('claim-join-form')).toBeVisible();
-    await expect(visitor.getByTestId('rejoin-person-0')).toContainText('Антон');
-    await expect(visitor.getByTestId('rejoin-person-1')).toHaveCount(0);
+    await expect(visitor.getByTestId('guest-slot-option-1')).toContainText('Гость 1');
+    await expect(visitor.getByTestId('guest-slot-option-2')).toContainText('Гость 2');
+    await expect(visitor.getByTestId('rejoin-person-0')).toHaveCount(0);
+    await expect(visitor.getByTestId('creator-add-guest-place')).toHaveCount(0);
   } finally {
     await visitorContext.close();
   }
 });
 
-test('9.3: manual sharing without browser storage leaves creator seat claimable', async ({ page }) => {
+test('TASK-BILLOK-002: creator retains account-owned place without localStorage', async ({ page }) => {
   await signIn(page);
   await page.addInitScript(() => {
     Storage.prototype.setItem = () => {
       throw new DOMException('Недостаточно места', 'QuotaExceededError');
     };
   });
-  await startManualReceipt(page, ['Павел', 'Антон'], 0);
-  await expect(page.getByTestId('claim-join-form')).toBeVisible();
-  await expect(page.getByTestId('rejoin-person-0')).toContainText('Павел');
-  await page.getByTestId('rejoin-person-0').click();
+  await startUnifiedReceipt(page, 2, 0);
+  // The server-bound creator is distinct from both empty guest slots.
+  await expect(page.getByTestId('guest-slot-option-1')).toHaveCount(0);
+  await expect(page.getByTestId('creator-add-guest-place')).toBeVisible();
   await expect(page.getByTestId('switch-person-0')).toBeEnabled();
 });
 
