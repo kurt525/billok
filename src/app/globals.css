@@ -128,3 +128,20 @@
     @apply font-sans;
   }
 }
+
+/*
+ * Sonner's mobile stylesheet positions the toaster 16px from the left
+ * but also gives it width: 100%. At narrow widths the fixed outer element
+ * can therefore extend beyond the viewport after notifications mount.
+ * Its own mobile offset variables also define the available inner width.
+ */
+@media (max-width: 600px) {
+  [data-sonner-toaster].toaster {
+    width: calc(100vw - var(--mobile-offset-left, 16px) - var(--mobile-offset-right, 16px));
+    max-width: calc(100vw - var(--mobile-offset-left, 16px) - var(--mobile-offset-right, 16px));
+  }
+
+  [data-sonner-toaster].toaster [data-sonner-toast] {
+    width: 100%;
+  }
+}

@@ -3,20 +3,6 @@ import { joinGuestSession, trpcMutation } from './helpers';
 
 const BASE = process.env.BASE_URL || 'http://localhost:3001';
 
-test.describe('Guest Split UI Flow', () => {
-  test('guest split page loads and shows upload options with testids', async ({ page }) => {
-    await page.goto('/en/split');
-    await expect(page.getByText('Split a bill')).toBeVisible();
-
-    // Verify upload areas are present with correct testids
-    await expect(page.getByTestId('guest-snap-upload')).toBeVisible();
-    await expect(page.getByTestId('guest-gallery-upload')).toBeVisible();
-
-    // The gallery file input should exist (hidden inside the label)
-    await expect(page.getByTestId('guest-file-input')).toBeAttached();
-  });
-});
-
 test.describe('Guest Split — Share Result Page', () => {
   let shareToken: string;
 

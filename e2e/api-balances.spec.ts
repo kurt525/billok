@@ -28,10 +28,10 @@ test.describe('Balances & Settlements API', () => {
       // Get member IDs
       const groupDetail = await trpcQuery(ctx, 'groups.get', { groupId });
       const groupData = (await groupDetail.json())[0]?.result?.data?.json;
-      const aliceId = groupData.members.find((m: { user: { email: string } }) => m.user.email === 'alice@example.com')
+      const aliceId = groupData.members.find((m: { user: { email: string } }) => m.user.email === 'alice@qa.billok.ru')
         ?.user.id;
-      const bobId = groupData.members.find((m: { user: { email: string } }) => m.user.email === 'bob@example.com')?.user
-        .id;
+      const bobId = groupData.members.find((m: { user: { email: string } }) => m.user.email === 'bob@qa.billok.ru')
+        ?.user.id;
 
       // Alice pays $30, split equally between Alice and Bob
       await trpcMutation(ctx, 'expenses.create', {
@@ -89,10 +89,10 @@ test.describe('Balances & Settlements API', () => {
 
       const groupDetail = await trpcQuery(ctx, 'groups.get', { groupId });
       const groupData = (await groupDetail.json())[0]?.result?.data?.json;
-      const aliceId = groupData.members.find((m: { user: { email: string } }) => m.user.email === 'alice@example.com')
+      const aliceId = groupData.members.find((m: { user: { email: string } }) => m.user.email === 'alice@qa.billok.ru')
         ?.user.id;
-      const bobId = groupData.members.find((m: { user: { email: string } }) => m.user.email === 'bob@example.com')?.user
-        .id;
+      const bobId = groupData.members.find((m: { user: { email: string } }) => m.user.email === 'bob@qa.billok.ru')
+        ?.user.id;
 
       // Alice pays $20 for both
       await trpcMutation(ctx, 'expenses.create', {
@@ -162,8 +162,8 @@ test.describe('Balances & Settlements API', () => {
 
       const groupDetail = await trpcQuery(ctx, 'groups.get', { groupId });
       const members = (await groupDetail.json())[0]?.result?.data?.json?.members;
-      const aliceId = members.find((m: { user: { email: string } }) => m.user.email === 'alice@example.com')?.user.id;
-      const bobId = members.find((m: { user: { email: string } }) => m.user.email === 'bob@example.com')?.user.id;
+      const aliceId = members.find((m: { user: { email: string } }) => m.user.email === 'alice@qa.billok.ru')?.user.id;
+      const bobId = members.find((m: { user: { email: string } }) => m.user.email === 'bob@qa.billok.ru')?.user.id;
 
       // Alice pays $50, Bob pays half
       await trpcMutation(ctx, 'expenses.create', {

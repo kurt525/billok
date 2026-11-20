@@ -58,11 +58,6 @@ next-env.d.ts
 /test-results/
 /playwright-report/
 
-# demo video output
-/demo/*.webm
-/demo/*.mp4
-/demo/*.png
-!/demo/social-preview.png
 /blob-report/
 /tmp-screenshots/
 /test-screenshots/
@@ -80,3 +75,12 @@ test-pg-data/
 
 # Claude Code session artifacts (agent worktrees, local settings)
 .claude/
+
+# 8.11: production secrets never tracked in this repository.
+**/.env*
+!.env.example
+**/.npmrc
+**/secrets/
+*.key
+*.p12
+*.pfx

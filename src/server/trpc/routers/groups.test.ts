@@ -1,3 +1,4 @@
+import ruErrors from '../../../../messages/ru/errors.json';
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('next/headers', () => ({
@@ -26,6 +27,7 @@ const mockDb = {
     count: vi.fn(),
   },
   groupInvite: { findUnique: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
+  ownerBootstrap: { findUnique: vi.fn() },
   activityLog: { create: vi.fn(), deleteMany: vi.fn(), updateMany: vi.fn() },
   expense: { count: vi.fn(), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   expenseShare: {
@@ -55,11 +57,6 @@ vi.mock('@/server/db', () => ({ db: mockDb }));
 vi.mock('@/server/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
-const { removeReceiptFiles } = vi.hoisted(() => ({ removeReceiptFiles: vi.fn() }));
-vi.mock('@/server/lib/receipt-cleanup', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/server/lib/receipt-cleanup')>()),
-  removeReceiptFiles,
-}));
 
 async function caller(userId = 'owner') {
   const { groupsRouter } = await import('./groups');
@@ -71,6 +68,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   // protectedProcedure looks the caller up; groupMemberProcedure checks membership.
   mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
+  mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'global-owner' });
   mockDb.groupMember.findUnique.mockResolvedValue({ role: 'OWNER', userId: 'owner', groupId: 'g1' });
   mockDb.$transaction.mockImplementation(async (arg: unknown) =>
     typeof arg === 'function' ? arg(mockDb) : Promise.all(arg as Promise<unknown>[]),
@@ -126,6 +124,54 @@ test.each(['list', 'listArchived'] as const)(
   },
 );
 
+describe('Issue 3.2: independent groups, no artificial list cap, private membership', () => {
+  test.each(['list', 'listArchived'] as const)(
+    '%s returns every matching group including results after the previous 200-group cutoff',
+    async (procedure) => {
+      const groups = Array.from({ length: 225 }, (_, i) => ({ id: 'owned-' + i, name: 'Group ' + i }));
+      mockDb.group.findMany.mockResolvedValue(groups);
+      const listed = await (await caller('owner'))[procedure]();
+      expect(listed).toHaveLength(225);
+      expect(listed.at(-1)?.id).toBe('owned-224');
+      const query = mockDb.group.findMany.mock.calls[0]![0];
+      expect(query).not.toHaveProperty('take');
+      expect(query.where.members.some).toEqual({ userId: 'owner', removedAt: null });
+    },
+  );
+
+  test('a signed-in user can create successive groups without a per-user quota', async () => {
+    mockDb.group.create.mockImplementation(async ({ data }: { data: { name: string } }) => ({
+      id: 'g-' + data.name,
+      ...data,
+    }));
+    const owner = await caller('owner');
+    for (let i = 0; i < 3; i++) {
+      const created = await owner.create({ name: 'Own ' + i });
+      expect(created.id).toBe('g-Own ' + i);
+    }
+    expect(mockDb.group.create).toHaveBeenCalledTimes(3);
+    for (const [index, [query]] of mockDb.group.create.mock.calls.entries()) {
+      expect(query.data.members.create).toEqual({ userId: 'owner', role: 'OWNER' });
+      expect(query.data.name).toBe('Own ' + index);
+    }
+  });
+
+  test('another signed-in user can create their own group but never open or change a foreign one', async () => {
+    mockDb.group.create.mockResolvedValue({ id: 'other-group' });
+    await (await caller('outsider')).create({ name: 'My own group' });
+    expect(mockDb.group.create.mock.calls[0]![0].data.members.create.userId).toBe('outsider');
+
+    mockDb.groupMember.findUnique.mockResolvedValue(null);
+    const outsider = await caller('outsider');
+    await expect(outsider.get({ groupId: 'g1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(outsider.update({ groupId: 'g1', name: 'Hijacked' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.group.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('group and placeholder names are trimmed', () => {
   test('create refuses a group name that is only whitespace', async () => {
     const api = await caller();
@@ -171,7 +217,11 @@ describe('group and placeholder names are trimmed', () => {
     await api.addPlaceholder({ groupId: 'g1', name: 'Dave' });
     expect(mockDb.user.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ isPlaceholder: true, groupMembers: { create: { groupId: 'g1' } } }),
+        data: expect.objectContaining({
+          isPlaceholder: true,
+          groupMembers: { create: { groupId: 'g1' } },
+          email: expect.stringMatching(/^placeholder-[a-f0-9-]{36}@placeholder\.billok\.ru$/u),
+        }),
       }),
     );
     expect(mockDb.groupMember.create).not.toHaveBeenCalled();
@@ -414,6 +464,18 @@ describe('invites', () => {
     expect(mockDb.groupInvite.findUnique).not.toHaveBeenCalled();
   });
 
+  test('6.13.2: an invitation token never accepts a supplied actor ID or group role', async () => {
+    const api = await caller('owner');
+    for (const field of ['userId', 'ownerId', 'id', 'role', 'isAdmin', 'emailVerified']) {
+      const forged = { token: 'valid-token', [field]: 'foreign-user-uuid' };
+      await expect(api.getInvite(forged as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(api.joinByInvite(forged as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.groupInvite.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.groupMember.create).not.toHaveBeenCalled();
+    expect(mockDb.groupInvite.updateMany).not.toHaveBeenCalled();
+  });
+
   // #276: the link would only fail once someone accepted it
   test.each([
     ['a deleted account', { suspendedAt: new Date(), isPlaceholder: true }, null],
@@ -513,7 +575,9 @@ describe('invites', () => {
       placeholderUserId: 'p1',
     });
     mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
-      where.id === 'p1' ? { suspendedAt: null, isPlaceholder: true } : { suspendedAt: null, isPlaceholder: false },
+      where.id === 'p1'
+        ? { suspendedAt: null, isPlaceholder: true }
+        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01'), email: 'bob@qa.billok.ru' },
     );
     mockDb.groupMember.findUnique.mockImplementation(
       async ({ where }: { where: { userId_groupId: { userId: string } } }) =>
@@ -546,7 +610,9 @@ describe('invites', () => {
       .mockResolvedValueOnce({ id: 'i1', groupId: 'g1', usedAt: null, expiresAt: inAWeek(), placeholderUserId: 'p1' })
       .mockResolvedValue({ usedById: usedById ?? null });
     mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
-      where.id === 'p1' ? { suspendedAt: null, isPlaceholder: true } : { suspendedAt: null, isPlaceholder: false },
+      where.id === 'p1'
+        ? { suspendedAt: null, isPlaceholder: true }
+        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01'), email: 'bob@qa.billok.ru' },
     );
     mockDb.groupMember.findUnique.mockImplementation(
       async ({ where }: { where: { userId_groupId: { userId: string } } }) => ({
@@ -592,7 +658,9 @@ describe('invites', () => {
     expect(mockDb.expense.updateMany).not.toHaveBeenCalled();
     // A share lock, so a removal waits for the merge instead of slipping in after the check
     const [sql, ...values] = mockDb.$queryRaw.mock.calls[0]! as [TemplateStringsArray, ...unknown[]];
-    expect(sql.join('?')).toMatch(/FROM "GroupMember" WHERE "userId" = \? AND "groupId" = \? FOR SHARE/);
+    expect(sql.join('?')).toMatch(
+      /FROM "GroupMember" WHERE "userId" = \? AND "groupId" = \? AND "removedAt" IS NULL FOR SHARE/,
+    );
     expect(values).toEqual(['bob', 'g1']);
   });
 
@@ -623,7 +691,9 @@ describe('invites', () => {
       placeholderUserId: 'p1',
     });
     mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
-      where.id === 'p1' ? { suspendedAt: null, isPlaceholder: true } : { suspendedAt: null, isPlaceholder: false },
+      where.id === 'p1'
+        ? { suspendedAt: null, isPlaceholder: true }
+        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01'), email: 'bob@qa.billok.ru' },
     );
     mockDb.groupMember.findUnique.mockImplementation(
       async ({ where }: { where: { userId_groupId: { userId: string } } }) => ({
@@ -660,7 +730,9 @@ describe('invites', () => {
       placeholderUserId: 'p1',
     });
     mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
-      where.id === 'p1' ? { suspendedAt: null, isPlaceholder: true } : { suspendedAt: null, isPlaceholder: false },
+      where.id === 'p1'
+        ? { suspendedAt: null, isPlaceholder: true }
+        : { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01'), email: 'bob@qa.billok.ru' },
     );
     // Bob isn't a member until the transaction adds him
     let bobJoined = false;
@@ -711,14 +783,13 @@ describe('removing a placeholder', () => {
     {
       paidById: 'p1',
       amount: 1000,
-      baseCurrencyAmount: null,
       shares: [
         { userId: 'owner', amount: 500 },
         { userId: 'p1', amount: 500 },
       ],
     },
   ];
-  const ownerPaidAlice = [{ fromId: 'owner', toId: 'p1', amount: 500, baseCurrencyAmount: null }];
+  const ownerPaidAlice = [{ fromId: 'owner', toId: 'p1', amount: 500 }];
 
   function setUp({
     shares = 0,
@@ -760,7 +831,7 @@ describe('removing a placeholder', () => {
     const api = await caller();
     await expect(api.removeMember({ groupId: 'g1', userId: 'p1' })).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
-      message: "Alice still owes or is owed money in this group, so they can't be removed. Settle up first.",
+      message: ruErrors.placeholderUnsettled.replace('{name}', 'Alice'),
     });
     expectNothingChanged();
   });
@@ -859,14 +930,13 @@ describe('leaving a group', () => {
     {
       paidById: 'owner',
       amount: 1000,
-      baseCurrencyAmount: null,
       shares: [
         { userId: 'owner', amount: 500 },
         { userId: 'bob', amount: 500 },
       ],
     },
   ];
-  const bobPaidBack = [{ fromId: 'bob', toId: 'owner', amount: 500, baseCurrencyAmount: null }];
+  const bobPaidBack = [{ fromId: 'bob', toId: 'owner', amount: 500 }];
 
   // The caller's user lookup, then the target's user row
   function setUp(
@@ -890,8 +960,7 @@ describe('leaving a group', () => {
     const api = await caller('owner');
     await expect(api.removeMember({ groupId: 'g1', userId: 'owner' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message:
-        "The group's owner can't leave it. Transfer ownership to another member first, or delete the group if nobody needs it.",
+      message: ruErrors.ownerCannotLeave,
     });
     expect(mockDb.groupMember.delete).not.toHaveBeenCalled();
   });
@@ -904,7 +973,7 @@ describe('leaving a group', () => {
     const api = await caller(leaver);
     await expect(api.removeMember({ groupId: 'g1', userId: leaver })).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
-      message: 'You still owe or are owed money in this group. Settle up before you leave.',
+      message: ruErrors.leaveWithBalance,
     });
     expect(mockDb.groupMember.delete).not.toHaveBeenCalled();
   });
@@ -967,8 +1036,7 @@ describe('leaving a group', () => {
       const api = await caller('bob');
       await expect(api.removeMember({ groupId: 'g1', userId: 'bob' })).rejects.toMatchObject({
         code: 'FORBIDDEN',
-        message:
-          "The group's owner can't leave it. Transfer ownership to another member first, or delete the group if nobody needs it.",
+        message: ruErrors.ownerCannotLeave,
       });
       expect(mockDb.groupMember.delete).not.toHaveBeenCalled();
     });
@@ -981,7 +1049,7 @@ describe('leaving a group', () => {
       const api = await caller('owner');
       await expect(api.removeMember({ groupId: 'g1', userId: 'bob' })).rejects.toMatchObject({
         code: 'FORBIDDEN',
-        message: 'Cannot remove the owner',
+        message: ruErrors.cannotRemoveOwner,
       });
       expect(mockDb.groupMember.delete).not.toHaveBeenCalled();
     });
@@ -994,7 +1062,7 @@ describe('leaving a group', () => {
       const api = await caller('owner');
       await expect(api.removeMember({ groupId: 'g1', userId: 'carol' })).rejects.toMatchObject({
         code: 'FORBIDDEN',
-        message: 'Cannot remove other members',
+        message: ruErrors.cannotRemoveOthers,
       });
       expect(mockDb.groupMember.delete).not.toHaveBeenCalled();
     });
@@ -1005,6 +1073,21 @@ describe('leaving a group', () => {
 // other people still use
 describe('transferring ownership', () => {
   const account = { isPlaceholder: false, suspendedAt: null };
+
+  test('6.13.2: group owner role transfer cannot also set global ownerId, JWT or arbitrary roles', async () => {
+    const api = await caller('owner');
+    for (const field of ['ownerId', 'userId', 'role', 'isAdmin', 'sessionSecurityVersion', 'id']) {
+      await expect(
+        api.transferOwnership({
+          groupId: 'g1',
+          newOwnerId: 'bob',
+          [field]: 'foreign-user-uuid',
+        } as never),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.groupMember.update).not.toHaveBeenCalled();
+    expect(mockDb.ownerBootstrap.findUnique).not.toHaveBeenCalled();
+  });
 
   test('makes a member with an account the owner, and the old owner a member', async () => {
     mockMemberships({ owner: member('owner', 'OWNER'), bob: member('bob', 'MEMBER', { user: account }) });
@@ -1046,7 +1129,7 @@ describe('transferring ownership', () => {
     const api = await caller('owner');
     await expect(api.transferOwnership({ groupId: 'g1', newOwnerId: 'bob' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'Only the owner can transfer ownership',
+      message: ruErrors.onlyOwnerTransfers,
     });
     expect(mockDb.groupMember.update).not.toHaveBeenCalled();
   });
@@ -1062,7 +1145,7 @@ describe('transferring ownership', () => {
     const api = await caller('owner');
     await expect(api.transferOwnership({ groupId: 'g1', newOwnerId: 'bob' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'Only the owner can transfer ownership',
+      message: ruErrors.onlyOwnerTransfers,
     });
     expect(mockDb.groupMember.update).not.toHaveBeenCalled();
   });
@@ -1072,7 +1155,7 @@ describe('transferring ownership', () => {
     const api = await caller('owner');
     await expect(api.transferOwnership({ groupId: 'g1', newOwnerId: 'owner' })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'You already own this group',
+      message: ruErrors.alreadyOwner,
     });
     expect(mockDb.groupMember.update).not.toHaveBeenCalled();
   });
@@ -1082,18 +1165,14 @@ describe('transferring ownership', () => {
     const api = await caller('owner');
     await expect(api.transferOwnership({ groupId: 'g1', newOwnerId: 'bob' })).rejects.toMatchObject({
       code: 'NOT_FOUND',
-      message: 'Member not found',
+      message: ruErrors.memberNotFound,
     });
     expect(mockDb.groupMember.update).not.toHaveBeenCalled();
   });
 
   test.each([
-    ['a placeholder', { isPlaceholder: true, suspendedAt: null }, 'Only a member with an account can own a group'],
-    [
-      'a suspended account',
-      { isPlaceholder: false, suspendedAt: new Date() },
-      "That member's account is suspended, so they can't own the group",
-    ],
+    ['a placeholder', { isPlaceholder: true, suspendedAt: null }, ruErrors.ownerNeedsAccount],
+    ['a suspended account', { isPlaceholder: false, suspendedAt: new Date() }, ruErrors.ownerSuspended],
   ])('is refused to %s', async (_, user, message) => {
     mockMemberships({ owner: member('owner', 'OWNER'), bob: member('bob', 'MEMBER', { user }) });
     const api = await caller('owner');
@@ -1145,7 +1224,7 @@ describe('deleting a group', () => {
     const api = await caller('owner');
     await expect(api.delete({ groupId: 'g1' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'Only the owner can delete a group',
+      message: ruErrors.onlyOwnerDeletesGroup,
     });
     expect(mockDb.group.delete).not.toHaveBeenCalled();
   });
@@ -1160,44 +1239,32 @@ describe('deleting a group', () => {
     const api = await caller('owner');
     await expect(api.delete({ groupId: 'g1' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'Only the owner can delete a group',
+      message: ruErrors.onlyOwnerDeletesGroup,
     });
     expect(mockDb.group.delete).not.toHaveBeenCalled();
     expect(mockDb.receipt.deleteMany).not.toHaveBeenCalled();
-    expect(removeReceiptFiles).not.toHaveBeenCalled();
   });
 
   // #265: the group's scanned receipts stayed behind, with their items, assignments
-  // and image files
-  test("deletes the group's receipts, and their image files once that's committed", async () => {
+
+  test('deletes unreferenced group receipt records atomically', async () => {
     mockMemberships({ owner: member('owner', 'OWNER') });
-    mockDb.receipt.findMany.mockResolvedValue([
-      { id: 'r1', imagePath: 'receipts/r1.jpg' },
-      { id: 'r2', imagePath: 'receipts/r2.jpg' },
-    ]);
+    mockDb.receipt.findMany.mockResolvedValue([{ id: 'r1' }, { id: 'r2' }]);
     const api = await caller('owner');
     await api.delete({ groupId: 'g1' });
 
     expect(mockDb.receipt.findMany).toHaveBeenCalledWith({
       where: { groupId: 'g1' },
-      select: { id: true, imagePath: true },
+      select: { id: true },
     });
     expect(mockDb.receipt.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['r1', 'r2'] } } });
-    expect(removeReceiptFiles).toHaveBeenCalledWith(['receipts/r1.jpg', 'receipts/r2.jpg']);
-    // Only once the transaction is over, so a rollback can't leave a receipt without its image
-    expect(removeReceiptFiles.mock.invocationCallOrder[0]!).toBeGreaterThan(
-      mockDb.group.delete.mock.invocationCallOrder[0]!,
-    );
   });
 
-  // The claim page shows the receipt's image, so the receipt stays until its last
+  // A claim session references this receipt until its last
   // split goes (guest.deleteSplit)
   test('keeps a receipt that a Quick Split or claim session still shows', async () => {
     mockMemberships({ owner: member('owner', 'OWNER') });
-    mockDb.receipt.findMany.mockResolvedValue([
-      { id: 'r1', imagePath: 'receipts/r1.jpg' },
-      { id: 'r2', imagePath: 'receipts/r2.jpg' },
-    ]);
+    mockDb.receipt.findMany.mockResolvedValue([{ id: 'r1' }, { id: 'r2' }]);
     mockDb.guestSplit.findMany.mockResolvedValue([{ receiptId: 'r2' }]);
     const api = await caller('owner');
     await api.delete({ groupId: 'g1' });
@@ -1207,7 +1274,6 @@ describe('deleting a group', () => {
       select: { receiptId: true },
     });
     expect(mockDb.receipt.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['r1'] } } });
-    expect(removeReceiptFiles).toHaveBeenCalledWith(['receipts/r1.jpg']);
   });
 
   // Nothing new can join the group or be scanned into it once its receipts are read,
@@ -1263,11 +1329,19 @@ describe('deleting a group', () => {
 // #276: merging a placeholder into the member it stands for moves their
 // expenses, shares and payments over, so the balance follows them.
 describe('merging a placeholder into a member', () => {
-  const users: Record<string, { suspendedAt: null; isPlaceholder: boolean }> = {
-    owner: { suspendedAt: null, isPlaceholder: false },
-    bob: { suspendedAt: null, isPlaceholder: false },
-    p1: { suspendedAt: null, isPlaceholder: true },
-    p2: { suspendedAt: null, isPlaceholder: true },
+  const users: Record<
+    string,
+    { suspendedAt: Date | null; isPlaceholder: boolean; emailVerified: Date | null; email: string }
+  > = {
+    owner: {
+      suspendedAt: null,
+      isPlaceholder: false,
+      emailVerified: new Date('2026-11-01'),
+      email: 'owner@qa.billok.ru',
+    },
+    bob: { suspendedAt: null, isPlaceholder: false, emailVerified: new Date('2026-11-01'), email: 'bob@qa.billok.ru' },
+    p1: { suspendedAt: null, isPlaceholder: true, emailVerified: null, email: 'p1@qa.billok.ru' },
+    p2: { suspendedAt: null, isPlaceholder: true, emailVerified: null, email: 'p2@qa.billok.ru' },
   };
   // admin.deleteUser turns an account into a suspended placeholder that keeps its history in other groups
   const deletedAccount = { suspendedAt: new Date(), isPlaceholder: true };
@@ -1293,6 +1367,110 @@ describe('merging a placeholder into a member', () => {
     expect(mockDb.settlement.deleteMany).not.toHaveBeenCalled();
     expect(mockDb.user.delete).not.toHaveBeenCalled();
   }
+
+  test('Issue 6.12.5: global owner ID cannot become a removable placeholder even if a flag is forged', async () => {
+    const api = await caller('owner');
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'p1' });
+    await expect(
+      api.mergePlaceholder({
+        groupId: 'g1',
+        placeholderUserId: 'p1',
+        realUserId: 'bob',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.ownerBootstrap.findUnique).toHaveBeenCalledWith({
+      where: { id: 1 },
+      select: { userId: true },
+    });
+    expect(mockDb.groupMember.deleteMany).not.toHaveBeenCalled();
+    expect(mockDb.user.delete).not.toHaveBeenCalled();
+    expectNothingMoved();
+  });
+
+  test('Issue 6.12.5: forged owner privilege fields cannot enter merge operations', async () => {
+    const api = await caller();
+    for (const field of ['ownerId', 'userId', 'role', 'isAdmin', 'emailVerified', 'sessionSecurityVersion']) {
+      await expect(
+        api.mergePlaceholder({
+          groupId: 'g1',
+          placeholderUserId: 'p1',
+          realUserId: 'bob',
+          [field]: 'owner',
+        } as never),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.ownerBootstrap.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.groupMember.deleteMany).not.toHaveBeenCalled();
+    expectNothingMoved();
+  });
+
+  test('6.13.2: a known UUID outside the current check cannot receive guest debt', async () => {
+    mockDb.$queryRaw.mockResolvedValueOnce([]);
+    const api = await caller('owner');
+    await expect(
+      api.mergePlaceholder({
+        groupId: 'g1',
+        placeholderUserId: 'p1',
+        realUserId: 'bob',
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: ruErrors.mergeTargetNotMember });
+    expect(mockDb.$queryRaw).toHaveBeenCalledOnce();
+    expect(mockDb.groupMember.deleteMany).not.toHaveBeenCalled();
+    expectNothingMoved();
+  });
+
+  test('6.13.2: removed membership never qualifies for merging financial data', async () => {
+    const { readFileSync } = await import('node:fs');
+    const code = readFileSync('src/server/lib/placeholder-merge.ts', 'utf8');
+    expect(code).toContain('AND "removedAt" IS NULL FOR SHARE');
+    const api = await caller('owner');
+    mockDb.$queryRaw.mockResolvedValueOnce([]);
+    await expect(
+      api.mergePlaceholder({
+        groupId: 'g1',
+        placeholderUserId: 'p1',
+        realUserId: 'bob',
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expectNothingMoved();
+  });
+
+  test('6.13.2: a deleted/suspended or unverified target UUID never receives a guest receipt', async () => {
+    for (const target of [
+      { ...users.bob, suspendedAt: new Date('2026-11-02') },
+      { ...users.bob, emailVerified: null },
+    ]) {
+      mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
+        where.id === 'bob' ? target : (users[where.id] ?? null),
+      );
+      const api = await caller('owner');
+      await expect(
+        api.mergePlaceholder({
+          groupId: 'g1',
+          placeholderUserId: 'p1',
+          realUserId: 'bob',
+        }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mockDb.groupMember.deleteMany).not.toHaveBeenCalled();
+      expectNothingMoved();
+    }
+  });
+
+  test('6.13.2: knowing other account UUID cannot impersonate acting owner via JSON fields', async () => {
+    const api = await caller('owner');
+    for (const key of ['ownerId', 'userId', 'role', 'isAdmin', 'emailVerified', 'id']) {
+      await expect(
+        api.mergePlaceholder({
+          groupId: 'g1',
+          placeholderUserId: 'p1',
+          realUserId: 'bob',
+          [key]: 'other-user-uuid',
+        } as never),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.groupMember.deleteMany).not.toHaveBeenCalled();
+    expectNothingMoved();
+  });
 
   test('refuses to merge a placeholder into itself', async () => {
     const api = await caller();
@@ -1327,7 +1505,7 @@ describe('merging a placeholder into a member', () => {
     const api = await caller();
     await expect(
       api.mergePlaceholder({ groupId: 'g1', placeholderUserId: 'p1', realUserId: 'bob' }),
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining('archived') });
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: ruErrors.mergeArchivedGroup });
     expectNothingMoved();
   });
 
@@ -1431,7 +1609,6 @@ describe('archiving a group', () => {
   const expense = (paidById: string, shares: { userId: string; amount: number }[]) => ({
     paidById,
     amount: shares.reduce((sum, s) => sum + s.amount, 0),
-    baseCurrencyAmount: null,
     shares,
   });
   // The owner paid $10.00 split with Bob, so Bob owes the owner $5.00.
@@ -1462,7 +1639,7 @@ describe('archiving a group', () => {
     const api = await caller();
     await expect(api.archive({ groupId: 'g1' })).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
-      message: 'This group still has unsettled balances. Settle up before archiving it.',
+      message: ruErrors.archiveUnsettled,
     });
     expect(mockDb.expense.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { groupId: 'g1' } }));
     expect(mockDb.settlement.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { groupId: 'g1' } }));
@@ -1476,17 +1653,14 @@ describe('archiving a group', () => {
     const api = await caller();
     await expect(api.archive({ groupId: 'g1' })).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
-      message:
-        "Someone who is no longer in this group still owes or is owed money, so it can't be archived. Invite them back to settle up, or edit the expenses they're in.",
+      message: ruErrors.archiveFormerMemberUnsettled,
     });
     expect(mockDb.activityLog.create).not.toHaveBeenCalled();
   });
 
   test('goes ahead once everyone is settled up', async () => {
     // Bob paid the owner back.
-    mockDb.settlement.findMany.mockResolvedValue([
-      { fromId: 'bob', toId: 'owner', amount: 500, baseCurrencyAmount: null },
-    ]);
+    mockDb.settlement.findMany.mockResolvedValue([{ fromId: 'bob', toId: 'owner', amount: 500 }]);
     const api = await caller();
     await expect(api.archive({ groupId: 'g1' })).resolves.toMatchObject({ id: 'g1', name: 'Trip' });
     expect(mockDb.group.updateMany).toHaveBeenCalledWith({
@@ -1516,5 +1690,125 @@ describe('archiving a group', () => {
     await expect(api.archive({ groupId: 'g1' })).resolves.toMatchObject({ id: 'g1' });
     expect(mockDb.expense.findMany).not.toHaveBeenCalled();
     expect(mockDb.activityLog.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('RUB-only group API', () => {
+  test('creates a group in RUB when the currency is omitted', async () => {
+    mockDb.group.create.mockResolvedValue({ id: 'g2', currency: 'RUB' });
+    const api = await caller();
+    await api.create({ name: 'Поездка' });
+    expect(mockDb.group.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        name: 'Поездка',
+        currency: 'RUB',
+        members: { create: { userId: 'owner', role: 'OWNER' } },
+      }),
+    });
+  });
+
+  test('accepts an explicit lowercase rub and stores RUB', async () => {
+    mockDb.group.create.mockResolvedValue({ id: 'g2', currency: 'RUB' });
+    const api = await caller();
+    await api.create({ name: 'Поездка', currency: 'rub' });
+    expect(mockDb.group.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ name: 'Поездка', currency: 'RUB' }),
+    });
+  });
+
+  test.each(['USD', 'eur', 'GBP'])('refuses currency %s when creating a group', async (currency) => {
+    const api = await caller();
+    await expect(api.create({ name: 'Поездка', currency })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.group.create).not.toHaveBeenCalled();
+  });
+
+  test.each(['USD', 'RUB'])('refuses any currency argument %s when updating a group', async (currency) => {
+    const api = await caller();
+    const invalidPayload = { groupId: 'g1', currency } as unknown as Parameters<typeof api.update>[0];
+    await expect(api.update(invalidPayload)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.group.update).not.toHaveBeenCalled();
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('rejects obsolete per-group debt simplification setting, keeping the global algorithm intact', async () => {
+    const api = await caller();
+    const invalidPayload = { groupId: 'g1', simplifyDebts: false } as unknown as Parameters<typeof api.update>[0];
+    await expect(api.update(invalidPayload)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.group.update).not.toHaveBeenCalled();
+  });
+
+  test('updates allowed fields without modifying currency or querying conversion-related tables', async () => {
+    mockDb.group.update.mockResolvedValue({ id: 'g1', currency: 'RUB', name: 'Новое название' });
+    const api = await caller();
+    await api.update({ groupId: 'g1', name: 'Новое название', description: 'Общие покупки' });
+    expect(mockDb.group.update).toHaveBeenCalledWith({
+      where: { id: 'g1' },
+      data: { name: 'Новое название', description: 'Общие покупки' },
+    });
+    expect(mockDb.expense.count).not.toHaveBeenCalled();
+    expect(mockDb.settlement.count).not.toHaveBeenCalled();
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue 6.12.5: group member removal cannot delete platform owner identity', () => {
+  test('a forged placeholder flag cannot delete global owner through membership removal', async () => {
+    mockMemberships({
+      owner: member('owner', 'OWNER'),
+      'global-owner': member('global-owner', 'MEMBER'),
+    });
+    mockDb.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
+      where.id === 'global-owner'
+        ? { id: 'global-owner', isPlaceholder: true, name: 'Владелец', placeholderName: null }
+        : { suspendedAt: null },
+    );
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'global-owner' });
+    await expect(
+      (await caller('owner')).removeMember({
+        groupId: 'g1',
+        userId: 'global-owner',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.user.delete).not.toHaveBeenCalled();
+    expect(mockDb.groupMember.delete).not.toHaveBeenCalled();
+    expect(mockDb.groupMember.updateMany).not.toHaveBeenCalled();
+    expect(mockDb.activityLog.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue 6.12.5: group role is not global BillOK ownership', () => {
+  test('group creation refuses client ownerId/userId/role/isAdmin even with an authenticated group owner', async () => {
+    const api = await caller();
+    for (const field of ['ownerId', 'userId', 'role', 'isAdmin', 'emailVerified', 'sessionSecurityVersion']) {
+      await expect(api.create({ name: 'Наш чек', [field]: 'owner' } as never)).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+    }
+    expect(mockDb.group.create).not.toHaveBeenCalled();
+    expect(mockDb.ownerBootstrap.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('group update and placeholder creation/rename reject privilege injection before any mutation', async () => {
+    const api = await caller();
+    for (const field of ['ownerId', 'userId', 'role', 'isAdmin', 'sessionSecurityVersion']) {
+      await expect(api.update({ groupId: 'g1', name: 'Обычный чек', [field]: 'OWNER' } as never)).rejects.toMatchObject(
+        { code: 'BAD_REQUEST' },
+      );
+      await expect(
+        api.addPlaceholder({ groupId: 'g1', name: 'Гость', [field]: 'OWNER' } as never),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(
+        api.renamePlaceholder({
+          groupId: 'g1',
+          placeholderUserId: 'p1',
+          name: 'Гость',
+          [field]: 'OWNER',
+        } as never),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.group.update).not.toHaveBeenCalled();
+    expect(mockDb.user.create).not.toHaveBeenCalled();
+    expect(mockDb.user.update).not.toHaveBeenCalled();
+    expect(mockDb.ownerBootstrap.findUnique).not.toHaveBeenCalled();
   });
 });

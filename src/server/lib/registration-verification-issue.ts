@@ -1,0 +1,58 @@
+import type { SMTPTransportOptions } from 'nodemailer';
+import type { PrismaClient } from '@/generated/prisma/client';
+import { logger } from './logger';
+import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
+import { registrationEmailProofHash } from './registration-email-proof';
+import { AppError } from './app-error';
+import { prepareRegistrationVerificationLink } from './registration-verification-link';
+import { sendRussianRegistrationVerificationEmail } from './email-verification-email';
+
+/**
+ * Save only the confirmation hash before sending its one-time link.
+ * Call this for an already-created, unverified account after invitation reservation.
+ * Invitation consumption and sign-in restrictions belong to a separate step.
+ */
+export async function issueRegistrationVerification(input: {
+  db: Pick<PrismaClient, 'emailVerificationRequest'>;
+  userId: string;
+  email: string;
+  siteOrigin: string;
+  from: string;
+  server: SMTPTransportOptions;
+  confirmationPath?: '/verify-email' | '/setup-owner';
+}): Promise<{ expiresAt: Date }> {
+  if (!isAllowedRegistrationEmailDomain(input.email)) throw new AppError('FORBIDDEN');
+  const emailHash = registrationEmailProofHash(input.email);
+  if (!emailHash) throw new AppError('FORBIDDEN');
+  const { url, tokenHash, expiresAt } = prepareRegistrationVerificationLink(
+    input.siteOrigin,
+    new Date(),
+    input.confirmationPath,
+  );
+  const request = await input.db.emailVerificationRequest.create({
+    data: { userId: input.userId, tokenHash, emailHash, expiresAt },
+    select: { id: true },
+  });
+
+  try {
+    await sendRussianRegistrationVerificationEmail({
+      to: input.email,
+      url,
+      from: input.from,
+      server: input.server,
+    });
+  } catch (error) {
+    // A failed SMTP send must not leave the newly issued link valid.
+    // A cleanup failure must not mask the original SMTP error.
+    try {
+      await input.db.emailVerificationRequest.deleteMany({
+        where: { id: request.id, userId: input.userId, consumedAt: null },
+      });
+    } catch {
+      logger.error('auth.email_verification_cleanup_failed', { requestId: request.id });
+    }
+    throw error;
+  }
+
+  return { expiresAt };
+}

@@ -13,6 +13,7 @@ export function AuditLogSection() {
   const locale = useLocale();
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const auditLog = trpc.admin.getAuditLog.useQuery({ limit: 20, cursor });
+  const security = trpc.admin.getSecurityEvents.useQuery({ limit: 20 });
 
   const ACTION_LABELS: Record<string, { label: string; color: string }> = {
     USER_DELETED: { label: t('audit.actionUserDeleted'), color: 'bg-red-500/10 text-red-700 dark:text-red-400' },
@@ -25,10 +26,6 @@ export function AuditLogSection() {
       color: 'bg-green-500/10 text-green-700 dark:text-green-400',
     },
     GROUP_DELETED: { label: t('audit.actionGroupDeleted'), color: 'bg-red-500/10 text-red-700 dark:text-red-400' },
-    ORPHANS_CLEANED: {
-      label: t('audit.actionOrphansCleaned'),
-      color: 'bg-blue-500/10 text-blue-700 dark:text-blue-400',
-    },
     IMPERSONATION_STARTED: {
       label: t('audit.actionImpersonation'),
       color: 'bg-purple-500/10 text-purple-700 dark:text-purple-400',
@@ -56,34 +53,6 @@ export function AuditLogSection() {
       label: t('audit.actionUnusedReceiptsCleaned'),
       color: 'bg-blue-500/10 text-blue-700 dark:text-blue-400',
     },
-    MERIDIAN_LOGIN_STARTED: {
-      label: t('audit.actionMeridianLogin'),
-      color: 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-400',
-    },
-    MERIDIAN_LOGIN_COMPLETED: {
-      label: t('audit.actionMeridianLoggedIn'),
-      color: 'bg-green-500/10 text-green-700 dark:text-green-400',
-    },
-    MERIDIAN_LOGIN_FAILED: {
-      label: t('audit.actionMeridianLoginFailed'),
-      color: 'bg-red-500/10 text-red-700 dark:text-red-400',
-    },
-    MERIDIAN_LOGOUT: {
-      label: t('audit.actionMeridianLogout'),
-      color: 'bg-orange-500/10 text-orange-700 dark:text-orange-400',
-    },
-    MERIDIAN_NOTIFY_PREFERENCE_CHANGED: {
-      label: t('audit.actionNotifyPrefChanged'),
-      color: 'bg-violet-500/10 text-violet-700 dark:text-violet-400',
-    },
-    AI_PROVIDER_TESTED: {
-      label: t('audit.actionAIProviderTest'),
-      color: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
-    },
-    GUEST_UPLOADS_SETTING_CHANGED: {
-      label: t('audit.actionGuestUploadsChanged'),
-      color: 'bg-violet-500/10 text-violet-700 dark:text-violet-400',
-    },
   };
 
   function formatMetadata(metadata: Record<string, unknown> | null): string {
@@ -109,14 +78,45 @@ export function AuditLogSection() {
   }
 
   return (
-    <section>
-      <div className="mb-4 flex items-center gap-2">
+    <section className="min-w-0" data-testid="admin-audit-section">
+      <div className="mb-5 min-w-0 rounded-lg border p-3" data-testid="admin-security-events">
+        <h3 className="mb-2 text-base font-semibold">События безопасности</h3>
+        <p className="mb-3 text-xs text-muted-foreground">
+          Административные действия и отклонённые попытки. Идентификаторы объектов показаны только как отпечатки;
+          секреты не сохраняются.
+        </p>
+        {security.isLoading ? (
+          <p className="text-sm text-muted-foreground">Загрузка журнала…</p>
+        ) : security.isError ? (
+          <p className="text-sm text-destructive">Не удалось получить журнал безопасности.</p>
+        ) : security.data?.items.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Событий пока нет.</p>
+        ) : (
+          <div className="max-h-72 space-y-2 overflow-y-auto" role="region" aria-label="События безопасности">
+            {security.data?.items.map((entry) => (
+              <div key={entry.id} className="min-w-0 rounded-md border px-3 py-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={entry.outcome === 'DENIED' ? 'font-semibold text-destructive' : 'font-semibold'}>
+                    {entry.outcome === 'DENIED' ? 'Отклонено' : 'Выполнено'}
+                  </span>
+                  <span className="[overflow-wrap:anywhere]">{entry.action}</span>
+                </div>
+                <p className="mt-1 text-muted-foreground [overflow-wrap:anywhere]">
+                  {new Date(entry.createdAt).toLocaleString(locale)} · Субъект: {entry.actorId ?? 'не определён'}
+                  {entry.targetFingerprint ? ' · Объект: ' + entry.targetFingerprint.slice(0, 16) : ''}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="mb-4 flex min-w-0 flex-wrap items-center gap-2">
         <ScrollText className="h-5 w-5 text-muted-foreground" />
-        <h2 className="text-lg font-semibold">{t('audit.title')}</h2>
+        <h2 className="min-w-0 text-lg font-semibold [overflow-wrap:anywhere]">{t('audit.title')}</h2>
       </div>
 
-      <Card>
-        <CardContent className="p-0">
+      <Card className="min-w-0">
+        <CardContent className="min-w-0 p-0">
           {auditLog.isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -125,8 +125,14 @@ export function AuditLogSection() {
             <div className="py-12 text-center text-sm text-muted-foreground">{t('audit.noEntries')}</div>
           ) : (
             <>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <div
+                className="min-w-0 max-w-full overflow-x-auto overscroll-x-contain"
+                role="region"
+                aria-label={t('audit.title')}
+                tabIndex={0}
+                data-testid="admin-audit-scroll"
+              >
+                <table className="w-full min-w-[720px] table-fixed text-sm">
                   <thead>
                     <tr className="border-b text-left text-muted-foreground">
                       <th className="px-4 py-3 font-medium">{t('audit.colAction')}</th>
@@ -144,12 +150,19 @@ export function AuditLogSection() {
                       return (
                         <tr key={entry.id} className="border-b last:border-0">
                           <td className="px-4 py-3">
-                            <Badge variant="secondary" className={actionInfo.color}>
+                            <Badge
+                              variant="secondary"
+                              className={actionInfo.color + ' max-w-full whitespace-normal [overflow-wrap:anywhere]'}
+                            >
                               {actionInfo.label}
                             </Badge>
                           </td>
-                          <td className="px-4 py-3 text-muted-foreground">{entry.adminName}</td>
-                          <td className="px-4 py-3 text-muted-foreground">{formatMetadata(entry.metadata)}</td>
+                          <td className="px-4 py-3 text-muted-foreground [overflow-wrap:anywhere]">
+                            {entry.adminName}
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground [overflow-wrap:anywhere]">
+                            {formatMetadata(entry.metadata)}
+                          </td>
                           <td className="px-4 py-3 text-muted-foreground">
                             {new Date(entry.createdAt).toLocaleString(locale)}
                           </td>
@@ -161,7 +174,13 @@ export function AuditLogSection() {
               </div>
               {auditLog.data?.nextCursor && (
                 <div className="border-t px-4 py-3">
-                  <Button variant="ghost" size="sm" onClick={() => setCursor(auditLog.data?.nextCursor)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="min-h-11 min-w-11 max-w-full whitespace-normal [overflow-wrap:anywhere]"
+                    data-testid="admin-audit-load-more"
+                    onClick={() => setCursor(auditLog.data?.nextCursor)}
+                  >
                     {t('audit.loadMore')}
                   </Button>
                 </div>

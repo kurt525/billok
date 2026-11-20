@@ -2,28 +2,6 @@ import { test, expect, request } from '@playwright/test';
 
 const BASE = process.env.BASE_URL || 'http://localhost:3001';
 
-test.describe('Guest Bill Split — UI', () => {
-  test('split page loads without authentication', async ({ page }) => {
-    await page.goto('/en/split');
-    await expect(page.getByText('Split a bill')).toBeVisible();
-    // Upload options: camera and gallery
-    await expect(page.getByText('Snap a Bill')).toBeVisible();
-  });
-
-  test('split page shows upload form with camera option', async ({ page }) => {
-    await page.goto('/en/split');
-    const fileInput = page.locator('input[type="file"]').first();
-    await expect(fileInput).toBeAttached();
-  });
-
-  test('login page links to guest split', async ({ page }) => {
-    await page.goto('/en/login');
-    const splitLink = page.getByRole('link', { name: 'Split without an account' });
-    await expect(splitLink).toBeVisible();
-    await expect(splitLink).toHaveAttribute('href', /\/split$/);
-  });
-});
-
 test.describe('Guest Bill Split — API happy path', () => {
   test('createSplit creates a shareable split and getSplit retrieves it', async () => {
     const ctx = await request.newContext({ baseURL: BASE });

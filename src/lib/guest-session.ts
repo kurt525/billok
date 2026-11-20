@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
-const guestSessionTokenSchema = z.string().uuid();
+// 256-bit unpadded base64url guest bearer; last sextet has two unused bits.
+const guestSessionTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/);
 
 export const storedClaimIdentitySchema = z.object({
   name: z.string(),
@@ -73,8 +74,19 @@ export function setStoredClaimIdentity(shareToken: string, identity: StoredClaim
   }
 }
 
+/** 3.6: one stable Unicode comparison key across creating, joining and renaming.
+ * NFKC removes canonical and compatibility differences (e.g. decomposed accents
+ * and fullwidth Latin), while a fixed locale avoids environment-dependent casing.
+ * Keep the human's display spelling; only this key decides name collisions.
+ */
 export function normalizeGuestName(name: string): string {
-  return name.trim().toLowerCase();
+  return name.normalize('NFKC').trim().toLocaleLowerCase('ru-RU').normalize('NFKC');
+}
+
+/** Duplicate names must be rejected rather than silently merging two diners. */
+export function hasDuplicateGuestNames(names: readonly string[]): boolean {
+  const keys = names.map(normalizeGuestName);
+  return new Set(keys).size !== keys.length;
 }
 
 export function isGuestSessionToken(value: string): boolean {
@@ -199,6 +211,22 @@ export function claimPollInterval(poll: {
   if (poll.finalized) return false;
   if (poll.error === null) return CLAIM_POLL_MS;
   return poll.error.httpStatus === 404 ? false : CLAIM_POLL_RETRY_MS;
+}
+
+/**
+ * A live SSE stream invalidates receipt changes, not guestPresence rows.
+ * Keep creator/delegate presence live through the existing short poll.
+ * Guests with a healthy SSE connection can avoid duplicate receipt reads;
+ * transient tRPC errors still use the retry interval.
+ */
+export function claimLivePollInterval(poll: {
+  finalized: boolean;
+  error: { httpStatus: number | undefined } | null;
+  sseConnected: boolean;
+  presenceVisible: boolean;
+}): number | false {
+  if (poll.sseConnected && !poll.presenceVisible && poll.error === null) return false;
+  return claimPollInterval({ finalized: poll.finalized, error: poll.error });
 }
 
 /**

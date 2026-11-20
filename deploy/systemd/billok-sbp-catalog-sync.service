@@ -1,0 +1,15 @@
+[Unit]
+Description=BillOK SBP registry review on self-hosted VPS
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=sentinelx
+Group=sentinelx
+StateDirectory=billok-sbp-sync
+StateDirectoryMode=0750
+Environment=HOME=/opt/sentinelx-cloud-core
+ExecStart=/usr/local/libexec/billok/sbp-catalog-poll.sh
+TimeoutStartSec=10min
+NoNewPrivileges=true

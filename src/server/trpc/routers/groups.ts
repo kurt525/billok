@@ -5,13 +5,14 @@ import { createTRPCRouter, protectedProcedure, groupMemberProcedure } from '../i
 import { stripUndefined } from '../../lib/strip-undefined';
 import { loadGroupBalances, lockGroupMembers } from '../../lib/group-balances';
 import { deleteGroupWithData } from '../../lib/group-delete';
-import { removeReceiptFiles } from '../../lib/receipt-cleanup';
 import { mergePlaceholderIntoUser } from '../../lib/placeholder-merge';
 import { checkRateLimit } from '../../lib/rate-limit';
 import { normalizeGuestName } from '@/lib/guest-session';
+import { retryUserIdCollision } from '@/server/lib/user-id-collision-retry';
 
 // Invite tokens are cuids (25 characters); a defensive bound so oversized input never reaches the lookup.
 const inviteTokenSchema = z.string().max(64);
+const inviteTokenInputSchema = z.strictObject({ token: inviteTokenSchema });
 // getInvite answers whether a token is live without using it up, so cap how fast one account can ask.
 const INVITE_LOOKUP_LIMIT = 30;
 const INVITE_LOOKUP_WINDOW_MS = 60 * 1000;
@@ -49,7 +50,6 @@ export const groupsRouter = createTRPCRouter({
         members: { some: { userId: ctx.user.id, removedAt: null } },
         archivedAt: null,
       },
-      take: 200,
       include: {
         members: {
           where: { removedAt: null },
@@ -72,7 +72,6 @@ export const groupsRouter = createTRPCRouter({
         members: { some: { userId: ctx.user.id, removedAt: null } },
         archivedAt: { not: null },
       },
-      take: 200,
       include: {
         members: {
           where: { removedAt: null },
@@ -103,7 +102,6 @@ export const groupsRouter = createTRPCRouter({
                 image: true,
                 isPlaceholder: true,
                 placeholderName: true,
-                venmoUsername: true,
               },
             },
           },
@@ -125,7 +123,7 @@ export const groupsRouter = createTRPCRouter({
 
   create: protectedProcedure
     .input(
-      z.object({
+      z.strictObject({
         name: z.string().trim().min(1).max(100),
         description: z.string().max(500).optional(),
         currency: z
@@ -133,7 +131,8 @@ export const groupsRouter = createTRPCRouter({
           .length(3)
           .regex(/^[a-zA-Z]{3}$/)
           .transform((c) => c.toUpperCase())
-          .default('USD'),
+          .pipe(z.literal('RUB'))
+          .default('RUB'),
         emoji: z.string().max(4).optional(),
       }),
     )
@@ -141,6 +140,7 @@ export const groupsRouter = createTRPCRouter({
       const group = await ctx.db.group.create({
         data: {
           ...stripUndefined(input),
+          currency: 'RUB',
           members: {
             create: {
               userId: ctx.user.id,
@@ -154,18 +154,13 @@ export const groupsRouter = createTRPCRouter({
 
   update: groupMemberProcedure
     .input(
-      z.object({
+      z.strictObject({
         groupId: z.string(),
         name: z.string().trim().min(1).max(100).optional(),
         description: z.string().max(500).optional(),
-        currency: z
-          .string()
-          .length(3)
-          .regex(/^[a-zA-Z]{3}$/)
-          .transform((c) => c.toUpperCase())
-          .optional(),
+        // A group's currency is immutable in RUB-only BillOK.
+        currency: z.never().optional(),
         emoji: z.string().max(4).optional(),
-        simplifyDebts: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -173,22 +168,6 @@ export const groupsRouter = createTRPCRouter({
         throw new AppError('FORBIDDEN', 'onlyAdminsUpdateGroup');
       }
       const { groupId, ...data } = input;
-
-      if (data.currency) {
-        const existing = await ctx.db.group.findUnique({
-          where: { id: groupId },
-          select: { currency: true },
-        });
-        if (existing && data.currency.toUpperCase() !== existing.currency.toUpperCase()) {
-          const [expenseCount, settlementCount] = await Promise.all([
-            ctx.db.expense.count({ where: { groupId }, take: 1 }),
-            ctx.db.settlement.count({ where: { groupId }, take: 1 }),
-          ]);
-          if (expenseCount > 0 || settlementCount > 0) {
-            throw new AppError('BAD_REQUEST', 'currencyLocked');
-          }
-        }
-      }
 
       const group = await ctx.db.group.update({
         where: { id: groupId },
@@ -202,7 +181,7 @@ export const groupsRouter = createTRPCRouter({
     if (ctx.membership.role !== 'OWNER') {
       throw notOwner;
     }
-    const imagePaths = await ctx.db.$transaction(async (tx) => {
+    await ctx.db.$transaction(async (tx) => {
       // A transfer of ownership takes the same lock, so the role read below is
       // current: a delete the old owner sent while handing the group over is
       // refused, rather than deleting a group someone else now owns (#309).
@@ -216,7 +195,6 @@ export const groupsRouter = createTRPCRouter({
       }
       return deleteGroupWithData(tx, input.groupId);
     });
-    await removeReceiptFiles(imagePaths);
     return { success: true };
   }),
 
@@ -344,7 +322,7 @@ export const groupsRouter = createTRPCRouter({
   // What the invite page shows before the person accepts. Anyone signed in who
   // holds the token sees it, which is less than the token already gives them
   // (joining the group). null when joinByInvite would refuse the token.
-  getInvite: protectedProcedure.input(z.object({ token: inviteTokenSchema })).query(async ({ ctx, input }) => {
+  getInvite: protectedProcedure.input(inviteTokenInputSchema).query(async ({ ctx, input }) => {
     if (!checkRateLimit(`invite-lookup:${ctx.user.id}`, INVITE_LOOKUP_LIMIT, INVITE_LOOKUP_WINDOW_MS).allowed) {
       throw new AppError('TOO_MANY_REQUESTS', 'inviteLookupRateLimited');
     }
@@ -381,7 +359,7 @@ export const groupsRouter = createTRPCRouter({
     };
   }),
 
-  joinByInvite: protectedProcedure.input(z.object({ token: inviteTokenSchema })).mutation(async ({ ctx, input }) => {
+  joinByInvite: protectedProcedure.input(inviteTokenInputSchema).mutation(async ({ ctx, input }) => {
     const invite = await ctx.db.groupInvite.findUnique({
       where: { token: input.token },
     });
@@ -541,6 +519,13 @@ export const groupsRouter = createTRPCRouter({
         }
 
         if (targetUser?.isPlaceholder) {
+          // A corrupted/forged isPlaceholder flag must never allow any group
+          // administrator to delete the ONE BillOK owner via removeMember.
+          const platformOwner = await tx.ownerBootstrap.findUnique({
+            where: { id: 1 },
+            select: { userId: true },
+          });
+          if (platformOwner?.userId === input.userId) throw new AppError('FORBIDDEN');
           // A placeholder can't log in to settle up or rejoin, and moving their part
           // onto other people writes off what they owe or are owed (#260). So one
           // who is in any expense or payment goes only at a zero balance, and only
@@ -616,7 +601,7 @@ export const groupsRouter = createTRPCRouter({
   // owner becomes a plain member: nothing assigns ADMIN, so the new owner would
   // have no way to take it back.
   transferOwnership: groupMemberProcedure
-    .input(z.object({ groupId: z.string(), newOwnerId: z.string() }))
+    .input(z.strictObject({ groupId: z.string(), newOwnerId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const notOwner = new AppError('FORBIDDEN', 'onlyOwnerTransfers');
       if (ctx.membership.role !== 'OWNER') {
@@ -673,7 +658,7 @@ export const groupsRouter = createTRPCRouter({
 
   addPlaceholder: groupMemberProcedure
     .input(
-      z.object({
+      z.strictObject({
         groupId: z.string(),
         name: z.string().trim().min(1).max(100),
       }),
@@ -684,45 +669,47 @@ export const groupsRouter = createTRPCRouter({
       }
 
       const { randomUUID } = await import('crypto');
-      const placeholderEmail = `placeholder-${randomUUID()}@placeholder.local`;
+      const placeholderEmail = `placeholder-${randomUUID()}@placeholder.billok.ru`;
 
-      const { user, restored } = await ctx.db.$transaction(async (tx) => {
-        await lockGroupMembers(tx, input.groupId);
-        const holder = await findNameHolder(tx, input.groupId, input.name);
-        if (holder && !holder.removedAt) {
-          throw new AppError('CONFLICT', 'placeholderNameTaken');
-        }
-        // Adding a removed placeholder's name brings them back with their history,
-        // rather than a second person by that name (#284). A merge that took them
-        // meanwhile leaves nobody to bring back, and the name is free.
-        if (holder?.user.isPlaceholder) {
-          const { count } = await tx.groupMember.updateMany({
-            where: { userId: holder.userId, groupId: input.groupId, removedAt: { not: null } },
-            data: { removedAt: null },
-          });
-          if (count === 1) {
-            return {
-              user: { id: holder.userId, name: holder.user.placeholderName ?? holder.user.name },
-              restored: true,
-            };
+      const createOrRestorePlaceholder = () =>
+        ctx.db.$transaction(async (tx) => {
+          await lockGroupMembers(tx, input.groupId);
+          const holder = await findNameHolder(tx, input.groupId, input.name);
+          if (holder && !holder.removedAt) {
+            throw new AppError('CONFLICT', 'placeholderNameTaken');
           }
-        } else if (holder) {
-          throw new AppError('CONFLICT', 'placeholderNameTaken');
-        }
-        // One write: if the group is deleted meanwhile, the membership can't be made
-        // and the placeholder is rolled back with it, instead of staying with no group (#265)
-        const created = await tx.user.create({
-          data: {
-            email: placeholderEmail,
-            name: input.name,
-            isPlaceholder: true,
-            placeholderName: input.name,
-            createdByUserId: ctx.user.id,
-            groupMembers: { create: { groupId: input.groupId } },
-          },
+          // Adding a removed placeholder's name brings them back with their history,
+          // rather than a second person by that name (#284). A merge that took them
+          // meanwhile leaves nobody to bring back, and the name is free.
+          if (holder?.user.isPlaceholder) {
+            const { count } = await tx.groupMember.updateMany({
+              where: { userId: holder.userId, groupId: input.groupId, removedAt: { not: null } },
+              data: { removedAt: null },
+            });
+            if (count === 1) {
+              return {
+                user: { id: holder.userId, name: holder.user.placeholderName ?? holder.user.name },
+                restored: true,
+              };
+            }
+          } else if (holder) {
+            throw new AppError('CONFLICT', 'placeholderNameTaken');
+          }
+          // One write: if the group is deleted meanwhile, the membership can't be made
+          // and the placeholder is rolled back with it, instead of staying with no group (#265)
+          const created = await tx.user.create({
+            data: {
+              email: placeholderEmail,
+              name: input.name,
+              isPlaceholder: true,
+              placeholderName: input.name,
+              createdByUserId: ctx.user.id,
+              groupMembers: { create: { groupId: input.groupId } },
+            },
+          });
+          return { user: { id: created.id, name: created.name }, restored: false };
         });
-        return { user: { id: created.id, name: created.name }, restored: false };
-      });
+      const { user, restored } = await retryUserIdCollision(createOrRestorePlaceholder);
 
       await ctx.db.activityLog.create({
         data: {
@@ -741,7 +728,9 @@ export const groupsRouter = createTRPCRouter({
     }),
 
   renamePlaceholder: groupMemberProcedure
-    .input(z.object({ groupId: z.string(), placeholderUserId: z.string(), name: z.string().trim().min(1).max(100) }))
+    .input(
+      z.strictObject({ groupId: z.string(), placeholderUserId: z.string(), name: z.string().trim().min(1).max(100) }),
+    )
     .mutation(async ({ ctx, input }) => {
       if (ctx.membership.role !== 'OWNER' && ctx.membership.role !== 'ADMIN') {
         throw new AppError('FORBIDDEN', 'onlyAdminsRenamePlaceholder');
@@ -771,7 +760,7 @@ export const groupsRouter = createTRPCRouter({
 
   mergePlaceholder: groupMemberProcedure
     .input(
-      z.object({
+      z.strictObject({
         groupId: z.string(),
         placeholderUserId: z.string(),
         realUserId: z.string(),

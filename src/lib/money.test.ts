@@ -1,85 +1,31 @@
 import { describe, test, expect } from 'vitest';
-import { formatCents, parseToCents, centsToDecimal } from './money';
+import { formatCents, parseToCents, centsToDecimal, isValidMoneyInput } from './money';
 
 describe('formatCents', () => {
-  test('formats whole dollar amounts', () => {
-    expect(formatCents(1000)).toBe('$10.00');
-    expect(formatCents(100)).toBe('$1.00');
-    expect(formatCents(0)).toBe('$0.00');
+  const normalize = (value: string) => value.replace(/[\u00a0\u202f]/g, ' ');
+
+  test('renders rubles in Russian with exact kopecks', () => {
+    expect(normalize(formatCents(0))).toBe('0,00 ₽');
+    expect(normalize(formatCents(1))).toBe('0,01 ₽');
+    expect(normalize(formatCents(50))).toBe('0,50 ₽');
+    expect(normalize(formatCents(1299))).toBe('12,99 ₽');
   });
 
-  test('formats cents correctly', () => {
-    expect(formatCents(1299)).toBe('$12.99');
-    expect(formatCents(1)).toBe('$0.01');
-    expect(formatCents(50)).toBe('$0.50');
+  test('keeps grouping and negative balances in ru-RU', () => {
+    expect(normalize(formatCents(123456))).toBe('1 234,56 ₽');
+    expect(normalize(formatCents(10000000))).toBe('100 000,00 ₽');
+    expect(normalize(formatCents(-1299))).toBe('-12,99 ₽');
   });
 
-  test('formats large amounts', () => {
-    expect(formatCents(10000000)).toBe('$100,000.00');
-    expect(formatCents(999999)).toBe('$9,999.99');
+  test('never switches BillOK money rendering to obsolete language locales', () => {
+    for (const obsoleteLocale of ['en-US', 'es', 'de', 'fr', 'sv', 'pt-BR', 'ja', 'zh-CN', 'ko']) {
+      expect(normalize(formatCents(123456, 'RUB', obsoleteLocale)), obsoleteLocale).toBe('1 234,56 ₽');
+    }
   });
 
-  test('formats negative amounts', () => {
-    expect(formatCents(-1299)).toBe('-$12.99');
-  });
-
-  test('respects currency parameter', () => {
-    expect(formatCents(1000, 'EUR')).toBe('€10.00');
-    expect(formatCents(1000, 'GBP')).toBe('£10.00');
-  });
-
-  test('formats JPY without decimals', () => {
-    const result = formatCents(1000, 'JPY');
-    expect(result).toContain('10');
-  });
-
-  test('respects locale parameter for formatting', () => {
-    const result = formatCents(123456, 'EUR', 'de-DE');
-    expect(result).toContain('1.234,56');
-  });
-
-  test('defaults to configured app locale when not specified', () => {
-    expect(formatCents(1299, 'USD')).toBe('$12.99');
-    expect(formatCents(1299, 'USD', 'en-US')).toBe('$12.99');
-  });
-
-  test('maps app locale codes to regional money locales', () => {
-    const result = formatCents(123456, 'EUR', 'es');
-    expect(result).toContain('1234,56');
-  });
-
-  test('maps all supported app locales to regional money locales', () => {
-    // Normalize whitespace variants (NBSP, narrow NBSP) to ASCII space
-    // to avoid flaky assertions across Node/ICU versions
-    const norm = (s: string) => s.replace(/[  ]/g, ' ');
-
-    // Swedish
-    const sv = formatCents(123456, 'SEK', 'sv');
-    expect(norm(sv)).toContain('1 234,56');
-
-    // French
-    const fr = formatCents(123456, 'EUR', 'fr');
-    expect(norm(fr)).toContain('1 234,56');
-
-    // German
-    const de = formatCents(123456, 'EUR', 'de');
-    expect(de).toContain('1.234,56');
-
-    // Portuguese (Brazil)
-    const ptBR = formatCents(123456, 'BRL', 'pt-BR');
-    expect(ptBR).toContain('1.234,56');
-
-    // Japanese
-    const ja = formatCents(100000, 'JPY', 'ja');
-    expect(ja).toContain('1,000');
-
-    // Chinese (Simplified)
-    const zhCN = formatCents(123456, 'CNY', 'zh-CN');
-    expect(zhCN).toContain('1,234.56');
-
-    // Korean
-    const ko = formatCents(123456, 'KRW', 'ko');
-    expect(ko).toContain('1,235');
+  test('preserves historical foreign currency labels without FX conversion', () => {
+    expect(normalize(formatCents(100, 'EUR', 'en-US'))).toBe('1,00 €');
+    expect(normalize(formatCents(1299, 'USD', 'de-DE'))).toBe('12,99 $');
   });
 });
 
@@ -96,15 +42,41 @@ describe('parseToCents', () => {
     expect(parseToCents('0.50')).toBe(50);
   });
 
-  test('truncates beyond two decimal places', () => {
-    expect(parseToCents('12.999')).toBe(1299);
-    expect(parseToCents('12.994')).toBe(1299);
-    expect(parseToCents('0.005')).toBe(0);
+  test('accepts Russian commas and separated thousands without losing kopecks', () => {
+    expect(parseToCents('12,50')).toBe(1250);
+    expect(parseToCents('0,01')).toBe(1);
+    expect(parseToCents('1 234,56')).toBe(123456);
+    expect(parseToCents('1\u00a0234,56')).toBe(123456);
+    expect(parseToCents('1\u202f234,56')).toBe(123456);
+    expect(parseToCents('-12,50')).toBe(-1250);
+    expect(parseToCents('12,50')).toBe(parseToCents('12.50'));
+    expect(formatCents(parseToCents('1 234,56')).replace(/[\u00a0\u202f]/g, ' ')).toBe('1 234,56 ₽');
   });
 
-  test('avoids floating-point corruption', () => {
-    expect(parseToCents('1.005')).toBe(100);
-    expect(parseToCents('2.675')).toBe(267);
+  test('can distinguish a valid zero-kopeck amount from invalid entered text', () => {
+    expect(isValidMoneyInput('0,00')).toBe(true);
+    expect(isValidMoneyInput('1 234,50')).toBe(true);
+    expect(isValidMoneyInput('не сумма')).toBe(false);
+  });
+
+  test('rejects ambiguous or malformed grouping instead of misinterpreting a receipt', () => {
+    expect(parseToCents('12,50,00')).toBe(0);
+    expect(parseToCents('1 23,45')).toBe(0);
+    expect(parseToCents('1.234,56')).toBe(0);
+    expect(parseToCents('12 руб')).toBe(0);
+  });
+
+  test('rounds monetary values half-up to the nearest kopeck', () => {
+    expect(parseToCents('12.999')).toBe(1300);
+    expect(parseToCents('12,994')).toBe(1299);
+    expect(parseToCents('12,995')).toBe(1300);
+    expect(parseToCents('0,005')).toBe(1);
+    expect(parseToCents('-0,005')).toBe(-1);
+  });
+
+  test('avoids floating-point corruption in decimal rounding', () => {
+    expect(parseToCents('1.005')).toBe(101);
+    expect(parseToCents('2.675')).toBe(268);
     expect(parseToCents('1.15')).toBe(115);
   });
 

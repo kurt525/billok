@@ -5,49 +5,42 @@ import { cookies } from 'next/headers';
 import { auth } from '../auth';
 import { db } from '../db';
 import { logger } from '../lib/logger';
-import { verifyAndParse } from '../lib/signed-cookie';
+import { currentImpersonationSessionBinding, verifiedImpersonationSession } from '../lib/impersonation-session';
 import { AppError, errorShape } from '../lib/app-error';
+import { isAllowedRegistrationEmailDomain } from '../lib/registration-email-domain';
+import { recordOwnerSecurityEvent, securityTargetFromInput } from '../lib/security-event-audit';
 import { LOCALE_HEADER, localeFromHeader } from '@/lib/locale-header';
 import { defaultLocale } from '@/i18n/routing';
 
 const IMPERSONATE_COOKIE = 'sharetab-impersonate';
 
 export const createTRPCContext = async (opts?: { req?: Request }) => {
-  const session = await auth();
+  const authenticatedSession = await auth();
+  // The effective identity belongs to this tRPC request only. Never mutate
+  // the original Auth.js result shared with authentication infrastructure.
+  const session = authenticatedSession
+    ? { ...authenticatedSession, ...(authenticatedSession.user ? { user: { ...authenticatedSession.user } } : {}) }
+    : authenticatedSession;
   const headers = opts?.req?.headers ?? new Headers();
 
-  // Check for impersonation cookie
-  interface ImpersonationData {
-    adminId: string;
-    adminEmail: string;
-    targetId: string;
-    targetName: string | null;
-    targetEmail: string;
-    startedAt?: string;
-  }
-  let impersonating: ImpersonationData | null = null;
-
+  let impersonating: ReturnType<typeof verifiedImpersonationSession> = null;
   try {
     const cookieStore = await cookies();
-    const impCookie = cookieStore.get(IMPERSONATE_COOKIE);
-    if (impCookie?.value && session?.user) {
-      const data = verifyAndParse<ImpersonationData>(impCookie.value);
-      // Enforce expiry server-side: a replayed cookie value must not outlive
-      // the 1h browser maxAge. Cookies without startedAt are rejected.
-      const startedAtMs = data?.startedAt ? Date.parse(data.startedAt) : NaN;
-      const expired = !Number.isFinite(startedAtMs) || Date.now() - startedAtMs > 60 * 60 * 1000;
-      if (data && !expired && data.adminId === session.user.id) {
-        impersonating = data;
-        // Swap session user to the impersonated user
-        if (session.user) {
-          session.user.id = data.targetId;
-          session.user.name = data.targetName;
-          session.user.email = data.targetEmail;
+    const raw = cookieStore.get(IMPERSONATE_COOKIE)?.value;
+    if (raw && session?.user?.id && opts?.req) {
+      const binding = await currentImpersonationSessionBinding(opts.req, session.user.id);
+      if (binding) {
+        const data = verifiedImpersonationSession(raw, session.user.id, binding);
+        if (data) {
+          impersonating = data;
+          // The owner JWT remains unchanged; only this tRPC request acts as the
+          // target. All owner-only procedures reject an impersonation context.
+          session.user = { ...session.user, id: data.targetId, name: data.targetName, email: data.targetEmail };
         }
       }
     }
   } catch {
-    // Ignore malformed cookie
+    // Invalid/replayed/expired impersonation data never grants target access.
   }
 
   return { session, db, headers, impersonating, locale: localeFromHeader(headers.get(LOCALE_HEADER)) };
@@ -64,7 +57,7 @@ const t = initTRPC.context<TRPCContext>().create({
 // Procedures that poll frequently and would spam the log buffer
 const QUIET_PATHS = new Set(['admin.getLogs', 'admin.getImpersonationStatus']);
 
-const loggingMiddleware = t.middleware(async ({ path, type, next, ctx }) => {
+const loggingMiddleware = t.middleware(async ({ path, type, next, ctx, getRawInput }) => {
   const start = Date.now();
   const userId = ctx.session?.user?.id;
   // Attribute impersonated requests to the real admin, not just the target
@@ -73,6 +66,25 @@ const loggingMiddleware = t.middleware(async ({ path, type, next, ctx }) => {
   const result = await next();
 
   if (QUIET_PATHS.has(path)) return result;
+
+  // Persistent security journal is deliberately separate from the redacted
+  // diagnostic ring buffer. It records rejected requests even if the owner
+  // procedure fails before entering any transaction or parsing input.
+  if (type === 'mutation' && path.startsWith('admin.')) {
+    let targetFingerprint: string | null = null;
+    try {
+      targetFingerprint = securityTargetFromInput(await getRawInput());
+    } catch {
+      // Invalid/unreadable inputs are still audited without their contents.
+    }
+    await recordOwnerSecurityEvent({
+      db: ctx.db,
+      action: path,
+      outcome: result.ok ? 'ALLOWED' : 'DENIED',
+      actorId: impersonatedBy ?? userId ?? null,
+      targetFingerprint,
+    });
+  }
 
   const durationMs = Date.now() - start;
   const ok = result.ok;
@@ -103,10 +115,10 @@ export const protectedProcedure = t.procedure.use(loggingMiddleware).use(async (
 
   const user = await ctx.db.user.findUnique({
     where: { id: ctx.session.user.id },
-    select: { suspendedAt: true },
+    select: ctx.impersonating ? { suspendedAt: true, email: true } : { suspendedAt: true },
   });
 
-  if (!user) {
+  if (!user || (ctx.impersonating && !('email' in user && isAllowedRegistrationEmailDomain(user.email)))) {
     throw new AppError('UNAUTHORIZED');
   }
 

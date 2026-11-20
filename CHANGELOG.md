@@ -6,7 +6,7 @@ ShareTab stopped publishing numbered (semver) versions after v0.8.0. Each push t
 
 ### Features
 
-- OIDC single sign-on (Authentik, Authelia, Keycloak, and other OpenID Connect providers), optional SSO auto-registration, and `DISABLE_PASSWORD_LOGIN` (#190)
+- Historical upstream SSO feature (#190): removed from BillOK. External identity providers and related account-linking code are intentionally unavailable; WebAuthn/Passkeys is the sole planned sign-in method.
 - admin toggle and `DISABLE_GUEST_UPLOADS` env var to turn off guest receipt uploads and AI scans (#200)
 - multi-currency expenses with automatic exchange-rate conversion (#149, #150)
 - claim sessions (added in v0.8.0) gained switching between people, splitting an item between people, auto-splitting multi-quantity items, joining as a group that pays a proportional share, a finalize button, conflict detection on save, My Splits history for signed-in users, and claiming from a group receipt scan (#101, #102, #112, #113, #114)

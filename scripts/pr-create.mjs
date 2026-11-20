@@ -40,7 +40,7 @@ try {
   if (typeof flags['body-file'] === 'string') {
     args.push('--body-file', flags['body-file']);
   } else if (typeof flags.body === 'string') {
-    const bodyFile = createTempFile('sharetab-pr-body', flags.body);
+    const bodyFile = createTempFile('billok-pr-body', flags.body);
     args.push('--body-file', bodyFile);
   } else {
     args.push('--fill');

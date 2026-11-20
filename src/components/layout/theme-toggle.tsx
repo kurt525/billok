@@ -18,14 +18,14 @@ function useMounted() {
   );
 }
 
-export function ThemeToggle() {
+export function ThemeToggle({ className }: { className?: string }) {
   const { resolvedTheme, setTheme } = useTheme();
   const mounted = useMounted();
   const t = useTranslations('common');
 
   if (!mounted) {
     return (
-      <Button variant="ghost" size="icon-sm" disabled aria-label={t('actions.toggleTheme')}>
+      <Button variant="ghost" size="icon-sm" className={className} disabled aria-label={t('actions.toggleTheme')}>
         <Sun className="h-4 w-4" />
       </Button>
     );
@@ -35,6 +35,7 @@ export function ThemeToggle() {
     <Button
       variant="ghost"
       size="icon-sm"
+      className={className}
       onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
       aria-label={t('actions.toggleTheme')}
     >

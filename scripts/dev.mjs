@@ -76,6 +76,8 @@ console.log('PostgreSQL running on port 51214.');
 
 // Push schema + seed if first run (check if tables exist)
 try {
+  // One-time, narrowly scoped cleanup for prelaunch databases, before schema sync.
+  execSync('npx prisma db execute --file prisma/migrations/prelaunch_schema_cleanup.sql', { stdio: 'inherit' });
   execSync('npx prisma db push', { stdio: 'inherit' });
   // Try seeding — will no-op if data already exists (upserts)
   execSync('npm run db:seed', { stdio: 'inherit' });
@@ -91,7 +93,7 @@ try {
 } catch {}
 console.log('');
 console.log('============================================');
-console.log('  ShareTab Dev Server');
+console.log('  BillOK Dev Server');
 console.log('============================================');
 console.log(`  Version:  ${pkg.version}`);
 console.log(`  Commit:   ${commitSha}`);

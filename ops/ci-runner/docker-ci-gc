@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+# Weekly timer reuses the same locked, BillOK-only scoped maintenance.
+# Never prune Docker images, build caches or containers of other projects.
+exec /usr/local/sbin/ci-runner-cleanup daily

@@ -1,3 +1,4 @@
+import ruErrors from '../../../../messages/ru/errors.json';
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('next/headers', () => ({
@@ -30,13 +31,13 @@ function asRole(role: 'OWNER' | 'ADMIN' | 'MEMBER', userId: string) {
   mockDb.groupMember.findUnique.mockResolvedValue({ role, userId, groupId: 'g1' });
 }
 
-const payment = { id: 's1', groupId: 'g1', fromId: 'bob', toId: 'alice', amount: 50000, currency: 'USD' };
+const payment = { id: 's1', groupId: 'g1', fromId: 'bob', toId: 'alice', amount: 50000, currency: 'RUB' };
 
 beforeEach(() => {
   vi.resetAllMocks();
   // protectedProcedure looks the caller up; groupMemberProcedure checks membership.
   mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
-  mockDb.group.findUnique.mockResolvedValue({ archivedAt: null });
+  mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'RUB' });
   // The transaction's lock on the group row (#289) finds it active unless a test says otherwise
   mockDb.$queryRaw.mockResolvedValue([{ archivedAt: null }]);
   mockDb.settlement.findUnique.mockResolvedValue(payment);
@@ -77,7 +78,7 @@ describe('settlements.delete', () => {
         userId: 'bob',
         type: 'SETTLEMENT_DELETED',
         entityId: 's1',
-        metadata: { fromId: 'bob', toId: 'alice', amount: 50000, currency: 'USD' },
+        metadata: { fromId: 'bob', toId: 'alice', amount: 50000, currency: 'RUB' },
       },
     });
   });
@@ -144,7 +145,7 @@ describe('a group archived while a payment was on its way (#289)', () => {
   beforeEach(() => {
     // The early check still sees the group active, but by the time the
     // transaction locks its row, it's archived
-    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'USD' });
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'RUB' });
     mockDb.$queryRaw.mockResolvedValue([{ archivedAt: new Date() }]);
     mockDb.groupMember.count.mockResolvedValue(2);
   });
@@ -152,9 +153,9 @@ describe('a group archived while a payment was on its way (#289)', () => {
   test('create refuses, recording nothing', async () => {
     asRole('MEMBER', 'bob');
     const api = await caller('bob');
-    await expect(api.create({ groupId: 'g1', toId: 'alice', amount: 500 })).rejects.toMatchObject({
+    await expect(api.create({ groupId: 'g1', currency: 'RUB', toId: 'alice', amount: 500 })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Cannot create settlements in an archived group',
+      message: ruErrors.archivedCreateSettlement,
     });
     expect(mockDb.settlement.create).not.toHaveBeenCalled();
     expect(mockDb.activityLog.create).not.toHaveBeenCalled();
@@ -165,7 +166,7 @@ describe('a group archived while a payment was on its way (#289)', () => {
     const api = await caller('bob');
     await expect(api.delete({ groupId: 'g1', settlementId: 's1' })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Cannot delete payments from an archived group',
+      message: ruErrors.archivedDeletePayment,
     });
     expect(mockDb.settlement.deleteMany).not.toHaveBeenCalled();
   });
@@ -175,7 +176,7 @@ describe('a group archived while a payment was on its way (#289)', () => {
     mockDb.settlement.create.mockResolvedValue({ id: 's2' });
     asRole('MEMBER', 'bob');
     const api = await caller('bob');
-    await api.create({ groupId: 'g1', toId: 'alice', amount: 500 });
+    await api.create({ groupId: 'g1', currency: 'RUB', toId: 'alice', amount: 500 });
 
     expect(rawSql()).toEqual([expect.stringMatching(/FROM "Group" WHERE "id" = \? FOR SHARE/)]);
     const [locked] = mockDb.$queryRaw.mock.invocationCallOrder;
@@ -189,7 +190,7 @@ describe('a group archived while a payment was on its way (#289)', () => {
     mockDb.settlement.create.mockResolvedValue({ id: 's2' });
     asRole('MEMBER', 'bob');
     const api = await caller('bob');
-    await api.create({ groupId: 'g1', toId: 'alice', amount: 500 });
+    await api.create({ groupId: 'g1', currency: 'RUB', toId: 'alice', amount: 500 });
 
     const [locked] = mockDb.$queryRaw.mock.invocationCallOrder;
     expect(mockDb.groupMember.count.mock.invocationCallOrder[0]).toBeGreaterThan(locked!);
@@ -203,12 +204,11 @@ describe('a group archived while a payment was on its way (#289)', () => {
 // with when an old expense changes their balance, but a payment can't make them a
 // new debt: they're no longer in the group to take part in anything else.
 describe('a payment with someone removed from the group', () => {
-  // Hal (removed) paid $10.00 split with Alice, so Alice owes Hal $5.00
+  // Hal (removed) paid 10 RUB split with Alice, so Alice owes Hal 5 RUB
   const aliceOwesHal = [
     {
       paidById: 'hal',
       amount: 1000,
-      baseCurrencyAmount: null,
       shares: [
         { userId: 'alice', amount: 500 },
         { userId: 'hal', amount: 500 },
@@ -217,7 +217,7 @@ describe('a payment with someone removed from the group', () => {
   ];
 
   beforeEach(() => {
-    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'USD' });
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'RUB' });
     mockDb.$queryRaw.mockResolvedValue([{ archivedAt: null }]);
     mockDb.groupMember.count.mockResolvedValue(2);
     mockDb.groupMember.findMany.mockResolvedValue([{ userId: 'hal' }]);
@@ -229,17 +229,17 @@ describe('a payment with someone removed from the group', () => {
   test('can settle what they are owed', async () => {
     asRole('MEMBER', 'alice');
     const api = await caller('alice');
-    await api.create({ groupId: 'g1', toId: 'hal', amount: 500 });
+    await api.create({ groupId: 'g1', currency: 'RUB', toId: 'hal', amount: 500 });
     expect(mockDb.settlement.create).toHaveBeenCalled();
   });
 
   test('can settle what they owe', async () => {
     mockDb.expense.findMany.mockResolvedValue([
-      { ...aliceOwesHal[0], paidById: 'alice' }, // Alice paid, so Hal owes Alice $5.00
+      { ...aliceOwesHal[0], paidById: 'alice' }, // Alice paid, so Hal owes Alice 5 RUB
     ]);
     asRole('OWNER', 'alice');
     const api = await caller('alice');
-    await api.create({ groupId: 'g1', fromId: 'hal', toId: 'alice', amount: 500 });
+    await api.create({ groupId: 'g1', currency: 'RUB', fromId: 'hal', toId: 'alice', amount: 500 });
     expect(mockDb.settlement.create).toHaveBeenCalled();
   });
 
@@ -249,9 +249,9 @@ describe('a payment with someone removed from the group', () => {
   ])('refuses %s', async (_, payment) => {
     asRole('OWNER', 'alice');
     const api = await caller('alice');
-    await expect(api.create({ groupId: 'g1', ...payment })).rejects.toMatchObject({
+    await expect(api.create({ groupId: 'g1', currency: 'RUB', ...payment })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'A payment with someone removed from this group can only settle what they still owe or are owed.',
+      message: ruErrors.settlementRemovedMemberOverpaid,
     });
     expect(mockDb.settlement.create).not.toHaveBeenCalled();
   });
@@ -259,7 +259,7 @@ describe('a payment with someone removed from the group', () => {
   test('reads their balance inside the transaction, after the lock', async () => {
     asRole('MEMBER', 'alice');
     const api = await caller('alice');
-    await api.create({ groupId: 'g1', toId: 'hal', amount: 500 });
+    await api.create({ groupId: 'g1', currency: 'RUB', toId: 'hal', amount: 500 });
     const [locked] = mockDb.$queryRaw.mock.invocationCallOrder;
     expect(mockDb.expense.findMany.mock.invocationCallOrder[0]).toBeGreaterThan(locked!);
   });
@@ -268,8 +268,76 @@ describe('a payment with someone removed from the group', () => {
     mockDb.groupMember.findMany.mockResolvedValue([]);
     asRole('MEMBER', 'alice');
     const api = await caller('alice');
-    await api.create({ groupId: 'g1', toId: 'bob', amount: 99999 });
+    await api.create({ groupId: 'g1', currency: 'RUB', toId: 'bob', amount: 99999 });
     expect(mockDb.expense.findMany).not.toHaveBeenCalled();
     expect(mockDb.settlement.create).toHaveBeenCalled();
+  });
+});
+
+describe('RUB-only settlement creation', () => {
+  beforeEach(() => {
+    asRole('MEMBER', 'bob');
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'RUB' });
+    mockDb.groupMember.count.mockResolvedValue(2);
+    mockDb.settlement.create.mockResolvedValue({ id: 's2' });
+  });
+
+  test.each(['USD', 'eur', 'GBP'])('rejects a new settlement in %s before database access', async (currency) => {
+    const api = await caller('bob');
+    await expect(api.create({ groupId: 'g1', toId: 'alice', amount: 500, currency })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('rejects a manual exchange rate even with RUB', async () => {
+    const api = await caller('bob');
+    const bad = { groupId: 'g1', toId: 'alice', amount: 500, currency: 'RUB', exchangeRate: 2 };
+    await expect(api.create(bad as unknown as Parameters<typeof api.create>[0])).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.group.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('refuses a transfer into a legacy non-RUB group', async () => {
+    mockDb.group.findUnique.mockResolvedValue({ archivedAt: null, currency: 'USD' });
+    const api = await caller('bob');
+    await expect(api.create({ groupId: 'g1', toId: 'alice', amount: 500 })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: ruErrors.rubOnlySettlement,
+    });
+    expect(mockDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('rechecks group currency inside the active transaction after the lock', async () => {
+    mockDb.group.findUnique
+      .mockResolvedValueOnce({ archivedAt: null, currency: 'RUB' })
+      .mockResolvedValueOnce({ currency: 'USD' });
+    const api = await caller('bob');
+    await expect(api.create({ groupId: 'g1', toId: 'alice', amount: 500 })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.settlement.create).not.toHaveBeenCalled();
+    expect(mockDb.groupMember.count).not.toHaveBeenCalled();
+    expect(mockDb.$queryRaw).toHaveBeenCalledOnce();
+  });
+
+  test('saves exactly 505 kopecks in RUB with no conversion or outside FX', async () => {
+    const api = await caller('bob');
+    await api.create({ groupId: 'g1', toId: 'alice', amount: 505 });
+    expect(mockDb.settlement.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        groupId: 'g1',
+        fromId: 'bob',
+        toId: 'alice',
+        amount: 505,
+        currency: 'RUB',
+      }),
+    });
+    const written = mockDb.settlement.create.mock.calls[0]![0].data;
+    expect(written).not.toHaveProperty('exchangeRate');
+    expect(written).not.toHaveProperty('baseCurrencyAmount');
+    expect(mockDb.activityLog.create).toHaveBeenCalledOnce();
   });
 });

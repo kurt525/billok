@@ -46,7 +46,7 @@ test.describe('Groups API', () => {
     createdGroupIds.push(groupId);
 
     // Try to access as Charlie (who is not a member of this new group)
-    const charlie = await authedContext('charlie@example.com', 'password123');
+    const charlie = await authedContext('charlie@qa.billok.ru', 'password123');
     const res = await trpcQuery(charlie, 'groups.get', { groupId });
     const body = await res.json();
     expect(body[0]?.error?.json?.data?.code).toBe('FORBIDDEN');

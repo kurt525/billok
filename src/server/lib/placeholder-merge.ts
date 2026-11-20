@@ -1,4 +1,5 @@
 import { AppError } from './app-error';
+import { isAllowedRegistrationEmailDomain } from './registration-email-domain';
 import type { Prisma, SplitMode } from '@/generated/prisma/client';
 
 type ShareFields = { amount: number; shares: number; percentage: number | null };
@@ -43,11 +44,24 @@ export async function mergePlaceholderIntoUser(
   if (placeholderUserId === realUserId) {
     throw new AppError('BAD_REQUEST', 'mergeIntoItself');
   }
+  // No placeholder merge can ever absorb or delete the ONE global owner row,
+  // even if a historical/forged flag incorrectly says isPlaceholder=true.
+  // Group OWNER roles are unrelated to the single BillOK OwnerBootstrap ID.
+  // Read inside the caller's transaction; database invariants are separate
+  // acceptance work under Issue 6.12.10.
+  const billokOwner = await tx.ownerBootstrap.findUnique({
+    where: { id: 1 },
+    select: { userId: true },
+  });
+  if (billokOwner?.userId === placeholderUserId) throw new AppError('FORBIDDEN');
   // Hard guard: this reassigns financial history and may delete the user row,
   // so it must never run against a real (non-placeholder) account.
   const [placeholder, target, group] = await Promise.all([
     tx.user.findUnique({ where: { id: placeholderUserId }, select: { isPlaceholder: true, suspendedAt: true } }),
-    tx.user.findUnique({ where: { id: realUserId }, select: { isPlaceholder: true } }),
+    tx.user.findUnique({
+      where: { id: realUserId },
+      select: { isPlaceholder: true, suspendedAt: true, emailVerified: true, email: true },
+    }),
     tx.group.findUnique({ where: { id: groupId }, select: { archivedAt: true } }),
   ]);
   if (!placeholder?.isPlaceholder) {
@@ -58,14 +72,20 @@ export async function mergePlaceholderIntoUser(
   if (placeholder.suspendedAt) {
     throw new AppError('BAD_REQUEST', 'mergeDeletedAccount');
   }
-  if (!target || target.isPlaceholder) {
+  if (
+    !target ||
+    target.isPlaceholder ||
+    target.suspendedAt ||
+    !target.emailVerified ||
+    !isAllowedRegistrationEmailDomain(target.email)
+  ) {
     throw new AppError('BAD_REQUEST', 'mergeTargetNeedsAccount');
   }
   // History handed to someone outside the group couldn't be settled. Lock their
   // membership row (Prisma has no row-lock API): a removal waits for this
   // transaction, and one that got in first leaves no row to lock.
   const targetMembership = await tx.$queryRaw<{ id: string }[]>`
-    SELECT "id" FROM "GroupMember" WHERE "userId" = ${realUserId} AND "groupId" = ${groupId} FOR SHARE`;
+    SELECT "id" FROM "GroupMember" WHERE "userId" = ${realUserId} AND "groupId" = ${groupId} AND "removedAt" IS NULL FOR SHARE`;
   if (targetMembership.length === 0) {
     throw new AppError('BAD_REQUEST', 'mergeTargetNotMember');
   }

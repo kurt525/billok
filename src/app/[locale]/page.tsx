@@ -1,11 +1,8 @@
 import { redirect } from 'next/navigation';
 import { auth } from '@/server/auth';
 
-export default async function Home({ params }: { params: Promise<{ locale: string }> }) {
-  const { locale } = await params;
+// BillOK exposes Russian-only canonical routes without locale prefixes.
+export default async function Home() {
   const session = await auth();
-  if (session?.user) {
-    redirect(`/${locale}/dashboard`);
-  }
-  redirect(`/${locale}/login`);
+  redirect(session?.user ? '/dashboard' : '/login');
 }

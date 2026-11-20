@@ -9,6 +9,7 @@ import { trpc } from '@/lib/trpc';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { UserPlus } from 'lucide-react';
+import { localizedTrpcError } from '@/lib/localized-trpc-error';
 
 // The group, inviter and placeholder names come from other users; <bdi> keeps right-to-left or direction-override
 // characters in them from reordering the rest of the sentence.
@@ -20,6 +21,7 @@ export default function InvitePage({ params }: { params: Promise<{ token: string
   const router = useRouter();
   const locale = useLocale();
   const t = useTranslations('auth.invite');
+  const tc = useTranslations('common');
   const { data: session, status } = useSession();
 
   // No retries, so a failed lookup falls back straight away. Details that loaded aren't refetched
@@ -89,7 +91,9 @@ export default function InvitePage({ params }: { params: Promise<{ token: string
           )}
 
           {joinGroup.error && !invalid && !invite.isFetching && (
-            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{joinGroup.error.message}</div>
+            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+              {localizedTrpcError(joinGroup.error, tc('errors.generic'))}
+            </div>
           )}
 
           {!invalid && (

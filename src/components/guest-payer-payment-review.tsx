@@ -1,0 +1,1091 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import { useLocale, useTranslations } from 'next-intl';
+import { toast } from 'sonner';
+import { formatCents } from '@/lib/money';
+import { parseExactReceivedRub, type ReceiptOverpaymentChoice } from '@/lib/actual-receipt-payments';
+import { groupGuestPayerPayments, type GuestPayerPaymentGroup } from '@/lib/guest-payer-payment-groups';
+import { summarizeGuestPayerPaymentGroups } from '@/lib/guest-payer-payment-summary';
+import {
+  mergeGuestPaymentStatuses,
+  newlyDeclaredGuestPayments,
+  newlyRevokedGuestPayments,
+} from '@/lib/guest-payment-notifications';
+import { getDocumentActiveMountRegistry } from '@/lib/latest-active-mount';
+import { trpc } from '@/lib/trpc';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+
+type PaymentRow = {
+  personId: string;
+  name: string;
+  amount: number;
+  foodCents: number;
+  declaredTipCents: number;
+  receivedCents: number;
+  outstandingCents: number;
+  extraTipCents: number;
+  refundDueCents: number;
+  refundedCents: number;
+  excessCents: number;
+  overpaymentChoice: ReceiptOverpaymentChoice | null;
+  confirmedRefunds?: { id: string; amountCents: number; confirmedAt: string }[];
+  declaredPaidAt: string | null;
+  unmarkedAt?: string;
+  verifiedAt: string | null;
+  verifiedByPersonId: string | null;
+  memberIds?: string[];
+  receivedTransfers?: {
+    id: string;
+    amountCents: number;
+    confirmedAt: string;
+    cancelledAt?: string;
+    correctsTransferId?: string;
+  }[];
+  members?: { personId: string; personIndex: number; amountCents: number; tipCents: number }[];
+};
+
+/** Shows the payer only the receipt's outstanding, declared and verified transfers.
+ * The data is never included in guest.getSession or the public receipt link.
+ */
+export function GuestPayerPaymentReview({
+  token,
+  personId,
+  personToken,
+  people,
+}: {
+  token: string;
+  personId: string;
+  personToken: string;
+  people?: { id: string; name: string }[];
+}) {
+  const t = useTranslations('split.claim');
+  const locale = useLocale();
+  const read = trpc.guest.getMyPayerPaymentReview.useMutation();
+  const verify = trpc.guest.confirmGuestPaymentReceived.useMutation();
+  const record = trpc.guest.recordGuestPaymentReceived.useMutation();
+  const cancelActual = trpc.guest.cancelGuestReceivedTransfer.useMutation();
+  const correctActual = trpc.guest.correctGuestReceivedTransfer.useMutation();
+  const saveChoice = trpc.guest.setGuestOverpaymentChoice.useMutation();
+  const recordRefund = trpc.guest.confirmGuestOverpaymentRefund.useMutation();
+  const cancelVerified = trpc.guest.cancelGuestPaymentReceived.useMutation();
+  const [payments, setPayments] = useState<PaymentRow[] | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const [receiptDrafts, setReceiptDrafts] = useState<Record<string, string>>({});
+  const [overpaymentChoices, setOverpaymentChoices] = useState<Record<string, ReceiptOverpaymentChoice | ''>>({});
+  const [refundDrafts, setRefundDrafts] = useState<Record<string, string>>({});
+  const [correctingTransferId, setCorrectingTransferId] = useState<string | null>(null);
+  const [correctionDraft, setCorrectionDraft] = useState('');
+  const [correctionChoice, setCorrectionChoice] = useState<ReceiptOverpaymentChoice | ''>('');
+  const [choiceDrafts, setChoiceDrafts] = useState<Record<string, ReceiptOverpaymentChoice | ''>>({});
+  const latestPayments = useRef<PaymentRow[] | null>(null);
+  const latestRead = useRef(0);
+  const writeInFlight = useRef(false);
+  const refreshCurrent = useRef<() => void>(() => {});
+  const readPayments = read.mutateAsync;
+  const activePayerReviews = getDocumentActiveMountRegistry();
+  const [mountId] = useState(() => Symbol('payer-review'));
+  // Never subscribe/update an external store during React hydration. The
+  // private card starts absent in both server HTML and the first client render;
+  // ownership is acquired in an effect after React commits the component.
+  const [isActiveReview, setIsActiveReview] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    const onOwnershipChanged = () => {
+      if (mounted) setIsActiveReview(activePayerReviews.isActive(token, mountId));
+    };
+    // Each receipt has exactly one payer, including if an older Next.js route
+    // remains mounted. The shared document registry transfers ownership.
+    const unsubscribe = activePayerReviews.subscribe(token, mountId, onOwnershipChanged);
+    onOwnershipChanged();
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, [activePayerReviews, token, mountId]);
+
+  useEffect(() => {
+    if (!isActiveReview) return;
+    let cancelled = false;
+    const refresh = () => {
+      if (writeInFlight.current) return;
+      const readId = ++latestRead.current;
+      // Always read a fresh snapshot using the payer's personal token.
+      void readPayments({ token, personId, personToken })
+        .then((result) => {
+          if (cancelled || writeInFlight.current || readId !== latestRead.current) return;
+          const merged = mergeGuestPaymentStatuses(latestPayments.current, result.payments);
+          const newlyDeclared = newlyDeclaredGuestPayments(latestPayments.current, merged);
+          const newlyRevoked = newlyRevokedGuestPayments(latestPayments.current, merged);
+          latestPayments.current = merged;
+          setPayments(merged);
+          // One stable Sonner ID per private event: a temporary second route
+          // observer must not display the same event twice.
+          if (newlyDeclared.length > 0) {
+            const noticeId =
+              'billok-declared-' +
+              token +
+              '-' +
+              newlyDeclared
+                .map((row) => row.personId + ':' + row.declaredPaidAt)
+                .sort()
+                .join(',');
+            if (newlyDeclared.length === 1) {
+              const payment = newlyDeclared[0]!;
+              toast.info(
+                t('payerPaymentDeclarationNotice', {
+                  name: payment.name,
+                  amount: formatCents(payment.amount, 'RUB', locale),
+                }),
+                { id: noticeId },
+              );
+            } else {
+              toast.info(t('payerPaymentDeclarationBatchNotice', { count: newlyDeclared.length }), { id: noticeId });
+            }
+          }
+          // The cancelled declaration is not a bank reversal. A separate
+          // addressed notice is shown only to this receipt's actual payer.
+          // Compare server event IDs/timestamps, not the current payment
+          // bucket, so a fast re-declaration cannot silently hide a reversal.
+          for (const payment of newlyRevoked) {
+            toast.warning(
+              t('payerPaymentDeclarationRevokedNotice', {
+                name: payment.name,
+                amount: formatCents(payment.amount, 'RUB', locale),
+              }),
+              { id: 'billok-unmarked-' + token + '-' + payment.personId + '-' + payment.unmarkedAt },
+            );
+          }
+          setLoadFailed(false);
+        })
+        .catch(() => {
+          if (!cancelled && !writeInFlight.current && readId === latestRead.current) setLoadFailed(true);
+        });
+    };
+    refreshCurrent.current = refresh;
+    refresh();
+    // The private SSE subscription normally refreshes the payer within the
+    // receipt's change window. Also read immediately after a phone reconnects
+    // or returns from the background instead of waiting for the 12s fallback.
+    const interval = setInterval(refresh, 12000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    window.addEventListener('online', refresh);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      window.removeEventListener('online', refresh);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+      refreshCurrent.current = () => {};
+    };
+  }, [isActiveReview, readPayments, token, personId, personToken, t, locale]);
+
+  // 5.5: receive receipt-scoped change hints promptly, but fetch the actual
+  // amounts only through the payer's existing private tRPC procedure.
+  // SSE has no personal data; the short-lived authorization ticket is issued
+  // over POST with the payer's secret in the body, never the EventSource URL.
+  useEffect(() => {
+    if (!isActiveReview || typeof EventSource === 'undefined') return;
+    const url = '/api/guest/' + encodeURIComponent(token) + '/events';
+    const controller = new AbortController();
+    let closed = false;
+    let retryCount = 0;
+    let source: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let renewTimer: ReturnType<typeof setTimeout> | null = null;
+    const refresh = () => refreshCurrent.current();
+    const retry = () => {
+      if (closed || controller.signal.aborted) return;
+      source?.close();
+      source = null;
+      if (renewTimer) clearTimeout(renewTimer);
+      if (retryTimer) clearTimeout(retryTimer);
+      renewTimer = null;
+      retryTimer = setTimeout(() => void connect(), Math.min(30_000, 2000 * 2 ** Math.min(retryCount++, 4)));
+    };
+    const connect = async () => {
+      if (closed || controller.signal.aborted) return;
+      try {
+        const ticket = await fetch(url, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ personId, personToken }),
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!ticket.ok) return retry();
+        if (closed || controller.signal.aborted) return;
+        source?.close();
+        const events = new EventSource(url);
+        source = events;
+        events.addEventListener('ready', () => {
+          if (closed) return;
+          retryCount = 0;
+          refresh();
+          if (renewTimer) clearTimeout(renewTimer);
+          renewTimer = setTimeout(() => {
+            events.close();
+            void connect();
+          }, 4 * 60_000);
+        });
+        events.addEventListener('changed', refresh);
+        events.onerror = retry;
+      } catch {
+        retry();
+      }
+    };
+    void connect();
+    return () => {
+      closed = true;
+      controller.abort();
+      source?.close();
+      if (retryTimer) clearTimeout(retryTimer);
+      if (renewTimer) clearTimeout(renewTimer);
+    };
+  }, [isActiveReview, token, personId, personToken]);
+
+  async function confirmReceipt(debtorId: string) {
+    if (verifyingId || writeInFlight.current || !payments?.some((p) => p.personId === debtorId && !p.verifiedAt))
+      return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
+    setVerifyingId(debtorId);
+    try {
+      const result = await verify.mutateAsync({
+        token,
+        personId,
+        personToken,
+        debtorId,
+        requestId: window.crypto.randomUUID(),
+      });
+      const updated =
+        latestPayments.current?.map((entry) =>
+          entry.personId === debtorId ? { ...entry, verifiedAt: result.verifiedAt } : entry,
+        ) ?? null;
+      latestPayments.current = updated;
+      setPayments(updated);
+      toast.success(t('payerPaymentVerifiedToast'));
+    } catch {
+      toast.error(t('payerPaymentVerifyFailed'));
+    } finally {
+      writeInFlight.current = false;
+      setVerifyingId(null);
+      refreshCurrent.current();
+    }
+  }
+
+  async function recordReceipt(debtorId: string) {
+    const payment = payments?.find((row) => row.personId === debtorId && !row.verifiedAt);
+    if (!payment || verifyingId || writeInFlight.current) return;
+    const receivedAmountCents = parseExactReceivedRub(receiptDrafts[debtorId] ?? '');
+    if (receivedAmountCents === null) return;
+    const extra = Math.max(0, payment.receivedCents + receivedAmountCents - payment.amount);
+    const choice = overpaymentChoices[debtorId];
+    if (extra > 0 && !choice) return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
+    setVerifyingId(debtorId);
+    try {
+      const result = await record.mutateAsync({
+        token,
+        personId,
+        personToken,
+        debtorId,
+        receivedAmountCents,
+        requestId: window.crypto.randomUUID(),
+        ...(extra > 0 ? { overpaymentChoice: choice as ReceiptOverpaymentChoice } : {}),
+      });
+      const updated =
+        latestPayments.current?.map((entry) =>
+          entry.personId === debtorId
+            ? {
+                ...entry,
+                verifiedAt: result.verifiedAt,
+                receivedCents: result.receivedCents,
+                outstandingCents: result.outstandingCents,
+                extraTipCents: result.extraTipCents,
+                refundDueCents: result.refundDueCents,
+              }
+            : entry,
+        ) ?? null;
+      latestPayments.current = updated;
+      setPayments(updated);
+      setReceiptDrafts((values) => ({ ...values, [debtorId]: '' }));
+      setOverpaymentChoices((values) => ({ ...values, [debtorId]: '' }));
+      toast.success(result.verifiedAt ? t('payerPaymentVerifiedToast') : t('payerPartialReceiptSaved'));
+    } catch {
+      toast.error(t('payerPaymentVerifyFailed'));
+    } finally {
+      writeInFlight.current = false;
+      setVerifyingId(null);
+      refreshCurrent.current();
+    }
+  }
+
+  async function saveOverpaymentChoice(debtorId: string) {
+    const payment = payments?.find((row) => row.personId === debtorId);
+    const choice = choiceDrafts[debtorId];
+    if (!payment || !choice || payment.overpaymentChoice === choice || verifyingId || writeInFlight.current) return;
+    if (choice === 'tip' && payment.refundedCents > 0) return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
+    setVerifyingId(debtorId);
+    try {
+      await saveChoice.mutateAsync({
+        token,
+        personId,
+        personToken,
+        debtorId,
+        choice,
+        requestId: window.crypto.randomUUID(),
+      });
+      toast.success(t('payerChoiceUpdated'));
+    } catch {
+      toast.error(t('payerChoiceUpdateFailed'));
+    } finally {
+      writeInFlight.current = false;
+      setVerifyingId(null);
+      refreshCurrent.current();
+    }
+  }
+
+  async function confirmRefund(debtorId: string) {
+    const payment = payments?.find((row) => row.personId === debtorId);
+    const amountCents = parseExactReceivedRub(refundDrafts[debtorId] ?? '');
+    if (
+      !payment ||
+      verifyingId ||
+      writeInFlight.current ||
+      payment.overpaymentChoice !== 'refund' ||
+      amountCents === null ||
+      amountCents > payment.refundDueCents ||
+      !window.confirm(t('payerRefundConfirm'))
+    )
+      return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
+    setVerifyingId(debtorId);
+    try {
+      await recordRefund.mutateAsync({
+        token,
+        personId,
+        personToken,
+        debtorId,
+        amountCents,
+        requestId: window.crypto.randomUUID(),
+      });
+      setRefundDrafts((current) => ({ ...current, [debtorId]: '' }));
+      toast.success(t('payerRefundRecorded'));
+    } catch {
+      toast.error(t('payerRefundRecordFailed'));
+    } finally {
+      writeInFlight.current = false;
+      setVerifyingId(null);
+      refreshCurrent.current();
+    }
+  }
+
+  async function correctActualReceipt(debtorId: string, transferId: string) {
+    const payment = payments?.find((row) => row.personId === debtorId);
+    const original = payment?.receivedTransfers?.find((row) => row.id === transferId && !row.cancelledAt);
+    const correctedAmountCents = parseExactReceivedRub(correctionDraft);
+    if (
+      !payment ||
+      !original ||
+      correctingTransferId !== transferId ||
+      correctedAmountCents === null ||
+      correctedAmountCents === original.amountCents ||
+      verifyingId ||
+      writeInFlight.current
+    )
+      return;
+    const projected = payment.receivedCents - original.amountCents + correctedAmountCents;
+    const excessCents = Math.max(0, projected - payment.amount);
+    const choice = correctionChoice || payment.overpaymentChoice;
+    if (excessCents > 0 && !choice) return;
+    if (payment.refundedCents > 0 && choice === 'tip') return;
+    if (!window.confirm(t('payerActualCorrectionConfirm'))) return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
+    setVerifyingId(debtorId);
+    try {
+      await correctActual.mutateAsync({
+        token,
+        personId,
+        personToken,
+        debtorId,
+        transferId,
+        correctedAmountCents,
+        requestId: window.crypto.randomUUID(),
+        ...(excessCents > 0 && choice ? { overpaymentChoice: choice } : {}),
+      });
+      setCorrectingTransferId(null);
+      setCorrectionDraft('');
+      setCorrectionChoice('');
+      toast.success(t('payerActualCorrectionSaved'));
+    } catch {
+      toast.error(t('payerActualCorrectionFailed'));
+    } finally {
+      writeInFlight.current = false;
+      setVerifyingId(null);
+      refreshCurrent.current();
+    }
+  }
+
+  async function cancelActualReceipt(debtorId: string, transferId: string) {
+    if (
+      verifyingId ||
+      writeInFlight.current ||
+      !payments?.some(
+        (payment) =>
+          payment.personId === debtorId &&
+          payment.receivedTransfers?.some((transfer) => transfer.id === transferId && !transfer.cancelledAt),
+      ) ||
+      !window.confirm(t('payerActualCancelConfirm'))
+    )
+      return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
+    setVerifyingId(debtorId);
+    try {
+      const result = await cancelActual.mutateAsync({ token, personId, personToken, debtorId, transferId });
+      const updated =
+        latestPayments.current?.map((payment) =>
+          payment.personId === debtorId
+            ? {
+                ...payment,
+                verifiedAt: result.verifiedAt,
+                verifiedByPersonId: result.verifiedAt ? payment.verifiedByPersonId : null,
+                receivedCents: result.receivedCents,
+                outstandingCents: result.outstandingCents,
+                extraTipCents: result.extraTipCents,
+                refundDueCents: result.refundDueCents,
+                ...(payment.receivedTransfers
+                  ? {
+                      receivedTransfers: payment.receivedTransfers.map((transfer) =>
+                        transfer.id === transferId ? { ...transfer, cancelledAt: result.cancelledAt } : transfer,
+                      ),
+                    }
+                  : {}),
+              }
+            : payment,
+        ) ?? null;
+      latestPayments.current = updated;
+      setPayments(updated);
+      toast.success(t('payerActualCancelSuccess'));
+    } catch {
+      toast.error(t('payerActualCancelFailed'));
+    } finally {
+      writeInFlight.current = false;
+      setVerifyingId(null);
+      refreshCurrent.current();
+    }
+  }
+
+  async function cancelReceipt(debtorId: string) {
+    if (
+      verifyingId ||
+      writeInFlight.current ||
+      !payments?.some((payment) => payment.personId === debtorId && payment.verifiedAt) ||
+      !window.confirm(t('payerPaymentCancelConfirm'))
+    )
+      return;
+    writeInFlight.current = true;
+    latestRead.current += 1;
+    setVerifyingId(debtorId);
+    try {
+      await cancelVerified.mutateAsync({
+        token,
+        personId,
+        personToken,
+        debtorId,
+        requestId: window.crypto.randomUUID(),
+      });
+      const updated =
+        latestPayments.current?.map((entry) =>
+          entry.personId === debtorId ? { ...entry, verifiedAt: null, verifiedByPersonId: null } : entry,
+        ) ?? null;
+      latestPayments.current = updated;
+      setPayments(updated);
+      toast.success(t('payerPaymentCancelToast'));
+    } catch {
+      toast.error(t('payerPaymentCancelFailed'));
+    } finally {
+      writeInFlight.current = false;
+      setVerifyingId(null);
+      refreshCurrent.current();
+    }
+  }
+
+  const paymentGroups = groupGuestPayerPayments(payments ?? [], personId);
+  const paymentSummary = summarizeGuestPayerPaymentGroups(paymentGroups);
+  const additionalTipsCents = payments?.reduce((sum, payment) => sum + payment.extraTipCents, 0) ?? 0;
+
+  const groupLabels: Record<GuestPayerPaymentGroup, string> = {
+    verified: t('payerPaymentGroupVerified'),
+    awaiting: t('payerPaymentGroupAwaiting'),
+    unpaid: t('payerPaymentGroupUnpaid'),
+  };
+  const statusOrder: GuestPayerPaymentGroup[] = ['verified', 'awaiting', 'unpaid'];
+
+  // Do not server-render an empty review card. On hydration a stale loading
+  // card could remain beside the freshly populated card in the DOM.
+  // Mount the review card only after its private data has been loaded.
+  if (!isActiveReview || (payments === null && !loadFailed)) return null;
+
+  return (
+    <Card data-testid="guest-payer-payment-review">
+      <CardContent className="space-y-3 py-4">
+        <h3 className="font-semibold">{t('payerPaymentReviewTitle')}</h3>
+        <p className="text-xs text-muted-foreground">{t('payerPaymentReviewHint')}</p>
+        <p
+          className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]"
+          data-testid="guest-payer-settlement-locked"
+        >
+          {t('payerSettlementLockedNotice')}
+        </p>
+        {loadFailed && (
+          <p className="text-xs text-destructive" data-testid="guest-payer-review-error">
+            {t('payerPaymentReviewError')}
+          </p>
+        )}
+        {!payments ? null : (
+          <div className="space-y-3" data-testid="guest-payer-payment-groups">
+            {paymentSummary ? (
+              <dl
+                className="min-w-0 space-y-2 rounded-lg border p-3 text-sm"
+                data-testid="guest-payer-payment-summary"
+                aria-live="polite"
+              >
+                {(
+                  [
+                    ['total', 'payerSummaryTotal', paymentSummary.total],
+                    ['verified', 'payerSummaryVerified', paymentSummary.verified],
+                    ['awaiting', 'payerSummaryAwaiting', paymentSummary.awaiting],
+                    ['unpaid', 'payerSummaryUnpaid', paymentSummary.unpaid],
+                    ['outstanding', 'payerSummaryOutstanding', paymentSummary.outstanding],
+                  ] as const
+                ).map(([key, label, amount]) => (
+                  <div key={key} className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                    <dt className="min-w-0 [overflow-wrap:anywhere]">{t(label)}</dt>
+                    <dd
+                      className="min-w-0 max-w-full font-semibold tabular-nums [overflow-wrap:anywhere]"
+                      data-testid={'guest-payer-summary-' + key}
+                    >
+                      {formatCents(amount, 'RUB', locale)}
+                    </dd>
+                  </div>
+                ))}
+                {additionalTipsCents > 0 && Number.isSafeInteger(additionalTipsCents) && (
+                  <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-2 text-green-700 dark:text-green-400">
+                    <dt>{t('payerAdditionalTips')}</dt>
+                    <dd className="font-semibold tabular-nums" data-testid="guest-payer-total-extra-tips">
+                      {formatCents(additionalTipsCents, 'RUB', locale)}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            ) : (
+              <p className="text-sm text-destructive" data-testid="guest-payer-summary-invalid">
+                {t('payerSummaryUnavailable')}
+              </p>
+            )}
+            {payments.length === 0 && <p className="text-sm text-muted-foreground">{t('payerPaymentReviewNone')}</p>}
+            {statusOrder.map((status) => (
+              <details
+                key={status}
+                className="min-w-0 rounded-lg border"
+                open
+                data-testid={'guest-payer-group-' + status}
+              >
+                <summary className="min-h-11 min-w-0 cursor-pointer p-3 text-sm font-semibold [overflow-wrap:anywhere]">
+                  <span>{groupLabels[status]}</span>
+                  <span
+                    className="ml-2 inline-block tabular-nums text-muted-foreground"
+                    data-testid={'guest-payer-group-count-' + status}
+                  >
+                    {paymentGroups[status].length}
+                  </span>
+                </summary>
+                <div className="min-w-0 space-y-2 px-3 pb-3">
+                  {paymentGroups[status].length === 0 && (
+                    <p className="text-xs text-muted-foreground" data-testid={'guest-payer-group-empty-' + status}>
+                      {t('payerPaymentGroupEmpty')}
+                    </p>
+                  )}
+                  {paymentGroups[status].map((payment) => (
+                    <div
+                      key={payment.personId}
+                      className="space-y-2 rounded-lg border p-3"
+                      data-testid={'guest-payer-payment-' + payment.personId}
+                    >
+                      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 text-sm">
+                        <span className="min-w-0 [overflow-wrap:anywhere] font-medium">{payment.name}</span>
+                        <span
+                          data-testid="guest-payer-payment-amount"
+                          className="ml-auto min-w-0 max-w-full font-semibold tabular-nums [overflow-wrap:anywhere]"
+                        >
+                          {formatCents(payment.amount, 'RUB', locale)}
+                        </span>
+                      </div>
+                      <dl
+                        className="min-w-0 space-y-1 text-xs text-muted-foreground"
+                        data-testid={'payer-breakdown-' + payment.personId}
+                      >
+                        {(
+                          [
+                            ['payerFoodShare', payment.foodCents],
+                            ['payerDeclaredTips', payment.declaredTipCents],
+                            ['payerActuallyReceived', payment.receivedCents],
+                            ...(payment.receivedCents > 0 ? [['payerStillOwed', payment.outstandingCents]] : []),
+                            ...(payment.extraTipCents > 0 ? [['payerAdditionalTips', payment.extraTipCents]] : []),
+                            ...(payment.refundDueCents > 0 ? [['payerRefundDue', payment.refundDueCents]] : []),
+                            ...(payment.refundedCents > 0 ? [['payerRefundedTotal', payment.refundedCents]] : []),
+                          ] as [string, number][]
+                        ).map(([key, amount]) => (
+                          <div key={key} className="flex min-w-0 flex-wrap justify-between gap-2">
+                            <dt>{t(key as 'payerFoodShare')}</dt>
+                            <dd className="tabular-nums">{formatCents(amount, 'RUB', locale)}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                      {payment.members && (
+                        <div
+                          className="min-w-0 space-y-1 text-xs text-muted-foreground"
+                          data-testid={'payer-payment-group-members-' + payment.personId}
+                        >
+                          <p className="font-medium">{t('paymentGroupTotal')}</p>
+                          {payment.members.map((member) => (
+                            <p key={member.personId} className="min-w-0 break-words tabular-nums">
+                              {t('paymentGroupPersonal', {
+                                name:
+                                  people?.find((person) => person.id === member.personId)?.name ??
+                                  t('personFallback', { index: member.personIndex + 1 }),
+                                amount: formatCents(member.amountCents, 'RUB', locale),
+                              })}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                      {payment.unmarkedAt && !payment.declaredPaidAt && !payment.verifiedAt && (
+                        <p
+                          role="status"
+                          aria-live="polite"
+                          className="min-w-0 rounded-md border border-amber-600/40 bg-amber-50 p-3 text-sm text-amber-900 [overflow-wrap:anywhere] dark:bg-amber-950/20 dark:text-amber-200"
+                          data-testid={'guest-payer-unmarked-notice-' + payment.personId}
+                        >
+                          {t('payerPaymentDeclarationRevokedNotice', {
+                            name: payment.name,
+                            amount: formatCents(payment.amount, 'RUB', locale),
+                          })}
+                        </p>
+                      )}
+                      <p
+                        className={
+                          'text-xs font-medium [overflow-wrap:anywhere] ' +
+                          (payment.verifiedAt
+                            ? 'text-green-700 dark:text-green-400'
+                            : payment.declaredPaidAt
+                              ? 'text-amber-800 dark:text-amber-300'
+                              : 'text-muted-foreground')
+                        }
+                        data-testid={'guest-payer-payment-status-' + payment.personId}
+                      >
+                        {payment.verifiedAt
+                          ? t('payerPaymentVerified')
+                          : payment.receivedCents > 0
+                            ? t('payerPartialReceiptSaved')
+                            : payment.declaredPaidAt
+                              ? t('payerPaymentDeclared')
+                              : t('payerPaymentNotDeclared')}
+                      </p>
+                      {payment.excessCents > 0 && (
+                        <section
+                          className="min-w-0 space-y-2 rounded-md border p-3"
+                          data-testid={'payer-surplus-actions-' + payment.personId}
+                        >
+                          <label htmlFor={'payer-choice-' + payment.personId} className="block text-sm font-medium">
+                            {t('payerChoiceCorrection')}
+                          </label>
+                          <select
+                            id={'payer-choice-' + payment.personId}
+                            value={choiceDrafts[payment.personId] ?? payment.overpaymentChoice ?? ''}
+                            onChange={(event) =>
+                              setChoiceDrafts((current) => ({
+                                ...current,
+                                [payment.personId]: event.target.value as ReceiptOverpaymentChoice | '',
+                              }))
+                            }
+                            disabled={verifyingId !== null || payment.refundedCents > 0}
+                            className="h-11 w-full min-w-0 rounded-md border bg-background px-2 text-sm"
+                            data-testid={'payer-choice-edit-' + payment.personId}
+                          >
+                            <option value="">{t('payerOverpaymentChoose')}</option>
+                            <option value="tip">{t('payerOverpaymentTip')}</option>
+                            <option value="refund">{t('payerOverpaymentRefund')}</option>
+                          </select>
+                          {payment.refundedCents > 0 && (
+                            <p className="text-xs text-muted-foreground">{t('payerChoiceLockedAfterRefund')}</p>
+                          )}
+                          {payment.refundedCents === 0 && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="min-h-11 w-full min-w-0 whitespace-normal"
+                              disabled={
+                                verifyingId !== null ||
+                                !choiceDrafts[payment.personId] ||
+                                choiceDrafts[payment.personId] === payment.overpaymentChoice
+                              }
+                              onClick={() => {
+                                void saveOverpaymentChoice(payment.personId);
+                              }}
+                              data-testid={'payer-choice-save-' + payment.personId}
+                            >
+                              {t('payerChoiceSave')}
+                            </Button>
+                          )}
+                          {payment.overpaymentChoice === 'refund' && payment.refundDueCents > 0 && (
+                            <div className="space-y-2 border-t pt-2">
+                              <label htmlFor={'payer-refund-' + payment.personId} className="block text-sm font-medium">
+                                {t('payerRefundInputLabel')}
+                              </label>
+                              <input
+                                id={'payer-refund-' + payment.personId}
+                                type="text"
+                                inputMode="decimal"
+                                autoComplete="off"
+                                value={refundDrafts[payment.personId] ?? ''}
+                                onChange={(event) =>
+                                  setRefundDrafts((current) => ({
+                                    ...current,
+                                    [payment.personId]: event.target.value,
+                                  }))
+                                }
+                                placeholder={t('payerActualInputExample')}
+                                disabled={verifyingId !== null}
+                                className="h-11 w-full min-w-0 rounded-md border bg-background px-3 text-base tabular-nums"
+                                data-testid={'payer-refund-input-' + payment.personId}
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="min-h-11 w-full min-w-0 whitespace-normal"
+                                disabled={
+                                  verifyingId !== null ||
+                                  parseExactReceivedRub(refundDrafts[payment.personId] ?? '') === null ||
+                                  (parseExactReceivedRub(refundDrafts[payment.personId] ?? '') ?? 0) >
+                                    payment.refundDueCents
+                                }
+                                onClick={() => {
+                                  void confirmRefund(payment.personId);
+                                }}
+                                data-testid={'payer-refund-confirm-' + payment.personId}
+                              >
+                                {t('payerRefundConfirmAction')}
+                              </Button>
+                            </div>
+                          )}
+                          {!!payment.confirmedRefunds?.length && (
+                            <div className="space-y-1 text-xs" data-testid={'payer-refund-history-' + payment.personId}>
+                              {payment.confirmedRefunds.map((refund) => (
+                                <p key={refund.id} className="min-w-0 break-words tabular-nums">
+                                  {formatCents(refund.amountCents, 'RUB', locale)}
+                                  {' · '}
+                                  <time dateTime={refund.confirmedAt}>
+                                    {new Date(refund.confirmedAt).toLocaleString('ru-RU')}
+                                  </time>
+                                </p>
+                              ))}
+                            </div>
+                          )}
+                        </section>
+                      )}
+                      {!!payment.receivedTransfers?.length && (
+                        <section
+                          className="min-w-0 space-y-2 rounded-md border p-2"
+                          data-testid={'payer-received-transfers-' + payment.personId}
+                        >
+                          <h4 className="text-xs font-medium">{t('payerActualTransferHistory')}</h4>
+                          {payment.receivedTransfers.map((transfer) => (
+                            <div
+                              key={transfer.id}
+                              className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t pt-2 text-xs"
+                            >
+                              <span className="min-w-0 break-words tabular-nums">
+                                {formatCents(transfer.amountCents, 'RUB', locale)}
+                                {' · '}
+                                <time dateTime={transfer.confirmedAt}>
+                                  {new Date(transfer.confirmedAt).toLocaleString('ru-RU')}
+                                </time>
+                              </span>
+                              {transfer.cancelledAt ? (
+                                <span className="text-muted-foreground">{t('payerActualTransferCancelled')}</span>
+                              ) : (
+                                <div className="flex min-w-0 flex-wrap gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="min-h-11 whitespace-normal"
+                                    disabled={verifyingId !== null}
+                                    onClick={() => {
+                                      setCorrectingTransferId(transfer.id);
+                                      setCorrectionDraft((transfer.amountCents / 100).toFixed(2));
+                                      setCorrectionChoice(payment.overpaymentChoice ?? '');
+                                    }}
+                                    data-testid={'payer-actual-edit-' + transfer.id}
+                                  >
+                                    {t('payerActualTransferEdit')}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="min-h-11 whitespace-normal"
+                                    disabled={verifyingId !== null}
+                                    onClick={() => {
+                                      void cancelActualReceipt(payment.personId, transfer.id);
+                                    }}
+                                    data-testid={'payer-actual-cancel-' + transfer.id}
+                                  >
+                                    {t('payerActualTransferCancel')}
+                                  </Button>
+                                </div>
+                              )}
+                              {correctingTransferId === transfer.id && !transfer.cancelledAt && (
+                                <div
+                                  className="w-full min-w-0 space-y-2"
+                                  data-testid={'payer-actual-correction-' + transfer.id}
+                                >
+                                  <label htmlFor={'payer-correct-' + transfer.id} className="block text-sm font-medium">
+                                    {t('payerActualCorrectionLabel')}
+                                  </label>
+                                  <input
+                                    id={'payer-correct-' + transfer.id}
+                                    type="text"
+                                    inputMode="decimal"
+                                    autoComplete="off"
+                                    className="h-11 w-full min-w-0 rounded-md border bg-background px-3 text-base tabular-nums"
+                                    value={correctionDraft}
+                                    onChange={(event) => setCorrectionDraft(event.target.value)}
+                                    disabled={verifyingId !== null}
+                                    data-testid={'payer-actual-correction-input-' + transfer.id}
+                                  />
+                                  {(() => {
+                                    const cents = parseExactReceivedRub(correctionDraft);
+                                    const excess =
+                                      cents === null
+                                        ? 0
+                                        : Math.max(
+                                            0,
+                                            payment.receivedCents - transfer.amountCents + cents - payment.amount,
+                                          );
+                                    return excess > 0 ? (
+                                      <>
+                                        <label
+                                          htmlFor={'payer-correct-choice-' + transfer.id}
+                                          className="block text-sm"
+                                        >
+                                          {t('payerOverpaymentDecision')}
+                                        </label>
+                                        <select
+                                          id={'payer-correct-choice-' + transfer.id}
+                                          className="h-11 w-full min-w-0 rounded-md border bg-background px-2 text-sm"
+                                          value={correctionChoice}
+                                          onChange={(event) =>
+                                            setCorrectionChoice(event.target.value as ReceiptOverpaymentChoice | '')
+                                          }
+                                          disabled={verifyingId !== null || payment.refundedCents > 0}
+                                          data-testid={'payer-actual-correction-choice-' + transfer.id}
+                                        >
+                                          <option value="">{t('payerOverpaymentChoose')}</option>
+                                          <option value="tip">{t('payerOverpaymentTip')}</option>
+                                          <option value="refund">{t('payerOverpaymentRefund')}</option>
+                                        </select>
+                                      </>
+                                    ) : null;
+                                  })()}
+                                  <div className="flex min-w-0 flex-wrap gap-2">
+                                    <Button
+                                      type="button"
+                                      className="min-h-11 min-w-0 whitespace-normal"
+                                      disabled={
+                                        verifyingId !== null ||
+                                        parseExactReceivedRub(correctionDraft) === null ||
+                                        parseExactReceivedRub(correctionDraft) === transfer.amountCents ||
+                                        (payment.receivedCents -
+                                          transfer.amountCents +
+                                          (parseExactReceivedRub(correctionDraft) ?? 0) >
+                                          payment.amount &&
+                                          !correctionChoice &&
+                                          !payment.overpaymentChoice)
+                                      }
+                                      onClick={() => {
+                                        void correctActualReceipt(payment.personId, transfer.id);
+                                      }}
+                                      data-testid={'payer-actual-correction-save-' + transfer.id}
+                                    >
+                                      {t('payerActualCorrectionSave')}
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      className="min-h-11 min-w-0 whitespace-normal"
+                                      onClick={() => {
+                                        setCorrectingTransferId(null);
+                                        setCorrectionDraft('');
+                                        setCorrectionChoice('');
+                                      }}
+                                      data-testid={'payer-actual-correction-dismiss-' + transfer.id}
+                                    >
+                                      {t('payerActualCorrectionDismiss')}
+                                    </Button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </section>
+                      )}
+                      {payment.verifiedAt && (
+                        <>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="min-h-11 w-full min-w-0 whitespace-normal border-green-600 bg-green-50 text-center text-green-800 [overflow-wrap:anywhere] disabled:cursor-default disabled:opacity-100 dark:border-green-700 dark:bg-green-950 dark:text-green-300"
+                            disabled
+                            data-testid={'guest-payer-verified-' + payment.personId}
+                          >
+                            {t('payerPaymentVerified')}
+                          </Button>
+                          <p
+                            className="min-w-0 break-words text-xs text-muted-foreground"
+                            data-testid={'guest-payer-verified-audit-' + payment.personId}
+                          >
+                            {t('payerPaymentVerifiedAudit', {
+                              payer: payment.verifiedByPersonId
+                                ? (people?.find((person) => person.id === payment.verifiedByPersonId)?.name ??
+                                  t('payerPaymentVerifierFallback'))
+                                : t('payerPaymentVerifierFallback'),
+                              at: new Date(payment.verifiedAt).toLocaleString('ru-RU'),
+                            })}
+                          </p>
+                          {!payment.receivedTransfers?.length && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="min-h-11 w-full min-w-0 whitespace-normal border-amber-600 text-center text-amber-800 [overflow-wrap:anywhere] dark:border-amber-500 dark:text-amber-300"
+                              disabled={verifyingId !== null}
+                              onClick={() => {
+                                void cancelReceipt(payment.personId);
+                              }}
+                              data-testid={'guest-payer-cancel-' + payment.personId}
+                            >
+                              {t('payerPaymentCancelAction')}
+                            </Button>
+                          )}
+                        </>
+                      )}
+                      {!payment.verifiedAt && (
+                        <div className="min-w-0 space-y-2 rounded-md border p-3">
+                          <label htmlFor={'payer-amount-' + payment.personId} className="block text-sm font-medium">
+                            {t('payerActualInputLabel')}
+                          </label>
+                          <input
+                            id={'payer-amount-' + payment.personId}
+                            type="text"
+                            inputMode="decimal"
+                            autoComplete="off"
+                            value={receiptDrafts[payment.personId] ?? ''}
+                            onChange={(event) =>
+                              setReceiptDrafts((current) => ({
+                                ...current,
+                                [payment.personId]: event.target.value,
+                              }))
+                            }
+                            placeholder={t('payerActualInputExample')}
+                            disabled={verifyingId !== null}
+                            className="h-11 w-full min-w-0 rounded-md border bg-background px-3 text-base tabular-nums"
+                            data-testid={'guest-payer-received-input-' + payment.personId}
+                          />
+                          {payment.receivedCents + (parseExactReceivedRub(receiptDrafts[payment.personId] ?? '') ?? 0) >
+                            payment.amount && (
+                            <div className="min-w-0 space-y-2" data-testid={'payer-excess-choice-' + payment.personId}>
+                              <p className="text-xs text-amber-800 dark:text-amber-300">
+                                {t('payerOverpaymentAmount', {
+                                  amount: formatCents(
+                                    payment.receivedCents +
+                                      (parseExactReceivedRub(receiptDrafts[payment.personId] ?? '') ?? 0) -
+                                      payment.amount,
+                                    'RUB',
+                                    locale,
+                                  ),
+                                })}
+                              </p>
+                              <label htmlFor={'payer-excess-' + payment.personId} className="block text-sm">
+                                {t('payerOverpaymentDecision')}
+                              </label>
+                              <select
+                                id={'payer-excess-' + payment.personId}
+                                value={overpaymentChoices[payment.personId] ?? ''}
+                                onChange={(event) =>
+                                  setOverpaymentChoices((current) => ({
+                                    ...current,
+                                    [payment.personId]: event.target.value as ReceiptOverpaymentChoice | '',
+                                  }))
+                                }
+                                className="h-11 w-full min-w-0 rounded-md border bg-background px-2 text-sm"
+                                data-testid={'guest-payer-excess-choice-' + payment.personId}
+                              >
+                                <option value="">{t('payerOverpaymentChoose')}</option>
+                                <option value="tip">{t('payerOverpaymentTip')}</option>
+                                <option value="refund">{t('payerOverpaymentRefund')}</option>
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {!payment.verifiedAt && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center"
+                          disabled={
+                            verifyingId !== null ||
+                            (payment.receivedCents > 0 && !(receiptDrafts[payment.personId] ?? '').trim()) ||
+                            (!!(receiptDrafts[payment.personId] ?? '').trim() &&
+                              (parseExactReceivedRub(receiptDrafts[payment.personId]!) === null ||
+                                (payment.receivedCents +
+                                  (parseExactReceivedRub(receiptDrafts[payment.personId]!) ?? 0) >
+                                  payment.amount &&
+                                  !overpaymentChoices[payment.personId])))
+                          }
+                          onClick={() => {
+                            if ((receiptDrafts[payment.personId] ?? '').trim()) {
+                              void recordReceipt(payment.personId);
+                            } else {
+                              void confirmReceipt(payment.personId);
+                            }
+                          }}
+                          data-testid={'guest-payer-verify-' + payment.personId}
+                        >
+                          {t('payerPaymentVerifyAction')}
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}

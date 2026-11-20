@@ -1,52 +1,33 @@
 'use client';
 
-import { use, useState } from 'react';
-import { useSession } from 'next-auth/react';
+import { use } from 'react';
 import { useFormatter, useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
 import { formatCents } from '@/lib/money';
 import { copyToClipboard } from '@/lib/clipboard';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Copy, Share2, Receipt, ArrowRight, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Link } from '@/i18n/navigation';
-import { getInitials, guestAvatarColor } from '@/lib/avatar';
-import { buildVenmoPayUrl, isValidVenmoHandle } from '@/lib/venmo';
+import { getInitials } from '@/lib/avatar';
+import { guestVisualColorStyle, guestVisualColorBorder } from '@/lib/guest-visual-color';
+import { guestReceiptRoleFlags } from '@/lib/guest-receipt-roles';
+import { GuestReceiptRoles } from '@/components/guest-receipt-roles';
+import { GuestAccountStatus } from '@/components/guest-account-status';
 import { groupSizeWeights, personItemShares } from '@/lib/split-calculator';
 
 export default function SharedSplitPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = use(params);
   const locale = useLocale();
   const t = useTranslations('split.result');
-  const tv = useTranslations('split.venmo');
+  const tr = useTranslations('split.roles');
+  const ta = useTranslations('split.accountStatus');
   const tc = useTranslations('common');
   const format = useFormatter();
-  const { data: authSession } = useSession();
   const split = trpc.guest.getSplit.useQuery({ token });
-  const venmoSetting = trpc.admin.getVenmoEnabled.useQuery();
-  const profile = trpc.auth.getProfile.useQuery(undefined, {
-    enabled: !!authSession?.user && !!venmoSetting.data?.enabled,
-  });
-  const utils = trpc.useUtils();
-  const setPayerVenmoHandle = trpc.guest.setPayerVenmoHandle.useMutation({
-    onSuccess: () => {
-      utils.guest.getSplit.invalidate({ token });
-    },
-  });
-
-  // The venmo handle is derived from the split record (falling back to the
-  // creator's profile) until the user edits it, at which point the edited
-  // value takes over. No state-syncing effect needed.
-  const [venmoHandleEdit, setVenmoHandleEdit] = useState<string | null>(null);
-  const venmoHandle =
-    venmoHandleEdit ??
-    split.data?.payerVenmoHandle ??
-    (split.data?.isCreator ? (profile.data?.venmoUsername ?? '') : '');
-
   if (split.isLoading) {
     return (
       <div className="flex flex-col items-center justify-center gap-4 py-20">
@@ -78,7 +59,25 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
   }
 
   const data = split.data!;
+  const roleMarks = (index: number) => (
+    <GuestReceiptRoles
+      {...guestReceiptRoleFlags(index, data.organizerIndex, data.paidByIndex, data.people.length)}
+      creatorLabel={tr('creator')}
+      payerLabel={tr('payer')}
+    />
+  );
+  const accountMark = (index: number) => (
+    <GuestAccountStatus
+      isRegistered={data.people[index]?.isRegistered === true}
+      registeredLabel={ta('registered')}
+      guestLabel={ta('guest')}
+    />
+  );
+  const expiredCreatorHistory = data.archivedCreatorView;
   const currency = data.receiptData.currency;
+  // Saved shares are the definitive settlement, including personal tips.
+  const finalizedTotal = data.summary.reduce((sum, person) => sum + person.total, 0);
+  const personalTipTotal = data.summary.reduce((sum, person) => sum + person.tip, 0) - data.receiptData.tip;
   const paidBy = data.people[data.paidByIndex]?.name ?? t('someone');
   // Weighted the way the totals were, so each person's lines add up to their total
   const weights = groupSizeWeights(data.people);
@@ -87,7 +86,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
     const url = window.location.href;
     const text = t('shareText', {
       merchant: data.receiptData.merchantName ?? t('aReceipt'),
-      total: formatCents(data.receiptData.total, currency, locale),
+      total: formatCents(finalizedTotal, currency, locale),
     });
 
     if (navigator.share) {
@@ -114,7 +113,23 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
   const initials = getInitials;
 
   return (
-    <div className="space-y-6 pb-24" data-testid="split-result">
+    <div
+      className="space-y-6 pb-[calc(7rem+env(safe-area-inset-bottom))] max-[399px]:pb-[calc(11rem+env(safe-area-inset-bottom))]"
+      data-testid="split-result"
+    >
+      {/* Keep the private-claim return action ahead of long breakdowns. The
+          sticky header and footer can fully cover a link near page bottom
+          when the visible Android viewport is only 380 CSS px tall. */}
+      {/* Return to the participant's private settlement view. The shared
+          summary contains no personal payment controls or identity token. */}
+      <Link
+        href={expiredCreatorHistory ? '/splits' : '/split/' + token + '/claim'}
+        className="flex min-h-11 w-full min-w-0 scroll-mt-20 items-center justify-center rounded-lg border px-4 py-2 text-center text-sm font-medium text-primary [overflow-wrap:anywhere] hover:bg-muted"
+        data-testid="split-result-back-to-claim"
+      >
+        {expiredCreatorHistory ? t('backToHistory') : 'Вернуться к своему чеку'}
+      </Link>
+
       {/* Header */}
       <div className="text-center space-y-1 pt-4">
         <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
@@ -125,30 +140,6 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
             name: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
           })}
         </p>
-        {venmoSetting.data?.enabled &&
-          currency === 'USD' &&
-          (split.data?.isCreator ? (
-            <div className="flex items-center justify-center gap-2 mt-2">
-              <Input
-                placeholder={tv('handlePlaceholder')}
-                aria-label={tv('handle')}
-                value={venmoHandle}
-                onChange={(e) => setVenmoHandleEdit(e.target.value)}
-                onBlur={() => {
-                  const trimmed = venmoHandle.trim() || null;
-                  if (trimmed !== (split.data?.payerVenmoHandle ?? null)) {
-                    setPayerVenmoHandle.mutate({ token, handle: trimmed });
-                  }
-                }}
-                className="h-8 text-sm max-w-48"
-                data-testid="venmo-handle-input"
-              />
-            </div>
-          ) : venmoHandle ? (
-            <p className="text-sm text-muted-foreground mt-1" data-testid="venmo-handle-display">
-              {t('venmoHandle', { handle: venmoHandle.replace(/^@/, '') })}
-            </p>
-          ) : null)}
       </div>
 
       {/* Total */}
@@ -157,7 +148,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
           <div className="flex justify-between items-center">
             <span className="font-semibold text-lg">{t('totalBill')}</span>
             <span className="text-2xl font-bold text-primary">
-              {formatCents(data.receiptData.total, currency, locale)}
+              <span data-testid="split-result-total">{formatCents(finalizedTotal, currency, locale)}</span>
             </span>
           </div>
         </CardContent>
@@ -171,22 +162,37 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
           const personItems = personItemShares(person.personIndex, {
             items: data.items,
             assignments: data.assignments,
+            balanceAcrossItems: data.receiptData.roundingBalanced === true,
+            organizerIndex: data.organizerIndex,
             ...weights,
           });
 
           return (
-            <Card key={idx} data-testid={`person-card-${idx}`}>
+            <Card
+              key={idx}
+              className="border-l-4"
+              style={{ borderLeftColor: guestVisualColorBorder(data.people[idx], idx) }}
+              data-testid={`person-card-${idx}`}
+            >
               <CardContent className="py-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-3">
+                <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
                     <Avatar className="h-10 w-10">
-                      <AvatarFallback className={`text-sm font-semibold ${guestAvatarColor(idx)}`}>
+                      <AvatarFallback
+                        className="text-sm font-semibold"
+                        style={guestVisualColorStyle(data.people[idx], idx)}
+                      >
                         {initials(person.name)}
                       </AvatarFallback>
                     </Avatar>
-                    <span className="font-semibold">{person.name}</span>
+                    <span className="min-w-0 font-semibold [overflow-wrap:anywhere]">{person.name}</span>
+                    {roleMarks(idx)}
+                    {accountMark(idx)}
                   </div>
-                  <span className="text-xl font-bold text-primary" data-testid={`person-total-${idx}`}>
+                  <span
+                    className="min-w-0 text-xl font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
+                    data-testid={`person-total-${idx}`}
+                  >
                     {formatCents(person.total, currency, locale)}
                   </span>
                 </div>
@@ -213,6 +219,19 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
                       </div>
                     );
                   })}
+                  {!!person.roundingCorrectionCents && (
+                    <div
+                      className="flex min-w-0 flex-wrap justify-between gap-2"
+                      data-testid={'guest-result-rounding-correction-' + person.personIndex}
+                    >
+                      <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                        {t('organizerRoundingCorrection')}
+                      </span>
+                      <span className="shrink-0 tabular-nums">
+                        {formatCents(person.roundingCorrectionCents, currency, locale)}
+                      </span>
+                    </div>
+                  )}
                   {person.tax > 0 && (
                     <div className="flex justify-between">
                       <span>{t('tax')}</span>
@@ -226,26 +245,6 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
                     </div>
                   )}
                 </div>
-
-                {venmoSetting.data?.enabled &&
-                  currency === 'USD' &&
-                  isValidVenmoHandle(venmoHandle) &&
-                  !split.data?.isPayer &&
-                  person.personIndex !== data.paidByIndex && (
-                    <a
-                      href={buildVenmoPayUrl(
-                        venmoHandle,
-                        person.total,
-                        `ShareTab: ${data.receiptData.merchantName ?? t('billSplit')}`,
-                      )!}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-3 flex items-center justify-center gap-2 rounded-lg bg-[#008CFF] px-4 py-2 text-sm font-medium text-white hover:bg-[#0070CC] transition-colors"
-                      data-testid={`venmo-pay-${idx}`}
-                    >
-                      {tv('payVia', { amount: formatCents(person.total, currency, locale) })}
-                    </a>
-                  )}
               </CardContent>
             </Card>
           );
@@ -258,31 +257,58 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
           <CardTitle className="text-base">{t('receiptDetails')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-1 text-sm">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">{t('subtotal')}</span>
-            <span>{formatCents(data.receiptData.subtotal, currency, locale)}</span>
+          <div className="flex justify-between gap-2">
+            <span className="text-muted-foreground">
+              {currency === 'RUB' && data.receiptData.tax === 0 ? t('dishesTotal') : t('subtotal')}
+            </span>
+            <span data-testid="split-result-food-total">
+              {formatCents(data.receiptData.subtotal, currency, locale)}
+            </span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">{t('tax')}</span>
-            <span>{formatCents(data.receiptData.tax, currency, locale)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">{t('tip')}</span>
-            <span>{formatCents(data.receiptData.tip, currency, locale)}</span>
-          </div>
+          {/* Historical receipts may contain upstream charges. New BillOK receipts
+              use tax=0 and tip=0 until each person can choose their own tip. */}
+          {data.receiptData.tax > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('tax')}</span>
+              <span>{formatCents(data.receiptData.tax, currency, locale)}</span>
+            </div>
+          )}
+          {data.receiptData.tip > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('tip')}</span>
+              <span>{formatCents(data.receiptData.tip, currency, locale)}</span>
+            </div>
+          )}
+          {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0 ? (
+            <div className="flex justify-between gap-2">
+              <span className="text-muted-foreground">{t('tipForWaiter')}</span>
+              <span data-testid="split-result-personal-tips">{formatCents(personalTipTotal, currency, locale)}</span>
+            </div>
+          ) : (
+            personalTipTotal > 0 && (
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">{t('tip')}</span>
+                <span data-testid="split-result-personal-tips">{formatCents(personalTipTotal, currency, locale)}</span>
+              </div>
+            )
+          )}
           <Separator />
-          <div className="flex justify-between font-semibold">
-            <span>{t('total')}</span>
-            <span>{formatCents(data.receiptData.total, currency, locale)}</span>
+          <div className="flex justify-between gap-2 font-semibold">
+            <span>
+              {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0
+                ? t('totalWithTips')
+                : t('total')}
+            </span>
+            <span>{formatCents(finalizedTotal, currency, locale)}</span>
           </div>
         </CardContent>
       </Card>
 
       {/* Expiry notice */}
       <p className="text-xs text-center text-muted-foreground">
-        {t('expiresOn', {
-          date: format.dateTime(new Date(data.expiresAt), { dateStyle: 'long' }),
-        })}
+        {expiredCreatorHistory
+          ? t('expiredCreatorHistory')
+          : t('expiresOn', { date: format.dateTime(new Date(data.expiresAt), { dateStyle: 'long' }) })}
       </p>
 
       {/* CTA */}
@@ -297,13 +323,29 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
       </div>
 
       {/* Share buttons - sticky bottom */}
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-background border-t">
-        <div className="mx-auto max-w-lg flex gap-2">
-          <Button variant="outline" className="flex-1 h-14" onClick={handleCopy} data-testid="copy-link-btn">
+      <div
+        className={
+          expiredCreatorHistory
+            ? 'hidden'
+            : 'fixed inset-x-0 bottom-0 z-10 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] [@media(max-height:320px)]:static [@media(max-height:320px)]:max-h-none [@media(max-height:320px)]:border-t-0'
+        }
+        data-testid="split-result-actions"
+      >
+        <div className="mx-auto flex max-w-lg min-w-0 gap-2 max-[399px]:flex-col">
+          <Button
+            variant="outline"
+            className="min-h-14 min-w-0 w-full flex-1 whitespace-normal text-center leading-tight"
+            onClick={handleCopy}
+            data-testid="copy-link-btn"
+          >
             <Copy className="mr-2 h-5 w-5" />
             {t('copyLink')}
           </Button>
-          <Button className="flex-1 h-14" onClick={handleShare} data-testid="share-btn">
+          <Button
+            className="min-h-14 min-w-0 w-full flex-1 whitespace-normal text-center leading-tight"
+            onClick={handleShare}
+            data-testid="share-btn"
+          >
             <Share2 className="mr-2 h-5 w-5" />
             {t('share')}
           </Button>

@@ -107,7 +107,7 @@ test.describe('Group settings by role', () => {
         .click();
 
       await expect(
-        page.getByText('You still owe or are owed money in this group. Settle up before you leave.'),
+        page.getByText('У вас остались задолженности или переплаты в этой группе. Завершите расчёты перед выходом.'),
       ).toBeVisible();
       await expect(page).toHaveURL(new RegExp(`/groups/${groupId}/settings$`));
     } finally {

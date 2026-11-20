@@ -47,14 +47,17 @@ export function ExactSplit({
   return (
     <div className="space-y-2">
       {members.map((m) => (
-        <div key={m.id} className="flex items-center gap-3 rounded-md border p-3">
-          <span className="flex-1 text-sm">{m.name ?? 'Unnamed'}</span>
+        <div
+          key={m.id}
+          className="flex min-w-0 flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center"
+          data-testid="split-member-row"
+        >
+          <span className="min-w-0 flex-1 break-words text-sm">{m.name ?? 'Без имени'}</span>
           <Input
-            type="number"
-            step="0.01"
-            min="0"
-            placeholder="0.00"
-            className="w-28"
+            type="text"
+            inputMode="decimal"
+            placeholder="0,00"
+            className="h-11 min-w-0 w-full text-base sm:w-28"
             value={amounts[m.id] ?? ''}
             onChange={(e) => setAmount(m.id, e.target.value)}
           />
@@ -66,10 +69,10 @@ export function ExactSplit({
         }`}
       >
         {remaining === 0
-          ? 'Fully allocated'
+          ? 'Сумма распределена полностью'
           : remaining > 0
-            ? `${formatCents(remaining, currency, locale)} remaining`
-            : `${formatCents(-remaining, currency, locale)} over-allocated`}
+            ? `Осталось распределить: ${formatCents(remaining, currency, locale)}`
+            : `Превышение суммы: ${formatCents(-remaining, currency, locale)}`}
       </p>
     </div>
   );

@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { auth } from '@/server/auth';
-import { AppSidebar } from '@/components/layout/sidebar';
+import { db } from '@/server/db';
+import { requireOwner } from '@/server/lib/owner-access';
 import { MobileHeader } from '@/components/layout/mobile-header';
 import { AnnouncementBanner } from '@/components/layout/announcement-banner';
 import { ImpersonationBanner } from '@/components/layout/impersonation-banner';
@@ -18,16 +19,20 @@ export default async function AppLayout({
     redirect(`/${locale}/login`);
   }
 
-  const isAdmin = !!process.env.ADMIN_EMAIL && session.user.email === process.env.ADMIN_EMAIL;
+  // ADMIN_EMAIL is only an initial bootstrap value; never an admin grant.
+  // UI visibility follows the exact same server policy as admin APIs.
+  const isAdmin = await requireOwner(db, session.user.id).then(
+    () => true,
+    () => false,
+  );
 
   return (
-    <div className="min-h-dvh lg:flex lg:h-dvh lg:flex-row">
+    <div className="min-h-dvh min-w-0">
       <MobileHeader isAdmin={isAdmin} />
-      <AppSidebar user={session.user} isAdmin={isAdmin} />
-      <main className="@container flex-1 min-w-0 lg:overflow-auto">
+      <main className="@container min-w-0">
         <ImpersonationBanner />
         <AnnouncementBanner />
-        <div className="w-full py-4 px-4 md:py-6 md:px-8 2xl:mx-auto 2xl:max-w-5xl">{children}</div>
+        <div className="mx-auto w-full min-w-0 max-w-xl px-4 py-4 md:py-6">{children}</div>
       </main>
     </div>
   );

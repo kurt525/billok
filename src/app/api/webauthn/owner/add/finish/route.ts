@@ -1,0 +1,81 @@
+import { NextResponse } from 'next/server';
+import type { RegistrationResponseJSON } from '@simplewebauthn/server';
+import type { Session } from 'next-auth';
+import { auth } from '@/server/auth';
+import { recordOwnerSecurityEvent } from '@/server/lib/security-event-audit';
+import { db } from '@/server/db';
+import { requireOwner } from '@/server/lib/owner-access';
+import { allowOwnerWebAuthnRequest } from '@/server/lib/owner-webauthn-burst';
+import { ownerSessionFingerprint } from '@/server/lib/owner-passkey-action-approval';
+import { finishAdditionalOwnerPasskey, OWNER_ADD_BINDING_COOKIE } from '@/server/lib/owner-passkey-add';
+import { readBillokWebAuthnRelyingParty } from '@/server/lib/webauthn-relying-party';
+
+async function performAuditedOwnerPost(request: Request, session: Session | null) {
+  const denied = () => NextResponse.json({ error: 'Новый Passkey не подтверждён.' }, { status: 403 });
+  if (!session?.user?.id || (request.headers.get('cookie') ?? '').includes('sharetab-impersonate=')) return denied();
+  // A valid server session is necessary, but not sufficient, for owner
+  // operations: recheck the sole owner and current DB account state.
+  try {
+    await requireOwner(db, session.user.id);
+  } catch {
+    return denied();
+  }
+  // Technical 2-second anti-flood, never an hourly limit on owner actions.
+  if (!allowOwnerWebAuthnRequest(session.user.id, 'add-finish')) {
+    return NextResponse.json({ error: 'Слишком много запросов подряд.' }, { status: 429 });
+  }
+  try {
+    const secretCookie = (request.headers.get('cookie') ?? '')
+      .split(';')
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(OWNER_ADD_BINDING_COOKIE + '='));
+    if (!secretCookie) return denied();
+    const secret = secretCookie.slice(OWNER_ADD_BINDING_COOKIE.length + 1);
+    const raw = await request.text();
+    if (raw.length > 35_000) return denied();
+    const payload = JSON.parse(raw) as {
+      approvalToken?: unknown;
+      response?: RegistrationResponseJSON;
+    };
+    if (!payload.response) return denied();
+    const result = await finishAdditionalOwnerPasskey({
+      db,
+      userId: session.user.id,
+      sessionHash: ownerSessionFingerprint(request.headers),
+      bindingSecret: secret,
+      approvalToken: payload.approvalToken,
+      response: payload.response,
+    });
+    const response = NextResponse.json(result);
+    response.cookies.set(OWNER_ADD_BINDING_COOKIE, '', {
+      path: '/api/webauthn/owner/add',
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: readBillokWebAuthnRelyingParty(process.env).origin.startsWith('https:'),
+      maxAge: 0,
+    });
+    return response;
+  } catch {
+    return denied();
+  }
+}
+
+export async function POST(request: Request) {
+  const session = await auth().catch(() => null);
+  let response: Response;
+  try {
+    response = await performAuditedOwnerPost(request, session);
+  } catch {
+    response = Response.json({ error: 'Доступ запрещён' }, { status: 403 });
+  }
+  // Successful audit is a separate durable security event; the existing
+  // transaction-bound AdminAuditLog remains authoritative for mutations.
+  // Denied requests are recorded OUTSIDE rolled-back transactions.
+  await recordOwnerSecurityEvent({
+    db,
+    action: 'OWNER_PASSKEY_ADDED',
+    outcome: response.status >= 400 ? 'DENIED' : 'ALLOWED',
+    actorId: session?.user?.id ?? null,
+  });
+  return response;
+}

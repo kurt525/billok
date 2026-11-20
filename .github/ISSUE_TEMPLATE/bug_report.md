@@ -1,37 +1,38 @@
 ---
-name: Bug report
-about: Something isn't working
+name: Сообщить об ошибке
+about: Сообщить о конкретной неисправности BillOK
 labels: bug
 ---
 
-## Description
+## Ошибка
 
-A clear description of what the bug is.
+Что произошло? Укажите точный экран и последовательность действий.
 
-## Steps to Reproduce
+## Как воспроизвести
 
-1. Go to '...'
-2. Click on '...'
-3. See error
+1. Откройте экран ...
+2. Выполните действие ...
+3. Получите результат ...
 
-## Expected Behavior
+## Ожидаемое поведение
 
-What you expected to happen.
+Как должен работать BillOK согласно Issue #1?
 
-## Actual Behavior
+## Фактическое поведение
 
-What actually happened.
+Что увидел пользователь? Какая функция не сработала?
 
-## Environment
+## Условия
 
-- Docker image tag and commit:
-  <!-- Prebuilt image: the commit is next to the version in the admin dashboard's System Health section and in the container startup log. Built with Docker Compose: run `git rev-parse --short HEAD` in your checkout. -->
-- Browser (if UI bug):
-- AI provider (if receipt scanning bug):
-- How you run ShareTab: Unraid template / Docker Compose built from this repo / Docker Compose with a prebuilt image / other container setup / bare metal / dev server
-- Host OS / platform:
-- Reverse proxy / CDN, if any (e.g. nginx, Traefik, Cloudflare, none):
+- Коммит/тег BillOK (без секретов):
+- Устройство и ширина экрана (для мобильного интерфейса):
+- Версия браузера:
+- Сценарий: ручной чек / гость / владелец / СБП / другое:
+- Среда: локальная тестовая / CI / опубликованная (только после разрешения владельца):
+- Номер соответствующего пункта Issue #1:
 
-## Logs / Screenshots
+## Журнал и скриншоты
 
-Paste any relevant logs or attach screenshots here.
+Добавляйте **только обезличенные** сообщения и скриншоты, без персональных ссылок, кодов входа, адресов, токенов, паролей и реквизитов.
+
+История реализации, диагностика и статус CI ведутся в PR #3; требования и checkbox — только в Issue #1.

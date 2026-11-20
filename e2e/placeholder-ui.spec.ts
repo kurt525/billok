@@ -1,14 +1,5 @@
 import { test, expect } from '@playwright/test';
-import {
-  users,
-  login,
-  navigateToGroup,
-  authedContext,
-  createTestGroup,
-  trpcMutation,
-  trpcQuery,
-  trpcResult,
-} from './helpers';
+import { users, login, authedContext, createTestGroup, trpcMutation, trpcQuery, trpcResult } from './helpers';
 
 test.describe('Placeholder Members UI', () => {
   test.beforeEach(async ({ page }) => {
@@ -165,32 +156,5 @@ test.describe('Merging a placeholder from group settings', () => {
       await charlie.dispose();
       await dispose();
     }
-  });
-});
-
-test.describe('Pending Receipts UI', () => {
-  test('scan page has save for later button', async ({ page }) => {
-    await login(page, users.alice.email, users.alice.password);
-
-    // Navigate to an existing group's scan page
-    await navigateToGroup(page, 'Apartment');
-    const groupUrl = page.url();
-
-    await page.goto(groupUrl + '/scan');
-    await expect(page.getByRole('heading', { name: 'Scan Receipt' })).toBeVisible();
-    // Save for Later button only appears after processing, not on upload step
-    await expect(page.getByText('Upload a receipt')).toBeVisible();
-  });
-
-  test('scan page supports resume via query param', async ({ page }) => {
-    await login(page, users.alice.email, users.alice.password);
-    await navigateToGroup(page, 'Apartment');
-    const groupUrl = page.url();
-
-    // Navigate to scan with a fake receiptId — should go to assign step
-    await page.goto(groupUrl + '/scan?receiptId=fake-id');
-    // Should try to load receipt data (will fail but shows the assign step was triggered)
-    // The important thing is it doesn't show the upload step
-    await expect(page.getByText('Upload a receipt')).not.toBeVisible();
   });
 });

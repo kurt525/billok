@@ -1,156 +1,54 @@
-# Contributing to ShareTab
+# Участие в разработке BillOK
 
-Thanks for your interest in contributing! Here's everything you need to get started.
+BillOK — русскоязычное приложение для ручного разделения чеков. Проект пока не опубликован: данные и учётные записи на этапе разработки тестовые. Требования и порядок приёмки — Issue #1 (https://github.com/kurt525/billok/issues/1), журнал изменений и CI — PR #3 (https://github.com/kurt525/billok/pull/3).
 
-## Dev Environment Setup
+Проект основан на ShareTab (MIT), но прежние инструкции upstream не описывают выпуск BillOK.
 
-### Prerequisites
+## Среда разработки
 
-- Node.js 22 (the version CI and the Docker image use)
-- npm 10+
-- Git
+Требуются Node.js 22.23.4, npm, PostgreSQL и Chromium для Playwright. Используйте отдельную тестовую БД и только тестовые значения окружения. Команды для локальной среды:
 
-### Install dependencies
+    git clone https://github.com/kurt525/billok.git
+    cd billok
+    npm ci --legacy-peer-deps
+    npx prisma generate
+    cp .env.example .env
 
-```bash
-git clone https://github.com/sw-carlos-cristobal/sharetab.git
-cd sharetab
-npm install
-npx prisma generate
-```
+Заполните локальный .env тестовыми параметрами. Настоящие пароли SMTP, токены, секреты и данные других сервисов не копировать.
 
-The committed `.npmrc` sets `legacy-peer-deps=true` (CI and the Dockerfile pass `--legacy-peer-deps` explicitly): next-auth's optional `nodemailer` peer range is older than the `nodemailer` version ShareTab pins. Keep `.npmrc` when copying the project, or `npm install` stops with an `ERESOLVE` error.
+    npx prisma db push
+    npm run dev
 
-### Start the dev server
+Команда npm run dev:full запускает встроенную тестовую PostgreSQL и Next.js. Тестовые записи создаются только в изолированной QA-БД через BILLOK_QA_FIXTURES=1 npm run db:seed. Они не заменяют регистрацию по приглашению с подтверждением email и Passkey.
 
-The easiest way is the all-in-one script — it starts an embedded PostgreSQL instance (PostgreSQL 18; Docker and CI use PostgreSQL 16) and the Next.js dev server together:
+## Проверки
 
-```bash
-cp .env.example .env   # its DATABASE_URL already points at the embedded database
-npm run dev:full
-```
+    npm run lint:i18n
+    npm run lint
+    npm run format:check
+    npx tsc --noEmit
+    npm test
+    python3 scripts/test_billok_legacy_cleanup.py
 
-Or if you have your own PostgreSQL running, copy `.env.example` to `.env`, set `DATABASE_URL`, then create the schema and start the server:
+Проверка npm run lint:i18n контролирует единственный каталог messages/ru: непустые переводы, отсутствие старого бренда и ненужных локалей. Языковой переключатель и дополнительные языки BillOK не поддерживает.
 
-```bash
-npx prisma db push
-npm run dev
-```
+Обязательный workflow .github/workflows/billok-ci.yml содержит пять заданий: Vitest, Code quality/types, Coverage regression, Mobile Chromium (320–720 CSS px) и BillOK mobile PWA. Полный CI запускается после точечных проверок. Случайно упавшее задание повторяется без дополнительного коммита.
 
-### Seed demo data
+## Архитектура и границы изменений
 
-```bash
-npm run db:seed
-```
+- Только ручные чеки, суммы в RUB до копейки, доли, один плательщик и добровольные чаевые.
+- Только Passkey для зарегистрированных пользователей, приглашение и подтверждение email. Пароли, Magic Link, Google и OIDC запрещены.
+- Только русский интерфейс и мобильные сценарии.
+- Страница /groups/[groupId]/scan является действующим ручным редактором, несмотря на историческое имя.
+- Серверные маршруты: src/server/trpc/routers/; UI: src/app/ и src/components/; схема: prisma/.
+- Prisma, SQL, сброс тестовой БД, предрелизные проверки и публикацию выполнять в отдельных разделах Issue #1. Рабочую БД не сбрасывать.
 
-This creates three demo users you can log in with:
+Сохраняйте проверки прав, транзакционные блокировки, копейки и атомарное назначение долей. Не допускайте изменения чужих сервисов VPS.
 
-| Email               | Password    |
-| ------------------- | ----------- |
-| alice@example.com   | password123 |
-| bob@example.com     | password123 |
-| charlie@example.com | password123 |
+## PR и безопасность
 
-## Running Tests
+Работайте через ветку PR #3; не отправляйте изменения прямо в main, не переписывайте историю и не создавайте лишние коммиты. В Issue #1 — только задания и checkbox их приёмки, в PR #3 — описание реализации и результаты CI на русском языке.
 
-### Unit tests
+Не помещайте секреты в Git, CI-логи или артефакты. Не удаляйте установленный Node.js 22.23.4 на ci-runner. Production-развёртывание и создание рабочей учётной записи владельца — только после отдельной приёмки и разрешения.
 
-```bash
-npm test
-```
-
-Runs over 1,100 fast Vitest tests (under 10 seconds). Tests sit next to the code they cover (`src/**/*.test.ts`, plus `docker/**/*.test.mjs` for the Docker build scripts): money and split math, balance computation, rate limiting, exchange rates, sign-in, OIDC and Google policy, guest sessions, AI providers, and the admin, auth, balances, expenses, guest, groups, and receipts routers.
-
-### E2E tests
-
-```bash
-npx playwright install chromium   # once, to download the browser (add --with-deps on Linux for its system libraries)
-npm run dev:full   # in one terminal
-BASE_URL=http://localhost:3000 npx playwright test   # in another
-```
-
-Tip: set `AUTH_RATE_LIMIT_MAX=9999`, `AUTH_IP_RATE_LIMIT_MAX=9999`, `REGISTER_RATE_LIMIT_MAX=9999`, and `GUEST_RATE_LIMIT_MAX=9999` in `.env` to lift the per-email and per-IP limits during test runs (the global guest caps and the fixed guest limits still apply). Every local request counts against one IP, because Next.js adds an `x-forwarded-for` header to local requests.
-
-The full suite also expects the settings CI uses. In `.env`, for the server: `ADMIN_EMAIL=alice@example.com` (the admin tests sign in as the seeded Alice), `AI_PROVIDER_PRIORITY=mock` (deterministic receipt scans), and `EMAIL_SERVER_HOST=localhost` with `EMAIL_SERVER_PORT=2525`, with `node scripts/mock-smtp.mjs 2525` running (it accepts all mail and delivers nothing). Playwright doesn't read `.env`, and the two magic-link tests that send mail skip unless the test process itself sees `EMAIL_SERVER_HOST` (the other magic-link tests fail unless the server has it), so pass it on the command line too:
-
-```bash
-EMAIL_SERVER_HOST=localhost BASE_URL=http://localhost:3000 npx playwright test
-```
-
-See the "Run tests" step in `.github/workflows/test.yml`.
-
-### Linting
-
-```bash
-npm run lint
-```
-
-### Formatting
-
-```bash
-npm run format         # auto-fix formatting
-npm run format:check   # check only (what CI runs)
-```
-
-### Type checking
-
-```bash
-npx tsc --noEmit
-```
-
-TypeScript runs in strict mode with extra checks, including `exactOptionalPropertyTypes` and `noUncheckedIndexedAccess` (see `tsconfig.json`), and ESLint fails on any warning (`--max-warnings 0`).
-
-### Translations
-
-```bash
-npm run lint:i18n   # every locale has exactly the keys English has
-```
-
-CI runs it too; run it locally whenever you add or change UI text. See [CONTRIBUTING-TRANSLATIONS.md](CONTRIBUTING-TRANSLATIONS.md).
-
-## Making Changes
-
-### Prisma schema changes
-
-After editing `prisma/schema.prisma`:
-
-```bash
-npx prisma db push      # apply to dev DB
-npx prisma generate     # regenerate the client
-```
-
-**Breaking schema changes** (enum conversions, column type changes, data migrations) can't be handled by `prisma db push` alone. For these, add an idempotent `.sql` file in `prisma/migrations/`. The Docker entrypoint runs all `*.sql` files in that directory before `prisma db push`, so they execute automatically on container startup. Name the file descriptively (e.g., `guest_split_status_enum.sql`) and make it safe to re-run. It must also do nothing on an empty database, because a fresh install runs it before any tables exist.
-
-Database objects that Prisma's schema can't express (for example the unique index on `lower(email)`) go in `prisma/after-push/`, which the entrypoint runs **after** `prisma db push`. These must be idempotent too. An error in either directory stops the container from starting, so for anything optional, log a warning (`RAISE WARNING`) instead of raising an error. CI's `docker-fresh-install.yml` workflow boots the image on an empty volume to check both directories.
-
-### Adding a tRPC route
-
-Routers live in `src/server/trpc/routers/`. Add your procedure there and wire it into `src/server/trpc/router.ts`.
-
-## Pull Request Guidelines
-
-- **One concern per PR** — bug fixes, features, and refactors should be separate PRs.
-- **Describe what and why** — the PR description should explain the motivation, not just restate the diff.
-- **Add tests** — new logic should have unit tests where possible; new user flows should have e2e coverage.
-- **Pass CI** — the required `test` check runs `npm audit --omit=dev --audit-level=high`, `npm run format:check`, `npm run lint`, `npx tsc --noEmit`, `npm test`, `npm run build`, and the Playwright e2e suite. Run the first six locally before opening a PR. If you change `docker/`, the entrypoint, `prisma/` SQL, or dependencies, also run `npm run test:docker` (the Docker Fresh Install check; `DOCKER_HOST=ssh://user@host` works if you have no local Docker).
-- **Document upgrade steps** — if a change needs anything from operators on upgrade (a manual command, a new required variable, a behavior they must know about), add it under **Upgrading** in the README, since build releases only list commit titles.
-- **Conventional commits** — use prefixes like `feat:`, `fix:`, `chore:`, `docs:`, `refactor:` in commit messages.
-
-## Project Structure
-
-```
-src/
-  app/           # Next.js App Router pages
-  components/    # React components (organized by domain)
-  server/        # tRPC routers, Prisma client, auth, AI providers
-  lib/           # Shared utilities (money, splits, etc.)
-prisma/
-  schema.prisma  # Database schema
-docker/          # Dockerfile + docker-compose
-```
-
-See [CLAUDE.md](CLAUDE.md) for a full architecture reference.
-
-## Questions?
-
-Open a [GitHub Discussion](https://github.com/sw-carlos-cristobal/sharetab/discussions) or file an issue.
+Документы для операторов: ops/billok/PRODUCTION-SECRETS.md и ops/billok/HTTPS-PREDEPLOY.md.

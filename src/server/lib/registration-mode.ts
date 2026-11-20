@@ -14,10 +14,8 @@ export async function readRegistrationMode(db: PrismaClient): Promise<Registrati
 }
 
 /**
- * Whether the Registration setting lets anyone create an account. The Google
- * policy reads it as is (DISABLE_PASSWORD_LOGIN doesn't close Google
- * sign-up); the OIDC policy reads it only for email linking, while password
- * login is on.
+ * Reads the administrative registration setting, subject to
+ * BillOK's invitation-only and approved-email-domain restrictions.
  */
 export async function isRegistrationOpen(db: PrismaClient): Promise<boolean> {
   return (await readRegistrationMode(db)) === 'open';

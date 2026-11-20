@@ -1,18 +1,16 @@
-name: Docker Fresh Install
+name: Docker External PostgreSQL Smoke
 
-# Builds the production image and runs scripts/docker-smoke.sh against it:
+# Manual smoke requires preprovisioned billok_pg_test and root-owned secrets:
 # a fresh install on an empty data volume, restarts the way every existing
-# install does on upgrade, and the Meridian provider starting inside the image
-# and running through the app. The Test workflow runs the app with
+# install does on upgrade, including schema creation and manual receipts. The Test workflow runs the app with
 # `npm run start` against its own database, so it never exercises the
 # entrypoint, the pre-push SQL migrations, or the packages the Dockerfile
 # adds. Run it locally with `npm run test:docker`.
 
-# Pull requests (and manual runs): on main, docker.yml runs the same script
-# before it publishes the image.
+# 8.2: manual only; require a separate Docker-capable isolated runner.
+# The regular ci-runner has no Docker-daemon permission. 8.9 owns Docker
+# isolation tests; 8.4 owns release/publication protection.
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -21,13 +19,15 @@ concurrency:
 
 jobs:
   fresh-install:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, billok-docker-smoke]
     permissions:
       contents: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -38,9 +38,9 @@ jobs:
           context: .
           file: docker/Dockerfile
           load: true
-          tags: sharetab:ci
+          tags: billok:ci
           # Reuse the layers the main-branch image build caches.
           cache-from: type=gha,scope=main-image
 
       - name: Smoke test the image
-        run: scripts/docker-smoke.sh --image sharetab:ci
+        run: scripts/docker-smoke.sh --image billok:ci

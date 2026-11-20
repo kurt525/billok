@@ -23,33 +23,31 @@ export const balancesRouter = createTRPCRouter({
           select: {
             paidById: true,
             amount: true,
-            baseCurrencyAmount: true,
             shares: { select: { userId: true, amount: true } },
           },
         },
         settlements: {
-          select: { fromId: true, toId: true, amount: true, baseCurrencyAmount: true },
+          select: { fromId: true, toId: true, amount: true },
         },
         members: {
-          select: { user: { select: { id: true, name: true, venmoUsername: true } } },
+          select: { user: { select: { id: true, name: true } } },
         },
       },
     });
 
     // Aggregate net amounts across all groups per person pair
     // Positive = they owe you, Negative = you owe them
-    const aggregated = new Map<string, { userName: string; venmoUsername: string | null; amount: number }>();
+    const aggregated = new Map<string, { userName: string; amount: number }>();
 
     for (const group of groups) {
       const balances = computeBalances(group.expenses, group.settlements);
       const debts = simplifyDebts(balances);
 
       // Build a userId -> user info lookup for this group
-      const userMap = new Map<string, { name: string; venmoUsername: string | null }>();
+      const userMap = new Map<string, { name: string }>();
       for (const member of group.members) {
         userMap.set(member.user.id, {
           name: member.user.name ?? 'Unknown',
-          venmoUsername: member.user.venmoUsername,
         });
       }
 
@@ -61,12 +59,9 @@ export const balancesRouter = createTRPCRouter({
           const userInfo = userMap.get(debt.from);
           if (existing) {
             existing.amount += debt.amount;
-            // Update venmoUsername if we find one (may differ across groups)
-            if (userInfo?.venmoUsername) existing.venmoUsername = userInfo.venmoUsername;
           } else {
             aggregated.set(debt.from, {
               userName: userInfo?.name ?? 'Unknown',
-              venmoUsername: userInfo?.venmoUsername ?? null,
               amount: debt.amount,
             });
           }
@@ -76,11 +71,9 @@ export const balancesRouter = createTRPCRouter({
           const userInfo = userMap.get(debt.to);
           if (existing) {
             existing.amount -= debt.amount;
-            if (userInfo?.venmoUsername) existing.venmoUsername = userInfo.venmoUsername;
           } else {
             aggregated.set(debt.to, {
               userName: userInfo?.name ?? 'Unknown',
-              venmoUsername: userInfo?.venmoUsername ?? null,
               amount: -debt.amount,
             });
           }
@@ -88,14 +81,14 @@ export const balancesRouter = createTRPCRouter({
       }
     }
 
-    const owedToYou: { userId: string; userName: string; venmoUsername: string | null; amount: number }[] = [];
-    const youOwe: { userId: string; userName: string; venmoUsername: string | null; amount: number }[] = [];
+    const owedToYou: { userId: string; userName: string; amount: number }[] = [];
+    const youOwe: { userId: string; userName: string; amount: number }[] = [];
 
-    for (const [userId, { userName, venmoUsername, amount }] of aggregated) {
+    for (const [userId, { userName, amount }] of aggregated) {
       if (amount > 0) {
-        owedToYou.push({ userId, userName, venmoUsername, amount });
+        owedToYou.push({ userId, userName, amount });
       } else if (amount < 0) {
-        youOwe.push({ userId, userName, venmoUsername, amount: -amount });
+        youOwe.push({ userId, userName, amount: -amount });
       }
     }
 
@@ -119,12 +112,11 @@ export const balancesRouter = createTRPCRouter({
           select: {
             paidById: true,
             amount: true,
-            baseCurrencyAmount: true,
             shares: { select: { userId: true, amount: true } },
           },
         },
         settlements: {
-          select: { fromId: true, toId: true, amount: true, baseCurrencyAmount: true },
+          select: { fromId: true, toId: true, amount: true },
         },
       },
     });

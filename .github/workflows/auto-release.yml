@@ -1,11 +1,17 @@
-name: Auto Release
+name: BillOK Manual Release
 
+# 8.4: no automatic release on push or ordinary CI.
+# Owner must explicitly approve repository variable and dispatch on main.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      confirm_release:
+        description: "Введите РАЗРЕШАЮ РЕЛИЗ BILLOK после приёмки"
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: auto-release
@@ -13,6 +19,14 @@ concurrency:
 
 jobs:
   release:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == github.repository_owner &&
+      vars.BILLOK_RELEASE_APPROVED == 'true' &&
+      inputs.confirm_release == 'РАЗРЕШАЮ РЕЛИЗ BILLOK'
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
