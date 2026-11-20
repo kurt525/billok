@@ -523,8 +523,9 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
                 "six-width final authenticated mobile adaptation audit across main screens",
             ),
             "e2e/billok-mobile-guest-split.spec.ts": (
-                "splits-page",
-                "split-card-",
+                "receipt-item-name-",
+                "creator-add-guest-place",
+                "guest-slot-option-3",
             ),
         }
         for path, markers in current.items():
@@ -559,8 +560,14 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertFalse((ROOT / "e2e/test-receipt.png").exists())
         self.assertIn("authedPasskeyContext", suite)
         self.assertIn("receipts.createManual", suite)
-        self.assertIn("workflow-manual", suite)
-        self.assertEqual(suite.count("test('9.3:"), 3)
+        # The original three cases remain covered, but two now exercise the
+        # single TASK-BILLOK-002 creation flow instead of a removed switch.
+        self.assertIn("startUnifiedReceipt", suite)
+        self.assertIn("creator-add-guest-place", suite)
+        self.assertIn("guest-slot-option-1", suite)
+        self.assertIn("guest-slot-option-2", suite)
+        self.assertEqual(suite.count("test('TASK-BILLOK-002:"), 2)
+        self.assertEqual(suite.count("test('9.3:"), 1)
         self.assertIn("e2e/claim-share-link.spec.ts", source(".github/workflows/billok-ci.yml"))
 
     def test_only_russian_internal_locale_rewrite_remains(self):

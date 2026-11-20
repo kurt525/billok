@@ -64,7 +64,26 @@ test('TASK-BILLOK-002: creator can distinguish and rename long guest names on a 
   await expect(page.getByTestId('creator-add-guest-place')).toBeVisible();
   const names = ['Алексей', 'Алексей Иванов', 'Анна Ли', 'Кристофер Александрович Петров'];
   for (let i = 1; i <= names.length; i++) {
-    await page.getByTestId('edit-person-' + i).click();
+    const editButton = page.getByTestId('edit-person-' + i);
+    // Playwright's default "if needed" scroll considers the button visible
+    // even when the sticky header, the prior guest row or a bottom toast
+    // covers its tap point. Center the actual control in the phone viewport.
+    await editButton.evaluate((button) => button.scrollIntoView({ block: 'center', inline: 'nearest' }));
+    await expect
+      .poll(
+        async () => {
+          return editButton.evaluate((button) => {
+            const bounds = button.getBoundingClientRect();
+            const x = bounds.x + bounds.width / 2;
+            const y = bounds.y + bounds.height / 2;
+            const top = document.elementFromPoint(x, y);
+            return x >= 0 && x < innerWidth && y >= 56 && y < innerHeight && (top === button || button.contains(top));
+          });
+        },
+        { message: 'Edit guest ' + i + ': actual tap point must not be intercepted' },
+      )
+      .toBe(true);
+    await editButton.click();
     await page.getByTestId('edit-name-input-' + i).fill(names[i - 1]!);
     await page
       .getByTestId('guest-color-person-' + i)
