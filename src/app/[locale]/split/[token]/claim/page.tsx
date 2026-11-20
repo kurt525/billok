@@ -573,9 +573,11 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   }
 
   const editPersonName = trpc.guest.editPersonName.useMutation({
-    onSuccess: () => {
-      setEditingPersonId(null);
-      setEditingName('');
+    onSuccess: (_data, variables) => {
+      // An SSE refresh can reveal the renamed guest before this response is
+      // processed. If the creator has already opened another guest's editor,
+      // an older successful save must not close it or erase its draft.
+      setEditingPersonId((current) => (current === variables.targetId ? null : current));
       void utils.guest.getSession.invalidate({ token });
       toast.success(t('nameUpdated'));
     },
@@ -2602,84 +2604,95 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 style={{ borderLeftColor: guestVisualColorBorder(person, idx) }}
                 data-testid={'guest-color-person-' + idx}
               >
-                <Avatar className="h-6 w-6 shrink-0">
-                  <AvatarFallback
-                    className="text-[10px] font-semibold"
-                    style={guestVisualColorStyle(data.people[idx], idx)}
-                  >
-                    {getInitials(person.name)}
-                  </AvatarFallback>
-                </Avatar>
-                {editingPersonId === person.id ? (
-                  <form
-                    className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      if (!editingName.trim() || (!data.isCreator && !personToken)) return;
-                      editPersonName.mutate({
-                        token,
-                        ...(personToken ? { personToken } : {}),
-                        targetId: person.id,
-                        newName: editingName.trim(),
-                        groupSize: editingGroupSize,
-                      });
-                    }}
-                  >
-                    <Input
-                      value={editingName}
-                      maxLength={MAX_GUEST_NAME_LENGTH}
-                      autoComplete="off"
-                      onChange={(e) => setEditingName(e.target.value)}
-                      className="h-11 min-w-[7rem] flex-1 text-base"
-                      autoFocus
-                      aria-label={t('editName')}
-                      data-testid={`edit-name-input-${idx}`}
-                    />
-                    <Input
-                      type="number"
-                      inputMode="numeric"
-                      min={1}
-                      max={20}
-                      value={editingGroupSize}
-                      onChange={(e) => setEditingGroupSize(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-                      className="h-11 w-16 min-w-0 text-base"
-                      aria-label={t('groupSize')}
-                      data-testid={`edit-group-size-${idx}`}
-                    />
-                    <Button
-                      type="submit"
-                      size="sm"
-                      variant="ghost"
-                      className="size-11 shrink-0 p-0"
-                      disabled={editPersonName.isPending}
-                      aria-label={t('saveName')}
-                      title={t('saveName')}
+                <div className="flex w-full min-w-0 items-start gap-2">
+                  <Avatar className="h-6 w-6 shrink-0">
+                    <AvatarFallback
+                      className="text-[10px] font-semibold"
+                      style={guestVisualColorStyle(data.people[idx], idx)}
                     >
-                      <Check className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="size-11 shrink-0 p-0"
-                      onClick={() => setEditingPersonId(null)}
-                      aria-label={t('cancelButton')}
-                      title={t('cancelButton')}
+                      {getInitials(person.name)}
+                    </AvatarFallback>
+                  </Avatar>
+                  {editingPersonId === person.id ? (
+                    <form
+                      className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (!editingName.trim() || (!data.isCreator && !personToken)) return;
+                        editPersonName.mutate({
+                          token,
+                          ...(personToken ? { personToken } : {}),
+                          targetId: person.id,
+                          newName: editingName.trim(),
+                          groupSize: editingGroupSize,
+                        });
+                      }}
                     >
-                      <X className="h-3.5 w-3.5" />
-                    </Button>
-                  </form>
-                ) : (
-                  <>
-                    <span className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">
-                      {person.name}
-                      {person.groupSize > 1 && (
-                        <span data-testid={`group-badge-${idx}`}>{` (×${person.groupSize})`}</span>
-                      )}
-                      {idx === myPersonIndex && ` ${t('you')}`}
-                    </span>
-                    {roleMarks(idx)}
-                    {accountMark(idx)}
+                      <Input
+                        value={editingName}
+                        maxLength={MAX_GUEST_NAME_LENGTH}
+                        autoComplete="off"
+                        onChange={(e) => setEditingName(e.target.value)}
+                        className="h-11 min-w-[7rem] flex-1 text-base"
+                        autoFocus
+                        aria-label={t('editName')}
+                        data-testid={`edit-name-input-${idx}`}
+                      />
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={20}
+                        value={editingGroupSize}
+                        onChange={(e) => setEditingGroupSize(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+                        className="h-11 w-16 min-w-0 text-base"
+                        aria-label={t('groupSize')}
+                        data-testid={`edit-group-size-${idx}`}
+                      />
+                      <Button
+                        type="submit"
+                        size="sm"
+                        variant="ghost"
+                        className="size-11 shrink-0 p-0"
+                        disabled={editPersonName.isPending}
+                        aria-label={t('saveName')}
+                        title={t('saveName')}
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="size-11 shrink-0 p-0"
+                        onClick={() => setEditingPersonId(null)}
+                        aria-label={t('cancelButton')}
+                        title={t('cancelButton')}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </form>
+                  ) : (
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <span
+                        className="block w-full min-w-0 text-sm font-medium [overflow-wrap:anywhere]"
+                        data-testid={'guest-display-name-' + idx}
+                      >
+                        {person.name}
+                        {person.groupSize > 1 && (
+                          <span data-testid={`group-badge-${idx}`}>{` (×${person.groupSize})`}</span>
+                        )}
+                        {idx === myPersonIndex && ` ${t('you')}`}
+                      </span>
+                      <div className="flex min-w-0 flex-wrap items-center gap-1">
+                        {roleMarks(idx)}
+                        {accountMark(idx)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {editingPersonId !== person.id && (
+                  <div className="flex w-full flex-wrap items-center justify-end gap-2 empty:hidden">
                     {(data.isCreator || person.id === myPersonId) && data.status === 'CLAIMING' && (
                       <button
                         type="button"
@@ -2709,7 +2722,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           <X className="h-3.5 w-3.5" />
                         </button>
                       )}
-                  </>
+                  </div>
                 )}
                 {creatorGuestLinkControls(person, idx)}
               </div>

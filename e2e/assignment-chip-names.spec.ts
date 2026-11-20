@@ -65,48 +65,20 @@ test('TASK-BILLOK-002: creator can distinguish and rename long guest names on a 
   const names = ['Алексей', 'Алексей Иванов', 'Анна Ли', 'Кристофер Александрович Петров'];
   for (let i = 1; i <= names.length; i++) {
     const editButton = page.getByTestId('edit-person-' + i);
-    // Playwright's default "if needed" scroll considers the button visible
-    // even when the sticky header, the prior guest row or a bottom toast
-    // covers its tap point. Center the actual control in the phone viewport.
-    await editButton.evaluate((button) => button.scrollIntoView({ block: 'center', inline: 'nearest' }));
-    await expect
-      .poll(
-        async () => {
-          return editButton.evaluate((button) => {
-            const bounds = button.getBoundingClientRect();
-            const x = bounds.x + bounds.width / 2;
-            const y = bounds.y + bounds.height / 2;
-            const top = document.elementFromPoint(x, y);
-            return x >= 0 && x < innerWidth && y >= 56 && y < innerHeight && (top === button || button.contains(top));
-          });
-        },
-        { message: 'Edit guest ' + i + ': actual tap point must not be intercepted' },
-      )
-      .toBe(true);
-    // Use the exact already-verified on-screen hit point, without allowing
-    // locator.click() to scroll the page a second time underneath the fixed
-    // header or the previous guest's notification. This is a real pointer
-    // click, not force-click or synthetic element.dispatchEvent.
-    const hitPoint = await editButton.evaluate((button) => {
-      const bounds = button.getBoundingClientRect();
-      const x = bounds.x + bounds.width / 2;
-      const y = bounds.y + bounds.height / 2;
-      const top = document.elementFromPoint(x, y);
-      if (top !== button && !button.contains(top)) {
-        throw new Error(
-          'Guest edit button obstructed by ' +
-            (top?.closest('[data-testid]')?.getAttribute('data-testid') ?? top?.tagName ?? 'unknown'),
-        );
-      }
-      return { x, y };
-    });
-    await page.mouse.click(hitPoint.x, hitPoint.y);
+    // A real touch locator, not a manual coordinate derived from
+    // getBoundingClientRect: Playwright tracks viewport/scroll and requires
+    // the actual edit button to receive the touch.
+    await editButton.tap();
     await expect(page.getByTestId('edit-name-input-' + i)).toBeVisible();
     await page.getByTestId('edit-name-input-' + i).fill(names[i - 1]!);
     await page
       .getByTestId('guest-color-person-' + i)
       .locator('button[type="submit"]')
       .click();
+    // The SSE response may update the visible name earlier than tRPC's
+    // mutation onSuccess. Wait until the previous editor has fully closed
+    // before beginning the next rename, so both transitions are verified.
+    await expect(page.getByTestId('edit-name-input-' + i)).toHaveCount(0);
     await expect(page.getByTestId('guest-color-person-' + i)).toContainText(names[i - 1]!);
   }
   for (const width of [320, 375]) {
@@ -119,6 +91,13 @@ test('TASK-BILLOK-002: creator can distinguish and rename long guest names on a 
       const rect = await card.boundingBox();
       expect(rect).not.toBeNull();
       expect(rect!.x + rect!.width, 'Guest card boundary at ' + width).toBeLessThanOrEqual(width + 1);
+      const nameLabel = card.getByTestId('guest-display-name-' + i);
+      await expect(nameLabel).toBeVisible();
+      const labelRect = await nameLabel.boundingBox();
+      expect(labelRect).not.toBeNull();
+      expect(labelRect!.width, 'Name must not collapse into a letter-wide column at ' + width).toBeGreaterThanOrEqual(
+        100,
+      );
     }
   }
 });
