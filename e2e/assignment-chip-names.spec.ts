@@ -83,7 +83,25 @@ test('TASK-BILLOK-002: creator can distinguish and rename long guest names on a 
         { message: 'Edit guest ' + i + ': actual tap point must not be intercepted' },
       )
       .toBe(true);
-    await editButton.click();
+    // Use the exact already-verified on-screen hit point, without allowing
+    // locator.click() to scroll the page a second time underneath the fixed
+    // header or the previous guest's notification. This is a real pointer
+    // click, not force-click or synthetic element.dispatchEvent.
+    const hitPoint = await editButton.evaluate((button) => {
+      const bounds = button.getBoundingClientRect();
+      const x = bounds.x + bounds.width / 2;
+      const y = bounds.y + bounds.height / 2;
+      const top = document.elementFromPoint(x, y);
+      if (top !== button && !button.contains(top)) {
+        throw new Error(
+          'Guest edit button obstructed by ' +
+            (top?.closest('[data-testid]')?.getAttribute('data-testid') ?? top?.tagName ?? 'unknown'),
+        );
+      }
+      return { x, y };
+    });
+    await page.mouse.click(hitPoint.x, hitPoint.y);
+    await expect(page.getByTestId('edit-name-input-' + i)).toBeVisible();
     await page.getByTestId('edit-name-input-' + i).fill(names[i - 1]!);
     await page
       .getByTestId('guest-color-person-' + i)
