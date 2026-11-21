@@ -137,8 +137,8 @@ test.describe('Claim page — conflict detection', () => {
     await expect(page.locator('[data-sonner-toast]')).toBeHidden({ timeout: 10000 });
 
     // Bob claims item 0 (Pizza — already claimed by Alice) and item 2 (Salad)
-    await page.getByTestId('claim-item-0').click();
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
 
     // Save claims
     const saveBtn = page.getByTestId('save-claims-btn');

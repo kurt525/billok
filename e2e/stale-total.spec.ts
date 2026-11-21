@@ -1,74 +1,68 @@
-import { test, expect, request } from '@playwright/test';
-import { trpcMutation, trpcQuery, trpcResult } from './helpers';
+import { test, expect } from '@playwright/test';
+import { authedContext, trpcMutation, trpcQuery, trpcResult } from './helpers';
 
-const BASE = process.env.BASE_URL || 'http://localhost:3001';
+// TASK-BILLOK-002: only the unified claiming flow may create a new receipt.
+// Keep the regression against stale totals and unapproved shared tips.
+test.describe('Unified receipt: totals and tip-override safety', () => {
+  const receiptData = {
+    merchantName: 'Проверка расчётов',
+    subtotal: 2000,
+    tax: 0,
+    tip: 0,
+    total: 2000,
+    currency: 'RUB',
+  };
+  const items = [{ name: 'Салат', quantity: 1, unitPrice: 2000, totalPrice: 2000 }];
 
-test.describe('createSplit total with tipOverride', () => {
-  test('stored total reflects tipOverride, not original tip', async () => {
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    // Receipt: subtotal 2000, tax 200, tip 100, total 2300
-    // Override tip to 500 → expected total = 2000 + 200 + 500 = 2700
-    const createRes = await trpcMutation(ctx, 'guest.createSplit', {
-      receiptData: {
-        merchantName: 'Tip Override Test',
-        subtotal: 2000,
-        tax: 200,
-        tip: 100,
-        total: 2300,
-        currency: 'USD',
-      },
-      items: [{ name: 'Burger', quantity: 1, unitPrice: 2000, totalPrice: 2000 }],
-      people: [{ name: 'Alice' }],
-      assignments: [{ itemIndex: 0, personIndices: [0] }],
-      paidByIndex: 0,
-      tipOverride: 500,
-    });
-    expect(createRes.ok()).toBe(true);
-    const { shareToken } = (await createRes.json()).result?.data?.json;
-
-    // Fetch the split and check stored receiptData.total
-    const getRes = await trpcQuery(ctx, 'guest.getSplit', { token: shareToken });
-    const data = await trpcResult(getRes);
-
-    // The stored tip should be the override value
-    expect(data.receiptData.tip).toBe(500);
-    // The stored total should be recalculated: subtotal + tax + overriddenTip
-    expect(data.receiptData.total).toBe(2700);
-
-    // Summary totals should also sum to the correct total
-    const summaryTotal = data.summary.reduce((sum: number, s: { total: number }) => sum + s.total, 0);
-    expect(summaryTotal).toBe(2700);
-
-    await ctx.dispose();
+  test('an obsolete top-level tipOverride cannot change the saved total or tips', async () => {
+    const ctx = await authedContext('alice@qa.billok.ru');
+    try {
+      const created = await trpcMutation(ctx, 'guest.createClaimSession', {
+        receiptData,
+        items,
+        guestCount: 0,
+        joinCreator: true,
+        tipOverride: 500,
+      });
+      expect(created.ok(), await created.text()).toBe(true);
+      const { shareToken } = (await created.json()).result.data.json;
+      const session = await trpcResult(await trpcQuery(ctx, 'guest.getSession', { token: shareToken }));
+      expect(session.receiptData.tip).toBe(0);
+      expect(session.receiptData.total).toBe(2000);
+      expect(session.receiptData.subtotal).toBe(2000);
+    } finally {
+      await ctx.dispose();
+    }
   });
 
-  test('stored total preserved when no tipOverride is provided', async () => {
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    const createRes = await trpcMutation(ctx, 'guest.createSplit', {
-      receiptData: {
-        merchantName: 'No Override Test',
-        subtotal: 2000,
-        tax: 200,
-        tip: 100,
-        total: 2300,
-        currency: 'USD',
-      },
-      items: [{ name: 'Salad', quantity: 1, unitPrice: 2000, totalPrice: 2000 }],
-      people: [{ name: 'Alice' }],
-      assignments: [{ itemIndex: 0, personIndices: [0] }],
-      paidByIndex: 0,
-    });
-    expect(createRes.ok()).toBe(true);
-    const { shareToken } = (await createRes.json()).result?.data?.json;
-
-    const getRes = await trpcQuery(ctx, 'guest.getSplit', { token: shareToken });
-    const data = await trpcResult(getRes);
-
-    expect(data.receiptData.tip).toBe(100);
-    expect(data.receiptData.total).toBe(2300);
-
-    await ctx.dispose();
+  test('valid unchanged subtotal is preserved; shared tax/tips cannot be added', async () => {
+    const ctx = await authedContext('alice@qa.billok.ru');
+    try {
+      for (const invalid of [
+        { ...receiptData, tip: 500, total: 2500 },
+        { ...receiptData, tax: 200, total: 2200 },
+        { ...receiptData, total: 2500 },
+      ]) {
+        const refused = await trpcMutation(ctx, 'guest.createClaimSession', {
+          receiptData: invalid,
+          items,
+          guestCount: 0,
+        });
+        expect(refused.ok(), await refused.text()).toBe(false);
+      }
+      const created = await trpcMutation(ctx, 'guest.createClaimSession', {
+        receiptData,
+        items,
+        guestCount: 0,
+        joinCreator: true,
+      });
+      expect(created.ok(), await created.text()).toBe(true);
+      const { shareToken } = (await created.json()).result.data.json;
+      const session = await trpcResult(await trpcQuery(ctx, 'guest.getSession', { token: shareToken }));
+      expect(session.receiptData.total).toBe(2000);
+      expect(session.receiptData.tip).toBe(0);
+    } finally {
+      await ctx.dispose();
+    }
   });
 });

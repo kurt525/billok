@@ -106,12 +106,6 @@ describe('BillOK participant display names: 1–40 chars per receipt', () => {
   const receiptData = { subtotal: 100, tax: 0, tip: 0, total: 100, currency: 'RUB' };
   const items = [{ name: 'Чай', quantity: 1, unitPrice: 100, totalPrice: 100 }];
   const base = {
-    createSplit: {
-      receiptData,
-      items,
-      people: [{ name: 'Илья' }],
-      assignments: [{ itemIndex: 0, personIndices: [0] }],
-    },
     createClaimSession: { receiptData, items, people: ['Илья'], creatorName: 'Илья', paidByName: 'Илья' },
     joinSession: { token: 'session', name: 'Илья' },
     editPersonName: {
@@ -123,7 +117,6 @@ describe('BillOK participant display names: 1–40 chars per receipt', () => {
   };
   type NameInput = (typeof base)[keyof typeof base];
   test.each([
-    ['createSplit', 'people'],
     ['createClaimSession', 'creatorName'],
     ['createClaimSession', 'paidByName'],
     ['createClaimSession', 'people'],
@@ -136,7 +129,7 @@ describe('BillOK participant display names: 1–40 chars per receipt', () => {
     };
     const schema = procedure._def.inputs[0]!;
     const makeInput = (name: string): NameInput => {
-      const nameField = field === 'people' ? (operation === 'createSplit' ? [{ name }] : [name]) : name;
+      const nameField = field === 'people' ? [name] : name;
       return { ...base[operation], [field]: nameField } as NameInput;
     };
     expect(() => schema.parse(makeInput('Я'.repeat(40)))).not.toThrow();
@@ -150,6 +143,212 @@ describe('BillOK participant display names: 1–40 chars per receipt', () => {
     expect(readFileSync('src/server/trpc/routers/auth.ts', 'utf8')).toContain(
       'name: z.string().trim().min(1).max(100).optional()',
     );
+  });
+});
+
+describe('TASK-BILLOK-002 23–30: indivisible family identities and atomic dish portions', () => {
+  const creator = '10000000-0000-4000-8000-000000000001';
+  const wife = '10000000-0000-4000-8000-000000000002';
+  const husband = '10000000-0000-4000-8000-000000000003';
+  const child = '10000000-0000-4000-8000-000000000004';
+  const outsider = '10000000-0000-4000-8000-000000000005';
+  const key = '40000000-0000-4000-8000-000000000001';
+  const secret = 'c9db8921-3577-4da1-b608-c511222a4b53';
+  function base() {
+    return {
+      id: 'receipt-1',
+      userId: 'user-1',
+      shareToken: 'share-1',
+      status: 'CLAIMING',
+      expiresAt: new Date(Date.now() + 3_600_000),
+      paidByIndex: 0,
+      receiptData: {
+        subtotal: 700,
+        total: 700,
+        tax: 0,
+        tip: 0,
+        currency: 'RUB',
+        organizerPersonId: creator,
+        knownPartsByItem: { '0': 7 },
+      },
+      items: [{ name: 'Пицца', quantity: 1, unitPrice: 700, totalPrice: 700 }],
+      assignments: [] as { itemIndex: number; personIndices: number[]; partsByPersonId?: Record<string, number> }[],
+      people: [
+        { id: creator, name: 'Илья', personToken: 'creator-secret', tipCents: 0 },
+        { id: wife, name: 'Жена', personToken: secret, tipCents: 40, paymentGroupRepresentativeId: wife },
+        { id: husband, name: 'Муж', personToken: 'husband-secret', tipCents: 15, paymentGroupRepresentativeId: wife },
+        { id: child, name: 'Ребёнок', tipCents: 0, paymentGroupRepresentativeId: wife },
+        { id: outsider, name: 'Посторонний', personToken: 'c5e4ad42-5418-4388-8000-0024fbe316ff' },
+      ],
+    };
+  }
+  let persisted: ReturnType<typeof base>;
+  beforeEach(() => {
+    persisted = structuredClone(base());
+    mockDb.guestSplit.findUnique.mockImplementation(async () => structuredClone(persisted));
+    mockDb.guestSplit.update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      persisted = { ...persisted, ...data } as typeof persisted;
+      return persisted;
+    });
+  });
+
+  test('creator assigns 4/2/1 on an ungrouped receipt while keeping separate person IDs and tips', async () => {
+    // Creator delegation is allowed only before payment groups exist; after
+    // grouping the delegated representative owns its members' assignments.
+    for (const person of persisted.people)
+      delete (person as { paymentGroupRepresentativeId?: string }).paymentGroupRepresentativeId;
+    const api = await caller(signedIn);
+    const changes = [
+      { personId: wife, parts: 4 },
+      { personId: husband, parts: 2 },
+      { personId: child, parts: 1 },
+    ];
+    const result = await api.setReceiptItemParts({ token: 'share-1', itemIndex: 0, changes, requestKey: key });
+    expect(result).toMatchObject({ success: true, replayed: false });
+    expect(persisted.assignments).toHaveLength(1);
+    expect(persisted.assignments[0]).toMatchObject({
+      itemIndex: 0,
+      personIndices: [1, 2, 3],
+      partsByPersonId: { [wife]: 4, [husband]: 2, [child]: 1 },
+    });
+    expect(persisted.people.map((person) => person.id)).toEqual(base().people.map((person) => person.id));
+    expect(persisted.people[1]).toMatchObject({ tipCents: 40, personToken: secret });
+    expect(persisted.people[2]).toMatchObject({ tipCents: 15 });
+    const count = mockDb.guestSplit.update.mock.calls.length;
+    await api.setReceiptItemParts({ token: 'share-1', itemIndex: 0, changes, requestKey: key });
+    expect(mockDb.guestSplit.update).toHaveBeenCalledTimes(count);
+    await expect(
+      api.setReceiptItemParts({
+        token: 'share-1',
+        itemIndex: 0,
+        changes: [{ personId: wife, parts: 5 }],
+        requestKey: key,
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
+  test('the creator cannot bypass a payment group and change its members through bulk allocation', async () => {
+    const api = await caller(signedIn);
+    await expect(
+      api.setReceiptItemParts({
+        token: 'share-1',
+        itemIndex: 0,
+        changes: [{ personId: husband, parts: 3 }],
+        requestKey: '40000000-0000-4000-8000-000000000005',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('group representative edits wife/husband/child, not outsider or payer', async () => {
+    const api = await caller();
+    await api.setReceiptItemParts({
+      token: 'share-1',
+      itemIndex: 0,
+      personToken: secret,
+      changes: [
+        { personId: wife, parts: 4 },
+        { personId: husband, parts: 2 },
+        { personId: child, parts: 1 },
+      ],
+      requestKey: key,
+    });
+    expect(persisted.assignments[0]!.partsByPersonId).toMatchObject({
+      [wife]: 4,
+      [husband]: 2,
+      [child]: 1,
+    });
+    expect(persisted.people[2]!.tipCents).toBe(15);
+    expect(persisted.people[3]!.paymentGroupRepresentativeId).toBe(wife);
+    await expect(
+      api.setReceiptItemParts({
+        token: 'share-1',
+        itemIndex: 0,
+        personToken: secret,
+        changes: [{ personId: outsider, parts: 1 }],
+        requestKey: '40000000-0000-4000-8000-000000000002',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      api.setReceiptItemParts({
+        token: 'share-1',
+        itemIndex: 0,
+        personToken: 'c5e4ad42-5418-4388-8000-0024fbe316ff',
+        changes: [{ personId: husband, parts: 3 }],
+        requestKey: '40000000-0000-4000-8000-000000000003',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(persisted.assignments[0]!.partsByPersonId?.[husband]).toBe(2);
+  });
+
+  test('part counts are bounded, total original parts enforced and removal leaves other people', async () => {
+    // All-diner creator assignment is legal only before a payment group
+    // exists; the separate group ACL is asserted in the test above.
+    for (const person of persisted.people)
+      delete (person as { paymentGroupRepresentativeId?: string }).paymentGroupRepresentativeId;
+    const api = await caller(signedIn);
+    await expect(
+      api.setReceiptItemParts({
+        token: 'share-1',
+        itemIndex: 0,
+        changes: [{ personId: wife, parts: 8 }],
+        requestKey: key,
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    await api.setReceiptItemParts({
+      token: 'share-1',
+      itemIndex: 0,
+      changes: [
+        { personId: wife, parts: 4 },
+        { personId: husband, parts: 3 },
+      ],
+      requestKey: key,
+    });
+    await api.setReceiptItemParts({
+      token: 'share-1',
+      itemIndex: 0,
+      changes: [
+        { personId: wife, parts: 0 },
+        { personId: child, parts: 4 },
+      ],
+      requestKey: '40000000-0000-4000-8000-000000000004',
+    });
+    expect(persisted.assignments[0]!.personIndices).toEqual([2, 3]);
+    expect(persisted.assignments[0]!.partsByPersonId).toMatchObject({ [husband]: 3, [child]: 4 });
+    expect(persisted.assignments[0]!.partsByPersonId?.[wife]).toBeUndefined();
+  });
+
+  test('legacy groupSize cannot enter new join/edit requests, preserved saved receipts are readable', async () => {
+    const { guestRouter } = await import('./guest');
+    const joinSchema = guestRouter._def.procedures.joinSession!._def.inputs[0]! as {
+      parse: (input: unknown) => unknown;
+    };
+    const editSchema = guestRouter._def.procedures.editPersonName!._def.inputs[0]! as {
+      parse: (input: unknown) => unknown;
+    };
+    const fixedSlotSchema = guestRouter._def.procedures.joinGuestSlot!._def.inputs[0]! as {
+      parse: (input: unknown) => unknown;
+    };
+    expect(() => joinSchema.parse({ token: 'share-1', name: 'Семья', groupSize: 3 })).toThrow();
+    expect(() =>
+      editSchema.parse({
+        token: 'share-1',
+        targetId: wife,
+        newName: 'Семья',
+        groupSize: 3,
+      }),
+    ).toThrow();
+    expect(() =>
+      fixedSlotSchema.parse({
+        token: 'share-1',
+        name: 'Семья',
+        groupSize: 3,
+        slotId: wife,
+        joinKey: key,
+      }),
+    ).toThrow();
+    expect(() => joinSchema.parse({ token: 'share-1', name: 'Жена' })).not.toThrow();
+    expect(() => editSchema.parse({ token: 'share-1', targetId: wife, newName: 'Жена' })).not.toThrow();
   });
 });
 
@@ -258,13 +457,6 @@ describe('BillOK creation permissions', () => {
   const items = [{ name: 'Tea', quantity: 1, unitPrice: 100, totalPrice: 100 }];
   type Api = Awaited<ReturnType<typeof caller>>;
   const operations = {
-    createSplit: (api: Api) =>
-      api.createSplit({
-        receiptData,
-        items,
-        people: [{ name: 'Pat' }],
-        assignments: [{ itemIndex: 0, personIndices: [0] }],
-      }),
     createClaimSession: (api: Api) =>
       api.createClaimSession({ receiptData, items, creatorName: 'Pat', paidByName: 'Pat' }),
   };
@@ -307,13 +499,6 @@ describe('Issue 3.23: shared account-based receipt creation burst', () => {
   const receiptData = { merchantName: 'Ужин', subtotal: 100, total: 100, tax: 0, tip: 0, currency: 'RUB' };
   const items = [{ name: 'Чай', quantity: 1, unitPrice: 100, totalPrice: 100 }];
   const operations = {
-    createSplit: (api: Awaited<ReturnType<typeof caller>>) =>
-      api.createSplit({
-        receiptData,
-        items,
-        people: [{ name: 'Анна' }],
-        assignments: [{ itemIndex: 0, personIndices: [0] }],
-      }),
     createClaimSession: (api: Awaited<ReturnType<typeof caller>>) =>
       api.createClaimSession({ receiptData, items, creatorName: 'Анна', paidByName: 'Анна' }),
   };
@@ -350,16 +535,6 @@ describe('new shared receipts use RUB exclusively', () => {
   const rubData = { merchantName: 'Ужин', subtotal: 505, tax: 0, tip: 0, total: 505 };
   const items = [{ name: 'Чай', quantity: 1, unitPrice: 505, totalPrice: 505 }];
   const create = {
-    createSplit: (
-      api: Awaited<ReturnType<typeof caller>>,
-      receiptData: Omit<typeof rubData, 'tax' | 'tip'> & { tax?: number; tip?: number; currency?: string },
-    ) =>
-      api.createSplit({
-        receiptData,
-        items,
-        people: [{ name: 'Анна' }],
-        assignments: [{ itemIndex: 0, personIndices: [0] }],
-      }),
     createClaimSession: (
       api: Awaited<ReturnType<typeof caller>>,
       receiptData: Omit<typeof rubData, 'tax' | 'tip'> & { tax?: number; tip?: number; currency?: string },
@@ -418,20 +593,9 @@ describe('new shared receipts use RUB exclusively', () => {
     },
   );
 
-  test('createSplit rejects shared tipOverride, including zero', async () => {
-    const api = await caller(signedIn);
-    const base = {
-      receiptData: rubData,
-      items,
-      people: [{ name: 'Анна' }],
-      assignments: [{ itemIndex: 0, personIndices: [0] }],
-    };
-    for (const tipOverride of [0, 100]) {
-      await expect(
-        api.createSplit({ ...base, tipOverride } as unknown as Parameters<typeof api.createSplit>[0]),
-      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    }
-    expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+  test('obsolete direct-finalized createSplit is absent from the exposed router', async () => {
+    const { guestRouter } = await import('./guest');
+    expect(Object.keys(guestRouter._def.procedures)).not.toContain('createSplit');
   });
 
   test('finalization cannot impose a shared tip on a claim session', async () => {
@@ -592,7 +756,7 @@ describe('guest.joinSession rate limit', () => {
   test('refuses with TOO_MANY_REQUESTS before opening a transaction', async () => {
     checkRateLimit.mockReturnValue({ allowed: false, retryAfterMs: 30_000 });
     const api = await caller();
-    await expect(api.joinSession({ token: 'share-token', name: 'Alice', groupSize: 2 })).rejects.toMatchObject({
+    await expect(api.joinSession({ token: 'share-token', name: 'Alice' })).rejects.toMatchObject({
       code: 'TOO_MANY_REQUESTS',
     });
     expect(mockDb.$transaction).not.toHaveBeenCalled();
@@ -763,6 +927,99 @@ describe('Issue 3.25.4.2: public REST responses redact every guest credential', 
   });
 });
 
+describe('TASK-BILLOK-002: creator expands an existing fixed-slot receipt', () => {
+  const data = {
+    subtotal: 2000,
+    tax: 0,
+    tip: 0,
+    total: 2000,
+    currency: 'RUB',
+    guestSlotsMode: true,
+    guestCount: 2,
+    organizerPersonId: pid(0),
+  };
+  const initial = [
+    { name: 'Анна', accountUserId: 'user-1', personToken: ALICE_TOKEN },
+    { name: 'Борис', guestSlotNumber: 1, personToken: OTHER_TOKEN, tipCents: 100 },
+    { name: 'Гость 2', guestSlotNumber: 2 },
+  ];
+
+  test('keeps creator, payer, prior tokens, shares and tips unchanged', async () => {
+    claimSession(initial, {
+      receiptData: data,
+      paidByIndex: 1,
+      items: [{ name: 'Пицца', quantity: 1, unitPrice: 2000, totalPrice: 2000 }],
+      assignments: [{ itemIndex: 0, personIndices: [1] }],
+    });
+    const requestKey = '98dd2ae9-034b-48e5-af10-6e57ef64bd12';
+    const result = await (await caller(signedIn)).addGuestPlace({ token: 'share-1', requestKey });
+    expect(result).toMatchObject({ personId: expect.stringMatching(UUID), guestSlotNumber: 3 });
+    const people = savedPeople() as (TestPerson & { guestPlaceRequestKey?: string })[];
+    expect(people).toHaveLength(4);
+    expect(people.slice(0, 3)).toMatchObject(withIds(initial));
+    expect(people[3]).toMatchObject({
+      id: result.personId,
+      name: 'Гость 3',
+      guestSlotNumber: 3,
+      guestPlaceRequestKey: requestKey,
+    });
+    expect(people[3]?.personToken).toBeUndefined();
+    const saved = mockDb.guestSplit.update.mock.lastCall?.[0] as {
+      data: { receiptData: { guestCount: number }; people: TestPerson[]; assignments?: unknown; paidByIndex?: number };
+    };
+    expect(saved.data.receiptData).toMatchObject({ guestSlotsMode: true, guestCount: 3 });
+    expect(saved.data.assignments).toBeUndefined();
+    expect(saved.data.paidByIndex).toBeUndefined();
+  });
+
+  test('retries the same request without creating another guest place', async () => {
+    claimSession(initial, { receiptData: data });
+    const storedBefore = await mockDb.guestSplit.findUnique();
+    const request = { token: 'share-1', requestKey: 'c65e4a13-8d32-4f54-90f4-209c6fdd2cc3' };
+    const first = await (await caller(signedIn)).addGuestPlace(request);
+    const nextPeople = savedPeople();
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...storedBefore,
+      people: nextPeople,
+      receiptData: { ...data, guestCount: 3 },
+    });
+    mockDb.guestSplit.update.mockClear();
+    const second = await (await caller(signedIn)).addGuestPlace(request);
+    expect(second).toEqual(first);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    const publicView = await (await caller()).getSession({ token: 'share-1' });
+    expect(JSON.stringify(publicView)).not.toContain(request.requestKey);
+  });
+
+  test('anonymous guests and unrelated signed-in accounts cannot expand a receipt', async () => {
+    claimSession(initial, { receiptData: data });
+    const input = { token: 'share-1', requestKey: '92add332-a2ac-4cb0-9554-b6918ef6d610' };
+    await expect((await caller()).addGuestPlace(input)).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    await expect((await caller({ user: { id: 'other-user' } })).addGuestPlace(input)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('cannot extend finalized receipts or bypass the 100-person guard', async () => {
+    const input = { token: 'share-1', requestKey: '9ac8626e-b94b-4990-8f6b-46247ed428eb' };
+    claimSession(initial, { receiptData: data, status: 'FINALIZED' });
+    await expect((await caller(signedIn)).addGuestPlace(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    claimSession(
+      [
+        { name: 'Анна', accountUserId: 'user-1' },
+        ...Array.from({ length: 99 }, (_, i) => ({ name: 'Гость ' + (i + 1), guestSlotNumber: i + 1 })),
+      ],
+      { receiptData: { ...data, guestCount: 99 } },
+    );
+    await expect((await caller(signedIn)).addGuestPlace(input)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      messageKey: 'sessionFull',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('guest.joinSession', () => {
   test('adds a new name with a fresh token', async () => {
     claimSession([{ name: 'Host' }]);
@@ -830,9 +1087,12 @@ describe('guest.joinSession', () => {
     // The first join saved Bob under the caller's join key, but the response never arrived.
     // Someone has renamed Bob since; the replay still matches the name the join was made with.
     claimSession([{ name: 'Host' }, { name: 'Bobby', personToken: OTHER_TOKEN, join: liveJoin('bob') }]);
-    expect(
-      await (await caller()).joinSession({ token: 'share-1', name: 'BOB', joinKey: JOIN_KEY, groupSize: 3 }),
-    ).toEqual({ personIndex: 1, personId: pid(1), personToken: OTHER_TOKEN, name: 'Bobby' });
+    expect(await (await caller()).joinSession({ token: 'share-1', name: 'BOB', joinKey: JOIN_KEY })).toEqual({
+      personIndex: 1,
+      personId: pid(1),
+      personToken: OTHER_TOKEN,
+      name: 'Bobby',
+    });
     // A replay changes nothing, not even the group size
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
@@ -926,10 +1186,18 @@ describe('guest.joinSession', () => {
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
-  test('updates the group size when the token holder rejoins with a new one', async () => {
-    claimSession([{ name: 'Alice', personToken: ALICE_TOKEN }]);
-    await (await caller()).joinSession({ token: 'share-1', name: 'Alice', personToken: ALICE_TOKEN, groupSize: 2 });
-    expect(savedPeople()).toEqual([{ id: pid(0), name: 'Alice', personToken: ALICE_TOKEN, groupSize: 2 }]);
+  test('rejoin cannot change a historical groupSize or add a new size', async () => {
+    claimSession([{ name: 'Alice', personToken: ALICE_TOKEN, groupSize: 2 }]);
+    await (await caller()).joinSession({ token: 'share-1', name: 'Alice', personToken: ALICE_TOKEN });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    await expect(
+      (await caller()).joinSession({
+        token: 'share-1',
+        name: 'Alice',
+        personToken: ALICE_TOKEN,
+        groupSize: 3,
+      } as unknown as Parameters<Awaited<ReturnType<typeof caller>>['joinSession']>[0]),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
   test('a replayed join on people saved before person ids existed saves their ids too', async () => {
@@ -1167,7 +1435,7 @@ describe('guest.getSession people', () => {
     ]);
     const session = await (await caller()).getSession({ token: 'share-1' });
     expect(session.people).toEqual([
-      { id: pid(0), name: 'Host', groupSize: 1, hasJoined: false, isRegistered: false, tipCents: 0 },
+      { id: pid(0), name: 'Host', hasJoined: false, isRegistered: false, tipCents: 0 },
       { id: pid(1), name: 'Alice', groupSize: 2, hasJoined: true, isRegistered: false, tipCents: 0 },
     ]);
     expect(JSON.stringify(session)).not.toContain(ALICE_TOKEN);
@@ -1220,8 +1488,8 @@ describe('guest.getSession people', () => {
     );
     const split = await (await caller()).getSplit({ token: 'share-1' });
     expect(split.people).toEqual([
-      { name: 'Host', groupSize: 1, hasJoined: false, isRegistered: false },
-      { name: 'Alice', groupSize: 1, hasJoined: true, isRegistered: false },
+      { name: 'Host', hasJoined: false, isRegistered: false },
+      { name: 'Alice', hasJoined: true, isRegistered: false },
     ]);
     expect(JSON.stringify(split)).not.toContain(ALICE_TOKEN);
     expect(JSON.stringify(split)).not.toContain(JOIN_KEY);
@@ -1413,47 +1681,73 @@ describe('Issue 3.6: no two people share a display name inside one receipt', () 
 
   test.each([
     [' Алексей ', 'алексей'],
-    ['Cafe\u0301', 'CAFÉ'],
+    ['Café', 'CAFÉ'],
     ['Ａｌｅｘ', 'alex'],
-  ])('direct split refuses normalized collision: %s vs %s', async (first, second) => {
+  ])('unified shared-link joining refuses normalized name collision: %s vs %s', async (first, second) => {
+    claimSession(
+      [
+        { name: 'Создатель', accountUserId: 'user-1' },
+        { name: 'Гость 1', guestSlotNumber: 1 },
+        { name: 'Гость 2', guestSlotNumber: 2 },
+      ],
+      { receiptData: { ...receiptData, guestSlotsMode: true, guestCount: 2 } },
+    );
+    const api = await caller();
+    const joined = await api.joinGuestSlot({
+      token: 'share-1',
+      slotId: pid(1),
+      name: first,
+      joinKey: '55555555-5555-4555-8555-555555555551',
+    });
+    const assigned = savedPeople() as TestPerson[];
+    claimSession(assigned, { receiptData: { ...receiptData, guestSlotsMode: true, guestCount: 2 } });
+    mockDb.guestSplit.update.mockClear();
     await expect(
-      (await caller(signedIn)).createSplit({
-        receiptData,
-        items,
-        people: [{ name: first }, { name: second }],
-        assignments: [{ itemIndex: 0, personIndices: [0, 1] }],
-        paidByIndex: 0,
+      api.joinGuestSlot({
+        token: 'share-1',
+        slotId: pid(2),
+        name: second,
+        joinKey: '55555555-5555-4555-8555-555555555552',
       }),
     ).rejects.toMatchObject({ code: 'CONFLICT', messageKey: 'nameTaken' });
-    expect(mockDb.guestSplit.create).not.toHaveBeenCalled();
+    expect(joined.personId).toBe(pid(1));
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
-  test('a different unique qualifier creates two separate people and assigned portions', async () => {
-    await (
-      await caller(signedIn)
-    ).createSplit({
-      receiptData,
-      items,
-      people: [{ name: 'Алексей' }, { name: 'Алексей П.' }],
-      assignments: [{ itemIndex: 0, personIndices: [0, 1] }],
-      paidByIndex: 0,
+  test('different qualifier joins two separate guest slots and their IDs stay distinct', async () => {
+    claimSession(
+      [
+        { name: 'Создатель', accountUserId: 'user-1' },
+        { name: 'Гость 1', guestSlotNumber: 1 },
+        { name: 'Гость 2', guestSlotNumber: 2 },
+      ],
+      { receiptData: { ...receiptData, guestSlotsMode: true, guestCount: 2 } },
+    );
+    const api = await caller();
+    const one = await api.joinGuestSlot({
+      token: 'share-1',
+      slotId: pid(1),
+      name: 'Алексей',
+      joinKey: '55555555-5555-4555-8555-555555555551',
     });
-    const created = mockDb.guestSplit.create.mock.calls[0]?.[0]?.data;
-    expect((created?.people as { name: string }[]).map((p) => p.name)).toEqual(['Алексей', 'Алексей П.']);
-    expect(created?.assignments).toEqual([{ itemIndex: 0, personIndices: [0, 1] }]);
+    claimSession(savedPeople() as TestPerson[], {
+      receiptData: { ...receiptData, guestSlotsMode: true, guestCount: 2 },
+    });
+    const two = await api.joinGuestSlot({
+      token: 'share-1',
+      slotId: pid(2),
+      name: 'Алексей П.',
+      joinKey: '55555555-5555-4555-8555-555555555552',
+    });
+    expect(one.personId).not.toBe(two.personId);
+    expect((savedPeople() as TestPerson[]).map((p) => p.name)).toEqual(['Создатель', 'Алексей', 'Алексей П.']);
   });
 
-  test('a new receipt may reuse a name used in a different receipt', async () => {
+  test('separate receipts can use the same guest name without sharing identities', async () => {
+    mockDb.user.findUnique.mockResolvedValue({ name: 'Создатель', suspendedAt: null });
     const api = await caller(signedIn);
-    for (let i = 0; i < 2; i++) {
-      await api.createSplit({
-        receiptData,
-        items,
-        people: [{ name: 'Алексей' }],
-        assignments: [{ itemIndex: 0, personIndices: [0] }],
-        paidByIndex: 0,
-      });
-    }
+    await api.createClaimSession({ receiptData, items, guestCount: 1 });
+    await api.createClaimSession({ receiptData, items, guestCount: 1 });
     expect(mockDb.guestSplit.create).toHaveBeenCalledTimes(2);
   });
 
@@ -2082,6 +2376,211 @@ describe('Issue 3.8.1: personal link only after the guest saves a real change', 
     claimSession([{ name: 'Андрей', personToken: ALICE_TOKEN }], { items });
     const session = await (await caller()).getSession({ token: 'share-1' });
     expect(session.people[0]).not.toHaveProperty('personalLinkReady');
+  });
+});
+
+describe('TASK-BILLOK-002 10–15: shared invitation auto-selects and safely expands slots', () => {
+  const receiptData = {
+    subtotal: 1100,
+    tax: 0,
+    tip: 0,
+    total: 1100,
+    currency: 'RUB',
+    guestSlotsMode: true,
+    guestCount: 2,
+    organizerPersonId: pid(0),
+    partsApprovalHash: 'existing-approval',
+  };
+  const basePeople: TestPerson[] = [
+    { name: 'Создатель', accountUserId: 'user-1', personToken: ALICE_TOKEN },
+    { name: 'Гость 1', guestSlotNumber: 1, tipCents: 25 },
+    { name: 'Гость 2', guestSlotNumber: 2, tipCents: 30 },
+  ];
+  const assignments = [{ itemIndex: 0, personIndices: [1] }];
+  const items = [{ name: 'Салат', quantity: 1, unitPrice: 1100, totalPrice: 1100 }];
+
+  async function persistentSession(people = basePeople, overrides: Parameters<typeof claimSession>[1] = {}) {
+    claimSession(people, { receiptData, assignments, items, paidByIndex: 0, ...overrides });
+    let saved = structuredClone(await mockDb.guestSplit.findUnique());
+    mockDb.guestSplit.findUnique.mockImplementation(async () => structuredClone(saved));
+    mockDb.guestSplit.update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      saved = { ...saved, ...data };
+      return structuredClone(saved);
+    });
+    return () => structuredClone(saved);
+  }
+
+  const auto = (name: string, joinKey: string) => ({ token: 'share-1', name, joinKey });
+
+  test('looking up the public share URL never creates an unclaimed guest', async () => {
+    const readSaved = await persistentSession();
+    const before = readSaved();
+    const view = await (await caller()).getSession({ token: 'share-1' });
+    expect(view.people).toHaveLength(3);
+    expect(readSaved()).toEqual(before);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('uses two free slots first, then creates two independent joined places without changing old money', async () => {
+    const readSaved = await persistentSession();
+    const api = await caller();
+    const first = await api.joinGuestSlot(auto('Анна', 'a1f8df2e-6713-4bd0-9e1f-f002a246cd10'));
+    const second = await api.joinGuestSlot(auto('Борис', 'a1f8df2e-6713-4bd0-9e1f-f002a246cd11'));
+    expect([first.personIndex, second.personIndex]).toEqual([1, 2]);
+    expect([first.personId, second.personId]).toEqual([pid(1), pid(2)]);
+    expect(readSaved().receiptData).toEqual(receiptData);
+
+    const third = await api.joinGuestSlot(auto('Вера', 'a1f8df2e-6713-4bd0-9e1f-f002a246cd12'));
+    const fourth = await api.joinGuestSlot(auto('Глеб', 'a1f8df2e-6713-4bd0-9e1f-f002a246cd13'));
+    const final = readSaved();
+    expect([third.personIndex, fourth.personIndex]).toEqual([3, 4]);
+    expect(new Set([first.personId, second.personId, third.personId, fourth.personId]).size).toBe(4);
+    expect(new Set([first.personToken, second.personToken, third.personToken, fourth.personToken]).size).toBe(4);
+    expect(third.personId).toMatch(UUID);
+    expect(fourth.personId).toMatch(UUID);
+    expect(final.people).toHaveLength(5);
+    expect((final.people as TestPerson[]).map((p) => p.guestSlotNumber)).toEqual([undefined, 1, 2, 3, 4]);
+    expect(final.receiptData).toMatchObject({ ...receiptData, guestCount: 4 });
+    expect(final.assignments).toEqual(assignments);
+    expect(final.paidByIndex).toBe(0);
+    expect((final.people as TestPerson[])[1]).toMatchObject({
+      name: 'Анна',
+      tipCents: 25,
+      personToken: first.personToken,
+    });
+    expect((final.people as TestPerson[])[2]).toMatchObject({
+      name: 'Борис',
+      tipCents: 30,
+      personToken: second.personToken,
+    });
+    const publicView = await api.getSession({ token: 'share-1' });
+    expect(publicView.people).toHaveLength(5);
+    expect(publicView.receiptData.guestCount).toBe(4);
+    const publicJson = JSON.stringify(publicView);
+    for (const privateValue of [
+      first.personToken,
+      third.personToken,
+      first.personId === 'x' ? 'x' : third.personToken,
+    ]) {
+      expect(publicJson).not.toContain(privateValue);
+    }
+  });
+
+  test('zero initially requested guests still lets the first real visitor join', async () => {
+    const readSaved = await persistentSession([basePeople[0]!], {
+      receiptData: { ...receiptData, guestCount: 0 },
+    });
+    const result = await (await caller()).joinGuestSlot(auto('Первый гость', 'a1f8df2e-6713-4bd0-9e1f-f002a246cd20'));
+    expect(result).toMatchObject({ personIndex: 1, name: 'Первый гость' });
+    expect(result.personId).toMatch(UUID);
+    expect(readSaved().people).toHaveLength(2);
+    expect(readSaved().receiptData).toMatchObject({ guestCount: 1 });
+    expect((readSaved().people as TestPerson[])[1]).toMatchObject({
+      id: result.personId,
+      name: 'Первый гость',
+      guestSlotNumber: 1,
+      personToken: result.personToken,
+    });
+    expect(readSaved().paidByIndex).toBe(0);
+  });
+
+  test('replay after a lost response is exactly one person, name and token', async () => {
+    const readSaved = await persistentSession(
+      basePeople.map((p, i) =>
+        i > 0 ? { ...p, personToken: i === 1 ? OTHER_TOKEN : '33333333-3333-4333-8333-333333333333' } : p,
+      ),
+    );
+    const api = await caller();
+    const key = 'b1f8df2e-6713-4bd0-9e1f-f002a246cd12';
+    const first = await api.joinGuestSlot(auto('Нина', key));
+    mockDb.guestSplit.update.mockClear();
+    const repeat = await api.joinGuestSlot(auto(' НИНА ', key));
+    expect(repeat).toEqual(first);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    expect(readSaved().people).toHaveLength(4);
+    await expect(api.joinGuestSlot(auto('Другая', key))).rejects.toMatchObject({
+      code: 'CONFLICT',
+      messageKey: 'joinKeyReused',
+    });
+  });
+
+  test('empty, overlong, duplicate and reused names cannot consume a place', async () => {
+    const readSaved = await persistentSession([
+      basePeople[0]!,
+      { ...basePeople[1]!, name: 'Анна', personToken: OTHER_TOKEN },
+      basePeople[2]!,
+    ]);
+    const api = await caller();
+    const key = 'c1f8df2e-6713-4bd0-9e1f-f002a246cd12';
+    for (const invalid of ['', ' ', 'Я'.repeat(41)]) {
+      await expect(api.joinGuestSlot(auto(invalid, key))).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    await expect(api.joinGuestSlot(auto(' аннА ', key))).rejects.toMatchObject({
+      code: 'CONFLICT',
+      messageKey: 'nameTaken',
+    });
+    expect(readSaved().people).toHaveLength(3);
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('creator-created free place and late personal link coexist with auto joins', async () => {
+    const readSaved = await persistentSession();
+    const api = await caller();
+    const added = await (
+      await caller(signedIn)
+    ).addGuestPlace({
+      token: 'share-1',
+      requestKey: 'd1f8df2e-6713-4bd0-9e1f-f002a246cd12',
+    });
+    expect(added.guestSlotNumber).toBe(3);
+    const first = await api.joinGuestSlot(auto('Анна', 'd1f8df2e-6713-4bd0-9e1f-f002a246cd13'));
+    await api.joinGuestSlot(auto('Борис', 'd1f8df2e-6713-4bd0-9e1f-f002a246cd14'));
+    const extra = await api.joinGuestSlot(auto('Вера', 'd1f8df2e-6713-4bd0-9e1f-f002a246cd15'));
+    expect(extra.personId).toBe(added.personId);
+    const beyond = await api.joinGuestSlot(auto('Олег', 'd1f8df2e-6713-4bd0-9e1f-f002a246cd16'));
+    expect(beyond.personIndex).toBe(4);
+    const prior = await api.resumeSession({ token: 'share-1', personToken: first.personToken });
+    expect(prior).toMatchObject({ personId: first.personId, name: first.name });
+    expect(readSaved().people).toHaveLength(5);
+    expect(readSaved().paidByIndex).toBe(0);
+    expect(readSaved().assignments).toEqual(assignments);
+  });
+
+  test('closed, expired, non-slot and full 100-person receipts cannot accept auto joins', async () => {
+    const api = await caller();
+    const input = auto('Олег', 'e1f8df2e-6713-4bd0-9e1f-f002a246cd12');
+    const readFinalized = await persistentSession(basePeople, { status: 'FINALIZED' });
+    await expect(api.joinGuestSlot(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(readFinalized().people).toHaveLength(3);
+    const readExpired = await persistentSession(basePeople, { expiresAt: new Date(0) });
+    await expect(api.joinGuestSlot(input)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(readExpired().people).toHaveLength(3);
+    await persistentSession(basePeople, {
+      receiptData: { subtotal: 1100, tax: 0, tip: 0, total: 1100, currency: 'RUB' },
+    });
+    await expect(api.joinGuestSlot(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    const people = [
+      basePeople[0]!,
+      ...Array.from({ length: 99 }, (_, i) => ({
+        name: 'Занятый ' + (i + 1),
+        guestSlotNumber: i + 1,
+        personToken: 'token-' + (i + 1),
+      })),
+    ];
+    await persistentSession(people, { receiptData: { ...receiptData, guestCount: 99 } });
+    await expect(api.joinGuestSlot(input)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      messageKey: 'sessionFull',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('automatic joining requires a stable retry key', async () => {
+    await persistentSession();
+    await expect((await caller()).joinGuestSlot({ token: 'share-1', name: 'Ирина' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 });
 
@@ -3053,8 +3552,8 @@ describe('guest.setPersonalTip: voluntary kopecks per authenticated participant'
     claimSession(people);
     const api = await caller();
     expect((await api.getSession({ token: 'share-1' })).people).toEqual([
-      { id: pid(0), name: 'Alice', groupSize: 1, hasJoined: true, isRegistered: false, tipCents: 0 },
-      { id: pid(1), name: 'Bob', groupSize: 1, hasJoined: true, isRegistered: false, tipCents: 400 },
+      { id: pid(0), name: 'Alice', hasJoined: true, isRegistered: false, tipCents: 0 },
+      { id: pid(1), name: 'Bob', hasJoined: true, isRegistered: false, tipCents: 400 },
     ]);
     expect(await api.setPersonalTip({ ...alice, tipCents: 0 })).toEqual({ success: true, tipCents: 0 });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
@@ -4938,12 +5437,12 @@ describe('deleting a split', () => {
 describe('creating a split', () => {
   test('clears a batch of expired splits with their receipts', async () => {
     mockDb.guestSplit.create.mockResolvedValue({ id: 's1', shareToken: 'tok' });
+    mockDb.user.findUnique.mockResolvedValue({ name: 'Pat', suspendedAt: null });
     const api = await caller(signedIn);
-    await api.createSplit({
+    await api.createClaimSession({
       receiptData: { subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'RUB' },
       items: [{ name: 'Pizza', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
-      people: [{ name: 'Pat' }],
-      assignments: [{ itemIndex: 0, personIndices: [0] }],
+      guestCount: 0,
     });
     expect(deleteExpiredSplits).toHaveBeenCalledWith(mockDb, 100);
     expect(mockDb.$queryRaw).not.toHaveBeenCalled();
@@ -4957,14 +5456,6 @@ describe('making a split from a receipt', () => {
   const items = [{ name: 'Pizza', quantity: 1, unitPrice: 1000, totalPrice: 1000 }];
   type Api = Awaited<ReturnType<typeof caller>>;
   const makeSplit = {
-    createSplit: (api: Api) =>
-      api.createSplit({
-        receiptId: 'r1',
-        receiptData,
-        items,
-        people: [{ name: 'Pat' }],
-        assignments: [{ itemIndex: 0, personIndices: [0] }],
-      }),
     createClaimSession: (api: Api) =>
       api.createClaimSession({ receiptId: 'r1', receiptData, items, creatorName: 'Pat', paidByName: 'Pat' }),
   };

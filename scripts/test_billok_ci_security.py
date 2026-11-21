@@ -24,7 +24,13 @@ class BillokCiSecurityTests(unittest.TestCase):
     def test_five_ci_jobs_are_read_only_and_not_triggered_by_pull_requests(self):
         self.assertRegex(BILLOK_CI, r"(?m)^permissions:\n  contents: read$")
         self.assertNotRegex(BILLOK_CI, r"(?m)^  pull_request:")
-        self.assertRegex(BILLOK_CI, r"(?m)^    branches: \[main, 'billok/\*\*'\]$")
+        self.assertRegex(
+            BILLOK_CI,
+            r"(?m)^    branches: \[main, 'billok/\*\*', 'task/billok-002-create-receipt'\]$",
+        )
+        # Only PR #11's exact branch is whitelisted, never arbitrary task/*
+        # branches, fork PRs or pull_request events on the CI runner.
+        self.assertNotIn("'task/**'", BILLOK_CI)
         for job_id in JOB_IDS:
             self.assertRegex(
                 BILLOK_CI,

@@ -23,8 +23,11 @@ describe('BillOK Russian-only user-facing fallbacks', () => {
     // 3.6: show server-localized name conflicts but retain safe Russian fallback
     // when the failure has no tRPC error data (e.g., offline or timeout).
     expect(guest).toContain('localizedTrpcError(error as { message: string; data?: { code?: string } }');
-    expect(guest).toContain("t('assign.createSplitFailed')");
-    expect(guest).toContain("t('assign.createSessionFailed')");
+    // The single creation route uses server-localized errors with a safe
+    // Russian fallback; the obsolete createSplit-specific catch is removed.
+    expect(guest).toContain("tc('errors.generic')");
+    expect(guest).toContain('createClaimSession.mutateAsync');
+    expect(guest).not.toContain('createSplit.mutateAsync');
     expect(guest).not.toContain('toast.error(error.message)');
     expect(grouped).toContain("toast.error(t('createSessionFailed'))");
     expect(guest).not.toContain("err instanceof Error ? err.message : t('assign.create");

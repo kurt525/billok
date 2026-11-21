@@ -1,97 +1,67 @@
+import { randomUUID } from 'node:crypto';
 import { test, expect, request, type Locator, type Page } from '@playwright/test';
-import { joinGuestSession, trpcMutation } from './helpers';
+import {
+  authedContext,
+  createUnifiedReceiptFixture,
+  finalizeUnifiedReceiptFixture,
+  trpcMutation,
+  trpcQuery,
+  trpcResult,
+} from './helpers';
 
 const BASE = process.env.BASE_URL || 'http://localhost:3001';
 
-test.describe('Guest Split — Share Result Page', () => {
-  let shareToken: string;
+test.describe('Unified BillOK receipt — finalized result and historic reader', () => {
+  let token: string;
+  let creatorName: string;
 
   test.beforeAll(async () => {
-    // Create a split via API to test the result page
-    const ctx = await request.newContext({ baseURL: BASE });
-    const res = await ctx.post('/api/trpc/guest.createSplit', {
-      data: {
-        json: {
-          receiptData: {
-            merchantName: 'Taco Stand',
-            date: '2026-05-07',
-            subtotal: 4500,
-            tax: 360,
-            tip: 700,
-            total: 5560,
-            currency: 'USD',
-          },
-          items: [
-            { name: 'Tacos x3', quantity: 3, unitPrice: 500, totalPrice: 1500 },
-            { name: 'Burrito', quantity: 1, unitPrice: 1200, totalPrice: 1200 },
-            { name: 'Nachos', quantity: 1, unitPrice: 900, totalPrice: 900 },
-            { name: 'Guacamole', quantity: 1, unitPrice: 450, totalPrice: 450 },
-            { name: 'Drinks', quantity: 1, unitPrice: 450, totalPrice: 450 },
-          ],
-          people: [{ name: 'Alice' }, { name: 'Bob' }, { name: 'Charlie' }],
-          assignments: [
-            { itemIndex: 0, personIndices: [0, 1, 2] },
-            { itemIndex: 1, personIndices: [0] },
-            { itemIndex: 2, personIndices: [1] },
-            { itemIndex: 3, personIndices: [0, 1, 2] },
-            { itemIndex: 4, personIndices: [2] },
-          ],
-          paidByIndex: 0,
-        },
-      },
-    });
-
-    const body = await res.json();
-    shareToken = body.result?.data?.json?.shareToken;
-    await ctx.dispose();
+    const ctx = await authedContext('alice@qa.billok.ru');
+    try {
+      const receipt = await createUnifiedReceiptFixture(ctx, {
+        merchantName: 'Семейный ужин',
+        guestCount: 0,
+        items: [
+          { name: 'Пицца', quantity: 1, unitPrice: 1500, totalPrice: 1500 },
+          { name: 'Салат', quantity: 1, unitPrice: 1200, totalPrice: 1200 },
+          { name: 'Напитки', quantity: 1, unitPrice: 1800, totalPrice: 1800 },
+        ],
+      });
+      token = receipt.shareToken;
+      creatorName = receipt.creator.name;
+      await finalizeUnifiedReceiptFixture(ctx, receipt, [0, 1, 2]);
+    } finally {
+      await ctx.dispose();
+    }
   });
 
-  test('result page displays split summary with data-testids', async ({ page }) => {
-    await page.goto(`/en/split/${shareToken}`);
-
-    // Result wrapper should be visible
+  test('final result page shows correct receipt name, total and share controls', async ({ page }) => {
+    await page.goto('/split/' + token);
     await expect(page.getByTestId('split-result')).toBeVisible();
-
-    // Should show merchant name
-    await expect(page.getByText('Taco Stand')).toBeVisible();
-
-    // Person cards should be present with indexed testids
+    await expect(page.getByRole('heading', { name: 'Семейный ужин' })).toBeVisible();
+    await expect(page.getByTestId('split-result-total')).toContainText('45');
     await expect(page.getByTestId('person-card-0')).toBeVisible();
-    await expect(page.getByTestId('person-card-1')).toBeVisible();
-    await expect(page.getByTestId('person-card-2')).toBeVisible();
-
-    // Share buttons should be present
     await expect(page.getByTestId('copy-link-btn')).toBeVisible();
-    await expect(page.getByTestId('share-btn')).toBeVisible();
   });
 
-  test('person cards contain correct names', async ({ page }) => {
-    await page.goto(`/en/split/${shareToken}`);
-    await expect(page.getByTestId('split-result')).toBeVisible();
-
-    // Verify each person card has the correct person's name
-    // The order matches the summary order from the API
-    const card0Text = await page.getByTestId('person-card-0').textContent();
-    const card1Text = await page.getByTestId('person-card-1').textContent();
-    const card2Text = await page.getByTestId('person-card-2').textContent();
-
-    // All three names should appear across the cards
-    const allText = `${card0Text} ${card1Text} ${card2Text}`;
-    expect(allText).toContain('Alice');
-    expect(allText).toContain('Bob');
-    expect(allText).toContain('Charlie');
+  test('finalized person card belongs to the same registered creator who claimed dishes', async ({ page }) => {
+    await page.goto('/split/' + token);
+    const card = page.getByTestId('person-card-0');
+    await expect(card).toContainText(creatorName);
+    await expect(card.getByText('Пицца')).toBeVisible();
+    await expect(card.getByText('Салат')).toBeVisible();
+    await expect(card.getByText('Напитки')).toBeVisible();
   });
 
-  test('invalid share token shows error state', async ({ page }) => {
-    await page.goto('/en/split/nonexistent-token-abc123');
-    await expect(page.getByText('Split not found')).toBeVisible();
+  test('invalid share token never renders an existing finalized receipt', async ({ page }) => {
+    await page.goto('/split/nonexistent-token-abc123');
+    await expect(page.getByTestId('split-result')).toHaveCount(0);
+    await expect(page.getByText('Семейный ужин')).toHaveCount(0);
   });
 });
 
-// #278: a shared item was listed at its full price under each person on it, so the lines on a
-// person's card added up to more than their total
-test.describe('Guest Split — shared items on the result page', () => {
-  const cents = (text: string) => Math.round(Number(text.replace(/[^0-9.]/g, '')) * 100);
+test.describe('Unified BillOK shared-dish result: per-person amounts', () => {
+  const numericCents = (text: string) => Math.round(Number(text.replace(/[^\d,.]/g, '').replace(',', '.')) * 100);
 
   function personCard(page: Page, name: string) {
     return page.locator('[data-testid^="person-card-"]').filter({ hasText: name });
@@ -100,90 +70,87 @@ test.describe('Guest Split — shared items on the result page', () => {
   async function expectLinesAddUpToTotal(card: Locator) {
     const lines = await card.getByTestId('line-amount').allTextContents();
     const total = await card.locator('[data-testid^="person-total-"]').textContent();
-    expect(lines.reduce((sum, line) => sum + cents(line), 0)).toBe(cents(total ?? ''));
+    expect(lines.reduce((sum, line) => sum + numericCents(line), 0)).toBe(numericCents(total ?? ''));
   }
 
-  test("a Quick Split lists a shared item at each person's share of it", async ({ page }) => {
-    const ctx = await request.newContext({ baseURL: BASE });
-    const res = await trpcMutation(ctx, 'guest.createSplit', {
-      receiptData: { merchantName: 'Lemonade Stand', subtotal: 2875, tax: 230, tip: 0, total: 3105, currency: 'USD' },
-      items: [
-        { name: 'Burger', quantity: 1, unitPrice: 1600, totalPrice: 1600 },
-        { name: 'Lemonade', quantity: 1, unitPrice: 375, totalPrice: 375 },
-        { name: 'Salad', quantity: 1, unitPrice: 900, totalPrice: 900 },
-      ],
-      people: [{ name: 'Pat' }, { name: 'Dana' }],
-      assignments: [
-        { itemIndex: 0, personIndices: [0] },
-        { itemIndex: 1, personIndices: [0, 1] },
-        { itemIndex: 2, personIndices: [1] },
-      ],
-      paidByIndex: 0,
-    });
-    expect(res.ok(), await res.text()).toBe(true);
-    const { shareToken } = (await res.json()).result.data.json;
-    await ctx.dispose();
+  test('a shared item divides exactly, and each person sees their actual part', async ({ page }) => {
+    const owner = await authedContext('alice@qa.billok.ru');
+    const anon = await request.newContext({ baseURL: BASE });
+    try {
+      const receipt = await createUnifiedReceiptFixture(owner, {
+        merchantName: 'Общая закуска',
+        guestCount: 1,
+        items: [
+          { name: 'Лимонад', quantity: 1, unitPrice: 375, totalPrice: 375 },
+          { name: 'Бургер', quantity: 1, unitPrice: 1600, totalPrice: 1600 },
+        ],
+      });
+      const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: receipt.shareToken }));
+      const response = await trpcMutation(anon, 'guest.joinGuestSlot', {
+        token: receipt.shareToken,
+        slotId: initial.people[1].id,
+        name: 'Гость',
+        joinKey: randomUUID(),
+      });
+      expect(response.ok(), await response.text()).toBe(true);
+      const guest = (await response.json()).result.data.json;
 
-    await page.goto(`/en/split/${shareToken}`);
-    const pat = personCard(page, 'Pat');
-    const dana = personCard(page, 'Dana');
-    await expect(pat).toContainText('Lemonade (1/2 of $3.75)');
-    await expect(pat).toContainText('$1.88');
-    await expect(dana).toContainText('Lemonade (1/2 of $3.75)');
-    await expect(dana).toContainText('$1.87');
-    // Items someone has to themselves show their full price with no share
-    await expect(pat.getByText('Burger', { exact: true })).toBeVisible();
-    await expect(pat).toContainText('$16.00');
+      const assignments = [
+        { actor: owner, person: receipt.creator, items: [0, 1] },
+        { actor: anon, person: guest, items: [0] },
+      ] as const;
+      for (const { actor, person, items } of assignments) {
+        const saved = await trpcMutation(actor, 'guest.claimItems', {
+          token: receipt.shareToken,
+          personId: person.personId,
+          personToken: person.personToken,
+          claimedItemIndices: items,
+        });
+        expect(saved.ok(), await saved.text()).toBe(true);
+      }
+      for (const operation of ['guest.confirmSessionParts', 'guest.finalizeSession']) {
+        const res = await trpcMutation(owner, operation, { token: receipt.shareToken });
+        expect(res.ok(), await res.text()).toBe(true);
+      }
 
-    await expectLinesAddUpToTotal(pat);
-    await expectLinesAddUpToTotal(dana);
+      const split = await trpcResult(await trpcQuery(owner, 'guest.getSplit', { token: receipt.shareToken }));
+      expect(split.summary).toHaveLength(2);
+      const total = split.summary.reduce((sum: number, person: { total: number }) => sum + person.total, 0);
+      expect(total).toBe(1975);
+      const guestTotal = split.summary.find((person: { name: string }) => person.name === 'Гость')?.total;
+      expect([187, 188]).toContain(guestTotal);
+
+      await page.goto('/split/' + receipt.shareToken);
+      await expect(page.getByTestId('split-result')).toBeVisible();
+      const guestCard = personCard(page, 'Гость');
+      const ownerCard = personCard(page, receipt.creator.name);
+      await expect(guestCard).toContainText('Лимонад');
+      await expect(ownerCard).toContainText('Лимонад');
+      await expect(ownerCard).toContainText('Бургер');
+      await expectLinesAddUpToTotal(ownerCard);
+      await expectLinesAddUpToTotal(guestCard);
+    } finally {
+      await anon.dispose();
+      await owner.dispose();
+    }
   });
 
-  test('a finalized claim session weights a shared item by group size, as its totals do', async ({ page }) => {
-    const ctx = await request.newContext({ baseURL: BASE });
-    const createRes = await trpcMutation(ctx, 'guest.createClaimSession', {
-      receiptData: { merchantName: 'Pitcher House', subtotal: 600, tax: 60, tip: 0, total: 660, currency: 'USD' },
-      items: [
-        { name: 'Pitcher', quantity: 1, unitPrice: 100, totalPrice: 100 },
-        { name: 'Fries', quantity: 1, unitPrice: 500, totalPrice: 500 },
-      ],
-      creatorName: 'Alice',
-      paidByName: 'Alice',
-      joinCreator: true,
-    });
-    expect(createRes.ok(), await createRes.text()).toBe(true);
-    const { shareToken, creator } = (await createRes.json()).result.data.json;
-    // Bob is here with a friend, so he pays two thirds of what he shares with Alice
-    const bob = await joinGuestSession(ctx, { token: shareToken, name: 'Bob', groupSize: 2 });
-    for (const [person, items] of [
-      [creator, [0, 1]],
-      [bob, [0]],
-    ] as const) {
-      const claimed = await trpcMutation(ctx, 'guest.claimItems', {
-        token: shareToken,
-        personId: person.personId,
-        personToken: person.personToken,
-        claimedItemIndices: items,
+  test('reading the same finalized receipt never changes its saved allocations', async () => {
+    const ctx = await authedContext('alice@qa.billok.ru');
+    try {
+      const receipt = await createUnifiedReceiptFixture(ctx, {
+        merchantName: 'Проверка неизменности',
+        guestCount: 0,
+        items: [{ name: 'Чай', quantity: 1, unitPrice: 1001, totalPrice: 1001 }],
       });
-      expect(claimed.ok(), await claimed.text()).toBe(true);
+      await finalizeUnifiedReceiptFixture(ctx, receipt, [0]);
+      const first = await trpcResult(await trpcQuery(ctx, 'guest.getSplit', { token: receipt.shareToken }));
+      const second = await trpcResult(await trpcQuery(ctx, 'guest.getSplit', { token: receipt.shareToken }));
+      expect(second.assignments).toEqual(first.assignments);
+      expect(second.summary).toEqual(first.summary);
+      expect(second.paidByIndex).toBe(0);
+    } finally {
+      await ctx.dispose();
     }
-    const finalized = await trpcMutation(ctx, 'guest.finalizeSession', {
-      token: shareToken,
-      personId: creator.personId,
-      personToken: creator.personToken,
-    });
-    expect(finalized.ok(), await finalized.text()).toBe(true);
-    await ctx.dispose();
-
-    await page.goto(`/en/split/${shareToken}`);
-    const alice = personCard(page, 'Alice');
-    const bobCard = personCard(page, 'Bob');
-    await expect(alice).toContainText('Pitcher (1/3 of $1.00)');
-    await expect(alice).toContainText('$0.33');
-    await expect(bobCard).toContainText('Pitcher (2/3 of $1.00)');
-    await expect(bobCard).toContainText('$0.67');
-
-    await expectLinesAddUpToTotal(alice);
-    await expectLinesAddUpToTotal(bobCard);
   });
 });

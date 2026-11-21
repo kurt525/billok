@@ -20,7 +20,7 @@ export type GuestSessionPerson = {
   // Identifies the person for as long as they are in the session. Their array index changes
   // when someone listed before them is removed, so the claim page targets people by id.
   // Public (getSession lists everyone's). People saved without one (claim sessions from before
-  // ids existed, and quick splits from guest.createSplit) get one the first time getSession,
+  // ids existed, including previously finalized legacy receipts) get one the first time getSession,
   // resumeSession or joinSession loads them (see assignPersonIds).
   id?: string;
   name: string;
@@ -31,6 +31,8 @@ export type GuestSessionPerson = {
   // 3.7: fixed guest place, distinct from a legacy unjoined named person.
   // A place can be renamed without changing its number or stable person id.
   guestSlotNumber?: number;
+  // Server-only idempotency key for a creator-added empty guest place.
+  guestPlaceRequestKey?: string;
   // 3.9: immutable per-receipt visual key. Names and array indices may
   // change; this ID must remain on the same person.
   visualColorId?: number;
@@ -43,7 +45,10 @@ export type GuestSessionPerson = {
   // 3.8.4: server-only audit of explicit creator reissues, no old credential.
   // Keeping the most recent request id makes a network retry idempotent.
   personalLinkRotation?: { requestKey: string; rotatedAt: string; count: number };
-  groupSize?: number; // defaults to 1, > 1 means this person represents a group
+  // Historical read-only compatibility. New participants cannot set this.
+  groupSize?: number;
+  // Bounded idempotency keys for atomic item allocation by the actor.
+  itemAllocationSaves?: { key: string; hash: string }[];
   // 3.24.1.1: optional server-controlled reimbursement group leader personId;
   // separate from legacy groupSize (which changes weights, not identities).
   paymentGroupRepresentativeId?: string;

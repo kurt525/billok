@@ -191,7 +191,9 @@ function toPublicPerson({ name, groupSize, personToken, accountUserId, visualCol
   // when the receipt was created and there is no guest token yet.
   return {
     name,
-    groupSize: groupSize ?? 1,
+    // Only an actual legacy persisted weight >1 remains visible to old
+    // financial summaries. New receipts have no groupSize field at all.
+    ...(groupSize != null && groupSize > 1 ? { groupSize } : {}),
     hasJoined: !!personToken || !!accountUserId,
     // Only a trusted server-issued account binding qualifies, not a display
     // name, phone, share URL, or possession of a guest bearer credential.
@@ -699,114 +701,9 @@ export const guestRouter = createTRPCRouter({
     };
   }),
 
-  // Only an active signed-in user may create a bill; existing guest links stay public.
-  createSplit: protectedProcedure
-    .input(
-      z.object({
-        receiptId: receiptIdSchema.optional(),
-        receiptData: receiptDataSchema,
-        items: z.array(itemSchema).min(1).max(100),
-        people: z
-          .array(z.object({ name: z.string().trim().max(MAX_GUEST_NAME_LENGTH) }))
-          .min(1)
-          .max(100),
-        assignments: z
-          .array(
-            z.object({
-              itemIndex: z.number().int(),
-              personIndices: z.array(z.number().int()),
-            }),
-          )
-          .max(1000),
-        paidByIndex: z.number().int().default(0),
-        tipOverride: z.never().optional(), // no shared tip override
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      if (!checkGuestReceiptCreationLimit(ctx.user.id)) {
-        throw new AppError('TOO_MANY_REQUESTS', 'splitsRateLimited');
-      }
-
-      // Validate raw index bounds BEFORE filtering blank names
-      for (const a of input.assignments) {
-        if (a.itemIndex < 0 || a.itemIndex >= input.items.length) {
-          throw new AppError('BAD_REQUEST', 'invalidItemIndexField', { index: a.itemIndex });
-        }
-        for (const pi of a.personIndices) {
-          if (pi < 0 || pi >= input.people.length) {
-            throw new AppError('BAD_REQUEST', 'invalidPersonIndex', { index: pi });
-          }
-        }
-      }
-      if (input.paidByIndex < 0 || input.paidByIndex >= input.people.length) {
-        throw new AppError('BAD_REQUEST', 'invalidPaidByIndex', { index: input.paidByIndex });
-      }
-
-      // Filter out blank-name people and remap indices
-      const indexMap = new Map<number, number>();
-      const filteredPeople = input.people.filter((p, i) => {
-        if (!p.name.trim()) return false;
-        indexMap.set(i, indexMap.size);
-        return true;
-      });
-      if (filteredPeople.length === 0) {
-        throw new AppError('BAD_REQUEST', 'personNameRequired');
-      }
-      if (hasDuplicateGuestNames(filteredPeople.map((p) => p.name))) {
-        throw new AppError('CONFLICT', 'nameTaken');
-      }
-      const remappedAssignments = input.assignments
-        .map((a) => ({
-          itemIndex: a.itemIndex,
-          personIndices: a.personIndices.filter((pi) => indexMap.has(pi)).map((pi) => indexMap.get(pi)!),
-        }))
-        .filter((a) => a.personIndices.length > 0);
-      const remappedPaidBy = indexMap.get(input.paidByIndex) ?? 0;
-
-      // Note: second bounds-validation loop removed (Finding #13) — the remap above
-      // only produces valid indices via indexMap filtering, making post-remap validation redundant.
-
-      const summary = calculateSplitTotals({
-        items: input.items,
-        assignments: remappedAssignments,
-        tax: 0,
-        tip: 0,
-        peopleCount: filteredPeople.length,
-      });
-
-      const summaryWithNames = summary.map((s) => ({
-        ...s,
-        name: filteredPeople[s.personIndex]?.name ?? `Person ${s.personIndex + 1}`,
-      }));
-
-      const share = issueGuestShareLink();
-      await ctx.db.$transaction(async (tx) => {
-        const receiptId = await lockReceiptForSplit(tx, input.receiptId, ctx.session?.user?.id);
-        return tx.guestSplit.create({
-          data: {
-            ...share.stored,
-            ...(receiptId !== undefined ? { receiptId } : {}),
-            receiptData: input.receiptData as unknown as Prisma.InputJsonValue,
-            items: input.items as unknown as Prisma.InputJsonValue,
-            people: filteredPeople.map((person, index) => ({
-              ...person,
-              visualColorId: index,
-            })) as unknown as Prisma.InputJsonValue,
-            assignments: remappedAssignments as unknown as Prisma.InputJsonValue,
-            summary: summaryWithNames as unknown as Prisma.InputJsonValue,
-            paidByIndex: remappedPaidBy,
-            userId: ctx.user.id,
-            expiresAt: createExpiryDate(),
-          },
-        });
-      });
-
-      cleanupExpiredSplits(ctx.db, 'guest.split');
-
-      logger.info('guest.split.created');
-
-      return { shareToken: share.token };
-    }),
+  // The historical finalized-split reader below stays available for saved
+  // receipts. The obsolete direct-finalized creation mutation is intentionally
+  // absent: new receipts must use createClaimSession and the claim workflow.
 
   getSplit: publicProcedure.input(z.object({ token: shareTokenSchema })).query(async ({ ctx, input }) => {
     // Bound share-link lookups before PostgreSQL, including invented tokens.
@@ -1086,6 +983,70 @@ export const guestRouter = createTRPCRouter({
       return { shareToken: share.token, creator };
     }),
 
+  // TASK-BILLOK-002: expand the guest list without replacing old identities,
+  // allocations, settlement state, or the creator/payer. Repeated clicks and
+  // network retries with the same request key return the original empty place.
+  addGuestPlace: protectedProcedure
+    .input(z.object({ token: shareTokenSchema, requestKey: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.impersonating) throw new AppError('FORBIDDEN', 'notParticipant');
+      if (!checkTokenRateLimit('guest-creator-add-place:' + ctx.user.id, 30, 60_000).allowed) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({
+          where: { shareToken: shareLookupHash(input.token) },
+        });
+        // A share link, a guest token, and a payer are NOT creator authority.
+        if (!session || session.userId !== ctx.user.id) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.status !== GuestSplitStatus.CLAIMING) {
+          throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+        }
+        const receipt = parseExtractedData(session.receiptData);
+        if (receipt.guestSlotsMode !== true) {
+          throw new AppError('BAD_REQUEST', 'invalidData', { label: 'guest slots mode' });
+        }
+
+        const people = assignPersonIds(session.people as GuestSessionPerson[]);
+        const replayed = people.find((person) => person.guestPlaceRequestKey === input.requestKey);
+        if (replayed) {
+          return { personId: replayed.id, guestSlotNumber: replayed.guestSlotNumber! };
+        }
+        if (people.length >= MAX_SESSION_PEOPLE) {
+          throw new AppError('BAD_REQUEST', 'sessionFull', { max: MAX_SESSION_PEOPLE });
+        }
+
+        const slot = Math.max(0, ...people.map((person) => person.guestSlotNumber ?? 0)) + 1;
+        let displayName = 'Гость ' + slot;
+        let suffix = 2;
+        while (people.some((person) => normalizeGuestName(person.name) === normalizeGuestName(displayName))) {
+          displayName = 'Гость ' + slot + ' (' + suffix++ + ')';
+        }
+        const personId = newGuestPersonId(people.map((person) => person.id));
+        people.push({
+          id: personId,
+          name: displayName,
+          guestSlotNumber: slot,
+          guestPlaceRequestKey: input.requestKey,
+          visualColorId: Math.max(-1, ...people.map((person) => person.visualColorId ?? -1)) + 1,
+        });
+        // Keep the original JSON fields, including private settlement metadata.
+        // No changes to assignments, paidByIndex, tips, payments, or tokens.
+        await tx.guestSplit.update({
+          where: { id: session.id },
+          data: {
+            people: people as unknown as Prisma.InputJsonValue,
+            receiptData: {
+              ...(session.receiptData as Record<string, unknown>),
+              guestCount: slot,
+            } as Prisma.InputJsonValue,
+          },
+        });
+        return { personId, guestSlotNumber: slot };
+      });
+    }),
+
   /** 3.7.2: join one of N preallocated guest slots by *stable person id*.
    * The shareToken reveals available places but provides no ownership of a
    * taken place. This is intentionally separate from legacy name-based joining.
@@ -1094,15 +1055,23 @@ export const guestRouter = createTRPCRouter({
    */
   joinGuestSlot: publicProcedure
     .input(
-      z.object({
-        token: shareTokenSchema,
-        slotId: personIdSchema,
-        name: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
-        personToken: guestLinkSecretSchema.optional(),
-        joinKey: z.string().uuid().optional(),
-      }),
+      z
+        .object({
+          token: shareTokenSchema,
+          // Optional for the shared-link auto-join; an explicit id still selects
+          // a specific legacy/preallocated free guest place.
+          slotId: personIdSchema.optional(),
+          name: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
+          personToken: guestLinkSecretSchema.optional(),
+          joinKey: z.string().uuid().optional(),
+        })
+        .strict(),
     )
     .mutation(async ({ ctx, input }) => {
+      // Automatic selection must always be replayable after a lost response.
+      if (!input.slotId && !input.joinKey) {
+        throw new AppError('BAD_REQUEST', 'invalidData', { label: 'join key' });
+      }
       if (!checkJoinRateLimit(input.token, input.name, input.personToken)) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
@@ -1132,6 +1101,9 @@ export const guestRouter = createTRPCRouter({
           throw new AppError('CONFLICT', 'nameTaken');
         }
         const people = assignPersonIds(stored);
+        // An automatic link join expands the receipt only after a successful
+        // confirmation, not on getSession/read or when the link is opened.
+        let addedGuestSlotNumber: number | null = null;
         const save = async () => {
           enforceGuestKnownParts(
             parseGuestItems(session.items),
@@ -1146,10 +1118,21 @@ export const guestRouter = createTRPCRouter({
               // Selecting a place changes neither dish portions nor voluntary
               // tip amounts: an already approved allocation stays approved.
               people: people as unknown as Prisma.InputJsonValue,
+              ...(addedGuestSlotNumber === null
+                ? {}
+                : {
+                    receiptData: {
+                      ...(session.receiptData as Record<string, unknown>),
+                      guestCount: Math.max(
+                        typeof receipt.guestCount === 'number' ? receipt.guestCount : 0,
+                        addedGuestSlotNumber,
+                      ),
+                    } as Prisma.InputJsonValue,
+                  }),
             },
           });
         };
-        const targetIndex = people.findIndex((p) => p.id === input.slotId && typeof p.guestSlotNumber === 'number');
+        let targetIndex = people.findIndex((p) => p.id === input.slotId && typeof p.guestSlotNumber === 'number');
         // A registered creator can re-enter their own reserved row using
         // their account, but cannot bind that row to a second guest slot.
         const accountIndex = accountUserId ? people.findIndex((p) => p.accountUserId === accountUserId) : -1;
@@ -1191,7 +1174,7 @@ export const guestRouter = createTRPCRouter({
         if (replayIndex >= 0) {
           const replayed = people[replayIndex]!;
           if (
-            replayed.id !== input.slotId ||
+            (input.slotId !== undefined && replayed.id !== input.slotId) ||
             replayed.join!.name !== normalizeGuestName(input.name) ||
             replayed.accountUserId !== undefined ||
             accountUserId !== null
@@ -1206,6 +1189,32 @@ export const guestRouter = createTRPCRouter({
           };
         }
 
+        if (input.slotId === undefined) {
+          // The shared link is valid even when all originally created slots
+          // have been occupied. Take an existing free slot first. When none
+          // remains, append the next independent slot inside this exact
+          // Repeatable Read transaction (serializing concurrent joins).
+          targetIndex = people.findIndex((p) => p.guestSlotNumber !== undefined && !p.personToken && !p.accountUserId);
+          if (targetIndex < 0) {
+            if (people.length >= MAX_SESSION_PEOPLE) {
+              throw new AppError('BAD_REQUEST', 'sessionFull', { max: MAX_SESSION_PEOPLE });
+            }
+            const nextSlot = Math.max(0, ...people.map((p) => p.guestSlotNumber ?? 0)) + 1;
+            let placeholderName = 'Гость ' + nextSlot;
+            let suffix = 2;
+            while (people.some((p) => normalizeGuestName(p.name) === normalizeGuestName(placeholderName))) {
+              placeholderName = 'Гость ' + nextSlot + ' (' + suffix++ + ')';
+            }
+            people.push({
+              id: newGuestPersonId(people.map((p) => p.id)),
+              name: placeholderName,
+              guestSlotNumber: nextSlot,
+              visualColorId: Math.max(-1, ...people.map((p) => p.visualColorId ?? -1)) + 1,
+            });
+            addedGuestSlotNumber = nextSlot;
+            targetIndex = people.length - 1;
+          }
+        }
         if (targetIndex < 0) throw new AppError('CONFLICT', 'personGone');
         const target = people[targetIndex]!;
         if (target.personToken || target.accountUserId) {
@@ -1244,21 +1253,22 @@ export const guestRouter = createTRPCRouter({
 
   joinSession: publicProcedure
     .input(
-      z.object({
-        token: shareTokenSchema,
-        name: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
-        groupSize: z.number().int().min(1).max(20).optional(),
-        // The token this device stored when it joined: whoever holds it is the caller. Only ever
-        // used to find its holder, never given to anyone, so a removed person's old token
-        // can't be attached to someone new.
-        personToken: guestLinkSecretSchema.optional(),
-        // An idempotency key the device made for this join. Replayable like Stripe's
-        // Idempotency-Key: saved (with the normalized name) on the person the join creates or
-        // first claims, a replay with the same key and name within JOIN_REPLAY_WINDOW_MS returns
-        // that person, so a join whose response was lost doesn't end up at a taken name; the same
-        // key with another name is refused. Tokens themselves are always minted here.
-        joinKey: z.string().uuid().optional(),
-      }),
+      z
+        .object({
+          token: shareTokenSchema,
+          name: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
+          // The token this device stored when it joined: whoever holds it is the caller. Only ever
+          // used to find its holder, never given to anyone, so a removed person's old token
+          // can't be attached to someone new.
+          personToken: guestLinkSecretSchema.optional(),
+          // An idempotency key the device made for this join. Replayable like Stripe's
+          // Idempotency-Key: saved (with the normalized name) on the person the join creates or
+          // first claims, a replay with the same key and name within JOIN_REPLAY_WINDOW_MS returns
+          // that person, so a join whose response was lost doesn't end up at a taken name; the same
+          // key with another name is refused. Tokens themselves are always minted here.
+          joinKey: z.string().uuid().optional(),
+        })
+        .strict(),
     )
     .mutation(async ({ ctx, input }) => {
       if (!checkJoinRateLimit(input.token, input.name, input.personToken)) {
@@ -1320,7 +1330,6 @@ export const guestRouter = createTRPCRouter({
           const previous = ownIndex >= 0 ? people[ownIndex]! : null;
           const personToken = previous?.personToken ?? issueGuestPersonToken();
           const finalIndex = ownIndex >= 0 ? ownIndex : people.length;
-          const desiredGroupSize = input.groupSize ?? previous?.groupSize;
           if (previous) {
             people[ownIndex] = {
               ...previous,
@@ -1328,7 +1337,6 @@ export const guestRouter = createTRPCRouter({
               accountUserId: ownerId,
               reservedOwner: true,
               personToken,
-              ...(desiredGroupSize !== undefined ? { groupSize: desiredGroupSize } : {}),
             };
           } else {
             people.push({
@@ -1337,7 +1345,6 @@ export const guestRouter = createTRPCRouter({
               accountUserId: ownerId,
               reservedOwner: true,
               personToken,
-              ...(input.groupSize != null ? { groupSize: input.groupSize } : {}),
             });
           }
           // Don't revoke an organizer's approved parts snapshot just because
@@ -1347,8 +1354,7 @@ export const guestRouter = createTRPCRouter({
             renamedAnother ||
             idsMissing ||
             previous.name !== RESERVED_OWNER_NAME ||
-            !previous.personToken ||
-            previous.groupSize !== desiredGroupSize
+            !previous.personToken
           )
             await savePeople();
           const owner = people[finalIndex]!;
@@ -1369,11 +1375,8 @@ export const guestRouter = createTRPCRouter({
         // join-key replay, so the device's current identity wins (e.g. another tab joined meanwhile).
         if (holderIndex >= 0) {
           const holder = people[holderIndex]!;
-          // Update groupSize on rejoin only if explicitly provided and different
-          const newGroupSize =
-            input.groupSize != null && input.groupSize !== (holder.groupSize ?? 1) ? input.groupSize : null;
-          if (newGroupSize !== null) people[holderIndex] = { ...holder, groupSize: newGroupSize };
-          if (newGroupSize !== null || idsMissing) await savePeople();
+          // No new write may update the weight on a historical receipt.
+          if (idsMissing) await savePeople();
           return { personIndex: holderIndex, personId: holder.id, personToken: holder.personToken!, name: holder.name };
         }
 
@@ -1414,7 +1417,6 @@ export const guestRouter = createTRPCRouter({
             ...existingPerson,
             personToken,
             ...joinRecord,
-            ...(input.groupSize != null ? { groupSize: input.groupSize } : {}),
           };
           await savePeople();
           return { personIndex: existingIndex, personId: existingPerson.id, personToken, name: existingPerson.name };
@@ -1432,7 +1434,6 @@ export const guestRouter = createTRPCRouter({
           personToken,
           visualColorId: Math.max(people.length - 1, ...people.map((p) => p.visualColorId ?? -1)) + 1,
           ...joinRecord,
-          ...(input.groupSize != null ? { groupSize: input.groupSize } : {}),
         });
         await savePeople();
 
@@ -1478,16 +1479,17 @@ export const guestRouter = createTRPCRouter({
 
   editPersonName: publicProcedure
     .input(
-      z.object({
-        token: shareTokenSchema,
-        // Optional only for the signed-in receipt creator: their own account
-        // grants permission, no guest token belonging to somebody else needed.
-        personToken: guestLinkSecretSchema.optional(),
-        // Who to rename, by id (see targetIndexOrThrow)
-        targetId: personIdSchema,
-        newName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
-        groupSize: z.number().int().min(1).max(20).optional(),
-      }),
+      z
+        .object({
+          token: shareTokenSchema,
+          // Optional only for the signed-in receipt creator: their own account
+          // grants permission, no guest token belonging to somebody else needed.
+          personToken: guestLinkSecretSchema.optional(),
+          // Who to rename, by id (see targetIndexOrThrow)
+          targetId: personIdSchema,
+          newName: z.string().trim().min(1).max(MAX_GUEST_NAME_LENGTH),
+        })
+        .strict(),
     )
     .mutation(async ({ ctx, input }) => {
       if (
@@ -1544,7 +1546,6 @@ export const guestRouter = createTRPCRouter({
         const renamed = {
           ...previous,
           name: input.newName.normalize('NFC').trim(),
-          ...(input.groupSize != null ? { groupSize: input.groupSize } : {}),
         };
         people[targetIndex] = isSelf && previous.name !== renamed.name ? markPersonalLinkReady(renamed) : renamed;
         enforceGuestKnownParts(
@@ -1784,6 +1785,140 @@ export const guestRouter = createTRPCRouter({
           });
         }
         return { success: true, tipCents: input.tipCents };
+      });
+    }),
+
+  // Issue #10 23–30: atomic per-item allocations, without creating new people.
+  setReceiptItemParts: publicProcedure
+    .input(
+      z.object({
+        token: shareTokenSchema,
+        personToken: guestLinkSecretSchema.optional(),
+        itemIndex: z.number().int().min(0),
+        changes: z
+          .array(z.object({ personId: personIdSchema, parts: z.number().int().min(0).max(10000) }))
+          .min(1)
+          .max(MAX_SESSION_PEOPLE),
+        requestKey: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const rateActor = input.personToken ?? (ctx.session?.user?.id ? 'creator:' + ctx.session.user.id : '');
+      if (!rateActor || !checkClaimWriteRateLimit('receipt-item-parts', input.token, rateActor)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'claimRateLimited');
+      }
+      if (new Set(input.changes.map((entry) => entry.personId)).size !== input.changes.length) {
+        throw new AppError('BAD_REQUEST', 'invalidData', { label: 'duplicate personId' });
+      }
+      const orderedChanges = [...input.changes].sort((a, b) => a.personId.localeCompare(b.personId));
+      const hash = createHash('sha256')
+        .update(JSON.stringify([input.itemIndex, orderedChanges]))
+        .digest('hex');
+      return guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        const people = assignPersonIds(session.people as GuestSessionPerson[]);
+        const isCreator = !!session.userId && session.userId === ctx.session?.user?.id && !ctx.impersonating;
+        const creatorId = parseExtractedData(session.receiptData).organizerPersonId ?? people[0]?.id;
+        const hasPaymentGroups = people.some((person) => person.paymentGroupRepresentativeId !== undefined);
+        const canCreatorAllocate = isCreator && !hasPaymentGroups;
+        const actorIndex = isCreator
+          ? people.findIndex((p) => p.id === creatorId)
+          : people.findIndex((p) => !!input.personToken && p.personToken === input.personToken);
+        if (actorIndex < 0 || (!isCreator && !input.personToken)) {
+          throw new AppError('FORBIDDEN', 'notParticipant');
+        }
+        // A receipt creator can allocate for anyone ONLY while the receipt is
+        // ungrouped. Once the creator builds payment groups, the same server
+        // group boundary applies to everyone, including the creator. Existing
+        // claimItems already enforces this exact rule; do not introduce a
+        // bypass by exposing a new bulk allocation route.
+        for (const entry of orderedChanges) {
+          if (canCreatorAllocate) {
+            if (!people.some((p) => p.id === entry.personId)) throw new AppError('NOT_FOUND', 'personGone');
+          } else {
+            if (!input.personToken) throw new AppError('FORBIDDEN', 'notParticipant');
+            authorizeReceiptPersonEdit(people, session.paidByIndex, input.personToken, entry.personId);
+          }
+        }
+        const actor = people[actorIndex]!;
+        const past = actor.itemAllocationSaves ?? [];
+        const replay = past.find((record) => record.key === input.requestKey);
+        if (replay) {
+          if (replay.hash !== hash) throw new AppError('CONFLICT', 'saveKeyReused');
+          return { success: true, replayed: true };
+        }
+        if (session.status !== GuestSplitStatus.CLAIMING) {
+          throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
+        }
+        const items = parseGuestItems(session.items);
+        if (input.itemIndex >= items.length) throw new AppError('BAD_REQUEST', 'invalidItemIndex');
+        const assignments = materializeGuestPersonalParts(
+          cloneAssignments(session.assignments as GuestPortionAssignment[]),
+          people,
+        );
+        let target = assignments.find((assignment) => assignment.itemIndex === input.itemIndex);
+        if (!target) {
+          target = { itemIndex: input.itemIndex, personIndices: [], partsByPersonId: {} };
+          assignments.push(target);
+        }
+        const partsMap = { ...(target.partsByPersonId ?? {}) };
+        const before = JSON.stringify([target.personIndices, partsMap]);
+        for (const entry of orderedChanges) {
+          const idx = people.findIndex((person) => person.id === entry.personId);
+          if (entry.parts === 0) {
+            target.personIndices = target.personIndices.filter((current) => current !== idx);
+            delete partsMap[entry.personId];
+          } else {
+            if (!target.personIndices.includes(idx)) target.personIndices.push(idx);
+            partsMap[entry.personId] = entry.parts;
+          }
+        }
+        target.personIndices.sort((a, b) => a - b);
+        target.partsByPersonId = partsMap;
+        const changed = before !== JSON.stringify([target.personIndices, partsMap]);
+        const nextAssignments = assignments.filter((assignment) => assignment.personIndices.length > 0);
+        enforceGuestKnownParts(
+          items,
+          people,
+          nextAssignments,
+          parseExtractedData(session.receiptData).knownPartsByItem,
+          false,
+        );
+        calculateSplitTotals({
+          items,
+          assignments: guestPortionAssignments(nextAssignments, people),
+          tax: 0,
+          tip: 0,
+          peopleCount: people.length,
+          ...groupSizeWeights(people),
+        });
+        const updatedPeople: GuestSessionPerson[] = people.map((person, index) => {
+          let next: GuestSessionPerson = person;
+          if (changed && index !== actorIndex && orderedChanges.some((entry) => entry.personId === person.id)) {
+            next = appendDelegatedReceiptAudit(person, actor.id!, person.id!, 'item-parts', input.itemIndex);
+          } else if (changed && index === actorIndex) {
+            next = markPersonalLinkReady(person);
+          }
+          if (index === actorIndex) {
+            next = { ...next, itemAllocationSaves: [...past, { key: input.requestKey, hash }].slice(-40) };
+          }
+          return next;
+        });
+        await tx.guestSplit.update({
+          where: { id: session.id },
+          data: {
+            ...(changed
+              ? {
+                  assignments: nextAssignments as unknown as Prisma.InputJsonValue,
+                  ...invalidatePartsApproval(session.receiptData),
+                }
+              : {}),
+            people: updatedPeople as unknown as Prisma.InputJsonValue,
+          },
+        });
+        return { success: true, replayed: false };
       });
     }),
 

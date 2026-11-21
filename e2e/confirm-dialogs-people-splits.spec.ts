@@ -58,12 +58,11 @@ test('9.3: deleting a RUB split requires confirmation and Cancel preserves it', 
   await signIn(page);
   const native = recordNativeDialogs(page);
   const merchantName = 'Чек для удаления ' + Date.now();
-  const created = await trpcMutation(page.request, 'guest.createSplit', {
+  const created = await trpcMutation(page.request, 'guest.createClaimSession', {
     receiptData: { merchantName, subtotal: 12500, tax: 0, tip: 0, total: 12500, currency: 'RUB' },
     items: [{ name: 'Обед', quantity: 1, unitPrice: 12500, totalPrice: 12500 }],
-    people: [{ name: 'Борис' }],
-    assignments: [{ itemIndex: 0, personIndices: [0] }],
-    paidByIndex: 0,
+    guestCount: 0,
+    joinCreator: true,
   });
   expect(created.ok(), await created.text()).toBe(true);
   await page.goto('/splits');

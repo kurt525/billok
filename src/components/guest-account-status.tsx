@@ -13,8 +13,8 @@ export function GuestAccountStatus({ isRegistered, registeredLabel, guestLabel }
       className={
         'inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium ' +
         (isRegistered
-          ? 'border-sky-500/40 bg-sky-500/10 text-foreground'
-          : 'border-dashed border-muted-foreground/40 bg-muted/60 text-muted-foreground')
+          ? 'border-slate-500 bg-white text-slate-950 shadow-sm dark:border-slate-200 dark:bg-slate-950 dark:text-white'
+          : 'border-dashed border-slate-500 bg-white text-slate-900 dark:border-slate-400 dark:bg-slate-950 dark:text-white')
       }
       data-testid={isRegistered ? 'account-status-registered' : 'account-status-guest'}
     >

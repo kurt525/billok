@@ -45,6 +45,7 @@ export const guestPersonSchema = z.object({
   id: z.string().optional(),
   name: z.string(),
   personToken: z.string().optional(),
+  // Historical stored receipts only: never allow new join/edit payloads to set it.
   groupSize: z.number().int().min(1).optional(),
   tipCents: z.number().int().min(0).max(MAX_MONEY_CENTS).optional(),
   join: z.object({ key: z.string(), name: z.string(), expiresAt: z.number() }).optional(),

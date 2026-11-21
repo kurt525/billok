@@ -319,6 +319,34 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
 
 
 
+    def test_issue10_deleted_quick_split_api_and_kept_finalized_reader(self):
+        # TASK-BILLOK-002 16–19: remove the direct-finalized creation API
+        # while preserving the historical finalized-reader endpoint.
+        router = source("src/server/trpc/routers/guest.ts")
+        creation = source("src/app/[locale]/split/page.tsx")
+        self.assertNotIn("createSplit: protectedProcedure", router)
+        self.assertNotIn("guest.createSplit", creation)
+        self.assertNotIn("createSplit.useMutation", creation)
+        self.assertNotIn("workflow ===", creation)
+        self.assertNotIn("setWorkflow", creation)
+        self.assertIn("createClaimSession.useMutation", creation)
+        self.assertIn("getSplit: publicProcedure", router)
+        # No second hidden database insert path may create a finalized split.
+        self.assertEqual(router.count("tx.guestSplit.create({"), 1)
+        self.assertIn("joinSession: publicProcedure", router)
+        self.assertIn("joinGuestSlot: publicProcedure", router)
+        import json
+        labels = json.loads(source("messages/ru/split.json"))["assign"]
+        for key in ("createSplitButton", "creatingSplit", "assignAllItems", "createSplitFailed"):
+            self.assertNotIn(key, labels)
+        # An explicit negative regression is the only supported reference to
+        # the removed route. Setup tests use the current creation protocol.
+        for suite in (ROOT / "e2e").glob("*.spec.ts"):
+            text = suite.read_text()
+            if suite.name == "billok-mobile-guest-split.spec.ts":
+                continue
+            self.assertNotIn("guest.createSplit", text, str(suite))
+
     def test_obsolete_photo_browser_scenarios_not_in_test_suite(self):
         for obsolete in ("e2e/receipt-ui.spec.ts",):
             self.assertFalse((ROOT / obsolete).exists(), obsolete)
@@ -349,7 +377,9 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
             self.assertNotIn(old, suite)
         self.assertIn("authedPasskeyContext", suite)
         self.assertIn("create-manual-group-receipt", suite)
-        self.assertIn("workflow-manual", suite)
+        self.assertNotIn("workflow-manual", suite)
+        self.assertIn("guest-count-input", suite)
+        self.assertIn("share-for-claiming-btn", suite)
         self.assertIn("e2e/assignment-chip-names.spec.ts", source(".github/workflows/billok-ci.yml"))
 
     def test_split_item_uses_only_manual_receipts_and_signed_passkey(self):
@@ -363,11 +393,12 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
 
     def test_confirm_dialogs_people_and_splits_migrated(self):
         mobile = source("e2e/confirm-dialogs-people-splits.spec.ts")
-        for required in ("authedPasskeyContext", "groups.addPlaceholder", "guest.createSplit",
+        for required in ("authedPasskeyContext", "groups.addPlaceholder", "guest.createClaimSession",
                          "getByRole('alertdialog')", "currency: 'RUB'"):
             self.assertIn(required, mobile)
         for obsolete in ("/en/", "/api/upload", "receipts.processReceipt", "users.alice.password"):
             self.assertNotIn(obsolete, mobile)
+        self.assertNotIn("guest.createSplit", mobile)
         self.assertEqual(mobile.count("test('9.3:"), 2)
         self.assertIn("e2e/confirm-dialogs-people-splits.spec.ts", source(".github/workflows/billok-ci.yml"))
 
@@ -523,8 +554,9 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
                 "six-width final authenticated mobile adaptation audit across main screens",
             ),
             "e2e/billok-mobile-guest-split.spec.ts": (
-                "splits-page",
-                "split-card-",
+                "receipt-item-name-",
+                "creator-add-guest-place",
+                "guest-slot-option-3",
             ),
         }
         for path, markers in current.items():
@@ -559,8 +591,14 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         self.assertFalse((ROOT / "e2e/test-receipt.png").exists())
         self.assertIn("authedPasskeyContext", suite)
         self.assertIn("receipts.createManual", suite)
-        self.assertIn("workflow-manual", suite)
-        self.assertEqual(suite.count("test('9.3:"), 3)
+        # The original three cases remain covered, but two now exercise the
+        # single TASK-BILLOK-002 creation flow instead of a removed switch.
+        self.assertIn("startUnifiedReceipt", suite)
+        self.assertIn("creator-add-guest-place", suite)
+        self.assertIn("guest-slot-option-1", suite)
+        self.assertIn("guest-slot-option-2", suite)
+        self.assertEqual(suite.count("test('TASK-BILLOK-002:"), 2)
+        self.assertEqual(suite.count("test('9.3:"), 1)
         self.assertIn("e2e/claim-share-link.spec.ts", source(".github/workflows/billok-ci.yml"))
 
     def test_only_russian_internal_locale_rewrite_remains(self):

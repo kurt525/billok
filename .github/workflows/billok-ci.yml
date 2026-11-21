@@ -1,8 +1,10 @@
 name: BillOK CI
 
 on:
+  # Exact trust exception for already-open TASK-BILLOK-002 PR #11.
+  # Do not allow arbitrary task/* branches or pull_request on the self-hosted runner.
   push:
-    branches: [main, 'billok/**']
+    branches: [main, 'billok/**', 'task/billok-002-create-receipt']
   workflow_dispatch:
 
 permissions:

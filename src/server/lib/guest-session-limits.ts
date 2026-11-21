@@ -28,6 +28,7 @@ export type ClaimWriteAction =
   | 'split-item'
   | 'personal-tip'
   | 'personal-parts'
+  | 'receipt-item-parts'
   | 'payer-sbp-read'
   | 'payer-sbp-write'
   | 'payer-sbp-reimbursement'

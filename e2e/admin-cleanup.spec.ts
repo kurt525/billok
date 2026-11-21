@@ -1,7 +1,5 @@
-import { test, expect, request } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { users, login, authedContext, trpcQuery, trpcMutation, trpcResult, trpcError } from './helpers';
-
-const BASE = process.env.BASE_URL || 'http://localhost:3001';
 
 test.describe('Admin — Guest Split Cleanup', () => {
   // ── API Tests ────────────────────────────────────────────
@@ -16,29 +14,22 @@ test.describe('Admin — Guest Split Cleanup', () => {
   });
 
   test('cleanupExpiredSplits deletes expired records', async () => {
-    const unauthCtx = await request.newContext({ baseURL: BASE });
-
-    // Create a guest split (these expire in 7 days, so it won't be expired)
-    const createRes = await unauthCtx.post('/api/trpc/guest.createSplit', {
-      data: {
-        json: {
-          receiptData: {
-            merchantName: 'Cleanup Test',
-            subtotal: 1000,
-            tax: 80,
-            tip: 0,
-            total: 1080,
-            currency: 'USD',
-          },
-          items: [{ name: 'Test Item', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
-          people: [{ name: 'Tester' }],
-          assignments: [{ itemIndex: 0, personIndices: [0] }],
-          paidByIndex: 0,
-        },
+    const createCtx = await authedContext(users.alice.email);
+    const createRes = await trpcMutation(createCtx, 'guest.createClaimSession', {
+      receiptData: {
+        merchantName: 'Cleanup Test',
+        subtotal: 1000,
+        tax: 0,
+        tip: 0,
+        total: 1000,
+        currency: 'RUB',
       },
+      items: [{ name: 'Test Item', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
+      guestCount: 0,
+      joinCreator: true,
     });
-    expect(createRes.ok()).toBe(true);
-    await unauthCtx.dispose();
+    expect(createRes.ok(), await createRes.text()).toBe(true);
+    await createCtx.dispose();
 
     // Now run cleanup as admin — should succeed (may delete 0 if none are expired)
     const adminCtx = await authedContext(users.alice.email, users.alice.password);

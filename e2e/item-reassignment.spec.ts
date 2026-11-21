@@ -57,7 +57,7 @@ test.describe('Item reassignment via person switcher', () => {
     await expect(page.locator('[data-sonner-toast]')).toBeHidden({ timeout: 10000 });
 
     // Alice claims Salad for herself
-    await page.getByTestId('claim-item-1').click();
+    await page.getByTestId('claim-item-1').click({ position: { x: 24, y: 20 } });
     const saveBtn = page.getByTestId('save-claims-btn');
     await saveBtn.scrollIntoViewIfNeeded();
     await saveBtn.click();
@@ -77,7 +77,7 @@ test.describe('Item reassignment via person switcher', () => {
     await page.screenshot({ path: 'docs/screenshots/reassign-switch-to-bob.png' });
 
     // Unclaim Fries from Bob (Bob claimed wrong item)
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
     await expect(page.getByTestId('claim-item-2')).toHaveAttribute('aria-pressed', 'false');
 
     // Save Bob's updated claims
@@ -91,7 +91,7 @@ test.describe('Item reassignment via person switcher', () => {
     await page.waitForTimeout(500);
 
     // Claim Fries for Alice instead
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
     await expect(page.getByTestId('claim-item-2')).toHaveAttribute('aria-pressed', 'true');
 
     // Save Alice's updated claims

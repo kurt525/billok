@@ -20,6 +20,14 @@ function rejectNativeDialogs(page: Page) {
   return seen;
 }
 
+async function ensureReceiptTab(page: Page, tab: 'people' | 'items') {
+  const control = page.getByTestId('claim-tab-' + tab);
+  await expect(control).toBeVisible({ timeout: 20_000 });
+  if ((await control.getAttribute('aria-selected')) !== 'true') await control.click();
+  await expect(control).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#claim-' + tab + '-panel')).toBeVisible({ timeout: 10_000 });
+}
+
 test.use({ viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
 
 test('9.3: deleting a RUB group expense confirms its name, Cancel preserves it', async ({ page }) => {
@@ -89,12 +97,15 @@ test('9.3: organizer removes a joined person only after an in-page confirmation'
   await rememberClaimIdentity(page.context(), token, creator);
   await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.getByTestId('claim-people-panel')).toBeAttached({ timeout: 20_000 });
 
   // Editing a person's name is cancellable, and the icon buttons have accessible names.
+  await ensureReceiptTab(page, 'people');
   await page.getByTestId('edit-person-1').click();
   await expect(page.getByTestId('edit-name-input-1')).toHaveValue('Борис');
   await expect(page.getByRole('button', { name: 'Сохранить имя' })).toBeVisible();
   await page.getByRole('button', { name: 'Отмена', exact: true }).click();
+  await ensureReceiptTab(page, 'people');
   await expect(page.getByTestId('edit-person-1')).toBeVisible();
 
   const remove = page.getByTestId('remove-person-1');
