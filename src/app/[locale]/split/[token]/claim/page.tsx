@@ -3,7 +3,6 @@
 import { use, useState, useMemo, useEffect, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
-import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
 import { MAX_GUEST_NAME_LENGTH } from '@/lib/guest-name-limit';
 import { GUEST_PRESENCE_HEARTBEAT_MS } from '@/lib/guest-presence';
@@ -27,29 +26,6 @@ import {
   type ClaimIdentity,
   type PendingJoin,
 } from '@/lib/guest-session';
-import {
-  draftsByIndex,
-  editsAfterSave,
-  editsToSave,
-  hasEdits,
-  pendingEdits,
-  stackEdits,
-  toggleEdit,
-  withEdits,
-  type ClaimEdits,
-  type SaveOutcome,
-} from '@/lib/claim-drafts';
-import {
-  SAVE_ATTEMPT_TIMEOUT_MS,
-  abortAfter,
-  failedSaveOutcome,
-  saveInOrder,
-  saveRetryDelay,
-  settleSave,
-  sleep,
-  type ParkedSave,
-  type SaveReload,
-} from '@/lib/claim-save';
 import { calculateClaimTotals, groupSizeWeights } from '@/lib/split-calculator';
 import { guestPortionAssignments, guestPortionProgress } from '@/lib/guest-portions';
 import { aggregateReceiptPaymentGroups } from '@/lib/receipt-payment-groups';
@@ -60,7 +36,6 @@ import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Badge } from '@/components/ui/badge';
 import {
   Check,
   Copy,
@@ -89,22 +64,6 @@ import { GuestPaymentDeclaration } from '@/components/guest-payment-declaration'
 import { GuestPayerPaymentReview } from '@/components/guest-payer-payment-review';
 import { GuestPaymentGroupsEditor } from '@/components/guest-payment-groups-editor';
 import { GuestItemAllocations } from '@/components/guest-item-allocations';
-
-// How one claim save attempt ended: the answer's conflicts when stored, the server's message
-// when refused
-type SaveAttempt = { outcome: SaveOutcome; conflicts: { claimedBy: string[] }[]; message?: string };
-
-// What a claim save sends to guest.claimItems
-type ClaimRequest = {
-  token: string;
-  personId: string;
-  personToken: string;
-  saveKey: string;
-  addItemIndices: number[];
-  removeItemIndices: number[];
-};
-// One save a Save sends: a parked one, or the person's changes
-type SaveStage = ParkedSave<ClaimRequest> & { parked: boolean };
 
 // Take a personal link's token out of the address bar and this tab's history entry (the
 // browser's global history keeps the URL that was opened). Only called after the page has
@@ -315,8 +274,9 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // Fixed slot selection is separate from a human's editable display name.
   const [selectedGuestSlotId, setSelectedGuestSlotId] = useState<string | null>(null);
   // Only the owner of this device's personToken can edit these tips.
-  const [personalTipDraft, setPersonalTipDraft] = useState<string | null>(null);
-  const [portionDrafts, setPortionDrafts] = useState<Record<number, string>>({});
+  // Drafts are scoped to person ID, including on tab changes and live refreshes.
+  const [tipDrafts, setTipDrafts] = useState<Record<string, string>>({});
+  const [tipTargetPersonId, setTipTargetPersonId] = useState<string | null>(null);
   const [knownPartsDrafts, setKnownPartsDrafts] = useState<Record<number, string>>({});
   const [finalizationOrganizerEmail, setFinalizationOrganizerEmail] = useState('');
   const [presenceConnectionLost, setPresenceConnectionLost] = useState(false);
@@ -329,42 +289,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // Query only hands a pending mutation each render's options after that render commits), so
   // they read this device's identity from this ref, which setIdentity updates at once
   const identityRef = useRef(identity);
-  // Who "Claiming for" is set to (this device's person unless the user picked someone else)
-  const [activePersonId, setActivePersonId] = useState<string | null>(null);
-  // Unsaved claim changes by person id: the items tapped, shown over the person's saved claims
-  // (see ClaimEdits); people without any show their saved claims
-  const [claimEdits, setClaimEdits] = useState<Map<string, ClaimEdits>>(new Map());
-  // The changes a save in flight is sending, by person id. Saving moves a person's changes here,
-  // and taps meanwhile are new changes on top of them (judged against the claims as they'll be
-  // once it lands); if it's refused, restoreEdits puts the sent changes back under the new ones
-  const [savingEdits, setSavingEdits] = useState<Map<string, ClaimEdits>>(new Map());
-  // Saves the page gave up on, by person id (#241): still shown under the person's changes, and
-  // sent again with their own save key before the page's next save, for anyone
-  const [parkedSaves, setParkedSaves] = useState<Map<string, ParkedSave<ClaimRequest>>>(new Map());
-  // Counts the times unsaved changes were discarded (this device became someone else, or no one),
-  // so a save in flight across that doesn't bring its changes back afterwards
-  const editsReset = useRef(0);
-  // Whether the page is still open: a save it's still sending stops at its next step once it
-  // closes (an attempt already out is left to finish, as a mutation would), and says nothing
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-  // Stops a save the page is still sending (see settleSave), waking its waits and abandoning its
-  // request: aborted, and replaced, when unsaved changes are discarded (the save no longer matters)
-  const stopSaves = useRef(new AbortController());
-  function discardEdits() {
-    editsReset.current += 1;
-    stopSaves.current.abort();
-    stopSaves.current = new AbortController();
-    setClaimEdits(new Map());
-    setSavingEdits(new Map());
-    setParkedSaves(new Map());
-  }
-  const [saving, setSaving] = useState(false);
   const [editingPersonId, setEditingPersonId] = useState<string | null>(null);
   const [creatorGuestLink, setCreatorGuestLink] = useState<{
     personId: string;
@@ -546,35 +470,14 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     },
   });
 
-  const setMyItemParts = trpc.guest.setMyItemParts.useMutation({
-    // After a response is lost, React Query retries the SAME mutation
-    // variables (and saveKey), never inventing another operation. Server
-    // deduplication handles a successful commit followed by a lost answer.
-    retry: (failures, error) =>
-      failures < 2 && (error.data?.httpStatus === 503 || error.data?.httpStatus === undefined),
-    retryDelay: (attempt) => Math.min(2000, 250 * 2 ** attempt),
+  const setPersonalTip = trpc.guest.setPersonalTip.useMutation({
     onSuccess: async (_result, variables) => {
       await utils.guest.getSession.invalidate({ token });
-      setPortionDrafts((drafts) => {
-        const next = { ...drafts };
-        delete next[variables.itemIndex];
-        return next;
+      setTipDrafts((previous) => {
+        const updated = { ...previous };
+        delete updated[variables.personId];
+        return updated;
       });
-      toast.success(t('partsSaved'));
-    },
-    onError: (error) => {
-      // A concurrent saved edit can consume the remaining original pieces
-      // while this phone still shows the prior count. Reload the authoritative
-      // balance before allowing another attempt.
-      void utils.guest.getSession.invalidate({ token });
-      toast.error(localizedTrpcError(error, tc('errors.generic')));
-    },
-  });
-
-  const setPersonalTip = trpc.guest.setPersonalTip.useMutation({
-    onSuccess: async () => {
-      await utils.guest.getSession.invalidate({ token });
-      setPersonalTipDraft(null);
       toast.success(t('personalTipSaved'));
     },
     onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
@@ -606,10 +509,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       ) === true
     );
   };
-  const selectedIndex = activePersonId === null ? undefined : indexById.get(activePersonId);
-  const selectedId = selectedIndex === undefined ? null : (session.data?.people[selectedIndex]?.id ?? null);
-  const personIndex = selectedId && canEditFor(selectedId) ? selectedIndex! : myPersonIndex;
-  const activeId = personIndex === null ? null : (session.data?.people[personIndex]?.id ?? null);
 
   // 3.6.1: when the verified BillOK owner joins after a guest named Илья,
   // the server changes only that guest's label. Inform the holder on their
@@ -627,8 +526,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   function setIdentity(next: { personId: string; personToken: string } | null) {
     identityRef.current = next;
     setIdentityState(next);
-    setPersonalTipDraft(null);
-    setPortionDrafts({});
+    setTipDrafts({});
+    setTipTargetPersonId(null);
   }
 
   // This device's person is gone (removed here or on another device): back to the join form.
@@ -639,8 +538,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     if (getStoredClaimIdentity(token)?.personToken === removedToken) removeStoredClaimIdentity(token);
     autoRejoinAttempted.current = true;
     setIdentity(null);
-    setActivePersonId(null);
-    discardEdits();
+    setTipTargetPersonId(null);
+    setTipDrafts({});
     setEditingPersonId(null);
   }
 
@@ -664,13 +563,11 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         forgetIdentity(mine.personToken);
       } else if (removedId !== undefined) {
         // Everyone else keeps their id, so there is nothing to renumber
-        const withoutThem = <T,>(prev: Map<string, T>) => {
-          const next = new Map(prev);
-          next.delete(removedId);
+        setTipDrafts((previous) => {
+          const next = { ...previous };
+          delete next[removedId];
           return next;
-        };
-        setClaimEdits(withoutThem);
-        setParkedSaves(withoutThem);
+        });
         // Show the people list without them now, not at the next poll
         void session.refetch();
       }
@@ -781,25 +678,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   });
 
   const splitClaimItem = trpc.guest.splitClaimItem.useMutation({
-    onSuccess: (_data, variables) => {
-      const splitIdx = variables.itemIndex;
+    onSuccess: () => {
       setSplittingItemIdx(null);
       setSplitQty('');
-      setPortionDrafts({});
-      // Remap claimed item indices: items after the split point shift +1 (Finding #4).
-      // Only invalidate the split item itself; preserve unsaved edits for other items.
-      setClaimEdits((prev) => {
-        const next = new Map<string, ClaimEdits>();
-        for (const [personId, edits] of prev) {
-          const remapped = new Map<number, boolean>();
-          for (const [itemIdx, claimed] of edits) {
-            // A change to the split item stays on the original (now-reduced) item
-            remapped.set(itemIdx > splitIdx ? itemIdx + 1 : itemIdx, claimed);
-          }
-          next.set(personId, remapped);
-        }
-        return next;
-      });
+      void utils.guest.getSession.invalidate({ token });
     },
     onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
   });
@@ -840,12 +722,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     // settled too, so a reload doesn't offer it again
     removePersonalLinkFromAddressBar();
     setIdentity({ personId: adopted.personId, personToken: adopted.personToken });
-    setActivePersonId(adopted.personId);
     setStoredClaimIdentity(token, { name: adopted.name, personToken: adopted.personToken });
     pendingJoin.current = null;
-    // Unsaved edits were made as whoever this device was before. Saved claims show from the
-    // session as loaded, whose indexes are its own, so nothing is carried over from it.
-    discardEdits();
     // Someone who just joined isn't in the session as loaded yet. Loads from before now don't
     // count for the membership check; this refetch drops any poll sent before now, so the
     // next load is from after the join.
@@ -1142,56 +1020,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // --- Derived state ---
   const hasJoined = identity !== null;
 
-  // Compute server claims for all people
-  const serverClaimsMap = useMemo(() => {
-    if (!session.data) return new Map<number, Set<number>>();
-    const map = new Map<number, Set<number>>();
-    for (const a of session.data.assignments) {
-      for (const pi of a.personIndices) {
-        if (!map.has(pi)) map.set(pi, new Set());
-        map.get(pi)!.add(a.itemIndex);
-      }
-    }
-    return map;
-  }, [session.data]);
-
-  // Unsaved edits by index in the session as loaded, for comparing with its saved claims
-  const localEdits = useMemo(() => draftsByIndex(claimEdits, session.data?.people ?? []), [claimEdits, session.data]);
-  // Saved claims with any parked save and save in flight applied: what unsaved edits are shown
-  // over and judged by
-  const pendingByIndex = useMemo(
-    () => draftsByIndex(pendingEdits(parkedSaves, savingEdits), session.data?.people ?? []),
-    [parkedSaves, savingEdits, session.data],
-  );
-  const baseClaimsMap = useMemo(() => {
-    const map = new Map(serverClaimsMap);
-    for (const [pi, edits] of pendingByIndex)
-      map.set(pi, withEdits(serverClaimsMap.get(pi) ?? new Set<number>(), edits));
-    return map;
-  }, [serverClaimsMap, pendingByIndex]);
-  // Whether anyone in the split has a parked save
-  const anyParked = useMemo(
-    () => draftsByIndex(parkedSaves, session.data?.people ?? []).size > 0,
-    [parkedSaves, session.data],
-  );
-
-  // A parked save counts: Save sends it again
-  const hasUnsavedChanges = useMemo(() => {
-    if (personIndex === null || activeId === null) return false;
-    if (parkedSaves.has(activeId)) return true;
-    return hasEdits(baseClaimsMap.get(personIndex) ?? new Set<number>(), localEdits.get(personIndex));
-  }, [localEdits, baseClaimsMap, personIndex, activeId, parkedSaves]);
-
-  // Check if ANY person has unsaved local edits (not just the currently selected one). A save in
-  // flight or parked counts too: until it lands, finalizing could lock in the claims from before it
-  const hasAnyUnsavedChanges = useMemo(() => {
-    if (pendingByIndex.size > 0) return true;
-    for (const [pIdx, edits] of localEdits) {
-      if (hasEdits(baseClaimsMap.get(pIdx) ?? new Set<number>(), edits)) return true;
-    }
-    return false;
-  }, [pendingByIndex, localEdits, baseClaimsMap]);
-
   // All items have at least one saved claimant
   const allItemsClaimed = useMemo(() => {
     if (!session.data) return false;
@@ -1246,60 +1074,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     });
   }, [session.data]);
 
-  // This device's per-person preview may additionally show unsaved taps.
-  const splitTotals = useMemo(() => {
-    if (!session.data) return { people: [], unclaimed: null };
-
-    const serverAssignments = session.data.assignments;
-
-    // Group sizes weight the items people share
-    const weightsParam = groupSizeWeights(session.data.people);
-
-    if (localEdits.size > 0 || pendingByIndex.size > 0) {
-      // Build assignment map from server state
-      const assignmentMap = new Map<number, Set<number>>();
-      for (const a of serverAssignments) {
-        assignmentMap.set(a.itemIndex, new Set(a.personIndices));
-      }
-      // Override with local claims for each person that has local state
-      for (const pi of new Set([...localEdits.keys(), ...pendingByIndex.keys()])) {
-        const items = withEdits(baseClaimsMap.get(pi) ?? new Set<number>(), localEdits.get(pi));
-        // Remove this person from all items
-        for (const [, persons] of assignmentMap) {
-          persons.delete(pi);
-        }
-        // Re-add their claimed items
-        for (const itemIdx of items) {
-          if (!assignmentMap.has(itemIdx)) {
-            assignmentMap.set(itemIdx, new Set());
-          }
-          assignmentMap.get(itemIdx)!.add(pi);
-        }
-      }
-      const mergedAssignments = Array.from(assignmentMap.entries())
-        .filter(([, persons]) => persons.size > 0)
-        .map(([itemIndex, persons]) => ({
-          itemIndex,
-          personIndices: Array.from(persons),
-          partsByPersonId: serverAssignments.find((a) => a.itemIndex === itemIndex)?.partsByPersonId,
-        }));
-
-      return calculateClaimTotals({
-        items: session.data.items,
-        assignments: guestPortionAssignments(mergedAssignments, session.data.people),
-        tax: session.data.receiptData.tax,
-        tip: session.data.receiptData.tip,
-        peopleCount: session.data.people.length,
-        balanceAcrossItems: session.data.receiptData.roundingBalanced === true,
-        organizerIndex: session.data.people.findIndex(
-          (person) => person.id === session.data.receiptData.organizerPersonId,
-        ),
-        ...weightsParam,
-      });
-    }
-
-    return savedSplitTotals;
-  }, [session.data, baseClaimsMap, localEdits, pendingByIndex, savedSplitTotals]);
+  // Only server-confirmed allocations contribute to financial totals.
+  const splitTotals = savedSplitTotals;
 
   // --- Handlers ---
   function handleJoin() {
@@ -1319,18 +1095,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       return;
     }
     startJoin({ name: trimmed });
-  }
-
-  function toggleClaim(itemIndex: number) {
-    if (personIndex === null || activeId === null) return;
-    const saved = baseClaimsMap.get(personIndex) ?? new Set<number>();
-    setClaimEdits((prev) => {
-      const next = new Map(prev);
-      const edits = toggleEdit(saved, prev.get(activeId), itemIndex);
-      if (edits.size > 0) next.set(activeId, edits);
-      else next.delete(activeId);
-      return next;
-    });
   }
 
   async function copyReimbursementAmount(amountCents: number) {
@@ -1392,182 +1156,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     } else {
       toast.error(tc('actions.copyFailed'));
     }
-  }
-
-  async function saveClaims() {
-    // Not while a split is in flight: it shifts the item indexes the changes are keyed by
-    if (personIndex === null || activeId === null || !personToken || splitClaimItem.isPending) return;
-    const edits = localEdits.get(personIndex);
-    // By id: if someone listed earlier was removed since the session last loaded, an index would
-    // now point at someone else. Only the items changed here are sent, so claims another device
-    // saved for this person on other items are kept (#226). One save key for every attempt, so
-    // the server stores the save once however often it's sent (#238).
-    const changes: SaveStage | undefined = edits && {
-      request: { token, personId: activeId, personToken, saveKey: newRequestKey(), ...editsToSave(edits) },
-      sent: edits,
-      parked: false,
-    };
-    if (!changes && !parkedSaves.has(activeId)) return;
-    // Every save this page parked (#241) goes first, each with its own key. Sent after this
-    // person's changes, theirs would be applied over them if it was never stored; and the server
-    // keeps only the last few save keys of the person saving, whoever the saves are for, so
-    // newer saves from this page could make it forget a parked save it stored.
-    const parked = [...parkedSaves]
-      .filter(([personId]) => indexById.has(personId))
-      .map(([, save]): SaveStage => ({ ...save, parked: true }));
-    const [first, ...rest]: SaveStage[] = [...parked, ...(changes ? [changes] : [])];
-    if (!first) return;
-    // The changes move into the save in flight; taps from now on are new changes on top of it
-    if (edits) {
-      setSavingEdits((prev) => new Map(prev).set(activeId, edits));
-      setClaimEdits((prev) => {
-        const next = new Map(prev);
-        next.delete(activeId);
-        return next;
-      });
-    }
-    // Saving until the save is settled (sent, sent again while unanswered, and reloaded), so Save
-    // isn't enabled again in between
-    setSaving(true);
-    const resetsBefore = editsReset.current;
-    const stop = stopSaves.current.signal;
-    // Until the page closes, its unsaved changes are discarded (it became someone else), or the
-    // person claimed for, or this device's own person, is removed: their changes go with them,
-    // and a removed person's token would only get the save refused
-    const saverId = myPersonId;
-    const going = () =>
-      mounted.current &&
-      !stop.aborted &&
-      editsReset.current === resetsBefore &&
-      isListed(activeId) &&
-      (saverId === null || isListed(saverId));
-    // The same, for one save: until the person it's for is removed too
-    const goingFor = (personId: string) => () => going() && isListed(personId);
-    // One attempt, through the plain client rather than a mutation hook, so it can be abandoned
-    // after SAVE_ATTEMPT_TIMEOUT_MS or when the save stops (sending it again is safe), and so it
-    // fails at once when offline instead of pausing (settleSave waits for the server instead)
-    const send = async (request: ClaimRequest, retry: boolean): Promise<SaveAttempt> => {
-      const limit = abortAfter(SAVE_ATTEMPT_TIMEOUT_MS, stop);
-      try {
-        const { conflicts } = await utils.client.guest.claimItems.mutate(request, { signal: limit.signal });
-        return { outcome: 'saved', conflicts };
-      } catch (error) {
-        const answered = error instanceof TRPCClientError && typeof error.data?.httpStatus === 'number';
-        const outcome = failedSaveOutcome(answered ? (error.data.httpStatus as number) : undefined, retry);
-        // Only a refusal's reason is worth showing; an unsettled save gets the generic message
-        return { outcome, conflicts: [], ...(answered && outcome === 'refused' ? { message: error.message } : {}) };
-      } finally {
-        limit.release();
-      }
-    };
-    // One reload, given up on after SAVE_ATTEMPT_TIMEOUT_MS (a paused or hung fetch) or when the
-    // save stops
-    const reload = async (): Promise<SaveReload> => {
-      const limit = abortAfter(SAVE_ATTEMPT_TIMEOUT_MS, stop);
-      try {
-        const cut = new Promise<SaveReload>((resolve) => {
-          if (limit.signal.aborted) resolve('failed');
-          else limit.signal.addEventListener('abort', () => resolve('failed'));
-        });
-        return await Promise.race([reloadSession(), cut]);
-      } finally {
-        limit.release();
-      }
-    };
-    try {
-      // An attempt that got no answer may have been stored, so it's sent again until an answer
-      // says (settleSave). Otherwise its changes would stay as unsaved edits after it was stored,
-      // and could undo a later change from another device at the next save (#238).
-      const { stage, attempt, reloaded, unsent } = await saveInOrder(
-        [first, ...rest],
-        async (save) => {
-          const settled = await settleSave({
-            // Every send of a parked save is a retry: an earlier attempt of it may have stored it
-            send: (retry) => send(save.request, retry || save.parked),
-            reload,
-            wait: (attempt) => sleep(saveRetryDelay(attempt), stop),
-            going: goingFor(save.request.personId),
-          });
-          // Stored: its changes are on the server, which the reload shows
-          if (save.parked && settled.attempt.outcome === 'saved' && editsReset.current === resetsBefore) {
-            setParkedSaves((prev) => {
-              const next = new Map(prev);
-              next.delete(save.request.personId);
-              return next;
-            });
-          }
-          return settled;
-        },
-        going,
-      );
-      if (editsReset.current !== resetsBefore) return;
-      // Whose save it ended on: this person's changes, or a parked save (theirs or someone else's)
-      const personId = stage.request.personId;
-      const savedNow = savedClaimsOf(personId);
-      setClaimEdits((prev) => {
-        const next = new Map(prev);
-        const put = (id: string, edits: Map<number, boolean>) => {
-          if (edits.size > 0) next.set(id, edits);
-          else next.delete(id);
-        };
-        // Changes held back by a parked save that didn't go through come back as they were, under
-        // the taps made since
-        if (changes && unsent.includes(changes)) put(activeId, stackEdits(changes.sent, prev.get(activeId)));
-        put(
-          personId,
-          editsAfterSave({ outcome: attempt.outcome, reloaded, savedNow, sent: stage.sent, since: next.get(personId) }),
-        );
-        return next;
-      });
-      // Still unsettled: parked, to be sent again with its own key before anything newer (#241)
-      setParkedSaves((prev) => {
-        const next = new Map(prev);
-        if (attempt.outcome === 'unknown') next.set(personId, { request: stage.request, sent: stage.sent });
-        else next.delete(personId);
-        return next;
-      });
-      // Said once the outcome is settled (no toast per attempt while it's sent again), and not
-      // for a save abandoned because the page closed or the person was removed
-      if (!mounted.current || (attempt.outcome === 'unknown' && !goingFor(personId)())) return;
-      if (attempt.outcome !== 'saved') {
-        toast.error(attempt.message ?? tc('errors.generic'));
-      } else if (attempt.conflicts.length > 0) {
-        const names = [...new Set(attempt.conflicts.flatMap((c) => c.claimedBy))];
-        toast.warning(t('claimConflict', { names: names.join(', '), count: attempt.conflicts.length }));
-      } else {
-        toast.success(t('claimsSavedToast'));
-      }
-    } finally {
-      setSavingEdits((prev) => {
-        const next = new Map(prev);
-        next.delete(activeId);
-        return next;
-      });
-      setSaving(false);
-    }
-  }
-
-  // Whether a person is in the session as last loaded (read from the query cache, since
-  // saveClaims runs across renders)
-  function isListed(personId: string): boolean {
-    const loaded = utils.guest.getSession.getData({ token });
-    return !loaded || loaded.people.some((person) => person.id === personId);
-  }
-
-  // Loads the session again: 'gone' when the server says it no longer exists (the page then
-  // shows that, and trying again won't help)
-  async function reloadSession(): Promise<SaveReload> {
-    const result = await session.refetch();
-    if (result.status === 'success') return 'loaded';
-    return isSessionLost(true, result.error?.data?.httpStatus) ? 'gone' : 'failed';
-  }
-
-  // A person's saved claims in the session as last loaded (read from the query cache, since
-  // saveClaims runs across renders)
-  function savedClaimsOf(personId: string): Set<number> {
-    const loaded = utils.guest.getSession.getData({ token });
-    const index = loaded?.people.findIndex((person) => person.id === personId) ?? -1;
-    return new Set(loaded?.assignments.filter((a) => a.personIndices.includes(index)).map((a) => a.itemIndex));
   }
 
   // --- Loading state ---
@@ -1818,15 +1406,16 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           : null
         : data.summary!.find((person) => person.personIndex === myPersonIndex && person.total > 0)
       : null;
-  // Ungrouped receipts preserve the historical personal-tip contract:
-  // switching the dish claimant never changes whose tip is being edited.
-  // Only the responsible person of an actual payment group can edit a
-  // group member's own tip through the existing personal token.
-  const tipTargetIndex =
-    hasPaymentGroups && personIndex !== null && activeId && canEditFor(activeId) ? personIndex : myPersonIndex;
+  // The tip target is chosen only inside this form, never by selecting a dish claimant.
+  const canSelectGroupMemberTip = !!myPersonId && myPerson?.paymentGroupRepresentativeId === myPersonId;
+  const requestedTipTarget =
+    hasPaymentGroups && canSelectGroupMemberTip && tipTargetPersonId && canEditFor(tipTargetPersonId)
+      ? indexById.get(tipTargetPersonId)
+      : undefined;
+  const tipTargetIndex = requestedTipTarget ?? myPersonIndex;
   const tipTarget = tipTargetIndex === null ? null : data.people[tipTargetIndex];
   const savedPersonalTip = tipTarget?.tipCents ?? 0;
-  const personalTipValue = personalTipDraft ?? centsToDecimal(savedPersonalTip);
+  const personalTipValue = (tipTarget ? tipDrafts[tipTarget.id] : undefined) ?? centsToDecimal(savedPersonalTip);
   const personalTipCents = parseToCents(personalTipValue);
   const personalTipIsValid =
     isValidMoneyInput(personalTipValue) &&
@@ -2129,9 +1718,9 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 style={{ borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex) }}
               >
                 <CardContent className="py-3">
-                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-                    <div className="flex min-w-0 flex-1 items-center gap-3">
-                      <Avatar className="h-8 w-8">
+                  <div className="min-w-0 space-y-2" data-testid={'finalized-person-layout-' + person.personIndex}>
+                    <div className="flex min-w-0 items-start gap-3">
+                      <Avatar className="h-8 w-8 shrink-0">
                         <AvatarFallback
                           className="text-xs font-semibold"
                           style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
@@ -2139,18 +1728,25 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           {getInitials(person.name)}
                         </AvatarFallback>
                       </Avatar>
-                      <span className="flex min-w-0 flex-wrap items-center gap-1 font-medium">
-                        <span>{person.name}</span>
-                        {roleMarks(person.personIndex)}
-                        {accountMark(person.personIndex)}
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <span className="block min-w-0 font-medium [overflow-wrap:anywhere]">{person.name}</span>
+                        <div
+                          className="flex min-w-0 flex-wrap items-center gap-1"
+                          data-testid={'finalized-person-badges-' + person.personIndex}
+                        >
+                          {roleMarks(person.personIndex)}
+                          {accountMark(person.personIndex)}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex min-w-0 justify-end border-t pt-2">
+                      <span
+                        data-testid={'finalized-person-total-' + person.personIndex}
+                        className="max-w-full text-right text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
+                      >
+                        {formatCents(person.total, currency, locale)}
                       </span>
                     </div>
-                    <span
-                      data-testid={'finalized-person-total-' + person.personIndex}
-                      className="min-w-0 text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
-                    >
-                      {formatCents(person.total, currency, locale)}
-                    </span>
                   </div>
                   {'roundingCorrectionCents' in person &&
                     typeof person.roundingCorrectionCents === 'number' &&
@@ -2563,13 +2159,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   }
 
   // --- Step 2: Claim items ---
-  // What "Claiming for" has claimed: their saved claims with their unsaved changes applied
-  const activeClaims =
-    personIndex === null
-      ? new Set<number>()
-      : withEdits(baseClaimsMap.get(personIndex) ?? new Set<number>(), localEdits.get(personIndex));
   return (
-    <div className="w-full min-w-0 max-w-full space-y-6 pb-[calc(10rem+env(safe-area-inset-bottom))]">
+    <div className="w-full min-w-0 max-w-full space-y-6 pb-[calc(4rem+env(safe-area-inset-bottom))]">
       {/* Header */}
       <div className="text-center space-y-1 pt-4">
         <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
@@ -2841,6 +2432,26 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              {canSelectGroupMemberTip && (
+                <label className="block min-w-0 space-y-1">
+                  <span className="block text-sm font-medium">{t('personalTipForMember')}</span>
+                  <select
+                    data-testid="personal-tip-target"
+                    className="h-11 w-full min-w-0 rounded-md border bg-background px-3 text-base text-foreground"
+                    value={tipTarget.id}
+                    disabled={setPersonalTip.isPending}
+                    onChange={(event) => setTipTargetPersonId(event.target.value)}
+                  >
+                    {data.people
+                      .filter((person) => canEditFor(person.id))
+                      .map((person) => (
+                        <option key={person.id} value={person.id}>
+                          {person.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
               <p className="text-sm text-muted-foreground">
                 {tipTarget.id === myPersonId ? t('personalTipDescription') : t('paymentGroupDisclaimer')}
               </p>
@@ -2867,7 +2478,9 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                     inputMode="decimal"
                     className="h-11 min-w-0 text-base"
                     value={personalTipValue}
-                    onChange={(event) => setPersonalTipDraft(event.target.value)}
+                    onChange={(event) => {
+                      if (tipTarget) setTipDrafts((previous) => ({ ...previous, [tipTarget.id]: event.target.value }));
+                    }}
                     aria-invalid={!personalTipIsValid}
                     data-testid="personal-tip-input"
                   />
@@ -2891,65 +2504,11 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           </Card>
         )}
 
-        {/* Claim as selector */}
-        <div className="space-y-2">
-          <p className="text-sm font-medium">{t('claimingFor')}</p>
-          {activeId && activeId !== myPersonId && (
-            <p className="text-xs font-medium" data-testid="payment-group-edit-target">
-              {t('paymentGroupEditFor', { name: data.people[personIndex!]?.name ?? '' })}
-            </p>
-          )}
-          <div className="flex flex-wrap gap-2">
-            {data.people.map((person, idx) => (
-              <button
-                key={person.id}
-                type="button"
-                onClick={() => {
-                  if (!canEditFor(person.id)) return;
-                  setActivePersonId(person.id);
-                  setPersonalTipDraft(null);
-                  setPortionDrafts({});
-                }}
-                disabled={!canEditFor(person.id)}
-                data-testid={`switch-person-${idx}`}
-                className={`flex min-h-11 min-w-0 max-w-full items-center gap-2 rounded-2xl px-3 py-1.5 transition-colors ${
-                  idx === personIndex
-                    ? 'bg-primary text-primary-foreground ring-2 ring-primary'
-                    : 'bg-muted hover:bg-muted/80'
-                }`}
-              >
-                <Avatar className="h-6 w-6">
-                  <AvatarFallback
-                    className="text-[10px] font-semibold"
-                    style={guestVisualColorStyle(data.people[idx], idx)}
-                  >
-                    {getInitials(person.name)}
-                  </AvatarFallback>
-                </Avatar>
-                <span className="min-w-0 text-left text-sm font-medium [overflow-wrap:anywhere]">
-                  {person.name}
-                  {idx === myPersonIndex && ` ${t('you')}`}
-                </span>
-                {roleMarks(idx)}
-                {accountMark(idx)}
-              </button>
-            ))}
-          </div>
-        </div>
-
         {/* Items to claim */}
         <div className="w-full min-w-0 max-w-full space-y-3">
-          <h3 className="font-semibold text-base">
-            {t('tapToClaim')}
-            {hasUnsavedChanges && (
-              <Badge variant="secondary" className="ml-2">
-                {t('unsavedChanges')}
-              </Badge>
-            )}
-          </h3>
+          <h3 className="font-semibold text-base">{t('dishAllocationHeading')}</h3>
           {sortedItemIndices.map((idx, sortPosition) => {
             const item = data.items[idx]!;
-            const isClaimed = activeClaims.has(idx);
             const savedOriginal = data.receiptData.knownPartsByItem?.[String(idx)] ?? null;
             const savedPortionProgress = guestPortionProgress(
               data.assignments.find((assignment) => assignment.itemIndex === idx) ?? {
@@ -2966,10 +2525,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               parsedOriginal >= 1 &&
               parsedOriginal <= 10000 &&
               parsedOriginal >= savedPortionProgress.countedParts;
-            // Find other claimants from server state
-            const otherClaimants =
-              data.assignments.find((a) => a.itemIndex === idx)?.personIndices.filter((pi) => pi !== personIndex) ?? [];
-
             // Show separator before the first claimed item
             const isFirstClaimed =
               sortPosition > 0 &&
@@ -2985,43 +2540,13 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                     <div className="flex-1 h-px bg-border" />
                   </div>
                 )}
-                <Card
-                  role="button"
-                  aria-pressed={isClaimed}
-                  tabIndex={0}
-                  data-testid={`claim-item-${idx}`}
-                  onKeyDown={(e) => {
-                    // Nested per-person chips and editor buttons implement their
-                    // own keyboard actions. Enter/Space on those controls must
-                    // never trigger the outer card's staged whole-dish claim.
-                    if (e.target !== e.currentTarget) return;
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      toggleClaim(idx);
-                    }
-                  }}
-                  className={`w-full min-w-0 max-w-full cursor-pointer transition-all ${
-                    isClaimed ? 'ring-2 ring-primary bg-primary/5' : 'hover:bg-muted/50'
-                  }`}
-                  onClick={() => toggleClaim(idx)}
-                >
+                <Card data-testid={'claim-item-' + idx} className="w-full min-w-0 max-w-full">
                   <CardContent className="py-3">
                     <div className="flex items-center gap-3">
-                      {/* Claim indicator */}
-                      <div
-                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${
-                          isClaimed ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
-                        }`}
-                      >
-                        {isClaimed && <Check className="h-4 w-4" />}
-                      </div>
-
                       {/* Item details */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-2">
-                          <span
-                            className={`font-medium [overflow-wrap:anywhere] ${isClaimed ? 'text-foreground' : 'text-muted-foreground'}`}
-                          >
+                          <span className="font-medium text-foreground [overflow-wrap:anywhere]">
                             {item.name}
                             {item.quantity > 1 && <span className="text-muted-foreground ml-1">x{item.quantity}</span>}
                           </span>
@@ -3097,7 +2622,9 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           actorId={myPersonId}
                           personToken={personToken}
                           isCreator={data.isCreator}
-                          disabled={saving || anyParked || hasAnyUnsavedChanges}
+                          disabled={
+                            splitClaimItem.isPending || confirmSessionParts.isPending || finalizeSession.isPending
+                          }
                           open={allocationEditorIdx === idx}
                           onOpenChange={(next) => setAllocationEditorIdx(next ? idx : null)}
                         >
@@ -3378,10 +2905,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                                     // Not while a save is in flight or parked: splitting shifts the item
                                     // indexes its changes are keyed by, and a parked save is sent again as it
                                     // was
-                                    disabled={splitClaimItem.isPending || saving || anyParked || !validQty}
+                                    disabled={splitClaimItem.isPending || !validQty}
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      if (!validQty || !personToken || saving || anyParked) return;
+                                      if (!validQty || !personToken) return;
                                       splitClaimItem.mutate({
                                         token,
                                         personToken,
@@ -3407,120 +2934,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                                 </div>
                               );
                             })()}
-
-                          {/* The representative may edit portions of their own group
-                          without altering other people's shares or original totals. */}
-                          {myPersonIndex !== null &&
-                            personIndex !== null &&
-                            activeId !== null &&
-                            canEditFor(activeId) &&
-                            personToken &&
-                            data.assignments.some(
-                              (assignment) =>
-                                assignment.itemIndex === idx && assignment.personIndices.includes(personIndex),
-                            ) &&
-                            (() => {
-                              const savedAssignment = data.assignments.find(
-                                (assignment) => assignment.itemIndex === idx,
-                              )!;
-                              const savedParts = savedAssignment.partsByPersonId?.[activeId] ?? 1;
-                              const value = portionDrafts[idx] ?? String(savedParts);
-                              const parsed = /^\d+$/.test(value) ? Number(value) : NaN;
-                              const valid =
-                                Number.isSafeInteger(parsed) &&
-                                parsed >= 1 &&
-                                parsed <= 10000 &&
-                                !hasUnsavedChanges &&
-                                !saving &&
-                                !anyParked;
-                              const progress = guestPortionProgress(savedAssignment, data.people);
-                              const original = data.receiptData.knownPartsByItem?.[String(idx)] ?? null;
-                              const projectedParts = progress.countedParts - savedParts + parsed;
-                              const respectsOriginal = original === null || projectedParts <= original;
-                              return (
-                                <div
-                                  className="mt-3 min-w-0 space-y-1 rounded-lg border p-2"
-                                  data-testid={'personal-parts-' + idx}
-                                  onClick={(event) => event.stopPropagation()}
-                                  onKeyDown={(event) => event.stopPropagation()}
-                                >
-                                  <p className="text-xs text-muted-foreground">{t('partsPersonalHint')}</p>
-                                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                                    <Input
-                                      type="number"
-                                      inputMode="numeric"
-                                      min={1}
-                                      max={10000}
-                                      step={1}
-                                      className="h-11 w-24 min-w-0 text-base"
-                                      data-testid={'personal-parts-input-' + idx}
-                                      aria-label={t('partsPersonalLabel')}
-                                      value={value}
-                                      onChange={(event) =>
-                                        setPortionDrafts((prev) => ({ ...prev, [idx]: event.target.value }))
-                                      }
-                                    />
-                                    <Button
-                                      type="button"
-                                      size="sm"
-                                      className="min-h-11 min-w-11"
-                                      data-testid={'personal-parts-save-' + idx}
-                                      disabled={
-                                        !valid || !respectsOriginal || parsed === savedParts || setMyItemParts.isPending
-                                      }
-                                      onClick={() => {
-                                        if (
-                                          !valid ||
-                                          !respectsOriginal ||
-                                          !activeId ||
-                                          !personToken ||
-                                          setMyItemParts.isPending
-                                        )
-                                          return;
-                                        setMyItemParts.mutate({
-                                          token,
-                                          personId: activeId,
-                                          personToken,
-                                          itemIndex: idx,
-                                          parts: parsed,
-                                          saveKey: newRequestKey(),
-                                        });
-                                      }}
-                                    >
-                                      {t('partsSave')}
-                                    </Button>
-                                  </div>
-                                  <p
-                                    className="text-xs text-muted-foreground"
-                                    data-testid={'personal-parts-counted-' + idx}
-                                  >
-                                    {t('partsCounted', { count: progress.countedParts })}
-                                  </p>
-                                </div>
-                              );
-                            })()}
-
-                          {/* Other claimants */}
-                          {otherClaimants.length > 0 && (
-                            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
-                              <span className="text-xs text-muted-foreground">{t('alsoClaimedBy')}</span>
-                              <div className="flex -space-x-1">
-                                {otherClaimants.map((pi) => (
-                                  <Avatar key={pi} className="h-5 w-5 border-2 border-background">
-                                    <AvatarFallback
-                                      className="text-[8px] font-semibold"
-                                      style={guestVisualColorStyle(data.people[pi], pi)}
-                                    >
-                                      {getInitials(data.people[pi]?.name ?? '?')}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                ))}
-                              </div>
-                              <span className="min-w-0 flex-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                                {otherClaimants.map((pi) => data.people[pi]?.name ?? '?').join(', ')}
-                              </span>
-                            </div>
-                          )}
                         </GuestItemAllocations>
                       </div>
                     </div>
@@ -3546,21 +2959,20 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               const personName =
                 data.people[person.personIndex]?.name ?? t('personFallback', { index: person.personIndex + 1 });
               const isMe = person.personIndex === myPersonIndex;
-              const isActive = person.personIndex === personIndex;
 
               return (
                 <Card
                   key={person.personIndex}
-                  className={isActive ? 'border-l-4 ring-2 ring-primary' : 'border-l-4'}
+                  className="border-l-4"
                   style={{
                     borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex),
                   }}
                   data-testid={`person-total-${person.personIndex}`}
                 >
                   <CardContent className="py-3">
-                    <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-                      <div className="flex min-w-0 flex-1 items-center gap-3">
-                        <Avatar className="h-8 w-8">
+                    <div className="min-w-0 space-y-2" data-testid={'preview-person-layout-' + person.personIndex}>
+                      <div className="flex min-w-0 items-start gap-3">
+                        <Avatar className="h-8 w-8 shrink-0">
                           <AvatarFallback
                             className="text-xs font-semibold"
                             style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
@@ -3568,16 +2980,31 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                             {getInitials(personName)}
                           </AvatarFallback>
                         </Avatar>
-                        <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
-                          {personName}
-                          {isMe && ` ${t('you')}`}
-                        </span>
-                        {roleMarks(person.personIndex)}
-                        {accountMark(person.personIndex)}
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <span
+                            className="block min-w-0 font-medium [overflow-wrap:anywhere]"
+                            data-testid={'preview-person-name-' + person.personIndex}
+                          >
+                            {personName}
+                            {isMe && ' (' + t('you') + ')'}
+                          </span>
+                          <div
+                            className="flex min-w-0 flex-wrap items-center gap-1"
+                            data-testid={'preview-person-badges-' + person.personIndex}
+                          >
+                            {roleMarks(person.personIndex)}
+                            {accountMark(person.personIndex)}
+                          </div>
+                        </div>
                       </div>
-                      <span className="min-w-0 text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]">
-                        {formatCents(person.total, currency, locale)}
-                      </span>
+                      <div className="flex min-w-0 justify-end border-t pt-2">
+                        <span
+                          className="max-w-full text-right text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
+                          data-testid={'preview-person-amount-' + person.personIndex}
+                        >
+                          {formatCents(person.total, currency, locale)}
+                        </span>
+                      </div>
                     </div>
                     {(person.tax > 0 || person.tip > 0 || !!person.roundingCorrectionCents) && (
                       <div className="ml-11 mt-1 flex min-w-0 flex-wrap gap-3 text-xs text-muted-foreground">
@@ -3729,80 +3156,46 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         </div>
       </section>
 
-      {/* Save button - fixed above interactive dish rows. Keep below the z-50 header/dialogs. */}
-      <div
-        className="fixed inset-x-0 bottom-0 z-40 isolate box-border w-screen min-w-0 max-w-[100vw] max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
-        data-testid="claim-actions"
-        hidden={receiptTab !== 'items'}
-      >
-        <div className="mx-auto w-full min-w-0 max-w-lg">
-          {/* The registered receipt creator explicitly approves the current
-              claims; guests can still submit their own portions, but cannot
-              approve completeness for the creator. */}
-          {data.canFinalize && !data.partsConfirmed && allItemsClaimed && knownPartsReady && (
+      {receiptTab === 'items' && data.canFinalize && allItemsClaimed && knownPartsReady && (
+        <div
+          className="mx-auto w-full min-w-0 max-w-lg space-y-2 pb-[env(safe-area-inset-bottom)]"
+          data-testid="claim-actions"
+        >
+          {!data.partsConfirmed && (
             <Button
+              type="button"
               variant="outline"
-              className="mb-2 min-h-12 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere]"
+              className="min-h-12 w-full whitespace-normal"
               data-testid="guest-confirm-parts-btn"
-              disabled={confirmSessionParts.isPending || hasAnyUnsavedChanges || saving || anyParked}
+              disabled={confirmSessionParts.isPending}
               onClick={() => confirmSessionParts.mutate({ token })}
             >
               {t('confirmPartsComplete')}
             </Button>
           )}
-          {/* Finalize button -- only after creator approval, with no unsaved changes */}
-          {data.canFinalize &&
-            !hasAnyUnsavedChanges &&
+          {data.partsConfirmed &&
             personToken &&
             myPersonId !== null &&
             myPersonIndex !== null &&
-            !finalizeSession.isPending &&
-            allItemsClaimed &&
-            knownPartsReady &&
-            data.partsConfirmed && (
+            !finalizeSession.isPending && (
               <Button
+                type="button"
                 variant="outline"
-                className="w-full h-12 mb-2"
-                onClick={() => setConfirmFinalize(true)}
-                disabled={finalizeSession.isPending}
+                className="min-h-12 w-full"
                 data-testid="finalize-btn"
+                onClick={() => setConfirmFinalize(true)}
               >
                 {t('finalizeSplit')}
               </Button>
             )}
           {finalizeSession.isPending && (
-            <Button variant="outline" className="w-full h-12 mb-2" disabled>
-              <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+            <Button variant="outline" className="min-h-12 w-full" disabled>
+              <Loader2 className="mr-2 size-5 animate-spin" />
               {t('finalizing')}
             </Button>
           )}
-          <Button
-            className="min-h-14 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center leading-tight"
-            onClick={saveClaims}
-            disabled={saving || splitClaimItem.isPending || !hasUnsavedChanges}
-            data-testid="save-claims-btn"
-          >
-            {saving ? (
-              <>
-                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                {t('saving')}
-              </>
-            ) : hasUnsavedChanges ? (
-              <>
-                <Check className="mr-2 h-5 w-5" />
-                {t('saveClaimsFor', {
-                  name: (personIndex === null ? undefined : data.people[personIndex]?.name) ?? '',
-                })}
-              </>
-            ) : (
-              <>
-                <Check className="mr-2 h-5 w-5" />
-                {t('claimsSaved')}
-              </>
-            )}
-          </Button>
         </div>
-      </div>
+      )}
 
       <ConfirmDialog
         open={removeFor !== null}

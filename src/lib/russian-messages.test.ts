@@ -158,7 +158,7 @@ describe('BillOK Russian-only translations', () => {
     const split = load('ru', 'split');
     const claim = split.claim as Record<string, string>;
     const result = split.result as Record<string, string>;
-    expect(claim.tapToClaim).toMatch(/позици/);
+    expect(claim.dishAllocationHeading).toMatch(/части блюд/);
     expect(claim.alreadyClaimed).toMatch(/выбрано/);
     expect(claim.claimConflict).toContain('{names}');
     expect(claim.claimConflict).toContain('many {');

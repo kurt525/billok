@@ -56,11 +56,14 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
     expect(settings).toContain('description: description || undefined');
   });
 
-  it('wraps unbroken names of other claimants without expanding the receipt on large-font phones', () => {
+  it('wraps all participant names in per-dish chips on large-font phones', () => {
     const claim = source('src/app/[locale]/split/[token]/claim/page.tsx');
-    expect(claim).toContain('mt-1 flex min-w-0 flex-wrap items-center gap-1');
-    expect(claim).toContain('min-w-0 flex-1 text-xs text-muted-foreground [overflow-wrap:anywhere]');
-    expect(claim).toContain("otherClaimants.map((pi) => data.people[pi]?.name ?? '?').join(', ')");
+    const allocations = source('src/components/guest-item-allocations.tsx');
+    expect(claim).toContain('<GuestItemAllocations');
+    expect(allocations).toContain("data-testid={'dish-people-' + itemIndex}");
+    expect(allocations).toContain('max-w-full');
+    expect(allocations).toContain('[overflow-wrap:anywhere]');
+    expect(claim).not.toContain('otherClaimants.map');
   });
 
   it('keeps the guest unclaimed total inside the mobile column with large Android text', () => {

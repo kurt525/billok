@@ -43,7 +43,7 @@ test('TASK-BILLOK-002: a unified receipt keeps creator ownership and allows gues
   await expect(page.getByTestId('creator-add-guest-place')).toBeVisible();
   await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
   await page.getByTestId('claim-tab-items').click();
-  await expect(page.getByTestId('switch-person-0')).toBeEnabled();
+  await expect(page.getByTestId('dish-person-0-0')).toBeEnabled();
 
   const visitorContext = await browser.newContext({
     viewport: { width: 320, height: 800 },
@@ -76,7 +76,7 @@ test('TASK-BILLOK-002: creator retains account-owned place without localStorage'
   await page.getByTestId('claim-tab-people').click();
   await expect(page.getByTestId('creator-add-guest-place')).toBeVisible();
   await page.getByTestId('claim-tab-items').click();
-  await expect(page.getByTestId('switch-person-0')).toBeEnabled();
+  await expect(page.getByTestId('dish-person-0-0')).toBeEnabled();
 });
 
 test('9.3: sharing a manual group receipt joins the signed-in group member', async ({ page }) => {
@@ -107,5 +107,5 @@ test('9.3: sharing a manual group receipt joins the signed-in group member', asy
   await expect(page).toHaveURL(/\/split\/[^/]+\/claim(?:\?.*)?$/);
   await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
   await page.getByTestId('claim-tab-items').click();
-  await expect(page.getByTestId('switch-person-0')).toBeEnabled();
+  await expect(page.getByTestId('dish-person-0-0')).toBeEnabled();
 });

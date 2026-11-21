@@ -19,8 +19,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
   const [trpcClient] = useState(() =>
     trpc.createClient({
       links: [
-        // Claim saves go on their own, so the claim page can abandon one that hangs (a batched
-        // request is aborted only when every call in it is; see src/lib/claim-save.ts)
+        // Keep unbatched guest.claimItems for historical receipt clients.
+        // Current per-dish allocation uses guest.setReceiptItemParts with server idempotency.
         splitLink({
           condition: (op) => op.path === 'guest.claimItems',
           // The page's language, so errors come back in it (#266)

@@ -36,7 +36,8 @@ test('in-progress totals prorate tax and tip over every item and show what is un
     await expect(alice).toHaveCount(0);
 
     // Alice claims the $25.24 steak: her share of tax and tip is prorated over the whole $32.48
-    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
+    await page.getByTestId('dish-person-0-0').click();
+    await expect(page.getByTestId('dish-person-0-0')).toHaveAttribute('aria-pressed', 'true');
     await expect(alice).toContainText('$31.15');
     await expect(alice).toContainText('Tax: $2.02');
     await expect(alice).toContainText('Tip: $3.89');
@@ -45,15 +46,16 @@ test('in-progress totals prorate tax and tip over every item and show what is un
     await expect(unclaimed).toContainText('Items: $7.24');
 
     // The same once saved and reloaded, from the server's copy of the claims
-    await page.getByTestId('save-claims-btn').click();
-    await expect(page.getByTestId('save-claims-btn')).toBeDisabled({ timeout: 15000 });
+    await expect(page.getByTestId('save-claims-btn')).toHaveCount(0);
     await page.reload();
     await expect(alice).toContainText('$31.15', { timeout: 15000 });
     await expect(unclaimed).toContainText('$8.93');
 
     // With every item claimed the unclaimed row goes away and Alice owes the whole bill
-    await page.getByTestId('claim-item-1').click({ position: { x: 24, y: 20 } });
-    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
+    await page.getByTestId('dish-person-1-0').click();
+    await expect(page.getByTestId('dish-person-1-0')).toHaveAttribute('aria-pressed', 'true');
+    await page.getByTestId('dish-person-2-0').click();
+    await expect(page.getByTestId('dish-person-2-0')).toHaveAttribute('aria-pressed', 'true');
     await expect(alice).toContainText('$40.08');
     await expect(unclaimed).toHaveCount(0);
   } finally {

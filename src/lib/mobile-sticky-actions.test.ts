@@ -29,16 +29,11 @@ describe('Responsive guest sharing actions with large Android system text', () =
 describe('Android guest result and claim actions', () => {
   for (const [file, testid, bottomSpace] of [
     ['src/app/[locale]/split/[token]/page.tsx', 'split-result-actions', '7rem'],
-    ['src/app/[locale]/split/[token]/claim/page.tsx', 'claim-actions', '10rem'],
   ] as const) {
     it(file + ': keeps bottom actions reachable above Android navigation and small keyboard viewports', () => {
       const ui = read(file);
       expect(ui).toContain('data-testid="' + testid + '"');
-      // Claim actions need a higher stacking context so dish cards cannot
-      // intercept a normal finger tap; result actions retain their own layer.
-      expect(ui).toContain(
-        testid === 'claim-actions' ? 'fixed inset-x-0 bottom-0 z-40 isolate' : 'fixed inset-x-0 bottom-0 z-10',
-      );
+      expect(ui).toContain('fixed inset-x-0 bottom-0 z-10');
       expect(ui).toContain('max-h-[calc(100dvh-1rem)]');
       expect(ui).toContain('overflow-y-auto overscroll-contain');
       expect(ui).toContain('pb-[calc(1rem+env(safe-area-inset-bottom))]');
@@ -68,11 +63,13 @@ describe('Android confirmation dialogs on compact viewports', () => {
   });
 });
 
-describe('Long claimant names on enlarged Android displays', () => {
-  it('lets the claim-save button wrap a 40-character participant name while staying touch-sized', () => {
+describe('TASK-BILLOK-003: per-item mobile actions have no obsolete fixed claim save', () => {
+  it('leaves summary and tip fields scrollable and keeps only necessary finalization controls', () => {
     const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
-    expect(claim).toContain(
-      'className="min-h-14 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center leading-tight"',
-    );
+    expect(claim).toContain('data-testid="claim-actions"');
+    expect(claim).toContain('pb-[env(safe-area-inset-bottom)]');
+    expect(claim).not.toContain('fixed inset-x-0 bottom-0 z-40 isolate');
+    expect(claim).not.toContain('data-testid="save-claims-btn"');
+    expect(claim).toContain('max-w-full');
   });
 });

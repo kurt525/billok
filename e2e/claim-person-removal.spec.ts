@@ -67,7 +67,7 @@ async function fourPeople(page: Page, merchantName: string) {
   });
   expect(deeClaims.ok(), await deeClaims.text()).toBe(true);
   // Cat's page has seen Dee join
-  await expect(page.getByTestId('switch-person-3')).toContainText('Dee', { timeout: 15000 });
+  await expect(page.getByTestId('dish-person-0-3')).toContainText('Dee', { timeout: 15000 });
   return { ctx, shareToken, ann };
 }
 
@@ -84,7 +84,7 @@ async function annRemovesBob(
     targetId: await personIdByName(ctx, shareToken, 'Bob'),
   });
   expect(removed.ok(), await removed.text()).toBe(true);
-  await expect(page.getByTestId('switch-person-3')).toHaveCount(0, { timeout: 15000 });
+  await expect(page.getByTestId('dish-person-0-3')).toHaveCount(0, { timeout: 15000 });
 }
 
 test.describe('Claim page — someone else removes a person listed earlier', () => {
@@ -94,9 +94,10 @@ test.describe('Claim page — someone else removes a person listed earlier', () 
 
     // Cat, now second in the list, claims the tea and saves
     await expect(page.getByText('Cat (you)').first()).toBeVisible();
-    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
-    await page.getByTestId('save-claims-btn').click();
-    await expect(page.getByText('Claims saved!').first()).toBeVisible({ timeout: 15000 });
+    await page.getByTestId('dish-person-0-1').click();
+    await expect(page.getByTestId('dish-person-0-1')).toHaveAttribute('aria-pressed', 'true', {
+      timeout: 15_000,
+    });
 
     const session = await getSession(ctx, shareToken);
     expect(session.people.map((p) => p.name)).toEqual(['Ann', 'Cat', 'Dee']);
@@ -109,7 +110,7 @@ test.describe('Claim page — someone else removes a person listed earlier', () 
     await annRemovesBob(page, ctx, shareToken, ann.personToken);
 
     // Dee is now third, where Cat used to be; Cat removes her
-    await expect(page.getByTestId('switch-person-2')).toContainText('Dee');
+    await expect(page.getByTestId('dish-person-0-2')).toContainText('Dee');
     await page.getByTestId('remove-person-2').click();
     await page.getByRole('alertdialog', { name: 'Remove Dee?' }).getByRole('button', { name: 'Remove' }).click();
     await expect(page.getByText('Person removed').first()).toBeVisible({ timeout: 15000 });
@@ -197,7 +198,7 @@ test.describe('Claim page — someone else removes a person listed earlier', () 
     await expect(page.getByTestId('switch-person-1')).toHaveCount(0, { timeout: 15000 });
     await expect(page.getByText('Alice (you)').first()).toBeVisible();
     // The tea isn't Alice's, and nothing is waiting to be saved
-    await expect(page.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.getByTestId('dish-person-0-0')).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByText('Unsaved changes')).toHaveCount(0);
 
     await pc.close();

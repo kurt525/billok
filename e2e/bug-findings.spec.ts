@@ -46,8 +46,8 @@ test.describe('Finding #3: removal must not corrupt stable person IDs', () => {
       });
       await page.goto('/split/' + shareToken + '/claim');
       await expect(page.getByTestId('claim-item-0')).toBeVisible();
-      await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
-      await page.getByTestId('save-claims-btn').click();
+      await page.getByTestId('dish-person-0-0').click();
+      await expect(page.getByTestId('dish-person-0-0')).toHaveAttribute('aria-pressed', 'true');
       await expect
         .poll(async () => {
           const saved = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: shareToken }));
