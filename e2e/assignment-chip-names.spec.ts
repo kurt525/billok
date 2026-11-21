@@ -20,8 +20,10 @@ async function revealMobileTouchTarget(control: Locator) {
   const bounds = await control.evaluate((node) => {
     const element = node as HTMLElement;
     const headerBottom = document.querySelector('header')?.getBoundingClientRect().bottom ?? 0;
-    const actionsTop =
-      document.querySelector('[data-testid="claim-actions"]')?.getBoundingClientRect().top ?? window.innerHeight;
+    const actionsTop = (() => {
+      const el = document.querySelector('[data-testid="claim-actions"]');
+      return el && el.getClientRects().length > 0 ? el.getBoundingClientRect().top : window.innerHeight;
+    })();
     const safeTop = headerBottom + 12;
     const safeBottom = Math.min(actionsTop, window.innerHeight) - 12;
     const center = (safeTop + safeBottom) / 2;
@@ -102,6 +104,7 @@ test('TASK-BILLOK-002: creator can distinguish and rename long guest names on a 
   await page.getByTestId('guest-add-item-submit').click();
   await expect(page.getByTestId('receipt-item-name-0')).toHaveText('Пирог');
   await page.getByTestId('share-for-claiming-btn').click();
+  await page.getByTestId('claim-tab-people').click();
   await expect(page.getByTestId('creator-add-guest-place')).toBeVisible();
   const names = ['Алексей', 'Алексей Иванов', 'Анна Ли', 'Кристофер Александрович Петров'];
   for (let i = 1; i <= names.length; i++) {

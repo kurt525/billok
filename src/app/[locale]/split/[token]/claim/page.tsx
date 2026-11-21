@@ -230,6 +230,76 @@ function CreatorAddGuestPlace({ token }: { token: string }) {
   );
 }
 
+type ReceiptTab = 'people' | 'items';
+
+// Both panels remain mounted when hidden. Pending requests and unsaved editor
+// drafts must survive tab changes, including switches during an SSE update.
+function ReceiptTabs({
+  activeTab,
+  onSelect,
+  peopleCount,
+  itemCount,
+}: {
+  activeTab: ReceiptTab;
+  onSelect: (tab: ReceiptTab) => void;
+  peopleCount: number;
+  itemCount: number;
+}) {
+  const t = useTranslations('split.claim');
+  const tabs: { id: ReceiptTab; label: string; count: number }[] = [
+    { id: 'people', label: t('tabsPeople'), count: peopleCount },
+    { id: 'items', label: t('tabsItems'), count: itemCount },
+  ];
+
+  return (
+    <div
+      role="tablist"
+      aria-label={t('tabsLabel')}
+      className="grid min-w-0 grid-cols-2 gap-1 rounded-xl border bg-muted/40 p-1"
+      data-testid="claim-receipt-tabs"
+    >
+      {tabs.map(({ id, label, count }) => (
+        <button
+          key={id}
+          type="button"
+          role="tab"
+          id={'claim-' + id + '-tab'}
+          aria-controls={'claim-' + id + '-panel'}
+          aria-selected={activeTab === id}
+          tabIndex={activeTab === id ? 0 : -1}
+          data-testid={'claim-tab-' + id}
+          className={
+            'flex min-h-12 min-w-0 items-center justify-center gap-1 rounded-lg px-2 py-2 text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ' +
+            (activeTab === id
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:bg-background/70')
+          }
+          onClick={() => onSelect(id)}
+          onKeyDown={(event) => {
+            const next: ReceiptTab | null =
+              event.key === 'ArrowLeft' || event.key === 'Home'
+                ? 'people'
+                : event.key === 'ArrowRight' || event.key === 'End'
+                  ? 'items'
+                  : null;
+            if (!next) return;
+            event.preventDefault();
+            onSelect(next);
+            event.currentTarget.parentElement
+              ?.querySelector<HTMLButtonElement>('[data-testid="claim-tab-' + next + '"]')
+              ?.focus();
+          }}
+        >
+          <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>
+          <span className="rounded-md border bg-muted px-1.5 text-xs tabular-nums" aria-hidden="true">
+            {count}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function ClaimPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = use(params);
   const locale = useLocale();
@@ -240,6 +310,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
   // --- State ---
   const [name, setName] = useState('');
+  const [receiptTab, setReceiptTab] = useState<ReceiptTab>('items');
+  const [joinTab, setJoinTab] = useState<ReceiptTab>('people');
   // Fixed slot selection is separate from a human's editable display name.
   const [selectedGuestSlotId, setSelectedGuestSlotId] = useState<string | null>(null);
   // Only the owner of this device's personToken can edit these tips.
@@ -2151,305 +2223,341 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           </CardContent>
         </Card>
 
-        {/* Copy link */}
-        <Button type="button" variant="outline" size="sm" onClick={copyLink} data-testid="copy-link-btn">
-          <Link2 className="mr-2 h-4 w-4" />
-          {t('copyLink')}
-        </Button>
-
-        {data.isCreator && data.status === 'CLAIMING' && <CreatorAddGuestPlace token={token} />}
-
-        {/* People already in session */}
-        {data.people.length > 0 && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Users className="h-4 w-4" />
-                {t('peopleInSession', { count: data.people.length })}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-2">
-                {data.people.map((person, idx) => (
-                  <div
-                    key={person.id}
-                    className="flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-2xl bg-muted px-3 py-1.5"
-                    data-testid={'invited-person-' + idx}
-                  >
-                    {data.isCreator && data.status === 'CLAIMING' && editingPersonId === person.id ? (
-                      <form
-                        className="flex min-w-0 w-full flex-wrap items-center gap-2"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          if (!editingName.trim()) return;
-                          // The authenticated receipt creator can correct guest
-                          // labels even before joining their own personal slot.
-                          editPersonName.mutate({ token, targetId: person.id, newName: editingName.trim() });
-                        }}
-                      >
-                        <Input
-                          value={editingName}
-                          maxLength={MAX_GUEST_NAME_LENGTH}
-                          onChange={(event) => setEditingName(event.target.value)}
-                          autoComplete="off"
-                          className="h-11 min-w-0 flex-1 text-base"
-                          aria-label={t('editName')}
-                          data-testid={'creator-edit-name-input-' + idx}
-                          autoFocus
-                        />
-                        <Button
-                          type="submit"
-                          size="sm"
-                          variant="ghost"
-                          className="size-11 shrink-0 p-0"
-                          disabled={!editingName.trim() || editPersonName.isPending}
-                          aria-label={t('saveName')}
-                          data-testid={'creator-save-name-' + idx}
-                        >
-                          <Check className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className="size-11 shrink-0 p-0"
-                          onClick={() => setEditingPersonId(null)}
-                          aria-label={t('cancelButton')}
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </form>
-                    ) : (
-                      <>
-                        <Avatar className="h-6 w-6 shrink-0">
-                          <AvatarFallback
-                            className="text-[10px] font-semibold"
-                            style={guestVisualColorStyle(data.people[idx], idx)}
-                          >
-                            {getInitials(person.name)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <span className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">
-                          {person.name}
-                        </span>
-                        {roleMarks(idx)}
-                        {accountMark(idx)}
-                        {data.isCreator && data.status === 'CLAIMING' && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingPersonId(person.id);
-                              setEditingName(person.name);
-                            }}
-                            className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
-                            aria-label={t('editName')}
-                            data-testid={'creator-edit-person-' + idx}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </button>
-                        )}
-                      </>
-                    )}
-                    {creatorGuestLinkControls(person, idx)}
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {linkOfferCard}
-        {linkRetryCard}
-
-        {/* A registered, explicitly appointed organizer can finish the receipt
-            without claiming any food or creating a fictitious guest. */}
-        {data.canFinalize && (
-          <Card className="min-w-0" data-testid="finalization-organizer-no-claim">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">{t('finalizationOrganizerNoClaimTitle')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-sm text-muted-foreground">{t('finalizationOrganizerNoClaimHint')}</p>
-              {!data.partsConfirmed && allItemsClaimed && knownPartsReady && (
-                <Button
-                  type="button"
-                  className="min-h-11 w-full whitespace-normal"
-                  disabled={confirmSessionParts.isPending}
-                  data-testid="guest-confirm-parts-btn"
-                  onClick={() => confirmSessionParts.mutate({ token })}
-                >
-                  {t('confirmPartsComplete')}
-                </Button>
-              )}
-              {data.partsConfirmed && allItemsClaimed && knownPartsReady && (
-                <Button
-                  type="button"
-                  className="min-h-11 w-full whitespace-normal"
-                  disabled={finalizeSession.isPending}
-                  data-testid="finalize-btn"
-                  onClick={() => setConfirmFinalize(true)}
-                >
-                  {t('finalizeSplit')}
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-        )}
-        <ConfirmDialog
-          open={confirmFinalize}
-          onOpenChange={setConfirmFinalize}
-          title={t('finalizeTitle')}
-          description={t('finalizeDescription')}
-          confirmLabel={t('finalizeSplit')}
-          destructive={false}
-          onConfirm={() => data.canFinalize && finalizeSession.mutate({ token })}
+        <ReceiptTabs
+          activeTab={joinTab}
+          onSelect={setJoinTab}
+          peopleCount={data.people.length}
+          itemCount={data.items.length}
         />
+        <section
+          id="claim-people-panel"
+          role="tabpanel"
+          aria-labelledby="claim-people-tab"
+          hidden={joinTab !== 'people'}
+          className="min-w-0 space-y-6"
+        >
+          {/* Copy link */}
+          <Button type="button" variant="outline" size="sm" onClick={copyLink} data-testid="copy-link-btn">
+            <Link2 className="mr-2 h-4 w-4" />
+            {t('copyLink')}
+          </Button>
 
-        {data.presence && (
-          <OrganizerPresence
-            people={data.people}
-            presence={data.presence}
-            organizerPersonId={data.receiptData.organizerPersonId}
+          {data.isCreator && data.status === 'CLAIMING' && <CreatorAddGuestPlace token={token} />}
+
+          {/* People already in session */}
+          {data.people.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Users className="h-4 w-4" />
+                  {t('peopleInSession', { count: data.people.length })}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-wrap gap-2">
+                  {data.people.map((person, idx) => (
+                    <div
+                      key={person.id}
+                      className="flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-2xl bg-muted px-3 py-1.5"
+                      data-testid={'invited-person-' + idx}
+                    >
+                      {data.isCreator && data.status === 'CLAIMING' && editingPersonId === person.id ? (
+                        <form
+                          className="flex min-w-0 w-full flex-wrap items-center gap-2"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            if (!editingName.trim()) return;
+                            // The authenticated receipt creator can correct guest
+                            // labels even before joining their own personal slot.
+                            editPersonName.mutate({ token, targetId: person.id, newName: editingName.trim() });
+                          }}
+                        >
+                          <Input
+                            value={editingName}
+                            maxLength={MAX_GUEST_NAME_LENGTH}
+                            onChange={(event) => setEditingName(event.target.value)}
+                            autoComplete="off"
+                            className="h-11 min-w-0 flex-1 text-base"
+                            aria-label={t('editName')}
+                            data-testid={'creator-edit-name-input-' + idx}
+                            autoFocus
+                          />
+                          <Button
+                            type="submit"
+                            size="sm"
+                            variant="ghost"
+                            className="size-11 shrink-0 p-0"
+                            disabled={!editingName.trim() || editPersonName.isPending}
+                            aria-label={t('saveName')}
+                            data-testid={'creator-save-name-' + idx}
+                          >
+                            <Check className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="size-11 shrink-0 p-0"
+                            onClick={() => setEditingPersonId(null)}
+                            aria-label={t('cancelButton')}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </form>
+                      ) : (
+                        <>
+                          <Avatar className="h-6 w-6 shrink-0">
+                            <AvatarFallback
+                              className="text-[10px] font-semibold"
+                              style={guestVisualColorStyle(data.people[idx], idx)}
+                            >
+                              {getInitials(person.name)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <span className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">
+                            {person.name}
+                          </span>
+                          {roleMarks(idx)}
+                          {accountMark(idx)}
+                          {data.isCreator && data.status === 'CLAIMING' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingPersonId(person.id);
+                                setEditingName(person.name);
+                              }}
+                              className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                              aria-label={t('editName')}
+                              data-testid={'creator-edit-person-' + idx}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                          )}
+                        </>
+                      )}
+                      {creatorGuestLinkControls(person, idx)}
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {linkOfferCard}
+          {linkRetryCard}
+
+          {/* A registered, explicitly appointed organizer can finish the receipt
+            without claiming any food or creating a fictitious guest. */}
+          {data.canFinalize && (
+            <Card className="min-w-0" data-testid="finalization-organizer-no-claim">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">{t('finalizationOrganizerNoClaimTitle')}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm text-muted-foreground">{t('finalizationOrganizerNoClaimHint')}</p>
+                {!data.partsConfirmed && allItemsClaimed && knownPartsReady && (
+                  <Button
+                    type="button"
+                    className="min-h-11 w-full whitespace-normal"
+                    disabled={confirmSessionParts.isPending}
+                    data-testid="guest-confirm-parts-btn"
+                    onClick={() => confirmSessionParts.mutate({ token })}
+                  >
+                    {t('confirmPartsComplete')}
+                  </Button>
+                )}
+                {data.partsConfirmed && allItemsClaimed && knownPartsReady && (
+                  <Button
+                    type="button"
+                    className="min-h-11 w-full whitespace-normal"
+                    disabled={finalizeSession.isPending}
+                    data-testid="finalize-btn"
+                    onClick={() => setConfirmFinalize(true)}
+                  >
+                    {t('finalizeSplit')}
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          )}
+          <ConfirmDialog
+            open={confirmFinalize}
+            onOpenChange={setConfirmFinalize}
+            title={t('finalizeTitle')}
+            description={t('finalizeDescription')}
+            confirmLabel={t('finalizeSplit')}
+            destructive={false}
+            onConfirm={() => data.canFinalize && finalizeSession.mutate({ token })}
           />
-        )}
 
-        {/* Join form */}
-        <Card data-testid="claim-join-form">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">{t('joinSession')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <label htmlFor="name-input" className="text-sm font-medium">
-                {t('yourName')}
-              </label>
-              <Input
-                id="name-input"
-                maxLength={MAX_GUEST_NAME_LENGTH}
-                autoComplete="off"
-                className="h-11 min-w-0 text-base"
-                placeholder={
-                  data.receiptData.guestSlotsMode && authSession?.user?.name ? authSession.user.name : t('enterName')
-                }
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleJoin();
-                }}
-                autoFocus
-                data-testid="claim-name-input"
-              />
-            </div>
-            {data.receiptData.guestSlotsMode && (
-              <div className="min-w-0 space-y-3" data-testid="guest-slot-choice">
-                <p className="text-sm font-semibold">{t('chooseGuestPlace')}</p>
-                <div className="grid min-w-0 grid-cols-1 gap-2">
+          {data.presence && (
+            <OrganizerPresence
+              people={data.people}
+              presence={data.presence}
+              organizerPersonId={data.receiptData.organizerPersonId}
+            />
+          )}
+
+          {/* Join form */}
+          <Card data-testid="claim-join-form">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">{t('joinSession')}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <label htmlFor="name-input" className="text-sm font-medium">
+                  {t('yourName')}
+                </label>
+                <Input
+                  id="name-input"
+                  maxLength={MAX_GUEST_NAME_LENGTH}
+                  autoComplete="off"
+                  className="h-11 min-w-0 text-base"
+                  placeholder={
+                    data.receiptData.guestSlotsMode && authSession?.user?.name ? authSession.user.name : t('enterName')
+                  }
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleJoin();
+                  }}
+                  autoFocus
+                  data-testid="claim-name-input"
+                />
+              </div>
+              {data.receiptData.guestSlotsMode && (
+                <div className="min-w-0 space-y-3" data-testid="guest-slot-choice">
+                  <p className="text-sm font-semibold">{t('chooseGuestPlace')}</p>
+                  <div className="grid min-w-0 grid-cols-1 gap-2">
+                    {data.people
+                      .filter((person) => person.guestSlotNumber !== undefined)
+                      .map((person) => (
+                        <button
+                          key={person.id}
+                          type="button"
+                          disabled={person.hasJoined || joining}
+                          aria-pressed={selectedGuestSlotId === person.id}
+                          onClick={() => setSelectedGuestSlotId(person.id)}
+                          className={
+                            'flex min-h-12 w-full min-w-0 items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left ' +
+                            (selectedGuestSlotId === person.id ? 'border-primary bg-primary/10 ' : '') +
+                            (person.hasJoined ? 'opacity-60 ' : 'hover:bg-muted')
+                          }
+                          data-testid={'guest-slot-option-' + person.guestSlotNumber}
+                        >
+                          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{person.name}</span>
+                          {roleMarks(data.people.findIndex((entry) => entry.id === person.id))}
+                          {accountMark(data.people.findIndex((entry) => entry.id === person.id))}
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {person.hasJoined ? t('guestPlaceTaken') : t('guestPlaceFree')}
+                          </span>
+                        </button>
+                      ))}
+                  </div>
                   {data.people
                     .filter((person) => person.guestSlotNumber !== undefined)
-                    .map((person) => (
-                      <button
-                        key={person.id}
-                        type="button"
-                        disabled={person.hasJoined || joining}
-                        aria-pressed={selectedGuestSlotId === person.id}
-                        onClick={() => setSelectedGuestSlotId(person.id)}
-                        className={
-                          'flex min-h-12 w-full min-w-0 items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left ' +
-                          (selectedGuestSlotId === person.id ? 'border-primary bg-primary/10 ' : '') +
-                          (person.hasJoined ? 'opacity-60 ' : 'hover:bg-muted')
-                        }
-                        data-testid={'guest-slot-option-' + person.guestSlotNumber}
-                      >
-                        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{person.name}</span>
-                        {roleMarks(data.people.findIndex((entry) => entry.id === person.id))}
-                        {accountMark(data.people.findIndex((entry) => entry.id === person.id))}
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          {person.hasJoined ? t('guestPlaceTaken') : t('guestPlaceFree')}
-                        </span>
-                      </button>
-                    ))}
-                </div>
-                {data.people
-                  .filter((person) => person.guestSlotNumber !== undefined)
-                  .every((person) => person.hasJoined) && (
-                  <p className="text-sm text-muted-foreground" data-testid="no-free-guest-slots">
-                    {t('noGuestPlacesLeft')}
-                  </p>
-                )}
-              </div>
-            )}
-            {/* Legacy named-person receipts retain their legacy joining buttons.
-                Fixed slots require explicit selection by stable personId. */}
-            {!data.receiptData.guestSlotsMode && data.people.some((person) => !person.hasJoined) && (
-              <div className="space-y-2">
-                <p className="text-xs text-muted-foreground">{t('orJoinAs')}</p>
-                <div className="flex flex-wrap gap-2">
-                  {data.people.map((person, idx) =>
-                    person.hasJoined ? null : (
-                      <button
-                        key={person.id}
-                        type="button"
-                        disabled={joining}
-                        onClick={() => {
-                          setName(person.name);
-                          startJoin({ name: person.name });
-                        }}
-                        className="flex min-h-11 min-w-0 max-w-full items-center gap-2 rounded-2xl bg-muted px-3 py-2 text-left transition-colors hover:bg-muted/80 disabled:opacity-50"
-                        data-testid={`rejoin-person-${idx}`}
-                      >
-                        <Avatar className="h-6 w-6 shrink-0">
-                          <AvatarFallback
-                            className="text-[10px] font-semibold"
-                            style={guestVisualColorStyle(data.people[idx], idx)}
-                          >
-                            {getInitials(person.name)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <span className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">{person.name}</span>
-                        {roleMarks(idx)}
-                        {accountMark(idx)}
-                      </button>
-                    ),
+                    .every((person) => person.hasJoined) && (
+                    <p className="text-sm text-muted-foreground" data-testid="no-free-guest-slots">
+                      {t('noGuestPlacesLeft')}
+                    </p>
                   )}
                 </div>
-              </div>
-            )}
-            <Button
-              className="min-h-11 w-full text-base"
-              onClick={handleJoin}
-              disabled={!(name.trim() || (data.receiptData.guestSlotsMode && authSession?.user?.name)) || joining}
-              data-testid="claim-join-btn"
-            >
-              {joining ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('joining')}
-                </>
-              ) : (
-                <>
-                  <ArrowRight className="mr-2 h-4 w-4" />
-                  {t('join')}
-                </>
               )}
-            </Button>
-            {data.receiptData.guestSlotsMode && authSession?.user && (
+              {/* Legacy named-person receipts retain their legacy joining buttons.
+                Fixed slots require explicit selection by stable personId. */}
+              {!data.receiptData.guestSlotsMode && data.people.some((person) => !person.hasJoined) && (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">{t('orJoinAs')}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {data.people.map((person, idx) =>
+                      person.hasJoined ? null : (
+                        <button
+                          key={person.id}
+                          type="button"
+                          disabled={joining}
+                          onClick={() => {
+                            setName(person.name);
+                            startJoin({ name: person.name });
+                          }}
+                          className="flex min-h-11 min-w-0 max-w-full items-center gap-2 rounded-2xl bg-muted px-3 py-2 text-left transition-colors hover:bg-muted/80 disabled:opacity-50"
+                          data-testid={`rejoin-person-${idx}`}
+                        >
+                          <Avatar className="h-6 w-6 shrink-0">
+                            <AvatarFallback
+                              className="text-[10px] font-semibold"
+                              style={guestVisualColorStyle(data.people[idx], idx)}
+                            >
+                              {getInitials(person.name)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <span className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">{person.name}</span>
+                          {roleMarks(idx)}
+                          {accountMark(idx)}
+                        </button>
+                      ),
+                    )}
+                  </div>
+                </div>
+              )}
               <Button
-                variant="ghost"
-                type="button"
-                className="min-h-11 w-full whitespace-normal"
-                disabled={joining}
-                onClick={() => {
-                  const creatorId = data.receiptData.organizerPersonId ?? data.people[0]?.id;
-                  if (!creatorId) return;
-                  startGuestSlotJoin({ slotId: creatorId, name: authSession.user.name || name || '' });
-                }}
-                data-testid="resume-registered-slot"
+                className="min-h-11 w-full text-base"
+                onClick={handleJoin}
+                disabled={!(name.trim() || (data.receiptData.guestSlotsMode && authSession?.user?.name)) || joining}
+                data-testid="claim-join-btn"
               >
-                {t('recoverRegisteredPlace')}
+                {joining ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {t('joining')}
+                  </>
+                ) : (
+                  <>
+                    <ArrowRight className="mr-2 h-4 w-4" />
+                    {t('join')}
+                  </>
+                )}
               </Button>
-            )}
-          </CardContent>
-        </Card>
+              {data.receiptData.guestSlotsMode && authSession?.user && (
+                <Button
+                  variant="ghost"
+                  type="button"
+                  className="min-h-11 w-full whitespace-normal"
+                  disabled={joining}
+                  onClick={() => {
+                    const creatorId = data.receiptData.organizerPersonId ?? data.people[0]?.id;
+                    if (!creatorId) return;
+                    startGuestSlotJoin({ slotId: creatorId, name: authSession.user.name || name || '' });
+                  }}
+                  data-testid="resume-registered-slot"
+                >
+                  {t('recoverRegisteredPlace')}
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+        <section
+          id="claim-items-panel"
+          role="tabpanel"
+          aria-labelledby="claim-items-tab"
+          hidden={joinTab !== 'items'}
+          className="min-w-0 space-y-3"
+          data-testid="claim-readonly-items"
+        >
+          <p className="text-sm text-muted-foreground">{t('tabsJoinToAssign')}</p>
+          {data.items.map((item, idx) => (
+            <Card key={idx} className="min-w-0">
+              <CardContent className="flex min-w-0 flex-wrap items-center justify-between gap-2 py-3">
+                <span className="min-w-0 flex-1 font-medium [overflow-wrap:anywhere]">
+                  {item.name} ×{item.quantity}
+                </span>
+                <span className="shrink-0 font-semibold tabular-nums">
+                  {formatCents(item.totalPrice, currency, locale)}
+                </span>
+              </CardContent>
+            </Card>
+          ))}
+        </section>
       </div>
     );
   }
@@ -2480,1120 +2588,1152 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         </CardContent>
       </Card>
 
-      {/* Copy link, and this person's own link for their other devices */}
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={copyLink} data-testid="copy-link-btn">
-          <Link2 className="mr-2 h-4 w-4" />
-          {t('copyLink')}
-        </Button>
-        {personalLinkButton}
-      </div>
-      {personalLinkHint}
+      <ReceiptTabs
+        activeTab={receiptTab}
+        onSelect={setReceiptTab}
+        peopleCount={data.people.length}
+        itemCount={data.items.length}
+      />
+      <section
+        id="claim-people-panel"
+        role="tabpanel"
+        aria-labelledby="claim-people-tab"
+        hidden={receiptTab !== 'people'}
+        className="w-full min-w-0 space-y-6"
+        data-testid="claim-people-panel"
+      >
+        {/* Copy link, and this person's own link for their other devices */}
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={copyLink} data-testid="copy-link-btn">
+            <Link2 className="mr-2 h-4 w-4" />
+            {t('copyLink')}
+          </Button>
+          {personalLinkButton}
+        </div>
+        {personalLinkHint}
 
-      {/* Personal tips belong to this device's identity, never the person selected
+        {/* Personal tips belong to this device's identity, never the person selected
           for editing dish claims. Individual tips are included when finalizing. */}
-      {tipTarget && myPersonId && personToken && (
-        <Card data-testid="personal-tip-card">
+        {tipTarget && myPersonId && personToken && (
+          <Card data-testid="personal-tip-card">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">
+                {tipTarget.id === myPersonId
+                  ? t('personalTipTitle')
+                  : t('paymentGroupTipFor', { name: tipTarget.name })}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                {tipTarget.id === myPersonId ? t('personalTipDescription') : t('paymentGroupDisclaimer')}
+              </p>
+              {tipTarget.id !== myPersonId && (
+                <p className="text-sm font-medium" data-testid="payment-group-tip-target">
+                  {t('paymentGroupTipFor', { name: tipTarget.name })}
+                </p>
+              )}
+              <form
+                className="flex flex-wrap items-end gap-3"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!personalTipIsValid || personalTipCents === savedPersonalTip || setPersonalTip.isPending) return;
+                  setPersonalTip.mutate({ token, personId: tipTarget.id, personToken, tipCents: personalTipCents });
+                }}
+              >
+                <div className="min-w-0 flex-1 space-y-1">
+                  <label htmlFor="personal-tip-amount" className="text-sm font-medium">
+                    {t('personalTipAmount')}
+                  </label>
+                  <Input
+                    id="personal-tip-amount"
+                    type="text"
+                    inputMode="decimal"
+                    className="h-11 min-w-0 text-base"
+                    value={personalTipValue}
+                    onChange={(event) => setPersonalTipDraft(event.target.value)}
+                    aria-invalid={!personalTipIsValid}
+                    data-testid="personal-tip-input"
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  className="min-h-11"
+                  disabled={!personalTipIsValid || personalTipCents === savedPersonalTip || setPersonalTip.isPending}
+                  data-testid="personal-tip-save"
+                >
+                  {setPersonalTip.isPending ? t('saving') : t('personalTipSave')}
+                </Button>
+              </form>
+              {!personalTipIsValid && (
+                <p className="text-sm text-destructive" role="alert">
+                  {t('personalTipInvalid')}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">{t('personalTipPendingTotals')}</p>
+            </CardContent>
+          </Card>
+        )}
+
+        {data.isCreator && (
+          <GuestPaymentGroupsEditor token={token} people={data.people} paidByIndex={data.paidByIndex} />
+        )}
+
+        {data.isCreator && data.status === 'CLAIMING' && <CreatorAddGuestPlace token={token} />}
+
+        {/* People in session */}
+        <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">
-              {tipTarget.id === myPersonId ? t('personalTipTitle') : t('paymentGroupTipFor', { name: tipTarget.name })}
+            <CardTitle className="text-base flex items-center gap-2">
+              <Users className="h-4 w-4" />
+              {t('peopleInSession', { count: data.people.length })}
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              {tipTarget.id === myPersonId ? t('personalTipDescription') : t('paymentGroupDisclaimer')}
-            </p>
-            {tipTarget.id !== myPersonId && (
-              <p className="text-sm font-medium" data-testid="payment-group-tip-target">
-                {t('paymentGroupTipFor', { name: tipTarget.name })}
-              </p>
-            )}
-            <form
-              className="flex flex-wrap items-end gap-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (!personalTipIsValid || personalTipCents === savedPersonalTip || setPersonalTip.isPending) return;
-                setPersonalTip.mutate({ token, personId: tipTarget.id, personToken, tipCents: personalTipCents });
-              }}
-            >
-              <div className="min-w-0 flex-1 space-y-1">
-                <label htmlFor="personal-tip-amount" className="text-sm font-medium">
-                  {t('personalTipAmount')}
-                </label>
-                <Input
-                  id="personal-tip-amount"
-                  type="text"
-                  inputMode="decimal"
-                  className="h-11 min-w-0 text-base"
-                  value={personalTipValue}
-                  onChange={(event) => setPersonalTipDraft(event.target.value)}
-                  aria-invalid={!personalTipIsValid}
-                  data-testid="personal-tip-input"
-                />
-              </div>
-              <Button
-                type="submit"
-                className="min-h-11"
-                disabled={!personalTipIsValid || personalTipCents === savedPersonalTip || setPersonalTip.isPending}
-                data-testid="personal-tip-save"
-              >
-                {setPersonalTip.isPending ? t('saving') : t('personalTipSave')}
-              </Button>
-            </form>
-            {!personalTipIsValid && (
-              <p className="text-sm text-destructive" role="alert">
-                {t('personalTipInvalid')}
-              </p>
-            )}
-            <p className="text-xs text-muted-foreground">{t('personalTipPendingTotals')}</p>
-          </CardContent>
-        </Card>
-      )}
-
-      {data.isCreator && <GuestPaymentGroupsEditor token={token} people={data.people} paidByIndex={data.paidByIndex} />}
-
-      {data.isCreator && data.status === 'CLAIMING' && <CreatorAddGuestPlace token={token} />}
-
-      {/* People in session */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Users className="h-4 w-4" />
-            {t('peopleInSession', { count: data.people.length })}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
-            {data.people.map((person, idx) => (
-              <div
-                key={person.id}
-                className={`flex min-w-0 flex-wrap items-center gap-2 rounded-lg border-l-4 px-3 py-2 ${
-                  idx === myPersonIndex ? 'bg-primary/10 ring-1 ring-primary' : 'bg-muted'
-                }`}
-                style={{ borderLeftColor: guestVisualColorBorder(person, idx) }}
-                data-testid={'guest-color-person-' + idx}
-              >
-                <div className="flex w-full min-w-0 items-start gap-2">
-                  <Avatar className="h-6 w-6 shrink-0">
-                    <AvatarFallback
-                      className="text-[10px] font-semibold"
-                      style={guestVisualColorStyle(data.people[idx], idx)}
-                    >
-                      {getInitials(person.name)}
-                    </AvatarFallback>
-                  </Avatar>
-                  {editingPersonId === person.id ? (
-                    <form
-                      className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        if (!editingName.trim() || (!data.isCreator && !personToken)) return;
-                        editPersonName.mutate({
-                          token,
-                          ...(personToken ? { personToken } : {}),
-                          targetId: person.id,
-                          newName: editingName.trim(),
-                        });
-                      }}
-                    >
-                      <Input
-                        value={editingName}
-                        maxLength={MAX_GUEST_NAME_LENGTH}
-                        autoComplete="off"
-                        onChange={(e) => setEditingName(e.target.value)}
-                        className="h-11 min-w-[7rem] flex-1 text-base"
-                        autoFocus
-                        aria-label={t('editName')}
-                        data-testid={`edit-name-input-${idx}`}
-                      />
-                      <Button
-                        type="submit"
-                        size="sm"
-                        variant="ghost"
-                        className="size-11 shrink-0 p-0"
-                        disabled={editPersonName.isPending}
-                        aria-label={t('saveName')}
-                        title={t('saveName')}
+          <CardContent>
+            <div className="space-y-2">
+              {data.people.map((person, idx) => (
+                <div
+                  key={person.id}
+                  className={`flex min-w-0 flex-wrap items-center gap-2 rounded-lg border-l-4 px-3 py-2 ${
+                    idx === myPersonIndex ? 'bg-primary/10 ring-1 ring-primary' : 'bg-muted'
+                  }`}
+                  style={{ borderLeftColor: guestVisualColorBorder(person, idx) }}
+                  data-testid={'guest-color-person-' + idx}
+                >
+                  <div className="flex w-full min-w-0 items-start gap-2">
+                    <Avatar className="h-6 w-6 shrink-0">
+                      <AvatarFallback
+                        className="text-[10px] font-semibold"
+                        style={guestVisualColorStyle(data.people[idx], idx)}
                       >
-                        <Check className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="size-11 shrink-0 p-0"
-                        onClick={() => setEditingPersonId(null)}
-                        aria-label={t('cancelButton')}
-                        title={t('cancelButton')}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </Button>
-                    </form>
-                  ) : (
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <span
-                        className="block w-full min-w-0 text-sm font-medium [overflow-wrap:anywhere]"
-                        data-testid={'guest-display-name-' + idx}
-                      >
-                        {person.name}
-                        {idx === myPersonIndex && ` ${t('you')}`}
-                      </span>
-                      <div className="flex min-w-0 flex-wrap items-center gap-1">
-                        {roleMarks(idx)}
-                        {accountMark(idx)}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                {editingPersonId !== person.id && (
-                  <div className="flex w-full flex-wrap items-center justify-end gap-2 empty:hidden">
-                    {(data.isCreator || person.id === myPersonId) && data.status === 'CLAIMING' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingPersonId(person.id);
-                          setEditingName(person.name);
+                        {getInitials(person.name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    {editingPersonId === person.id ? (
+                      <form
+                        className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          if (!editingName.trim() || (!data.isCreator && !personToken)) return;
+                          editPersonName.mutate({
+                            token,
+                            ...(personToken ? { personToken } : {}),
+                            targetId: person.id,
+                            newName: editingName.trim(),
+                          });
                         }}
-                        className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
-                        aria-label={t('editName')}
-                        data-testid={'edit-person-' + idx}
                       >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                    {data.people.length > 1 &&
-                      !!personToken &&
-                      (data.isCreator || person.id === myPersonId) &&
-                      (!hasPaymentGroups || data.isCreator) && (
-                        <button
+                        <Input
+                          value={editingName}
+                          maxLength={MAX_GUEST_NAME_LENGTH}
+                          autoComplete="off"
+                          onChange={(e) => setEditingName(e.target.value)}
+                          className="h-11 min-w-[7rem] flex-1 text-base"
+                          autoFocus
+                          aria-label={t('editName')}
+                          data-testid={`edit-name-input-${idx}`}
+                        />
+                        <Button
+                          type="submit"
+                          size="sm"
+                          variant="ghost"
+                          className="size-11 shrink-0 p-0"
+                          disabled={editPersonName.isPending}
+                          aria-label={t('saveName')}
+                          title={t('saveName')}
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
                           type="button"
-                          onClick={() => setRemoveFor({ id: person.id, name: person.name })}
-                          className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-destructive"
-                          aria-label={t('removePerson')}
-                          data-testid={`remove-person-${idx}`}
+                          size="sm"
+                          variant="ghost"
+                          className="size-11 shrink-0 p-0"
+                          onClick={() => setEditingPersonId(null)}
+                          aria-label={t('cancelButton')}
+                          title={t('cancelButton')}
                         >
                           <X className="h-3.5 w-3.5" />
+                        </Button>
+                      </form>
+                    ) : (
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <span
+                          className="block w-full min-w-0 text-sm font-medium [overflow-wrap:anywhere]"
+                          data-testid={'guest-display-name-' + idx}
+                        >
+                          {person.name}
+                          {idx === myPersonIndex && ` ${t('you')}`}
+                        </span>
+                        <div className="flex min-w-0 flex-wrap items-center gap-1">
+                          {roleMarks(idx)}
+                          {accountMark(idx)}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {editingPersonId !== person.id && (
+                    <div className="flex w-full flex-wrap items-center justify-end gap-2 empty:hidden">
+                      {(data.isCreator || person.id === myPersonId) && data.status === 'CLAIMING' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingPersonId(person.id);
+                            setEditingName(person.name);
+                          }}
+                          className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                          aria-label={t('editName')}
+                          data-testid={'edit-person-' + idx}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
                         </button>
                       )}
-                  </div>
-                )}
-                {creatorGuestLinkControls(person, idx)}
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+                      {data.people.length > 1 &&
+                        !!personToken &&
+                        (data.isCreator || person.id === myPersonId) &&
+                        (!hasPaymentGroups || data.isCreator) && (
+                          <button
+                            type="button"
+                            onClick={() => setRemoveFor({ id: person.id, name: person.name })}
+                            className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-destructive"
+                            aria-label={t('removePerson')}
+                            data-testid={`remove-person-${idx}`}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                    </div>
+                  )}
+                  {creatorGuestLinkControls(person, idx)}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
 
-      {/* Claim as selector */}
-      <div className="space-y-2">
-        <p className="text-sm font-medium">{t('claimingFor')}</p>
-        {activeId && activeId !== myPersonId && (
-          <p className="text-xs font-medium" data-testid="payment-group-edit-target">
-            {t('paymentGroupEditFor', { name: data.people[personIndex!]?.name ?? '' })}
+        {data.isCreator && data.status === 'CLAIMING' && (
+          <Card className="w-full min-w-0 max-w-full" data-testid="finalization-organizer-panel">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">{t('finalizationOrganizerTitle')}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">{t('finalizationOrganizerHint')}</p>
+              {data.hasFinalizationOrganizer && (
+                <p className="text-sm" data-testid="finalization-organizer-active">
+                  {t('finalizationOrganizerActive')}
+                </p>
+              )}
+              <label htmlFor="finalization-organizer-email" className="block text-sm font-medium">
+                {t('finalizationOrganizerEmail')}
+              </label>
+              <Input
+                id="finalization-organizer-email"
+                type="email"
+                inputMode="email"
+                autoComplete="off"
+                className="h-11 min-w-0 text-base"
+                value={finalizationOrganizerEmail}
+                onChange={(event) => setFinalizationOrganizerEmail(event.target.value)}
+                data-testid="finalization-organizer-email"
+              />
+              <div className="flex min-w-0 flex-wrap gap-2">
+                <Button
+                  type="button"
+                  className="min-h-11 min-w-11"
+                  disabled={
+                    setFinalizationOrganizer.isPending ||
+                    !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(finalizationOrganizerEmail.trim())
+                  }
+                  data-testid="finalization-organizer-appoint"
+                  onClick={() =>
+                    setFinalizationOrganizer.mutate({
+                      token,
+                      email: finalizationOrganizerEmail.trim().toLowerCase(),
+                    })
+                  }
+                >
+                  {t('finalizationOrganizerAppoint')}
+                </Button>
+                {data.hasFinalizationOrganizer && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11 min-w-11"
+                    disabled={setFinalizationOrganizer.isPending}
+                    data-testid="finalization-organizer-revoke"
+                    onClick={() => setFinalizationOrganizer.mutate({ token, email: null })}
+                  >
+                    {t('finalizationOrganizerRevoke')}
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {data.presence && (
+          <OrganizerPresence
+            people={data.people}
+            presence={data.presence}
+            organizerPersonId={data.receiptData.organizerPersonId}
+          />
+        )}
+        {presenceConnectionLost && (
+          <p className="text-sm text-destructive" role="status" data-testid="presence-connection-lost">
+            {t('presenceConnectionLost')}
           </p>
         )}
-        <div className="flex flex-wrap gap-2">
-          {data.people.map((person, idx) => (
-            <button
-              key={person.id}
-              type="button"
-              onClick={() => {
-                if (!canEditFor(person.id)) return;
-                setActivePersonId(person.id);
-                setPersonalTipDraft(null);
-                setPortionDrafts({});
-              }}
-              disabled={!canEditFor(person.id)}
-              data-testid={`switch-person-${idx}`}
-              className={`flex min-h-11 min-w-0 max-w-full items-center gap-2 rounded-2xl px-3 py-1.5 transition-colors ${
-                idx === personIndex
-                  ? 'bg-primary text-primary-foreground ring-2 ring-primary'
-                  : 'bg-muted hover:bg-muted/80'
-              }`}
-            >
-              <Avatar className="h-6 w-6">
-                <AvatarFallback
-                  className="text-[10px] font-semibold"
-                  style={guestVisualColorStyle(data.people[idx], idx)}
-                >
-                  {getInitials(person.name)}
-                </AvatarFallback>
-              </Avatar>
-              <span className="min-w-0 text-left text-sm font-medium [overflow-wrap:anywhere]">
-                {person.name}
-                {idx === myPersonIndex && ` ${t('you')}`}
-              </span>
-              {roleMarks(idx)}
-              {accountMark(idx)}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Items to claim */}
-      <div className="w-full min-w-0 max-w-full space-y-3">
-        <h3 className="font-semibold text-base">
-          {t('tapToClaim')}
-          {hasUnsavedChanges && (
-            <Badge variant="secondary" className="ml-2">
-              {t('unsavedChanges')}
-            </Badge>
+      </section>
+      <section
+        id="claim-items-panel"
+        role="tabpanel"
+        aria-labelledby="claim-items-tab"
+        hidden={receiptTab !== 'items'}
+        className="w-full min-w-0 space-y-6"
+        data-testid="claim-items-panel"
+      >
+        {/* Claim as selector */}
+        <div className="space-y-2">
+          <p className="text-sm font-medium">{t('claimingFor')}</p>
+          {activeId && activeId !== myPersonId && (
+            <p className="text-xs font-medium" data-testid="payment-group-edit-target">
+              {t('paymentGroupEditFor', { name: data.people[personIndex!]?.name ?? '' })}
+            </p>
           )}
-        </h3>
-        {sortedItemIndices.map((idx, sortPosition) => {
-          const item = data.items[idx]!;
-          const isClaimed = activeClaims.has(idx);
-          const savedOriginal = data.receiptData.knownPartsByItem?.[String(idx)] ?? null;
-          const savedPortionProgress = guestPortionProgress(
-            data.assignments.find((assignment) => assignment.itemIndex === idx) ?? {
-              itemIndex: idx,
-              personIndices: [],
-            },
-            data.people,
-            savedOriginal,
-          );
-          const originalDraft = knownPartsDrafts[idx] ?? (savedOriginal === null ? '' : String(savedOriginal));
-          const parsedOriginal = /^\d+$/.test(originalDraft) ? Number(originalDraft) : NaN;
-          const originalIsValid =
-            Number.isSafeInteger(parsedOriginal) &&
-            parsedOriginal >= 1 &&
-            parsedOriginal <= 10000 &&
-            parsedOriginal >= savedPortionProgress.countedParts;
-          // Find other claimants from server state
-          const otherClaimants =
-            data.assignments.find((a) => a.itemIndex === idx)?.personIndices.filter((pi) => pi !== personIndex) ?? [];
-
-          // Show separator before the first claimed item
-          const isFirstClaimed =
-            sortPosition > 0 && claimedByAnyone.has(idx) && !claimedByAnyone.has(sortedItemIndices[sortPosition - 1]!);
-
-          return (
-            <div key={idx} className="w-full min-w-0 max-w-full">
-              {isFirstClaimed && (
-                <div className="flex items-center gap-2 py-1">
-                  <div className="flex-1 h-px bg-border" />
-                  <span className="text-xs text-muted-foreground">{t('alreadyClaimed')}</span>
-                  <div className="flex-1 h-px bg-border" />
-                </div>
-              )}
-              <Card
-                role="button"
-                aria-pressed={isClaimed}
-                tabIndex={0}
-                data-testid={`claim-item-${idx}`}
-                onKeyDown={(e) => {
-                  // Nested per-person chips and editor buttons implement their
-                  // own keyboard actions. Enter/Space on those controls must
-                  // never trigger the outer card's staged whole-dish claim.
-                  if (e.target !== e.currentTarget) return;
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    toggleClaim(idx);
-                  }
+          <div className="flex flex-wrap gap-2">
+            {data.people.map((person, idx) => (
+              <button
+                key={person.id}
+                type="button"
+                onClick={() => {
+                  if (!canEditFor(person.id)) return;
+                  setActivePersonId(person.id);
+                  setPersonalTipDraft(null);
+                  setPortionDrafts({});
                 }}
-                className={`w-full min-w-0 max-w-full cursor-pointer transition-all ${
-                  isClaimed ? 'ring-2 ring-primary bg-primary/5' : 'hover:bg-muted/50'
+                disabled={!canEditFor(person.id)}
+                data-testid={`switch-person-${idx}`}
+                className={`flex min-h-11 min-w-0 max-w-full items-center gap-2 rounded-2xl px-3 py-1.5 transition-colors ${
+                  idx === personIndex
+                    ? 'bg-primary text-primary-foreground ring-2 ring-primary'
+                    : 'bg-muted hover:bg-muted/80'
                 }`}
-                onClick={() => toggleClaim(idx)}
               >
-                <CardContent className="py-3">
-                  <div className="flex items-center gap-3">
-                    {/* Claim indicator */}
-                    <div
-                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${
-                        isClaimed ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
-                      }`}
-                    >
-                      {isClaimed && <Check className="h-4 w-4" />}
-                    </div>
+                <Avatar className="h-6 w-6">
+                  <AvatarFallback
+                    className="text-[10px] font-semibold"
+                    style={guestVisualColorStyle(data.people[idx], idx)}
+                  >
+                    {getInitials(person.name)}
+                  </AvatarFallback>
+                </Avatar>
+                <span className="min-w-0 text-left text-sm font-medium [overflow-wrap:anywhere]">
+                  {person.name}
+                  {idx === myPersonIndex && ` ${t('you')}`}
+                </span>
+                {roleMarks(idx)}
+                {accountMark(idx)}
+              </button>
+            ))}
+          </div>
+        </div>
 
-                    {/* Item details */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <span
-                          className={`font-medium [overflow-wrap:anywhere] ${isClaimed ? 'text-foreground' : 'text-muted-foreground'}`}
-                        >
-                          {item.name}
-                          {item.quantity > 1 && <span className="text-muted-foreground ml-1">x{item.quantity}</span>}
-                        </span>
-                        <div className="flex items-center gap-1 shrink-0">
-                          {data.status === 'CLAIMING' && (data.isCreator || !!myPersonId) && (
-                            <button
-                              type="button"
-                              className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
-                              aria-label={t('partsForPeople')}
-                              aria-expanded={allocationEditorIdx === idx}
-                              data-testid={'dish-parts-open-' + idx}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setAllocationEditorIdx((previous) => (previous === idx ? null : idx));
-                              }}
-                            >
-                              <Pencil className="size-4" aria-hidden="true" />
-                            </button>
-                          )}
-                          {/* Keep the receipt correction action in the always-visible
+        {/* Items to claim */}
+        <div className="w-full min-w-0 max-w-full space-y-3">
+          <h3 className="font-semibold text-base">
+            {t('tapToClaim')}
+            {hasUnsavedChanges && (
+              <Badge variant="secondary" className="ml-2">
+                {t('unsavedChanges')}
+              </Badge>
+            )}
+          </h3>
+          {sortedItemIndices.map((idx, sortPosition) => {
+            const item = data.items[idx]!;
+            const isClaimed = activeClaims.has(idx);
+            const savedOriginal = data.receiptData.knownPartsByItem?.[String(idx)] ?? null;
+            const savedPortionProgress = guestPortionProgress(
+              data.assignments.find((assignment) => assignment.itemIndex === idx) ?? {
+                itemIndex: idx,
+                personIndices: [],
+              },
+              data.people,
+              savedOriginal,
+            );
+            const originalDraft = knownPartsDrafts[idx] ?? (savedOriginal === null ? '' : String(savedOriginal));
+            const parsedOriginal = /^\d+$/.test(originalDraft) ? Number(originalDraft) : NaN;
+            const originalIsValid =
+              Number.isSafeInteger(parsedOriginal) &&
+              parsedOriginal >= 1 &&
+              parsedOriginal <= 10000 &&
+              parsedOriginal >= savedPortionProgress.countedParts;
+            // Find other claimants from server state
+            const otherClaimants =
+              data.assignments.find((a) => a.itemIndex === idx)?.personIndices.filter((pi) => pi !== personIndex) ?? [];
+
+            // Show separator before the first claimed item
+            const isFirstClaimed =
+              sortPosition > 0 &&
+              claimedByAnyone.has(idx) &&
+              !claimedByAnyone.has(sortedItemIndices[sortPosition - 1]!);
+
+            return (
+              <div key={idx} className="w-full min-w-0 max-w-full">
+                {isFirstClaimed && (
+                  <div className="flex items-center gap-2 py-1">
+                    <div className="flex-1 h-px bg-border" />
+                    <span className="text-xs text-muted-foreground">{t('alreadyClaimed')}</span>
+                    <div className="flex-1 h-px bg-border" />
+                  </div>
+                )}
+                <Card
+                  role="button"
+                  aria-pressed={isClaimed}
+                  tabIndex={0}
+                  data-testid={`claim-item-${idx}`}
+                  onKeyDown={(e) => {
+                    // Nested per-person chips and editor buttons implement their
+                    // own keyboard actions. Enter/Space on those controls must
+                    // never trigger the outer card's staged whole-dish claim.
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      toggleClaim(idx);
+                    }
+                  }}
+                  className={`w-full min-w-0 max-w-full cursor-pointer transition-all ${
+                    isClaimed ? 'ring-2 ring-primary bg-primary/5' : 'hover:bg-muted/50'
+                  }`}
+                  onClick={() => toggleClaim(idx)}
+                >
+                  <CardContent className="py-3">
+                    <div className="flex items-center gap-3">
+                      {/* Claim indicator */}
+                      <div
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${
+                          isClaimed ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
+                        }`}
+                      >
+                        {isClaimed && <Check className="h-4 w-4" />}
+                      </div>
+
+                      {/* Item details */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span
+                            className={`font-medium [overflow-wrap:anywhere] ${isClaimed ? 'text-foreground' : 'text-muted-foreground'}`}
+                          >
+                            {item.name}
+                            {item.quantity > 1 && <span className="text-muted-foreground ml-1">x{item.quantity}</span>}
+                          </span>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {data.status === 'CLAIMING' && (data.isCreator || !!myPersonId) && (
+                              <button
+                                type="button"
+                                className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                                aria-label={t('partsForPeople')}
+                                aria-expanded={allocationEditorIdx === idx}
+                                data-testid={'dish-parts-open-' + idx}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setAllocationEditorIdx((previous) => (previous === idx ? null : idx));
+                                }}
+                              >
+                                <Pencil className="size-4" aria-hidden="true" />
+                              </button>
+                            )}
+                            {/* Keep the receipt correction action in the always-visible
                               header while the parts panel is open. Putting the
                               trigger below the per-person inputs made its touch
                               target inaccessible under fixed mobile bars. */}
-                          {data.isCreator && data.status === 'CLAIMING' && allocationEditorIdx === idx && (
-                            <button
-                              type="button"
-                              className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
-                              data-testid={'receipt-item-edit-' + idx}
-                              aria-label={t('itemCorrectionEdit')}
-                              title={t('itemCorrectionEdit')}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setReceiptItemEdit({
-                                  itemIndex: idx,
-                                  name: item.name,
-                                  quantity: String(item.quantity),
-                                  price: centsToDecimal(item.unitPrice),
-                                });
-                              }}
-                            >
-                              <Receipt className="size-4" aria-hidden="true" />
-                            </button>
-                          )}
-                          <span className="font-semibold">{formatCents(item.totalPrice, currency, locale)}</span>
+                            {data.isCreator && data.status === 'CLAIMING' && allocationEditorIdx === idx && (
+                              <button
+                                type="button"
+                                className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                                data-testid={'receipt-item-edit-' + idx}
+                                aria-label={t('itemCorrectionEdit')}
+                                title={t('itemCorrectionEdit')}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setReceiptItemEdit({
+                                    itemIndex: idx,
+                                    name: item.name,
+                                    quantity: String(item.quantity),
+                                    price: centsToDecimal(item.unitPrice),
+                                  });
+                                }}
+                              >
+                                <Receipt className="size-4" aria-hidden="true" />
+                              </button>
+                            )}
+                            <span className="font-semibold">{formatCents(item.totalPrice, currency, locale)}</span>
+                          </div>
                         </div>
-                      </div>
 
-                      {/* Saved technical progress is not shown in the compact card.
+                        {/* Saved technical progress is not shown in the compact card.
                           Existing regression checks can still read this semantic snapshot;
                           the pencil editor displays these details when explicitly opened. */}
-                      <div
-                        aria-hidden="true"
-                        className="relative h-0 w-full overflow-hidden text-xs opacity-0 pointer-events-none"
-                        data-testid={'guest-claimed-parts-progress-' + idx}
-                      >
-                        <span>{t('partsCounted', { count: savedPortionProgress.countedParts })}</span>
-                        <span>
-                          {savedPortionProgress.remainingParts === null
-                            ? t('partsUnknownOriginal')
-                            : savedPortionProgress.remainingParts < 0
-                              ? t('knownPartsOverclaimed', { count: -savedPortionProgress.remainingParts })
-                              : t('knownPartsRemaining', { count: savedPortionProgress.remainingParts })}
-                        </span>
-                      </div>
-                      <GuestItemAllocations
-                        token={token}
-                        itemIndex={idx}
-                        people={data.people}
-                        {...(data.assignments.find((assignment) => assignment.itemIndex === idx)
-                          ? { assignment: data.assignments.find((assignment) => assignment.itemIndex === idx)! }
-                          : {})}
-                        knownParts={savedOriginal}
-                        actorId={myPersonId}
-                        personToken={personToken}
-                        isCreator={data.isCreator}
-                        disabled={saving || anyParked || hasAnyUnsavedChanges}
-                        open={allocationEditorIdx === idx}
-                        onOpenChange={(next) => setAllocationEditorIdx(next ? idx : null)}
-                      >
-                        {/* The original is optional and must never be inferred from item.quantity.
-                          All phones see the same saved consumed/remaining totals. */}
                         <div
-                          className="mt-1 space-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]"
-                          data-testid={'guest-claimed-parts-progress-detail-' + idx}
+                          aria-hidden="true"
+                          className="relative h-0 w-full overflow-hidden text-xs opacity-0 pointer-events-none"
+                          data-testid={'guest-claimed-parts-progress-' + idx}
                         >
-                          <p>{t('partsCounted', { count: savedPortionProgress.countedParts })}</p>
-                          <p
-                            className={
-                              savedPortionProgress.remainingParts !== null && savedPortionProgress.remainingParts < 0
-                                ? 'text-destructive'
-                                : ''
-                            }
-                          >
+                          <span>{t('partsCounted', { count: savedPortionProgress.countedParts })}</span>
+                          <span>
                             {savedPortionProgress.remainingParts === null
                               ? t('partsUnknownOriginal')
                               : savedPortionProgress.remainingParts < 0
                                 ? t('knownPartsOverclaimed', { count: -savedPortionProgress.remainingParts })
                                 : t('knownPartsRemaining', { count: savedPortionProgress.remainingParts })}
-                          </p>
+                          </span>
                         </div>
-                        {/* 3.15: editing the receipt is a creator-only correction
+                        <GuestItemAllocations
+                          token={token}
+                          itemIndex={idx}
+                          people={data.people}
+                          {...(data.assignments.find((assignment) => assignment.itemIndex === idx)
+                            ? { assignment: data.assignments.find((assignment) => assignment.itemIndex === idx)! }
+                            : {})}
+                          knownParts={savedOriginal}
+                          actorId={myPersonId}
+                          personToken={personToken}
+                          isCreator={data.isCreator}
+                          disabled={saving || anyParked || hasAnyUnsavedChanges}
+                          open={allocationEditorIdx === idx}
+                          onOpenChange={(next) => setAllocationEditorIdx(next ? idx : null)}
+                        >
+                          {/* The original is optional and must never be inferred from item.quantity.
+                          All phones see the same saved consumed/remaining totals. */}
+                          <div
+                            className="mt-1 space-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]"
+                            data-testid={'guest-claimed-parts-progress-detail-' + idx}
+                          >
+                            <p>{t('partsCounted', { count: savedPortionProgress.countedParts })}</p>
+                            <p
+                              className={
+                                savedPortionProgress.remainingParts !== null && savedPortionProgress.remainingParts < 0
+                                  ? 'text-destructive'
+                                  : ''
+                              }
+                            >
+                              {savedPortionProgress.remainingParts === null
+                                ? t('partsUnknownOriginal')
+                                : savedPortionProgress.remainingParts < 0
+                                  ? t('knownPartsOverclaimed', { count: -savedPortionProgress.remainingParts })
+                                  : t('knownPartsRemaining', { count: savedPortionProgress.remainingParts })}
+                            </p>
+                          </div>
+                          {/* 3.15: editing the receipt is a creator-only correction
                           of existing line data. It never edits guest claims,
                           phone/bank details or creates an expense outside it. */}
-                        {data.isCreator && data.status === 'CLAIMING' && (
-                          <div
-                            className="mt-2 min-w-0 space-y-2"
-                            data-testid={'receipt-item-correction-' + idx}
-                            onClick={(event) => event.stopPropagation()}
-                            onKeyDown={(event) => event.stopPropagation()}
-                          >
-                            {receiptItemEdit?.itemIndex === idx && (
-                              <Dialog open onOpenChange={(open) => !open && setReceiptItemEdit(null)}>
-                                <DialogContent className="min-w-0 max-w-[calc(100%-1rem)] sm:max-w-sm">
-                                  <form
-                                    className="min-w-0 space-y-2"
-                                    data-testid={'receipt-item-edit-form-' + idx}
-                                    onSubmit={(event) => {
-                                      event.preventDefault();
-                                      if (!receiptItemEdit) return;
-                                      const qty = Number(receiptItemEdit.quantity);
-                                      const price = parseToCents(receiptItemEdit.price);
-                                      if (
-                                        !receiptItemEdit.name.trim() ||
-                                        !Number.isSafeInteger(qty) ||
-                                        qty < 1 ||
-                                        qty > 200 ||
-                                        !isValidMoneyInput(receiptItemEdit.price) ||
-                                        price < 1 ||
-                                        price * qty > MAX_MONEY_CENTS ||
-                                        updateClaimReceiptItem.isPending
-                                      )
-                                        return;
-                                      updateClaimReceiptItem.mutate({
-                                        token,
-                                        itemIndex: idx,
-                                        name: receiptItemEdit.name.trim(),
-                                        quantity: qty,
-                                        unitPrice: price,
-                                      });
-                                    }}
-                                  >
-                                    <DialogTitle>{t('itemCorrectionTitle')}</DialogTitle>
-                                    <DialogDescription>{t('itemCorrectionHint')}</DialogDescription>
-                                    <label htmlFor={'receipt-item-name-' + idx} className="block text-xs font-medium">
-                                      {t('itemCorrectionName')}
-                                    </label>
-                                    <Input
-                                      id={'receipt-item-name-' + idx}
-                                      className="min-h-11 min-w-0 text-base"
-                                      maxLength={160}
-                                      value={receiptItemEdit.name}
-                                      onChange={(event) =>
-                                        setReceiptItemEdit((previous) =>
-                                          previous ? { ...previous, name: event.target.value } : null,
+                          {data.isCreator && data.status === 'CLAIMING' && (
+                            <div
+                              className="mt-2 min-w-0 space-y-2"
+                              data-testid={'receipt-item-correction-' + idx}
+                              onClick={(event) => event.stopPropagation()}
+                              onKeyDown={(event) => event.stopPropagation()}
+                            >
+                              {receiptItemEdit?.itemIndex === idx && (
+                                <Dialog open onOpenChange={(open) => !open && setReceiptItemEdit(null)}>
+                                  <DialogContent className="min-w-0 max-w-[calc(100%-1rem)] sm:max-w-sm">
+                                    <form
+                                      className="min-w-0 space-y-2"
+                                      data-testid={'receipt-item-edit-form-' + idx}
+                                      onSubmit={(event) => {
+                                        event.preventDefault();
+                                        if (!receiptItemEdit) return;
+                                        const qty = Number(receiptItemEdit.quantity);
+                                        const price = parseToCents(receiptItemEdit.price);
+                                        if (
+                                          !receiptItemEdit.name.trim() ||
+                                          !Number.isSafeInteger(qty) ||
+                                          qty < 1 ||
+                                          qty > 200 ||
+                                          !isValidMoneyInput(receiptItemEdit.price) ||
+                                          price < 1 ||
+                                          price * qty > MAX_MONEY_CENTS ||
+                                          updateClaimReceiptItem.isPending
                                         )
-                                      }
-                                      data-testid={'receipt-item-name-' + idx}
-                                    />
-                                    <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2">
-                                      <div className="min-w-0 space-y-1">
-                                        <label
-                                          htmlFor={'receipt-item-qty-' + idx}
-                                          className="block text-xs font-medium"
-                                        >
-                                          {t('itemCorrectionQuantity')}
-                                        </label>
-                                        <Input
-                                          id={'receipt-item-qty-' + idx}
-                                          className="min-h-11 min-w-0 text-base"
-                                          type="number"
-                                          inputMode="numeric"
-                                          min={1}
-                                          max={200}
-                                          value={receiptItemEdit.quantity}
-                                          onChange={(event) =>
-                                            setReceiptItemEdit((previous) =>
-                                              previous ? { ...previous, quantity: event.target.value } : null,
-                                            )
-                                          }
-                                          data-testid={'receipt-item-qty-' + idx}
-                                        />
+                                          return;
+                                        updateClaimReceiptItem.mutate({
+                                          token,
+                                          itemIndex: idx,
+                                          name: receiptItemEdit.name.trim(),
+                                          quantity: qty,
+                                          unitPrice: price,
+                                        });
+                                      }}
+                                    >
+                                      <DialogTitle>{t('itemCorrectionTitle')}</DialogTitle>
+                                      <DialogDescription>{t('itemCorrectionHint')}</DialogDescription>
+                                      <label htmlFor={'receipt-item-name-' + idx} className="block text-xs font-medium">
+                                        {t('itemCorrectionName')}
+                                      </label>
+                                      <Input
+                                        id={'receipt-item-name-' + idx}
+                                        className="min-h-11 min-w-0 text-base"
+                                        maxLength={160}
+                                        value={receiptItemEdit.name}
+                                        onChange={(event) =>
+                                          setReceiptItemEdit((previous) =>
+                                            previous ? { ...previous, name: event.target.value } : null,
+                                          )
+                                        }
+                                        data-testid={'receipt-item-name-' + idx}
+                                      />
+                                      <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2">
+                                        <div className="min-w-0 space-y-1">
+                                          <label
+                                            htmlFor={'receipt-item-qty-' + idx}
+                                            className="block text-xs font-medium"
+                                          >
+                                            {t('itemCorrectionQuantity')}
+                                          </label>
+                                          <Input
+                                            id={'receipt-item-qty-' + idx}
+                                            className="min-h-11 min-w-0 text-base"
+                                            type="number"
+                                            inputMode="numeric"
+                                            min={1}
+                                            max={200}
+                                            value={receiptItemEdit.quantity}
+                                            onChange={(event) =>
+                                              setReceiptItemEdit((previous) =>
+                                                previous ? { ...previous, quantity: event.target.value } : null,
+                                              )
+                                            }
+                                            data-testid={'receipt-item-qty-' + idx}
+                                          />
+                                        </div>
+                                        <div className="min-w-0 space-y-1">
+                                          <label
+                                            htmlFor={'receipt-item-price-' + idx}
+                                            className="block text-xs font-medium"
+                                          >
+                                            {t('itemCorrectionPrice')}
+                                          </label>
+                                          <Input
+                                            id={'receipt-item-price-' + idx}
+                                            className="min-h-11 min-w-0 text-base"
+                                            type="text"
+                                            inputMode="decimal"
+                                            value={receiptItemEdit.price}
+                                            onChange={(event) =>
+                                              setReceiptItemEdit((previous) =>
+                                                previous ? { ...previous, price: event.target.value } : null,
+                                              )
+                                            }
+                                            data-testid={'receipt-item-price-' + idx}
+                                          />
+                                        </div>
                                       </div>
-                                      <div className="min-w-0 space-y-1">
-                                        <label
-                                          htmlFor={'receipt-item-price-' + idx}
-                                          className="block text-xs font-medium"
+                                      <div className="flex min-w-0 flex-wrap gap-2">
+                                        <Button
+                                          type="submit"
+                                          className="min-h-11 min-w-11 whitespace-normal"
+                                          disabled={updateClaimReceiptItem.isPending}
+                                          data-testid={'receipt-item-save-' + idx}
                                         >
-                                          {t('itemCorrectionPrice')}
-                                        </label>
-                                        <Input
-                                          id={'receipt-item-price-' + idx}
-                                          className="min-h-11 min-w-0 text-base"
-                                          type="text"
-                                          inputMode="decimal"
-                                          value={receiptItemEdit.price}
-                                          onChange={(event) =>
-                                            setReceiptItemEdit((previous) =>
-                                              previous ? { ...previous, price: event.target.value } : null,
-                                            )
-                                          }
-                                          data-testid={'receipt-item-price-' + idx}
-                                        />
+                                          {updateClaimReceiptItem.isPending ? t('saving') : t('itemCorrectionSave')}
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          className="min-h-11 min-w-11"
+                                          onClick={() => setReceiptItemEdit(null)}
+                                          data-testid={'receipt-item-cancel-' + idx}
+                                        >
+                                          {t('cancelButton')}
+                                        </Button>
                                       </div>
-                                    </div>
-                                    <div className="flex min-w-0 flex-wrap gap-2">
-                                      <Button
-                                        type="submit"
-                                        className="min-h-11 min-w-11 whitespace-normal"
-                                        disabled={updateClaimReceiptItem.isPending}
-                                        data-testid={'receipt-item-save-' + idx}
-                                      >
-                                        {updateClaimReceiptItem.isPending ? t('saving') : t('itemCorrectionSave')}
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        variant="outline"
-                                        className="min-h-11 min-w-11"
-                                        onClick={() => setReceiptItemEdit(null)}
-                                        data-testid={'receipt-item-cancel-' + idx}
-                                      >
-                                        {t('cancelButton')}
-                                      </Button>
-                                    </div>
-                                  </form>
-                                </DialogContent>
-                              </Dialog>
-                            )}
-                          </div>
-                        )}
-                        {data.isCreator && (
-                          <div
-                            className="mt-2 space-y-1 rounded-md border p-2 text-xs"
-                            data-testid={'guest-known-parts-editor-' + idx}
-                            onClick={(event) => event.stopPropagation()}
-                            onKeyDown={(event) => event.stopPropagation()}
-                          >
-                            <label htmlFor={'guest-original-parts-' + idx} className="block font-medium">
-                              {t('knownPartsLabel')}
-                            </label>
-                            <p className="text-muted-foreground">{t('knownPartsHint')}</p>
-                            <div className="flex min-w-0 flex-wrap items-center gap-2">
-                              <Input
-                                id={'guest-original-parts-' + idx}
-                                type="number"
-                                inputMode="numeric"
-                                min={1}
-                                max={10000}
-                                step={1}
-                                className="h-11 w-24 min-w-0 text-base"
-                                data-testid={'guest-known-parts-input-' + idx}
-                                value={originalDraft}
-                                onChange={(event) =>
-                                  setKnownPartsDrafts((prev) => ({
-                                    ...prev,
-                                    [idx]: event.target.value,
-                                  }))
-                                }
-                                disabled={setKnownItemParts.isPending}
-                              />
-                              <Button
-                                type="button"
-                                size="sm"
-                                className="min-h-11 min-w-11"
-                                data-testid={'guest-known-parts-save-' + idx}
-                                disabled={
-                                  setKnownItemParts.isPending || !originalIsValid || parsedOriginal === savedOriginal
-                                }
-                                onClick={() =>
-                                  setKnownItemParts.mutate({ token, itemIndex: idx, totalParts: parsedOriginal })
-                                }
-                              >
-                                {t('knownPartsSave')}
-                              </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                className="min-h-11 min-w-11"
-                                data-testid={'guest-known-parts-clear-' + idx}
-                                disabled={setKnownItemParts.isPending || savedOriginal === null}
-                                onClick={() => setKnownItemParts.mutate({ token, itemIndex: idx, totalParts: null })}
-                              >
-                                {t('knownPartsClear')}
-                              </Button>
-                            </div>
-                          </div>
-                        )}
-
-                        {item.quantity > 1 &&
-                          !!personToken &&
-                          (data.isCreator ||
-                            (myPersonIndex !== null &&
-                              !data.assignments.some(
-                                (assignment) =>
-                                  assignment.itemIndex === idx &&
-                                  assignment.personIndices.some((index) => index !== myPersonIndex),
-                              ))) && (
-                            <div className="flex justify-end">
-                              {item.quantity > 1 &&
-                                !!personToken &&
-                                (data.isCreator ||
-                                  (myPersonIndex !== null &&
-                                    !data.assignments.some(
-                                      (assignment) =>
-                                        assignment.itemIndex === idx &&
-                                        assignment.personIndices.some((index) => index !== myPersonIndex),
-                                    ))) && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setSplittingItemIdx(idx);
-                                      setSplitQty('1');
-                                    }}
-                                    className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
-                                    aria-label={t('splitItem')}
-                                    data-testid={`split-claim-item-${idx}`}
-                                  >
-                                    <Scissors className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
+                                    </form>
+                                  </DialogContent>
+                                </Dialog>
+                              )}
                             </div>
                           )}
-                        {/* Split form */}
-                        {splittingItemIdx === idx &&
-                          (() => {
-                            const parsed = Number(splitQty);
-                            const validQty = Number.isSafeInteger(parsed) && parsed >= 1 && parsed < item.quantity;
-                            return (
-                              <div
-                                className="mt-2 flex min-w-0 flex-wrap items-center gap-2"
-                                onClick={(e) => e.stopPropagation()}
-                                onKeyDown={(e) => e.stopPropagation()}
-                              >
-                                <span className="text-xs text-muted-foreground">{t('splitOff')}</span>
+                          {data.isCreator && (
+                            <div
+                              className="mt-2 space-y-1 rounded-md border p-2 text-xs"
+                              data-testid={'guest-known-parts-editor-' + idx}
+                              onClick={(event) => event.stopPropagation()}
+                              onKeyDown={(event) => event.stopPropagation()}
+                            >
+                              <label htmlFor={'guest-original-parts-' + idx} className="block font-medium">
+                                {t('knownPartsLabel')}
+                              </label>
+                              <p className="text-muted-foreground">{t('knownPartsHint')}</p>
+                              <div className="flex min-w-0 flex-wrap items-center gap-2">
                                 <Input
+                                  id={'guest-original-parts-' + idx}
                                   type="number"
                                   inputMode="numeric"
                                   min={1}
-                                  max={item.quantity - 1}
-                                  value={splitQty}
-                                  onChange={(e) => setSplitQty(e.target.value)}
-                                  className="h-11 w-20 min-w-0 text-base"
-                                  aria-label={t('splitOff')}
-                                  data-testid={`split-qty-input-${idx}`}
+                                  max={10000}
+                                  step={1}
+                                  className="h-11 w-24 min-w-0 text-base"
+                                  data-testid={'guest-known-parts-input-' + idx}
+                                  value={originalDraft}
+                                  onChange={(event) =>
+                                    setKnownPartsDrafts((prev) => ({
+                                      ...prev,
+                                      [idx]: event.target.value,
+                                    }))
+                                  }
+                                  disabled={setKnownItemParts.isPending}
                                 />
-                                <span className="text-xs text-muted-foreground">
-                                  {t('splitOfTotal', { total: item.quantity })}
-                                </span>
                                 <Button
                                   type="button"
                                   size="sm"
-                                  className="min-h-11 min-w-11 text-sm"
-                                  // Not while a save is in flight or parked: splitting shifts the item
-                                  // indexes its changes are keyed by, and a parked save is sent again as it
-                                  // was
-                                  disabled={splitClaimItem.isPending || saving || anyParked || !validQty}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (!validQty || !personToken || saving || anyParked) return;
-                                    splitClaimItem.mutate({
-                                      token,
-                                      personToken,
-                                      itemIndex: idx,
-                                      splitQuantity: parsed,
-                                    });
-                                  }}
+                                  className="min-h-11 min-w-11"
+                                  data-testid={'guest-known-parts-save-' + idx}
+                                  disabled={
+                                    setKnownItemParts.isPending || !originalIsValid || parsedOriginal === savedOriginal
+                                  }
+                                  onClick={() =>
+                                    setKnownItemParts.mutate({ token, itemIndex: idx, totalParts: parsedOriginal })
+                                  }
                                 >
-                                  {t('splitButton')}
+                                  {t('knownPartsSave')}
                                 </Button>
                                 <Button
                                   type="button"
-                                  variant="ghost"
                                   size="sm"
-                                  className="min-h-11 min-w-11 text-sm"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setSplittingItemIdx(null);
-                                  }}
+                                  variant="outline"
+                                  className="min-h-11 min-w-11"
+                                  data-testid={'guest-known-parts-clear-' + idx}
+                                  disabled={setKnownItemParts.isPending || savedOriginal === null}
+                                  onClick={() => setKnownItemParts.mutate({ token, itemIndex: idx, totalParts: null })}
                                 >
-                                  {t('cancelButton')}
+                                  {t('knownPartsClear')}
                                 </Button>
                               </div>
-                            );
-                          })()}
+                            </div>
+                          )}
 
-                        {/* The representative may edit portions of their own group
-                          without altering other people's shares or original totals. */}
-                        {myPersonIndex !== null &&
-                          personIndex !== null &&
-                          activeId !== null &&
-                          canEditFor(activeId) &&
-                          personToken &&
-                          data.assignments.some(
-                            (assignment) =>
-                              assignment.itemIndex === idx && assignment.personIndices.includes(personIndex),
-                          ) &&
-                          (() => {
-                            const savedAssignment = data.assignments.find(
-                              (assignment) => assignment.itemIndex === idx,
-                            )!;
-                            const savedParts = savedAssignment.partsByPersonId?.[activeId] ?? 1;
-                            const value = portionDrafts[idx] ?? String(savedParts);
-                            const parsed = /^\d+$/.test(value) ? Number(value) : NaN;
-                            const valid =
-                              Number.isSafeInteger(parsed) &&
-                              parsed >= 1 &&
-                              parsed <= 10000 &&
-                              !hasUnsavedChanges &&
-                              !saving &&
-                              !anyParked;
-                            const progress = guestPortionProgress(savedAssignment, data.people);
-                            const original = data.receiptData.knownPartsByItem?.[String(idx)] ?? null;
-                            const projectedParts = progress.countedParts - savedParts + parsed;
-                            const respectsOriginal = original === null || projectedParts <= original;
-                            return (
-                              <div
-                                className="mt-3 min-w-0 space-y-1 rounded-lg border p-2"
-                                data-testid={'personal-parts-' + idx}
-                                onClick={(event) => event.stopPropagation()}
-                                onKeyDown={(event) => event.stopPropagation()}
-                              >
-                                <p className="text-xs text-muted-foreground">{t('partsPersonalHint')}</p>
-                                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          {item.quantity > 1 &&
+                            !!personToken &&
+                            (data.isCreator ||
+                              (myPersonIndex !== null &&
+                                !data.assignments.some(
+                                  (assignment) =>
+                                    assignment.itemIndex === idx &&
+                                    assignment.personIndices.some((index) => index !== myPersonIndex),
+                                ))) && (
+                              <div className="flex justify-end">
+                                {item.quantity > 1 &&
+                                  !!personToken &&
+                                  (data.isCreator ||
+                                    (myPersonIndex !== null &&
+                                      !data.assignments.some(
+                                        (assignment) =>
+                                          assignment.itemIndex === idx &&
+                                          assignment.personIndices.some((index) => index !== myPersonIndex),
+                                      ))) && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSplittingItemIdx(idx);
+                                        setSplitQty('1');
+                                      }}
+                                      className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                                      aria-label={t('splitItem')}
+                                      data-testid={`split-claim-item-${idx}`}
+                                    >
+                                      <Scissors className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                              </div>
+                            )}
+                          {/* Split form */}
+                          {splittingItemIdx === idx &&
+                            (() => {
+                              const parsed = Number(splitQty);
+                              const validQty = Number.isSafeInteger(parsed) && parsed >= 1 && parsed < item.quantity;
+                              return (
+                                <div
+                                  className="mt-2 flex min-w-0 flex-wrap items-center gap-2"
+                                  onClick={(e) => e.stopPropagation()}
+                                  onKeyDown={(e) => e.stopPropagation()}
+                                >
+                                  <span className="text-xs text-muted-foreground">{t('splitOff')}</span>
                                   <Input
                                     type="number"
                                     inputMode="numeric"
                                     min={1}
-                                    max={10000}
-                                    step={1}
-                                    className="h-11 w-24 min-w-0 text-base"
-                                    data-testid={'personal-parts-input-' + idx}
-                                    aria-label={t('partsPersonalLabel')}
-                                    value={value}
-                                    onChange={(event) =>
-                                      setPortionDrafts((prev) => ({ ...prev, [idx]: event.target.value }))
-                                    }
+                                    max={item.quantity - 1}
+                                    value={splitQty}
+                                    onChange={(e) => setSplitQty(e.target.value)}
+                                    className="h-11 w-20 min-w-0 text-base"
+                                    aria-label={t('splitOff')}
+                                    data-testid={`split-qty-input-${idx}`}
                                   />
+                                  <span className="text-xs text-muted-foreground">
+                                    {t('splitOfTotal', { total: item.quantity })}
+                                  </span>
                                   <Button
                                     type="button"
                                     size="sm"
-                                    className="min-h-11 min-w-11"
-                                    data-testid={'personal-parts-save-' + idx}
-                                    disabled={
-                                      !valid || !respectsOriginal || parsed === savedParts || setMyItemParts.isPending
-                                    }
-                                    onClick={() => {
-                                      if (
-                                        !valid ||
-                                        !respectsOriginal ||
-                                        !activeId ||
-                                        !personToken ||
-                                        setMyItemParts.isPending
-                                      )
-                                        return;
-                                      setMyItemParts.mutate({
+                                    className="min-h-11 min-w-11 text-sm"
+                                    // Not while a save is in flight or parked: splitting shifts the item
+                                    // indexes its changes are keyed by, and a parked save is sent again as it
+                                    // was
+                                    disabled={splitClaimItem.isPending || saving || anyParked || !validQty}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (!validQty || !personToken || saving || anyParked) return;
+                                      splitClaimItem.mutate({
                                         token,
-                                        personId: activeId,
                                         personToken,
                                         itemIndex: idx,
-                                        parts: parsed,
-                                        saveKey: newRequestKey(),
+                                        splitQuantity: parsed,
                                       });
                                     }}
                                   >
-                                    {t('partsSave')}
+                                    {t('splitButton')}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="min-h-11 min-w-11 text-sm"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSplittingItemIdx(null);
+                                    }}
+                                  >
+                                    {t('cancelButton')}
                                   </Button>
                                 </div>
-                                <p
-                                  className="text-xs text-muted-foreground"
-                                  data-testid={'personal-parts-counted-' + idx}
+                              );
+                            })()}
+
+                          {/* The representative may edit portions of their own group
+                          without altering other people's shares or original totals. */}
+                          {myPersonIndex !== null &&
+                            personIndex !== null &&
+                            activeId !== null &&
+                            canEditFor(activeId) &&
+                            personToken &&
+                            data.assignments.some(
+                              (assignment) =>
+                                assignment.itemIndex === idx && assignment.personIndices.includes(personIndex),
+                            ) &&
+                            (() => {
+                              const savedAssignment = data.assignments.find(
+                                (assignment) => assignment.itemIndex === idx,
+                              )!;
+                              const savedParts = savedAssignment.partsByPersonId?.[activeId] ?? 1;
+                              const value = portionDrafts[idx] ?? String(savedParts);
+                              const parsed = /^\d+$/.test(value) ? Number(value) : NaN;
+                              const valid =
+                                Number.isSafeInteger(parsed) &&
+                                parsed >= 1 &&
+                                parsed <= 10000 &&
+                                !hasUnsavedChanges &&
+                                !saving &&
+                                !anyParked;
+                              const progress = guestPortionProgress(savedAssignment, data.people);
+                              const original = data.receiptData.knownPartsByItem?.[String(idx)] ?? null;
+                              const projectedParts = progress.countedParts - savedParts + parsed;
+                              const respectsOriginal = original === null || projectedParts <= original;
+                              return (
+                                <div
+                                  className="mt-3 min-w-0 space-y-1 rounded-lg border p-2"
+                                  data-testid={'personal-parts-' + idx}
+                                  onClick={(event) => event.stopPropagation()}
+                                  onKeyDown={(event) => event.stopPropagation()}
                                 >
-                                  {t('partsCounted', { count: progress.countedParts })}
-                                </p>
-                              </div>
-                            );
-                          })()}
-
-                        {/* Other claimants */}
-                        {otherClaimants.length > 0 && (
-                          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
-                            <span className="text-xs text-muted-foreground">{t('alsoClaimedBy')}</span>
-                            <div className="flex -space-x-1">
-                              {otherClaimants.map((pi) => (
-                                <Avatar key={pi} className="h-5 w-5 border-2 border-background">
-                                  <AvatarFallback
-                                    className="text-[8px] font-semibold"
-                                    style={guestVisualColorStyle(data.people[pi], pi)}
+                                  <p className="text-xs text-muted-foreground">{t('partsPersonalHint')}</p>
+                                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                    <Input
+                                      type="number"
+                                      inputMode="numeric"
+                                      min={1}
+                                      max={10000}
+                                      step={1}
+                                      className="h-11 w-24 min-w-0 text-base"
+                                      data-testid={'personal-parts-input-' + idx}
+                                      aria-label={t('partsPersonalLabel')}
+                                      value={value}
+                                      onChange={(event) =>
+                                        setPortionDrafts((prev) => ({ ...prev, [idx]: event.target.value }))
+                                      }
+                                    />
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      className="min-h-11 min-w-11"
+                                      data-testid={'personal-parts-save-' + idx}
+                                      disabled={
+                                        !valid || !respectsOriginal || parsed === savedParts || setMyItemParts.isPending
+                                      }
+                                      onClick={() => {
+                                        if (
+                                          !valid ||
+                                          !respectsOriginal ||
+                                          !activeId ||
+                                          !personToken ||
+                                          setMyItemParts.isPending
+                                        )
+                                          return;
+                                        setMyItemParts.mutate({
+                                          token,
+                                          personId: activeId,
+                                          personToken,
+                                          itemIndex: idx,
+                                          parts: parsed,
+                                          saveKey: newRequestKey(),
+                                        });
+                                      }}
+                                    >
+                                      {t('partsSave')}
+                                    </Button>
+                                  </div>
+                                  <p
+                                    className="text-xs text-muted-foreground"
+                                    data-testid={'personal-parts-counted-' + idx}
                                   >
-                                    {getInitials(data.people[pi]?.name ?? '?')}
-                                  </AvatarFallback>
-                                </Avatar>
-                              ))}
+                                    {t('partsCounted', { count: progress.countedParts })}
+                                  </p>
+                                </div>
+                              );
+                            })()}
+
+                          {/* Other claimants */}
+                          {otherClaimants.length > 0 && (
+                            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
+                              <span className="text-xs text-muted-foreground">{t('alsoClaimedBy')}</span>
+                              <div className="flex -space-x-1">
+                                {otherClaimants.map((pi) => (
+                                  <Avatar key={pi} className="h-5 w-5 border-2 border-background">
+                                    <AvatarFallback
+                                      className="text-[8px] font-semibold"
+                                      style={guestVisualColorStyle(data.people[pi], pi)}
+                                    >
+                                      {getInitials(data.people[pi]?.name ?? '?')}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                ))}
+                              </div>
+                              <span className="min-w-0 flex-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                                {otherClaimants.map((pi) => data.people[pi]?.name ?? '?').join(', ')}
+                              </span>
                             </div>
-                            <span className="min-w-0 flex-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                              {otherClaimants.map((pi) => data.people[pi]?.name ?? '?').join(', ')}
-                            </span>
-                          </div>
-                        )}
-                      </GuestItemAllocations>
+                          )}
+                        </GuestItemAllocations>
+                      </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          );
-        })}
-      </div>
+                  </CardContent>
+                </Card>
+              </div>
+            );
+          })}
+        </div>
 
-      {data.isCreator && data.status === 'CLAIMING' && (
-        <Card className="w-full min-w-0 max-w-full" data-testid="finalization-organizer-panel">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">{t('finalizationOrganizerTitle')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">{t('finalizationOrganizerHint')}</p>
-            {data.hasFinalizationOrganizer && (
-              <p className="text-sm" data-testid="finalization-organizer-active">
-                {t('finalizationOrganizerActive')}
-              </p>
-            )}
-            <label htmlFor="finalization-organizer-email" className="block text-sm font-medium">
-              {t('finalizationOrganizerEmail')}
-            </label>
-            <Input
-              id="finalization-organizer-email"
-              type="email"
-              inputMode="email"
-              autoComplete="off"
-              className="h-11 min-w-0 text-base"
-              value={finalizationOrganizerEmail}
-              onChange={(event) => setFinalizationOrganizerEmail(event.target.value)}
-              data-testid="finalization-organizer-email"
-            />
-            <div className="flex min-w-0 flex-wrap gap-2">
-              <Button
-                type="button"
-                className="min-h-11 min-w-11"
-                disabled={
-                  setFinalizationOrganizer.isPending ||
-                  !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(finalizationOrganizerEmail.trim())
-                }
-                data-testid="finalization-organizer-appoint"
-                onClick={() =>
-                  setFinalizationOrganizer.mutate({
-                    token,
-                    email: finalizationOrganizerEmail.trim().toLowerCase(),
-                  })
-                }
-              >
-                {t('finalizationOrganizerAppoint')}
-              </Button>
-              {data.hasFinalizationOrganizer && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="min-h-11 min-w-11"
-                  disabled={setFinalizationOrganizer.isPending}
-                  data-testid="finalization-organizer-revoke"
-                  onClick={() => setFinalizationOrganizer.mutate({ token, email: null })}
-                >
-                  {t('finalizationOrganizerRevoke')}
-                </Button>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {data.presence && (
-        <OrganizerPresence
-          people={data.people}
-          presence={data.presence}
-          organizerPersonId={data.receiptData.organizerPersonId}
-        />
-      )}
-      {presenceConnectionLost && (
-        <p className="text-sm text-destructive" role="status" data-testid="presence-connection-lost">
-          {t('presenceConnectionLost')}
+        <p
+          className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground [overflow-wrap:anywhere]"
+          data-testid="guest-parts-preliminary"
+        >
+          {t('partsPreliminary')}
         </p>
-      )}
 
-      <p
-        className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground [overflow-wrap:anywhere]"
-        data-testid="guest-parts-preliminary"
-      >
-        {t('partsPreliminary')}
-      </p>
+        {/* Per-person totals */}
+        {(splitTotals.people.length > 0 || splitTotals.unclaimed) && (
+          <div className="w-full min-w-0 max-w-full space-y-3">
+            <h3 className="font-semibold text-base">{t('perPersonTotals')}</h3>
+            {splitTotals.people.map((person) => {
+              const personName =
+                data.people[person.personIndex]?.name ?? t('personFallback', { index: person.personIndex + 1 });
+              const isMe = person.personIndex === myPersonIndex;
+              const isActive = person.personIndex === personIndex;
 
-      {/* Per-person totals */}
-      {(splitTotals.people.length > 0 || splitTotals.unclaimed) && (
-        <div className="w-full min-w-0 max-w-full space-y-3">
-          <h3 className="font-semibold text-base">{t('perPersonTotals')}</h3>
-          {splitTotals.people.map((person) => {
-            const personName =
-              data.people[person.personIndex]?.name ?? t('personFallback', { index: person.personIndex + 1 });
-            const isMe = person.personIndex === myPersonIndex;
-            const isActive = person.personIndex === personIndex;
-
-            return (
-              <Card
-                key={person.personIndex}
-                className={isActive ? 'border-l-4 ring-2 ring-primary' : 'border-l-4'}
-                style={{ borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex) }}
-                data-testid={`person-total-${person.personIndex}`}
-              >
-                <CardContent className="py-3">
-                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-                    <div className="flex min-w-0 flex-1 items-center gap-3">
-                      <Avatar className="h-8 w-8">
-                        <AvatarFallback
-                          className="text-xs font-semibold"
-                          style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
-                        >
-                          {getInitials(personName)}
-                        </AvatarFallback>
-                      </Avatar>
-                      <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
-                        {personName}
-                        {isMe && ` ${t('you')}`}
+              return (
+                <Card
+                  key={person.personIndex}
+                  className={isActive ? 'border-l-4 ring-2 ring-primary' : 'border-l-4'}
+                  style={{
+                    borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex),
+                  }}
+                  data-testid={`person-total-${person.personIndex}`}
+                >
+                  <CardContent className="py-3">
+                    <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                      <div className="flex min-w-0 flex-1 items-center gap-3">
+                        <Avatar className="h-8 w-8">
+                          <AvatarFallback
+                            className="text-xs font-semibold"
+                            style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
+                          >
+                            {getInitials(personName)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
+                          {personName}
+                          {isMe && ` ${t('you')}`}
+                        </span>
+                        {roleMarks(person.personIndex)}
+                        {accountMark(person.personIndex)}
+                      </div>
+                      <span className="min-w-0 text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]">
+                        {formatCents(person.total, currency, locale)}
                       </span>
-                      {roleMarks(person.personIndex)}
-                      {accountMark(person.personIndex)}
                     </div>
-                    <span className="min-w-0 text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]">
-                      {formatCents(person.total, currency, locale)}
+                    {(person.tax > 0 || person.tip > 0 || !!person.roundingCorrectionCents) && (
+                      <div className="ml-11 mt-1 flex min-w-0 flex-wrap gap-3 text-xs text-muted-foreground">
+                        <span>
+                          {t('items', {
+                            amount: formatCents(
+                              person.itemTotal - (person.roundingCorrectionCents ?? 0),
+                              currency,
+                              locale,
+                            ),
+                          })}
+                        </span>
+                        {person.tax > 0 && (
+                          <span>{t('taxAmount', { amount: formatCents(person.tax, currency, locale) })}</span>
+                        )}
+                        {person.tip > 0 && (
+                          <span>{t('tipAmount', { amount: formatCents(person.tip, currency, locale) })}</span>
+                        )}
+                        {!!person.roundingCorrectionCents && (
+                          <span
+                            className="min-w-0 [overflow-wrap:anywhere]"
+                            data-testid={'guest-preview-rounding-correction-' + person.personIndex}
+                          >
+                            {t('organizerRoundingCorrection')}:{' '}
+                            {formatCents(person.roundingCorrectionCents, currency, locale)}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+            {/* Items nobody has claimed yet, with their share of tax and tip, so the totals above don't look final */}
+            {splitTotals.unclaimed && (
+              <Card className="w-full min-w-0 max-w-full" data-testid="unclaimed-total">
+                <CardContent className="min-w-0 py-3">
+                  <div className="flex min-w-0 max-w-full flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 max-w-full flex-wrap items-center gap-3">
+                      <div
+                        className="h-8 w-8 shrink-0 rounded-full border-2 border-dashed border-muted-foreground/40"
+                        aria-hidden="true"
+                      />
+                      <span className="min-w-0 font-medium text-muted-foreground [overflow-wrap:anywhere]">
+                        {t('unclaimed')}
+                      </span>
+                    </div>
+                    <span className="min-w-0 text-lg font-bold text-muted-foreground [overflow-wrap:anywhere]">
+                      {formatCents(splitTotals.unclaimed.total, currency, locale)}
                     </span>
                   </div>
-                  {(person.tax > 0 || person.tip > 0 || !!person.roundingCorrectionCents) && (
-                    <div className="ml-11 mt-1 flex min-w-0 flex-wrap gap-3 text-xs text-muted-foreground">
+                  {(splitTotals.unclaimed.tax > 0 || splitTotals.unclaimed.tip > 0) && (
+                    <div className="ml-11 mt-1 flex flex-wrap gap-3 text-xs text-muted-foreground">
                       <span>
-                        {t('items', {
-                          amount: formatCents(
-                            person.itemTotal - (person.roundingCorrectionCents ?? 0),
-                            currency,
-                            locale,
-                          ),
-                        })}
+                        {t('items', { amount: formatCents(splitTotals.unclaimed.itemTotal, currency, locale) })}
                       </span>
-                      {person.tax > 0 && (
-                        <span>{t('taxAmount', { amount: formatCents(person.tax, currency, locale) })}</span>
+                      {splitTotals.unclaimed.tax > 0 && (
+                        <span>
+                          {t('taxAmount', { amount: formatCents(splitTotals.unclaimed.tax, currency, locale) })}
+                        </span>
                       )}
-                      {person.tip > 0 && (
-                        <span>{t('tipAmount', { amount: formatCents(person.tip, currency, locale) })}</span>
-                      )}
-                      {!!person.roundingCorrectionCents && (
-                        <span
-                          className="min-w-0 [overflow-wrap:anywhere]"
-                          data-testid={'guest-preview-rounding-correction-' + person.personIndex}
-                        >
-                          {t('organizerRoundingCorrection')}:{' '}
-                          {formatCents(person.roundingCorrectionCents, currency, locale)}
+                      {splitTotals.unclaimed.tip > 0 && (
+                        <span>
+                          {t('tipAmount', { amount: formatCents(splitTotals.unclaimed.tip, currency, locale) })}
                         </span>
                       )}
                     </div>
                   )}
                 </CardContent>
               </Card>
-            );
-          })}
-          {/* Items nobody has claimed yet, with their share of tax and tip, so the totals above don't look final */}
-          {splitTotals.unclaimed && (
-            <Card className="w-full min-w-0 max-w-full" data-testid="unclaimed-total">
-              <CardContent className="min-w-0 py-3">
-                <div className="flex min-w-0 max-w-full flex-wrap items-center justify-between gap-2">
-                  <div className="flex min-w-0 max-w-full flex-wrap items-center gap-3">
-                    <div
-                      className="h-8 w-8 shrink-0 rounded-full border-2 border-dashed border-muted-foreground/40"
-                      aria-hidden="true"
-                    />
-                    <span className="min-w-0 font-medium text-muted-foreground [overflow-wrap:anywhere]">
-                      {t('unclaimed')}
-                    </span>
-                  </div>
-                  <span className="min-w-0 text-lg font-bold text-muted-foreground [overflow-wrap:anywhere]">
-                    {formatCents(splitTotals.unclaimed.total, currency, locale)}
-                  </span>
-                </div>
-                {(splitTotals.unclaimed.tax > 0 || splitTotals.unclaimed.tip > 0) && (
-                  <div className="ml-11 mt-1 flex flex-wrap gap-3 text-xs text-muted-foreground">
-                    <span>
-                      {t('items', { amount: formatCents(splitTotals.unclaimed.itemTotal, currency, locale) })}
-                    </span>
-                    {splitTotals.unclaimed.tax > 0 && (
-                      <span>
-                        {t('taxAmount', { amount: formatCents(splitTotals.unclaimed.tax, currency, locale) })}
-                      </span>
-                    )}
-                    {splitTotals.unclaimed.tip > 0 && (
-                      <span>
-                        {t('tipAmount', { amount: formatCents(splitTotals.unclaimed.tip, currency, locale) })}
-                      </span>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
 
-      {/* 3.15: one server-backed source for every visible kopeck.
+        {/* 3.15: one server-backed source for every visible kopeck.
           No external expense, payment or guessed unconsumed pieces. */}
-      <Card
-        data-testid="claim-allocation-summary"
-        data-sync-mode={liveStreamConnected ? 'sse' : 'fallback'}
-        aria-live="polite"
-        aria-atomic="true"
-      >
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">{t('distributedBillTotal')}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2 text-sm">
-          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-            <span>{t('allocatedNow')}</span>
-            <span className="font-semibold tabular-nums" data-testid="claim-allocated-total">
-              {formatCents(
-                savedSplitTotals.people.reduce((sum, entry) => sum + entry.total, 0),
-                currency,
-                locale,
-              )}
-            </span>
-          </div>
-          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-            <span>{t('remainingToAllocate')}</span>
-            <span className="font-semibold tabular-nums" data-testid="claim-unallocated-total">
-              {formatCents(savedSplitTotals.unclaimed?.total ?? 0, currency, locale)}
-            </span>
-          </div>
-          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t pt-2">
-            <span className="font-semibold">{t('totalBill')}</span>
-            <span className="font-bold tabular-nums" data-testid="claim-distributed-total">
-              {formatCents(data.receiptData.total, currency, locale)}
-            </span>
-          </div>
-          <p className="text-muted-foreground" data-testid="claim-distribution-status">
-            {!allItemsClaimed
-              ? t('distributionIncomplete')
-              : data.partsConfirmed
-                ? t('distributionConfirmed')
-                : t('distributionComplete')}
-          </p>
-        </CardContent>
-      </Card>
-
-      {!knownPartsReady && (
-        <p
-          className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-destructive [overflow-wrap:anywhere]"
-          data-testid="guest-known-parts-not-reconciled"
+        <Card
+          data-testid="claim-allocation-summary"
+          data-sync-mode={liveStreamConnected ? 'sse' : 'fallback'}
+          aria-live="polite"
+          aria-atomic="true"
         >
-          {knownPartsBalance.overclaimed ? t('knownPartsOverLimit') : t('knownPartsNotFullyClaimed')}
-        </p>
-      )}
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">{t('distributedBillTotal')}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+              <span>{t('allocatedNow')}</span>
+              <span className="font-semibold tabular-nums" data-testid="claim-allocated-total">
+                {formatCents(
+                  savedSplitTotals.people.reduce((sum, entry) => sum + entry.total, 0),
+                  currency,
+                  locale,
+                )}
+              </span>
+            </div>
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+              <span>{t('remainingToAllocate')}</span>
+              <span className="font-semibold tabular-nums" data-testid="claim-unallocated-total">
+                {formatCents(savedSplitTotals.unclaimed?.total ?? 0, currency, locale)}
+              </span>
+            </div>
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t pt-2">
+              <span className="font-semibold">{t('totalBill')}</span>
+              <span className="font-bold tabular-nums" data-testid="claim-distributed-total">
+                {formatCents(data.receiptData.total, currency, locale)}
+              </span>
+            </div>
+            <p className="text-muted-foreground" data-testid="claim-distribution-status">
+              {!allItemsClaimed
+                ? t('distributionIncomplete')
+                : data.partsConfirmed
+                  ? t('distributionConfirmed')
+                  : t('distributionComplete')}
+            </p>
+          </CardContent>
+        </Card>
 
-      {/* Non-interactive approval state belongs to the scrollable content, not
+        {!knownPartsReady && (
+          <p
+            className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-destructive [overflow-wrap:anywhere]"
+            data-testid="guest-known-parts-not-reconciled"
+          >
+            {knownPartsBalance.overclaimed ? t('knownPartsOverLimit') : t('knownPartsNotFullyClaimed')}
+          </p>
+        )}
+
+        {/* Non-interactive approval state belongs to the scrollable content, not
           the fixed action bar. On short Android viewports it otherwise makes
           the bar cover the personal-tip save button. */}
-      {!data.partsConfirmed && (
-        <p
-          className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground [overflow-wrap:anywhere]"
-          data-testid="guest-parts-awaiting-confirmation"
-        >
-          {t('partsAwaitingConfirmation')}
-        </p>
-      )}
+        {!data.partsConfirmed && (
+          <p
+            className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground [overflow-wrap:anywhere]"
+            data-testid="guest-parts-awaiting-confirmation"
+          >
+            {t('partsAwaitingConfirmation')}
+          </p>
+        )}
 
-      {/* CTA */}
-      <div className="text-center">
-        <Link href="/split" className="text-sm font-medium text-primary hover:underline">
-          {t('splitYourOwn')}
-        </Link>
-        <span className="text-muted-foreground mx-2">{t('or')}</span>
-        <Link href="/register" className="text-sm font-medium text-primary hover:underline">
-          {t('createAccount')}
-        </Link>
-      </div>
+        {/* CTA */}
+        <div className="text-center">
+          <Link href="/split" className="text-sm font-medium text-primary hover:underline">
+            {t('splitYourOwn')}
+          </Link>
+          <span className="text-muted-foreground mx-2">{t('or')}</span>
+          <Link href="/register" className="text-sm font-medium text-primary hover:underline">
+            {t('createAccount')}
+          </Link>
+        </div>
+      </section>
 
       {/* Save button - fixed above interactive dish rows. Keep below the z-50 header/dialogs. */}
       <div
         className="fixed inset-x-0 bottom-0 z-40 isolate box-border w-screen min-w-0 max-w-[100vw] max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain border-t bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
         data-testid="claim-actions"
+        hidden={receiptTab !== 'items'}
       >
         <div className="mx-auto w-full min-w-0 max-w-lg">
           {/* The registered receipt creator explicitly approves the current

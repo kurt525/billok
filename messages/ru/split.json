@@ -40,6 +40,10 @@
     "createReceipt": "Создать чек"
   },
   "claim": {
+    "tabsLabel": "Разделы чека",
+    "tabsPeople": "Люди",
+    "tabsItems": "Позиции",
+    "tabsJoinToAssign": "Чтобы распределить позиции, сначала присоединитесь к чеку во вкладке «Люди».",
     "loadingSession": "Загрузка сеанса…",
     "sessionNotFound": "Сеанс не найден",
     "sessionExpired": "Срок действия сеанса истёк.",
