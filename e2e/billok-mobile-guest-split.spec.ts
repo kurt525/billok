@@ -6540,6 +6540,10 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
     await ensureReceiptTab(page, 'items');
     const statuses = page.getByTestId('preview-person-badges-0');
     const amount = page.getByTestId('preview-person-amount-0');
+    // The translation already includes parentheses: show exactly one (вы).
+    const ownerLabel = page.getByTestId('preview-person-name-0');
+    await expect(ownerLabel).toHaveText(result.creator.name + ' (вы)');
+    await expect(ownerLabel).not.toContainText('((вы))');
     await expect(amount).toContainText('400,00', { timeout: 20_000 });
     await expect(page.getByTestId('preview-person-amount-1')).toContainText('300,00');
     await expect(page.getByTestId('unclaimed-total')).toContainText('300,00');
