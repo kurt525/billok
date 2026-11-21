@@ -3457,6 +3457,9 @@ test('Issue 3.8.2: only a receipt creator can reveal and copy a saved guest link
 
     await loginWithPasskey(ownerPage, users.alice.email);
     await ownerPage.goto('/split/' + token + '/claim');
+    // The public invitation preview has a separate tab state. Wait for the
+    // creator's restored identity before selecting the member-only People tab.
+    await expect(ownerPage.getByTestId('claim-people-panel')).toBeAttached({ timeout: 20_000 });
     await ensureReceiptTab(ownerPage, 'people');
     await expect(ownerPage.getByTestId('creator-guest-link-open-1')).toBeVisible({ timeout: 20_000 });
     await ensureReceiptTab(ownerPage, 'people');
