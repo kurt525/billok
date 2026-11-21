@@ -3157,6 +3157,9 @@ test('Issue 3.9: mobile participant color stays with the person after rename and
 
     await loginWithPasskey(page, users.alice.email);
     await page.goto('/split/' + token + '/claim');
+    // The creator's server-bound place is restored asynchronously after the
+    // public join preview. Do not select the preview tab as if it were final.
+    await expect(page.getByTestId('claim-people-panel')).toBeAttached({ timeout: 20_000 });
     const colorOf = async (index: number) =>
       page.getByTestId('guest-color-person-' + index).evaluate((element) => getComputedStyle(element).borderLeftColor);
     await ensureReceiptTab(page, 'people');
@@ -3174,6 +3177,7 @@ test('Issue 3.9: mobile participant color stays with the person after rename and
     await expect(page.getByTestId('guest-color-person-1')).toContainText('Андрей П.', { timeout: 20_000 });
     expect(await colorOf(1)).toBe(before[1]);
     await page.reload();
+    await expect(page.getByTestId('claim-people-panel')).toBeAttached({ timeout: 20_000 });
     await ensureReceiptTab(page, 'people');
     await expect(page.getByTestId('guest-color-person-1')).toContainText('Андрей П.', { timeout: 20_000 });
     expect([await colorOf(0), await colorOf(1), await colorOf(2)]).toEqual(before);
@@ -3758,6 +3762,8 @@ test('Issue 3.6.2: creator renames unjoined guests on mobile; guests can edit on
     expect(joined.personId).toBe(guestId);
     await rememberClaimIdentity(page.context(), token, { name: joined.name, personToken: joined.personToken });
     await page.reload({ waitUntil: 'domcontentloaded' });
+    // The guest's own edit controls live only in the restored member view.
+    await expect(page.getByTestId('claim-people-panel')).toBeAttached({ timeout: 20_000 });
     await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
     await ensureReceiptTab(page, 'people');
     await expect(page.getByTestId('edit-person-0')).toHaveCount(0);
@@ -3918,6 +3924,9 @@ test('Issue 3.12: two guest devices count as one; joins, name changes and roles 
     await loginWithPasskey(ownerPage, users.alice.email);
     await rememberClaimIdentity(creatorDevice, token, created.creator);
     await ownerPage.goto('/split/' + token + '/claim');
+    // A public invitation preview has its own default People tab. Wait for the
+    // authenticated organizer's view before checking the presence counters.
+    await expect(ownerPage.getByTestId('claim-people-panel')).toBeAttached({ timeout: 20_000 });
     await ensureReceiptTab(ownerPage, 'people');
     const counters = ownerPage.getByTestId('organizer-presence-counters');
     await expect(counters).toBeVisible({ timeout: 20_000 });
