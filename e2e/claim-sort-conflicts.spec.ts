@@ -84,7 +84,7 @@ test.describe('Claim page — item sorting', () => {
 });
 
 test.describe('Claim page — conflict detection', () => {
-  test('saving overlapping claims shows conflict warning', async ({ browser }) => {
+  test('overlapping dishes update both personal chips, without a legacy Save', async ({ browser }) => {
     const ctx = await request.newContext({ baseURL: BASE });
 
     // Create session with 3 items
@@ -137,20 +137,12 @@ test.describe('Claim page — conflict detection', () => {
     await expect(page.locator('[data-sonner-toast]')).toBeHidden({ timeout: 10000 });
 
     // Bob claims item 0 (Pizza — already claimed by Alice) and item 2 (Salad)
-    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
-    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
-
-    // Save claims
-    const saveBtn = page.getByTestId('save-claims-btn');
-    await saveBtn.scrollIntoViewIfNeeded();
-    await saveBtn.click();
-
-    // Should show a conflict warning toast mentioning Alice and the item count
-    const toast = page.locator('[data-sonner-toast]').last();
-    await expect(toast).toBeVisible({ timeout: 10000 });
-    const toastText = await toast.textContent();
-    expect(toastText).toContain('Alice');
-    expect(toastText).toMatch(/1/); // 1 conflicting item
+    await page.getByTestId('dish-person-0-1').click();
+    await expect(page.getByTestId('dish-person-0-1')).toHaveAttribute('aria-pressed', 'true');
+    await page.getByTestId('dish-person-2-1').click();
+    await expect(page.getByTestId('dish-person-2-1')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('dish-person-0-0')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('save-claims-btn')).toHaveCount(0);
 
     await page.close();
     await browserCtx.close();

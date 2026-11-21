@@ -201,9 +201,8 @@ test('TASK-BILLOK-002: one mobile flow keeps all dish names and expands guests a
   await ensureReceiptTab(page, 'items');
   await expect(page.getByTestId('claim-item-0')).toBeVisible();
   await ensureReceiptTab(page, 'items');
-  await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
-  await expect(page.getByTestId('save-claims-btn')).toBeEnabled();
-  await page.getByTestId('save-claims-btn').click();
+  await page.getByTestId('dish-person-0-0').click();
+  await expect(page.getByTestId('dish-person-0-0')).toHaveAttribute('aria-pressed', 'true');
   const createdShareToken = new URL(page.url()).pathname.split('/').at(-2)!;
   await expect
     .poll(async () => {
@@ -336,7 +335,7 @@ test('TASK-BILLOK-002 23–30: compact real mobile portions 4/2/1, single-tap cl
     await ensureReceiptTab(page, 'items');
     await expect(page.getByTestId('dish-parts-editor-0')).toBeVisible();
     await ensureReceiptTab(page, 'items');
-    await expect(page.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.getByTestId('dish-person-0-0')).toHaveAttribute('aria-pressed', 'false');
     await ensureReceiptTab(page, 'items');
     await page.getByTestId('dish-parts-open-0').click();
     await ensureReceiptTab(page, 'items');
@@ -817,9 +816,9 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
     // An ordinary guest cannot switch to somebody else's dish assignments.
     // Their own voluntary tip remains editable independently of other guests.
     await ensureReceiptTab(page, 'items');
-    await expect(page.getByTestId('switch-person-0')).toBeEnabled();
+    await expect(page.getByTestId('dish-person-0-0')).toBeEnabled();
     await ensureReceiptTab(page, 'items');
-    await expect(page.getByTestId('switch-person-1')).toBeDisabled();
+    await expect(page.getByTestId('dish-person-0-1')).toBeDisabled();
     await expect(amount).toHaveValue('1.25');
     await amount.fill('0');
     await save.click();
@@ -876,7 +875,7 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
       await expect(page.getByTestId('guest-parts-awaiting-confirmation')).toBeVisible();
       await ensureReceiptTab(page, 'items');
       await expect(page.getByTestId('claim-actions').getByTestId('guest-parts-awaiting-confirmation')).toHaveCount(0);
-      for (const testId of ['personal-tip-input', 'personal-tip-save', 'claim-actions', 'save-claims-btn']) {
+      for (const testId of ['personal-tip-input', 'personal-tip-save', 'dish-person-0-0', 'dish-parts-open-0']) {
         const bounds = await page.getByTestId(testId).evaluate((element) => {
           const rect = element.getBoundingClientRect();
           return { left: rect.left, right: rect.right, height: rect.height };
@@ -934,9 +933,10 @@ test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobil
     await rememberClaimIdentity(page.context(), token, anna);
     await rememberClaimIdentity(second, token, boris);
 
-    // Before anyone selects this pizza, zero declared portions are visible.
-    // The whole receipt remains unclaimed, never automatically charged.
+    // Restoration is async: wait for the joined view, not the public guest
+    // preview that uses the same URL and has no allocation progress.
     await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId('dish-people-0')).toBeVisible({ timeout: 25_000 });
     await expect(page.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 0');
     await expect(page.getByTestId('unclaimed-total')).toContainText('8,00');
     await expect(page.getByTestId('guest-parts-preliminary')).toBeVisible();
@@ -976,30 +976,32 @@ test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobil
     const bobPage = await second.newPage();
     await alicePage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await bobPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    await expect(alicePage.getByTestId('dish-people-0')).toBeVisible({ timeout: 25_000 });
+    await expect(bobPage.getByTestId('dish-people-0')).toBeVisible({ timeout: 25_000 });
     await ensureReceiptTab(alicePage, 'items');
     await alicePage.getByTestId('dish-parts-open-0').click();
     await ensureReceiptTab(bobPage, 'items');
     await bobPage.getByTestId('dish-parts-open-0').click();
     await ensureReceiptTab(alicePage, 'items');
-    const aliceInput = alicePage.getByTestId('personal-parts-input-0');
+    const aliceInput = alicePage.getByTestId('dish-parts-input-0-0');
     await ensureReceiptTab(bobPage, 'items');
-    const bobInput = bobPage.getByTestId('personal-parts-input-0');
+    const bobInput = bobPage.getByTestId('dish-parts-input-0-1');
     await expect(alicePage.getByTestId('guest-parts-preliminary')).toContainText('Предварительный расчёт');
     await expect(alicePage.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 2');
     await expect(bobPage.getByTestId('guest-claimed-parts-progress-0')).not.toContainText('Осталось');
     await expect(aliceInput).toHaveValue('1', { timeout: 15_000 });
     await expect(bobInput).toHaveValue('1', { timeout: 15_000 });
-    await aliceInput.fill('0');
+    await aliceInput.fill('-1');
     await ensureReceiptTab(alicePage, 'items');
-    await expect(alicePage.getByTestId('personal-parts-save-0')).toBeDisabled();
+    await expect(alicePage.getByTestId('dish-parts-save-0')).toBeDisabled();
     await aliceInput.fill('3');
     await bobInput.fill('5');
     await ensureReceiptTab(alicePage, 'items');
-    await alicePage.getByTestId('personal-parts-save-0').click();
+    await alicePage.getByTestId('dish-parts-save-0').click();
     await ensureReceiptTab(bobPage, 'items');
-    await bobPage.getByTestId('personal-parts-save-0').click();
-    await expect(aliceInput).toHaveValue('3', { timeout: 15_000 });
-    await expect(bobInput).toHaveValue('5', { timeout: 15_000 });
+    await bobPage.getByTestId('dish-parts-save-0').click();
+    await expect(alicePage.getByTestId('dish-parts-count-0-0')).toHaveText('3', { timeout: 15_000 });
+    await expect(bobPage.getByTestId('dish-parts-count-0-1')).toHaveText('5', { timeout: 15_000 });
 
     await expect
       .poll(
@@ -1128,6 +1130,11 @@ test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobil
         { timeout: 15_000 },
       )
       .toEqual({ [anna.personId]: 3, [boris.personId]: 5 });
+    // The per-dish editor closes after a successful save. Reopen it for
+    // geometry diagnostics at every mobile width, without changing saved parts.
+    await ensureReceiptTab(alicePage, 'items');
+    await alicePage.getByTestId('dish-parts-open-0').click();
+    await expect(aliceInput).toHaveValue('3', { timeout: 15_000 });
     for (const width of [320, 360, 430, 480, 600, 720]) {
       await alicePage.setViewportSize({ width, height: 520 });
       await aliceInput.scrollIntoViewIfNeeded();
@@ -1153,10 +1160,13 @@ test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobil
     const unchanged = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     expect(unchanged.assignments[0].partsByPersonId).toEqual({ [anna.personId]: 3, [boris.personId]: 5 });
 
+    // The editor remains open across viewport checks; do not close it by
+    // pressing its toggle again before changing the person's own value.
     // A personal correction and finalization must retain exactly one payer and all 800 kopecks.
-    await aliceInput.fill('2');
     await ensureReceiptTab(alicePage, 'items');
-    await alicePage.getByTestId('personal-parts-save-0').click();
+    await expect(aliceInput).toBeVisible();
+    await aliceInput.fill('2');
+    await alicePage.getByTestId('dish-parts-save-0').click();
     await expect
       .poll(
         async () => {
@@ -1172,13 +1182,14 @@ test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobil
     await expect(alicePage.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 7', {
       timeout: 15_000,
     });
-    await expect(aliceInput).toHaveValue('2', { timeout: 15_000 });
+    await expect(alicePage.getByTestId('dish-parts-count-0-0')).toHaveText('2', { timeout: 15_000 });
     await ensureReceiptTab(alicePage, 'items');
-    const personalSave = alicePage.getByTestId('personal-parts-save-0');
-    await expect(personalSave).toBeDisabled();
+    await alicePage.getByTestId('dish-parts-open-0').click();
+    const portionSave = alicePage.getByTestId('dish-parts-save-0');
+    await expect(portionSave).toBeDisabled();
     await aliceInput.fill('3');
-    await expect(personalSave).toBeEnabled({ timeout: 15_000 });
-    await personalSave.click();
+    await expect(portionSave).toBeEnabled({ timeout: 15_000 });
+    await portionSave.click();
     // The controlled input changes before the mutation is committed. Never
     // finalize based only on the visible draft: wait for the personal token's
     // durable server value, which is what finalization actually uses.
@@ -1191,7 +1202,7 @@ test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobil
         { timeout: 15_000 },
       )
       .toBe(3);
-    await expect(aliceInput).toHaveValue('3', { timeout: 15_000 });
+    await expect(alicePage.getByTestId('dish-parts-count-0-0')).toHaveText('3', { timeout: 15_000 });
 
     // 2.20.3: creator enters the original count in the mobile UI.
 
@@ -2458,9 +2469,8 @@ test('anonymous mobile participant can join a long-name slot and edit it with to
     // The save action contains the full 40-character name. With Android text
     // scaling it must wrap rather than extending beyond the phone viewport.
     await ensureReceiptTab(page, 'items');
-    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
-    const saveClaims = page.getByTestId('save-claims-btn');
-    await expect(saveClaims).toContainText(longName);
+    const personChip = page.getByTestId('dish-person-0-0');
+    await expect(personChip).toContainText(longName);
     for (const width of [360, 430, 720]) {
       await page.setViewportSize({ width, height: 380 });
       await ensureReceiptTab(page, 'people');
@@ -2476,14 +2486,14 @@ test('anonymous mobile participant can join a long-name slot and edit it with to
         expect(rect!.x + rect!.width).toBeLessThanOrEqual(width);
       }
       await ensureReceiptTab(page, 'items');
-      await saveClaims.scrollIntoViewIfNeeded();
-      await expect(saveClaims).toBeInViewport();
-      const bounds = await saveClaims.boundingBox();
+      await personChip.scrollIntoViewIfNeeded();
+      await expect(personChip).toBeInViewport();
+      const bounds = await personChip.boundingBox();
       expect(bounds).not.toBeNull();
       expect(bounds!.height).toBeGreaterThanOrEqual(44);
       expect(bounds!.x).toBeGreaterThanOrEqual(0);
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-      const overflow = await saveClaims.evaluate((element) => element.scrollWidth - element.clientWidth);
+      const overflow = await personChip.evaluate((element) => element.scrollWidth - element.clientWidth);
       expect(overflow).toBeLessThanOrEqual(1);
       await fitsPhone(page);
     }
@@ -2527,32 +2537,27 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
       await ensureReceiptTab(page, 'items');
       await expect(page.getByTestId('claim-item-' + index)).toBeVisible();
       await ensureReceiptTab(page, 'items');
-      await expect(page.getByTestId('claim-item-' + index)).toHaveAttribute('aria-pressed', 'false');
+      await expect(page.getByTestId('dish-person-' + index + '-1')).toHaveAttribute('aria-pressed', 'false');
       await expect(page.getByTestId('split-claim-item-' + index)).toHaveCount(0);
     }
 
     const ownPart = 0;
     await ensureReceiptTab(page, 'items');
-    await page.getByTestId('claim-item-' + ownPart).click();
+    await page.getByTestId('dish-person-' + ownPart + '-1').click();
     await ensureReceiptTab(page, 'items');
-    await expect(page.getByTestId('claim-item-' + ownPart)).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('dish-person-' + ownPart + '-1')).toHaveAttribute('aria-pressed', 'true');
     for (const otherPart of [1, 2]) {
       await ensureReceiptTab(page, 'items');
-      await expect(page.getByTestId('claim-item-' + otherPart)).toHaveAttribute('aria-pressed', 'false');
+      await expect(page.getByTestId('dish-person-' + otherPart + '-1')).toHaveAttribute('aria-pressed', 'false');
     }
-    const save = page.getByTestId('save-claims-btn');
-    await expect(save).toBeEnabled();
-    await save.click();
-    await expect(save).toBeDisabled({ timeout: 15_000 });
-
     await page.reload({ waitUntil: 'domcontentloaded' });
     await ensureReceiptTab(page, 'items');
-    await expect(page.getByTestId('claim-item-' + ownPart)).toHaveAttribute('aria-pressed', 'true', {
+    await expect(page.getByTestId('dish-person-' + ownPart + '-1')).toHaveAttribute('aria-pressed', 'true', {
       timeout: 15_000,
     });
     for (const otherPart of [1, 2]) {
       await ensureReceiptTab(page, 'items');
-      await expect(page.getByTestId('claim-item-' + otherPart)).toHaveAttribute('aria-pressed', 'false');
+      await expect(page.getByTestId('dish-person-' + otherPart + '-1')).toHaveAttribute('aria-pressed', 'false');
     }
     const saved = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     const guestIndex = saved.people.findIndex((person: { name: string }) => person.name === 'Илья');
@@ -2573,8 +2578,12 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
       await ensureReceiptTab(page, 'items');
+      // The card is deliberately not selectable. Its personal chip retains
+      // the accessibility state across reopens.
       const card = page.getByTestId('claim-item-' + ownPart);
-      await expect(card).toHaveAttribute('aria-pressed', 'true', { timeout: 15_000 });
+      await expect(page.getByTestId('dish-person-' + ownPart + '-1')).toHaveAttribute('aria-pressed', 'true', {
+        timeout: 15_000,
+      });
       await fitsPhone(page);
 
       // The DOM rectangle is measured against the actual visual viewport,
@@ -2622,7 +2631,7 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
         geometry.visibleRight - geometry.cardRight,
         'Card is clipped at right on ' + width + 'px: ' + JSON.stringify(geometry),
       ).toBeGreaterThanOrEqual(0);
-      for (const testId of ['personal-link-btn', 'claim-actions', 'save-claims-btn']) {
+      for (const testId of ['personal-link-btn', 'dish-person-0-1']) {
         await ensureReceiptTab(page, testId === 'personal-link-btn' ? 'people' : 'items');
         const bounds = await page.getByTestId(testId).evaluate((element) => {
           const rect = element.getBoundingClientRect();
@@ -2901,11 +2910,11 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
 
     // The guest may claim an already selected *shared* dish and their own tea.
     await ensureReceiptTab(page, 'items');
-    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
+    await page.getByTestId('dish-person-0-1').click();
+    await expect(page.getByTestId('dish-person-0-1')).toHaveAttribute('aria-pressed', 'true');
     await ensureReceiptTab(page, 'items');
-    await page.getByTestId('claim-item-1').click({ position: { x: 24, y: 20 } });
-    await expect(page.getByTestId('save-claims-btn')).toBeEnabled();
-    await page.getByTestId('save-claims-btn').click();
+    await page.getByTestId('dish-person-1-1').click();
+    await expect(page.getByTestId('dish-person-1-1')).toHaveAttribute('aria-pressed', 'true');
     await expect
       .poll(
         async () => {
@@ -4113,20 +4122,15 @@ test('Issue 3.15: receipt corrections recalculate claims and known pieces on thr
       await expect(viewer.getByTestId('person-total-2')).toContainText('5,00');
       await expect(viewer.getByTestId('claim-distribution-status')).toContainText('Ожидается подтверждение');
     }
-    // The authorized creator changes a real item, not a detached expense.
-    // Draft-only changes must NEVER alter the saved shared counters or
-    // publish an uncommitted amount to the other device.
+    // A direct tap commits immediately and updates every device; there is no second save.
     await ensureReceiptTab(guestPage, 'items');
-    await guestPage.getByTestId('claim-item-1').click({ position: { x: 36, y: 44 } });
-    await ensureReceiptTab(guestPage, 'items');
-    await expect(guestPage.getByTestId('claim-item-1')).toHaveAttribute('aria-pressed', 'false');
-    await expect(guestPage.getByTestId('save-claims-btn')).toBeEnabled();
-    await expect(guestPage.getByTestId('claim-allocated-total')).toContainText('8,00');
-    await expect(guestPage.getByTestId('claim-unallocated-total')).toContainText('0,00');
-    await expect(creatorPage.getByTestId('claim-allocated-total')).toContainText('8,00');
-    await ensureReceiptTab(guestPage, 'items');
-    await guestPage.getByTestId('claim-item-1').click({ position: { x: 36, y: 44 } });
-    await expect(guestPage.getByTestId('save-claims-btn')).toBeDisabled();
+    await guestPage.getByTestId('dish-person-1-2').click();
+    await expect(guestPage.getByTestId('dish-person-1-2')).toHaveAttribute('aria-pressed', 'false');
+    await expect(guestPage.getByTestId('claim-allocated-total')).toContainText('3,00', { timeout: 25_000 });
+    await expect(creatorPage.getByTestId('claim-unallocated-total')).toContainText('5,00', { timeout: 25_000 });
+    await guestPage.getByTestId('dish-person-1-2').click();
+    await expect(guestPage.getByTestId('dish-person-1-2')).toHaveAttribute('aria-pressed', 'true');
+    await expect(creatorPage.getByTestId('claim-allocated-total')).toContainText('8,00', { timeout: 25_000 });
 
     const approved = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
     expect(approved.ok(), await approved.text()).toBe(true);
@@ -4651,19 +4655,18 @@ test('Issue 3.17: concurrent guests preserve each others claims and all open scr
       );
     }
 
-    // The selected participant is represented by aria-pressed, while
-    // "Также выбрали" names OTHER participants, never the active person.
-    // The creator (who claimed neither dish) sees both names.
+    // Each person has an independent real-time chip, with no global claimant
+    // and no duplicate "Also claimed by" panel.
     await ensureReceiptTab(creatorPage, 'items');
     await expect(creatorPage.getByTestId('claim-item-0')).toContainText('Анна');
     await ensureReceiptTab(creatorPage, 'items');
     await expect(creatorPage.getByTestId('claim-item-0')).toContainText('Борис');
     await ensureReceiptTab(page, 'items');
-    await expect(page.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('dish-person-0-1')).toHaveAttribute('aria-pressed', 'true');
     await ensureReceiptTab(page, 'items');
     await expect(page.getByTestId('claim-item-0')).toContainText('Борис');
     await ensureReceiptTab(borisPage, 'items');
-    await expect(borisPage.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'true');
+    await expect(borisPage.getByTestId('dish-person-0-2')).toHaveAttribute('aria-pressed', 'true');
     await ensureReceiptTab(borisPage, 'items');
     await expect(borisPage.getByTestId('claim-item-0')).toContainText('Анна');
 
@@ -4710,7 +4713,7 @@ test('Issue 3.17: concurrent guests preserve each others claims and all open scr
     await ensureReceiptTab(page, 'items');
     await expect(page.getByTestId('claim-item-0')).toContainText('Борис');
     await ensureReceiptTab(borisPage, 'items');
-    await expect(borisPage.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'true');
+    await expect(borisPage.getByTestId('dish-person-0-2')).toHaveAttribute('aria-pressed', 'true');
 
     // The creator now specifies exactly one original piece for the shared
     // pizza. A new simultaneous claim for it must be refused without
@@ -4994,56 +4997,50 @@ test('Issue 3.14: claims and shared positions reach every open mobile receipt', 
       await ensureReceiptTab(viewer, 'items');
       await expect(viewer.getByTestId('claim-item-0')).toBeVisible({ timeout: 25_000 });
     }
-    // A saved choice is delivered to all three open screens by server polling.
-    // B's unsaved choice of a different dish must stay local.
+    // Each mobile chip writes immediately; the other phones see the authoritative allocation.
     await ensureReceiptTab(guestPage, 'items');
-    await guestPage.getByTestId('claim-item-2').click({ position: { x: 36, y: 44 } });
-    await ensureReceiptTab(guestPage, 'items');
-    await expect(guestPage.getByTestId('claim-item-2')).toHaveAttribute('aria-pressed', 'true');
+    await guestPage.getByTestId('dish-person-2-2').click();
+    await expect(guestPage.getByTestId('dish-person-2-2')).toHaveAttribute('aria-pressed', 'true');
     await ensureReceiptTab(page, 'items');
-    await page.getByTestId('claim-item-0').click({ position: { x: 36, y: 44 } });
-    const mobileSave = page.getByTestId('save-claims-btn');
-    await expect(mobileSave).toBeEnabled();
-    // Verify the real hit target, not a force click: the fixed action bar
-    // must be above the dish cards on a mobile viewport.
-    const saveHit = await mobileSave.evaluate((element) => {
+    const claimButton = page.getByTestId('dish-person-0-1');
+    // Diagnose the actual touch target, without the obsolete sticky Save panel.
+    await claimButton.scrollIntoViewIfNeeded();
+    const target = await claimButton.evaluate((element) => {
       const rect = element.getBoundingClientRect();
-      const x = rect.left + rect.width / 2;
-      const y = rect.top + rect.height / 2;
-      const hit = document.elementFromPoint(x, y);
-      const panel = element.closest('[data-testid="claim-actions"]');
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
       return {
-        hittable: Boolean(hit && element.contains(hit)),
-        hitTag: hit?.tagName ?? 'none',
-        hitTestId: hit?.getAttribute('data-testid') ?? '',
-        panelZ: panel ? getComputedStyle(panel).zIndex : '',
-        x,
-        y,
-        viewport: { width: innerWidth, height: innerHeight },
+        clickable: Boolean(hit && element.contains(hit)),
+        left: rect.left,
+        right: rect.right,
+        height: rect.height,
+        viewport: window.innerWidth,
       };
     });
-    expect(saveHit.hittable, JSON.stringify(saveHit)).toBe(true);
-    await mobileSave.click();
+    expect(target.clickable, JSON.stringify(target)).toBe(true);
+    expect(target.left).toBeGreaterThanOrEqual(0);
+    expect(target.right).toBeLessThanOrEqual(target.viewport);
+    expect(target.height).toBeGreaterThanOrEqual(44);
+    await claimButton.click();
+    await expect(claimButton).toHaveAttribute('aria-pressed', 'true');
     await ensureReceiptTab(creatorPage, 'items');
-    await expect(creatorPage.getByTestId('claim-item-0')).toContainText('Андрей', { timeout: 25_000 });
+    await expect(creatorPage.getByTestId('dish-person-0-1')).toHaveAttribute('aria-pressed', 'true', {
+      timeout: 25_000,
+    });
     await ensureReceiptTab(guestPage, 'items');
-    await expect(guestPage.getByTestId('claim-item-0')).toContainText('Андрей', { timeout: 25_000 });
-    await ensureReceiptTab(guestPage, 'items');
-    await expect(guestPage.getByTestId('claim-item-2')).toHaveAttribute('aria-pressed', 'true');
-    await expect(guestPage.getByTestId('save-claims-btn')).toBeEnabled();
+    await expect(guestPage.getByTestId('dish-person-0-1')).toHaveAttribute('aria-pressed', 'true', { timeout: 25_000 });
+    await expect(guestPage.getByTestId('dish-person-2-2')).toHaveAttribute('aria-pressed', 'true');
     const firstSave = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     expect(firstSave.assignments.find((row: { itemIndex: number }) => row.itemIndex === 0)?.personIndices).toEqual([1]);
-    expect(firstSave.assignments.some((row: { itemIndex: number }) => row.itemIndex === 2)).toBe(false);
+    expect(firstSave.assignments.find((row: { itemIndex: number }) => row.itemIndex === 2)?.personIndices).toEqual([2]);
 
     // The amount actually consumed is published, without inventing a total.
     await ensureReceiptTab(page, 'items');
     await page.getByTestId('dish-parts-open-0').click();
     await ensureReceiptTab(page, 'items');
-    await expect(page.getByTestId('personal-parts-0')).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByTestId('dish-parts-editor-0')).toBeVisible({ timeout: 25_000 });
     await ensureReceiptTab(page, 'items');
-    await page.getByTestId('personal-parts-input-0').fill('3');
-    await ensureReceiptTab(page, 'items');
-    await page.getByTestId('personal-parts-save-0').click();
+    await page.getByTestId('dish-parts-input-0-1').fill('3');
+    await page.getByTestId('dish-parts-save-0').click();
     await expect(creatorPage.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 3', {
       timeout: 25_000,
     });
@@ -5052,8 +5049,8 @@ test('Issue 3.14: claims and shared positions reach every open mobile receipt', 
     });
     // B joins A's salad and saves tea; owner sees both saved names.
     await ensureReceiptTab(guestPage, 'items');
-    await guestPage.getByTestId('claim-item-0').click({ position: { x: 36, y: 44 } });
-    await guestPage.getByTestId('save-claims-btn').click();
+    await guestPage.getByTestId('dish-person-0-2').click();
+    await expect(guestPage.getByTestId('dish-person-0-2')).toHaveAttribute('aria-pressed', 'true');
     await ensureReceiptTab(page, 'items');
     await expect(page.getByTestId('claim-item-0')).toContainText('Борис', { timeout: 25_000 });
     await ensureReceiptTab(creatorPage, 'items');
@@ -5071,8 +5068,11 @@ test('Issue 3.14: claims and shared positions reach every open mobile receipt', 
 
     // A withdraws from the shared position; B's portion must remain.
     await ensureReceiptTab(page, 'items');
-    await page.getByTestId('claim-item-0').click({ position: { x: 36, y: 44 } });
-    await page.getByTestId('save-claims-btn').click();
+    // Andrew has three parts: the chip is intentionally non-clickable to avoid accidental removal.
+    await expect(page.getByTestId('dish-person-0-1')).toBeDisabled();
+    await page.getByTestId('dish-parts-open-0').click();
+    await page.getByTestId('dish-parts-input-0-1').fill('0');
+    await page.getByTestId('dish-parts-save-0').click();
     // All diners remain listed by design; the departed diner has no active
     // allocation chip or superscript, while Boris's allocated part survives.
     await expect(creatorPage.getByTestId('dish-person-0-1')).toHaveAttribute('aria-pressed', 'false', {
@@ -5084,7 +5084,7 @@ test('Issue 3.14: claims and shared positions reach every open mobile receipt', 
     await ensureReceiptTab(creatorPage, 'items');
     await expect(creatorPage.getByTestId('dish-parts-count-0-2')).toHaveText('1');
     await ensureReceiptTab(guestPage, 'items');
-    await expect(guestPage.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'true');
+    await expect(guestPage.getByTestId('dish-person-0-2')).toHaveAttribute('aria-pressed', 'true');
     await expect(guestPage.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 1', {
       timeout: 25_000,
     });
@@ -5640,13 +5640,9 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     const husbandIndex = initial.people.findIndex((person: { id: string }) => person.id === husbandId);
     const childIndex = initial.people.findIndex((person: { id: string }) => person.id === childId);
     await ensureReceiptTab(page, 'items');
-    await expect(page.getByTestId('switch-person-' + childIndex)).toBeEnabled();
-    await ensureReceiptTab(page, 'items');
-    await page.getByTestId('switch-person-' + childIndex).click();
-    await expect(page.getByTestId('payment-group-edit-target')).toContainText('Ребёнок');
-    await ensureReceiptTab(page, 'items');
-    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
-    await page.getByTestId('save-claims-btn').click();
+    await expect(page.getByTestId('dish-person-2-' + childIndex)).toBeEnabled();
+    await page.getByTestId('dish-person-2-' + childIndex).click();
+    await expect(page.getByTestId('dish-person-2-' + childIndex)).toHaveAttribute('aria-pressed', 'true');
     await expect
       .poll(
         async () => {
@@ -5664,11 +5660,11 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await ensureReceiptTab(page, 'items');
     await page.getByTestId('dish-parts-open-2').click();
     await ensureReceiptTab(page, 'items');
-    await expect(page.getByTestId('personal-parts-2')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('dish-parts-editor-2')).toBeVisible({ timeout: 20_000 });
     await ensureReceiptTab(page, 'items');
-    await page.getByTestId('personal-parts-input-2').fill('2');
+    await page.getByTestId('dish-parts-input-2-' + childIndex).fill('2');
     await ensureReceiptTab(page, 'items');
-    await page.getByTestId('personal-parts-save-2').click();
+    await page.getByTestId('dish-parts-save-2').click();
     await expect
       .poll(
         async () => {
@@ -5683,6 +5679,7 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
       )
       .toBe(2);
 
+    await page.getByTestId('personal-tip-target').selectOption(childId);
     await page.getByTestId('personal-tip-input').fill('0,50');
     await page.getByTestId('personal-tip-save').click();
     await expect
@@ -5696,10 +5693,8 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
       .toBe(50);
 
     await ensureReceiptTab(page, 'items');
-    await page.getByTestId('switch-person-' + husbandIndex).click();
-    await ensureReceiptTab(page, 'items');
-    await page.getByTestId('claim-item-1').click({ position: { x: 24, y: 20 } });
-    await page.getByTestId('save-claims-btn').click();
+    await page.getByTestId('dish-person-1-' + husbandIndex).click();
+    await expect(page.getByTestId('dish-person-1-' + husbandIndex)).toHaveAttribute('aria-pressed', 'true');
     await expect
       .poll(
         async () => {
@@ -5712,10 +5707,8 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
       )
       .toBe(true);
     await ensureReceiptTab(page, 'items');
-    await page.getByTestId('switch-person-' + wifeIndex).click();
-    await ensureReceiptTab(page, 'items');
-    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
-    await page.getByTestId('save-claims-btn').click();
+    await page.getByTestId('dish-person-0-' + wifeIndex).click();
+    await expect(page.getByTestId('dish-person-0-' + wifeIndex)).toHaveAttribute('aria-pressed', 'true');
     await expect
       .poll(
         async () => {
@@ -6120,11 +6113,11 @@ test('Issue 3.25.3.2: known personId cannot authorize foreign dish claims', asyn
     await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
     await ensureReceiptTab(page, 'items');
-    await expect(page.getByTestId('switch-person-1')).toBeEnabled();
+    await expect(page.getByTestId('dish-person-0-1')).toBeEnabled();
     await ensureReceiptTab(page, 'items');
-    await expect(page.getByTestId('switch-person-0')).toBeDisabled();
+    await expect(page.getByTestId('dish-person-0-0')).toBeDisabled();
     await ensureReceiptTab(page, 'items');
-    await expect(page.getByTestId('switch-person-2')).toBeDisabled();
+    await expect(page.getByTestId('dish-person-0-2')).toBeDisabled();
     await fitsPhone(page);
 
     const attack = await trpcMutation(page.request, 'guest.claimItems', {
@@ -6492,6 +6485,86 @@ test('Issue 10.31: mobile tabs keep receipt data and draft edits', async ({ page
       }
     }
   } finally {
+    await owner.dispose();
+  }
+});
+
+test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight mobile widths', async ({ page }) => {
+  test.setTimeout(150_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  let token: string | undefined;
+  try {
+    const create = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: {
+        merchantName: 'Чек со статусами',
+        subtotal: 100000,
+        total: 100000,
+        currency: 'RUB',
+        tax: 0,
+        tip: 0,
+      },
+      items: [
+        { name: 'Завтрак', quantity: 1, unitPrice: 40000, totalPrice: 40000 },
+        { name: 'Суп', quantity: 1, unitPrice: 30000, totalPrice: 30000 },
+        { name: 'Чай', quantity: 1, unitPrice: 30000, totalPrice: 30000 },
+      ],
+      guestCount: 1,
+      joinCreator: true,
+    });
+    expect(create.ok(), await create.text()).toBe(true);
+    const result = (await create.json()).result.data.json;
+    token = result.shareToken;
+    const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const joined = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[1].id,
+      name: 'Гость 1',
+      joinKey: randomUUID(),
+    });
+    expect(joined.ok(), await joined.text()).toBe(true);
+    for (const [itemIndex, personId] of [
+      [0, result.creator.personId],
+      [1, initial.people[1].id],
+    ] as const) {
+      const assigned = await trpcMutation(owner, 'guest.setReceiptItemParts', {
+        token,
+        itemIndex,
+        changes: [{ personId, parts: 1 }],
+        requestKey: randomUUID(),
+      });
+      expect(assigned.ok(), await assigned.text()).toBe(true);
+    }
+
+    await loginWithPasskey(page, users.alice.email);
+    await page.goto('/split/' + token + '/claim');
+    await ensureReceiptTab(page, 'items');
+    const statuses = page.getByTestId('preview-person-badges-0');
+    const amount = page.getByTestId('preview-person-amount-0');
+    await expect(amount).toContainText('400,00', { timeout: 20_000 });
+    await expect(page.getByTestId('preview-person-amount-1')).toContainText('300,00');
+    await expect(page.getByTestId('unclaimed-total')).toContainText('300,00');
+    for (const status of ['receipt-role-creator', 'receipt-role-payer', 'account-status-registered']) {
+      await expect(statuses.getByTestId(status)).toBeVisible();
+    }
+    await expect(page.locator('[data-testid^="switch-person-"]')).toHaveCount(0);
+    await expect(page.getByTestId('save-claims-btn')).toHaveCount(0);
+    await expect(page.getByTestId('claim-item-0')).not.toHaveAttribute('role', 'button');
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
+      await page.setViewportSize({ width, height: 570 });
+      await amount.scrollIntoViewIfNeeded();
+      const badgeBox = await statuses.boundingBox();
+      const moneyBox = await amount.boundingBox();
+      expect(badgeBox && moneyBox).toBeTruthy();
+      expect(badgeBox!.y + badgeBox!.height, 'Status overlaps amount at ' + width).toBeLessThanOrEqual(moneyBox!.y + 1);
+      for (const rect of [badgeBox!, moneyBox!]) {
+        expect(rect.x, 'Left clipping at ' + width).toBeGreaterThanOrEqual(-1);
+        expect(rect.x + rect.width, 'Right clipping at ' + width).toBeLessThanOrEqual(width + 1);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
+    }
+  } finally {
+    if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
     await owner.dispose();
   }
 });

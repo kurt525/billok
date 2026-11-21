@@ -58,7 +58,7 @@ test.describe('Finalize claim session', () => {
     await browserCtx.close();
   });
 
-  test('finalize button hidden when unsaved changes exist', async ({ browser }) => {
+  test('finalize button hidden before a dish is claimed', async ({ browser }) => {
     const ctx = await request.newContext({ baseURL: BASE });
 
     const createRes = await trpcMutation(ctx, 'guest.createClaimSession', {
@@ -87,11 +87,11 @@ test.describe('Finalize claim session', () => {
     await expect(page.locator('[data-testid^="claim-item-"]').first()).toBeVisible({ timeout: 15000 });
     await expect(page.locator('[data-sonner-toast]')).toBeHidden({ timeout: 10000 });
 
-    // Toggle a claim — creates unsaved changes
-    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
-
-    // Finalize button should NOT be visible
-    await expect(page.getByTestId('finalize-btn')).not.toBeVisible();
+    // There is no separate claim draft; an unallocated dish cannot be finalized.
+    await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
+    await expect(page.getByTestId('save-claims-btn')).toHaveCount(0);
+    await page.getByTestId('dish-person-0-0').click();
+    await expect(page.getByTestId('dish-person-0-0')).toHaveAttribute('aria-pressed', 'true');
 
     await page.close();
     await browserCtx.close();
@@ -145,13 +145,9 @@ test.describe('Finalize claim session', () => {
     await expect(page.locator('[data-sonner-toast]')).toBeHidden({ timeout: 10000 });
 
     // Alice claims item 0 (Burger)
-    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
-
-    // Save claims first
-    const saveBtn = page.getByTestId('save-claims-btn');
-    await saveBtn.scrollIntoViewIfNeeded();
-    await saveBtn.click();
-    await expect(saveBtn).toContainText(/saved/i, { timeout: 10000 });
+    await page.getByTestId('dish-person-0-1').click();
+    await expect(page.getByTestId('dish-person-0-1')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('save-claims-btn')).toHaveCount(0);
 
     // Now finalize button should appear
     const finalizeBtn = page.getByTestId('finalize-btn');
