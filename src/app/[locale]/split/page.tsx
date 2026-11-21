@@ -270,7 +270,9 @@ function ReceiptCreationForm() {
             </CardHeader>
             <CardContent className="flex flex-wrap justify-between gap-2 text-sm">
               <span>{t('assign.total')}</span>
-              <span className="font-semibold">{formatCents(subtotal, currency, locale)}</span>
+              <span className="font-semibold" data-testid="receipt-creation-total">
+                {formatCents(subtotal, currency, locale)}
+              </span>
             </CardContent>
           </Card>
           <Button
@@ -302,6 +304,8 @@ function ReceiptCreationForm() {
                     value={newItem.name}
                     onChange={(event) => setNewItem((old) => ({ ...old, name: event.target.value }))}
                     placeholder={t('assign.itemNamePlaceholder')}
+                    aria-label={t('assign.itemNamePlaceholder')}
+                    data-testid="new-receipt-item-name"
                     required
                     className="h-12 min-w-0 text-base"
                   />
@@ -313,6 +317,8 @@ function ReceiptCreationForm() {
                       value={newItem.quantity}
                       onChange={(event) => setNewItem((old) => ({ ...old, quantity: event.target.value }))}
                       placeholder={t('assign.qtyPlaceholder')}
+                      aria-label={t('assign.qtyPlaceholder')}
+                      data-testid="new-receipt-item-quantity"
                       className="h-12 min-w-0 text-base"
                     />
                     <Input
@@ -321,6 +327,8 @@ function ReceiptCreationForm() {
                       value={newItem.totalPrice}
                       onChange={(event) => setNewItem((old) => ({ ...old, totalPrice: event.target.value }))}
                       placeholder={t('assign.pricePlaceholder')}
+                      aria-label={t('assign.pricePlaceholder')}
+                      data-testid="new-receipt-item-price"
                       required
                       className="h-12 min-w-0 text-base"
                     />
@@ -347,6 +355,8 @@ function ReceiptCreationForm() {
                         value={editValues.name}
                         onChange={(event) => setEditValues((old) => ({ ...old, name: event.target.value }))}
                         placeholder={t('assign.itemNamePlaceholder')}
+                        aria-label={t('assign.itemNamePlaceholder')}
+                        data-testid="edit-receipt-item-name"
                         className="h-12 min-w-0 text-base"
                       />
                       <div className="grid min-w-0 grid-cols-2 gap-2">
@@ -357,6 +367,8 @@ function ReceiptCreationForm() {
                           value={editValues.quantity}
                           onChange={(event) => setEditValues((old) => ({ ...old, quantity: event.target.value }))}
                           placeholder={t('assign.qtyPlaceholder')}
+                          aria-label={t('assign.qtyPlaceholder')}
+                          data-testid="edit-receipt-item-quantity"
                           className="h-12 min-w-0 text-base"
                         />
                         <Input
@@ -365,11 +377,13 @@ function ReceiptCreationForm() {
                           value={editValues.totalPrice}
                           onChange={(event) => setEditValues((old) => ({ ...old, totalPrice: event.target.value }))}
                           placeholder={t('assign.pricePlaceholder')}
+                          aria-label={t('assign.pricePlaceholder')}
+                          data-testid="edit-receipt-item-price"
                           className="h-12 min-w-0 text-base"
                         />
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <Button className="min-h-11" onClick={saveEdit}>
+                        <Button className="min-h-11" onClick={saveEdit} data-testid="save-receipt-item-edit">
                           {t('assign.save')}
                         </Button>
                         <Button variant="ghost" className="min-h-11" onClick={() => setEditingItem(null)}>
@@ -386,9 +400,16 @@ function ReceiptCreationForm() {
                         >
                           {item.name}
                         </span>
-                        {item.quantity > 1 && <span className="text-xs text-muted-foreground">×{item.quantity}</span>}
+                        <span
+                          className="shrink-0 text-xs text-muted-foreground"
+                          data-testid={'receipt-item-quantity-' + index}
+                        >
+                          ×{item.quantity}
+                        </span>
                       </div>
-                      <span className="shrink-0 font-semibold">{formatCents(item.totalPrice, currency, locale)}</span>
+                      <span className="shrink-0 font-semibold" data-testid={'receipt-item-price-' + index}>
+                        {formatCents(item.totalPrice, currency, locale)}
+                      </span>
                     </div>
                   )}
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -397,6 +418,7 @@ function ReceiptCreationForm() {
                       size="sm"
                       className="min-h-11"
                       onClick={() => startEditing(index)}
+                      data-testid={'edit-receipt-item-' + index}
                       aria-label={t('assign.editItem', { name: item.name })}
                     >
                       <Pencil className="size-4" />
@@ -406,6 +428,7 @@ function ReceiptCreationForm() {
                       size="sm"
                       className="min-h-11"
                       onClick={() => deleteItem(index)}
+                      data-testid={'delete-receipt-item-' + index}
                       aria-label={t('assign.removeItem', { name: item.name })}
                     >
                       <Trash2 className="size-4" />

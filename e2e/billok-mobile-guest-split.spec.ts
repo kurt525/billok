@@ -257,6 +257,138 @@ test('TASK-BILLOK-002: one mobile flow keeps all dish names and expands guests a
   expect(remoteCalls).toEqual([]);
 });
 
+test('TASK-BILLOK-002 20–22: new receipt keeps visible items, edits, deletions, totals and long mobile names', async ({
+  page,
+}) => {
+  test.setTimeout(160_000);
+  await loginWithPasskey(page, 'alice@qa.billok.ru');
+  await page.goto('/split');
+  await page.getByTestId('manual-receipt-name').fill('Чек с редактированием позиций');
+  await page.getByTestId('guest-count-input').fill('0');
+  await page.getByTestId('next-assign-btn').click();
+  await expect(page.getByTestId('guest-assign-step')).toBeVisible();
+  await expect(page.getByTestId('manual-no-items')).toBeVisible();
+
+  const addItem = async (name: string, quantity: string, totalPrice: string) => {
+    await page.getByTestId('guest-add-item-btn').click();
+    await page.getByTestId('new-receipt-item-name').fill(name);
+    await page.getByTestId('new-receipt-item-quantity').fill(quantity);
+    await page.getByTestId('new-receipt-item-price').fill(totalPrice);
+    await page.getByTestId('guest-add-item-submit').click();
+    await expect(page.getByTestId('manual-item-entry-form')).toHaveCount(0);
+  };
+  const amountCents = async () => {
+    const text = (await page.getByTestId('receipt-creation-total').textContent()) ?? '';
+    return Number(text.replace(/[^0-9]/g, ''));
+  };
+  const item = (index: number) => page.getByTestId('guest-item-card-' + index);
+
+  // The names and exact amounts must remain visible after each addition, not
+  // only the calculated total at the top of the former invite-only flow.
+  await addItem('Пицца Маргарита', '1', '800,00');
+  await expect(page.getByTestId('receipt-item-name-0')).toHaveText('Пицца Маргарита');
+  await expect(page.getByTestId('receipt-item-quantity-0')).toHaveText('×1');
+  await expect(page.getByTestId('receipt-item-price-0')).toContainText('800,00');
+  expect(await amountCents()).toBe(80_000);
+  await addItem('Чай', '1', '300,00');
+  await expect(item(0)).toContainText('Пицца Маргарита');
+  await expect(item(1)).toContainText('Чай');
+  await expect(page.getByTestId('receipt-item-quantity-1')).toHaveText('×1');
+  await expect(page.getByTestId('receipt-item-price-1')).toContainText('300,00');
+  expect(await amountCents()).toBe(110_000);
+
+  // The mobile editor changes the actual name, quantity and entire line price
+  // without deleting the other row or losing a kopeck.
+  await page.getByTestId('edit-receipt-item-0').click();
+  await expect(page.getByTestId('guest-edit-item-form')).toBeVisible();
+  await page.getByTestId('edit-receipt-item-name').fill('Пицца Маргарита с дополнительным сыром');
+  await page.getByTestId('edit-receipt-item-quantity').fill('2');
+  await page.getByTestId('edit-receipt-item-price').fill('900,00');
+  await page.getByTestId('save-receipt-item-edit').click();
+  await expect(page.getByTestId('guest-edit-item-form')).toHaveCount(0);
+  await expect(page.getByTestId('receipt-item-name-0')).toHaveText('Пицца Маргарита с дополнительным сыром');
+  await expect(page.getByTestId('receipt-item-quantity-0')).toHaveText('×2');
+  await expect(page.getByTestId('receipt-item-price-0')).toContainText('900,00');
+  await expect(page.getByTestId('receipt-item-name-1')).toHaveText('Чай');
+  expect(await amountCents()).toBe(120_000);
+
+  const longName = 'Домашний пирог с очень длинным названием, томатами, базиликом и сыром по семейному рецепту';
+  await addItem(longName, '1', '100,00');
+  await expect(page.getByTestId('receipt-items-list').locator('[data-testid^="guest-item-card-"]')).toHaveCount(3);
+  for (const [index, name] of ['Пицца Маргарита с дополнительным сыром', 'Чай', longName].entries()) {
+    await expect(page.getByTestId('receipt-item-name-' + index)).toHaveText(name);
+  }
+  expect(await amountCents()).toBe(130_000);
+
+  // Confirm that the third entry is genuinely editable/removable on a phone,
+  // and that earlier names and the total survive deletion and re-addition.
+  await page.getByTestId('delete-receipt-item-2').click();
+  await expect(page.getByTestId('receipt-items-list').locator('[data-testid^="guest-item-card-"]')).toHaveCount(2);
+  expect(await amountCents()).toBe(120_000);
+  await addItem(longName, '1', '100,00');
+  expect(await amountCents()).toBe(130_000);
+
+  // Test both narrow and wide phones, with a larger accessibility font. A
+  // long name must wrap in its own row; no horizontal clipping/overlap with
+  // the amount, the top header or the fixed creation footer is acceptable.
+  for (const width of [320, 360, 375, 430, 600, 720]) {
+    await page.setViewportSize({ width, height: 720 });
+    await fitsPhone(page);
+    for (let index = 0; index < 3; index++) {
+      const card = item(index);
+      const label = page.getByTestId('receipt-item-name-' + index);
+      await expect(label).toBeVisible();
+      const cardBox = await card.boundingBox();
+      const labelBox = await label.boundingBox();
+      const priceBox = await page.getByTestId('receipt-item-price-' + index).boundingBox();
+      expect(cardBox).not.toBeNull();
+      expect(labelBox).not.toBeNull();
+      expect(priceBox).not.toBeNull();
+      expect(cardBox!.x).toBeGreaterThanOrEqual(-1);
+      expect(cardBox!.x + cardBox!.width).toBeLessThanOrEqual(width + 1);
+      expect(labelBox!.x).toBeGreaterThanOrEqual(cardBox!.x - 1);
+      expect(labelBox!.x + labelBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width + 1);
+      if (labelBox!.y < priceBox!.y + priceBox!.height && priceBox!.y < labelBox!.y + labelBox!.height) {
+        expect(labelBox!.x + labelBox!.width).toBeLessThanOrEqual(priceBox!.x + 1);
+      }
+    }
+    const longLabel = page.getByTestId('receipt-item-name-2');
+    const wrap = await longLabel.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        actualHeight: element.getBoundingClientRect().height,
+        lineHeight: parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2,
+        text: element.textContent,
+      };
+    });
+    expect(wrap.text).toBe(longName);
+    expect(wrap.actualHeight, 'Long name should wrap at ' + width + ' CSS px').toBeGreaterThan(wrap.lineHeight);
+    await fitsPhone(page);
+  }
+
+  // The saved receipt contains exactly these edited rows, not just a
+  // temporary client-side list: the previous tea name is preserved.
+  await page.getByTestId('share-for-claiming-btn').click();
+  await expect(page).toHaveURL(/\/split\/[^/]+\/claim(?:\?.*)?$/);
+  const shareToken = new URL(page.url()).pathname.split('/').at(-2)!;
+  const saved = await trpcResult(await trpcQuery(page.request, 'guest.getSession', { token: shareToken }));
+  expect(
+    saved.items.map((entry: { name: string; quantity: number; totalPrice: number }) => ({
+      name: entry.name,
+      quantity: entry.quantity,
+      totalPrice: entry.totalPrice,
+    })),
+  ).toEqual([
+    // createClaimSession intentionally expands quantity=2 into independent
+    // claimable parts, retaining the edited name and distributing kopecks.
+    { name: 'Пицца Маргарита с дополнительным сыром', quantity: 1, totalPrice: 45_000 },
+    { name: 'Пицца Маргарита с дополнительным сыром', quantity: 1, totalPrice: 45_000 },
+    { name: 'Чай', quantity: 1, totalPrice: 30_000 },
+    { name: longName, quantity: 1, totalPrice: 10_000 },
+  ]);
+  expect(saved.receiptData.total).toBe(130_000);
+});
+
 test('TASK-BILLOK-002 10–15: one public link auto-expands after two occupied slots and keeps prior people', async ({
   page,
   browser,
