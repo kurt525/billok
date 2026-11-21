@@ -419,7 +419,14 @@ test('TASK-BILLOK-002: obsolete create API is closed while existing finalized su
   try {
     // A logged-in user cannot revive the removed direct-finalized endpoint.
     const denied = await trpcMutation(owner, 'guest.createSplit', {
-      receiptData: { merchantName: 'Заблокированный путь', subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'RUB' },
+      receiptData: {
+        merchantName: 'Заблокированный путь',
+        subtotal: 1000,
+        tax: 0,
+        tip: 0,
+        total: 1000,
+        currency: 'RUB',
+      },
       items: [{ name: 'Блюдо', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
       people: [{ name: 'Илья' }],
       assignments: [{ itemIndex: 0, personIndices: [0] }],
@@ -431,20 +438,26 @@ test('TASK-BILLOK-002: obsolete create API is closed while existing finalized su
     const created = await trpcMutation(owner, 'guest.createClaimSession', {
       receiptData: { merchantName: 'Чек после очистки', subtotal: 1000, tax: 0, tip: 0, total: 1000, currency: 'RUB' },
       items: [{ name: 'Блюдо', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
-      guestCount: 0, joinCreator: true,
+      guestCount: 0,
+      joinCreator: true,
     });
     expect(created.ok(), await created.text()).toBe(true);
     const { shareToken, creator } = (await created.json()).result.data.json;
     for (const [operation, payload] of [
-      ['guest.claimItems', {
-        token: shareToken, personId: creator.personId,
-        personToken: creator.personToken, claimedItemIndices: [0],
-      }],
+      [
+        'guest.claimItems',
+        {
+          token: shareToken,
+          personId: creator.personId,
+          personToken: creator.personToken,
+          claimedItemIndices: [0],
+        },
+      ],
       ['guest.confirmSessionParts', { token: shareToken }],
       ['guest.finalizeSession', { token: shareToken }],
     ] as const) {
       const response = await trpcMutation(owner, operation, payload);
-      expect(response.ok(), operation + ': ' + await response.text()).toBe(true);
+      expect(response.ok(), operation + ': ' + (await response.text())).toBe(true);
     }
     const finalized = await trpcResult(await trpcQuery(owner, 'guest.getSplit', { token: shareToken }));
     expect(finalized.receiptData.merchantName).toBe('Чек после очистки');

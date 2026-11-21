@@ -29,7 +29,11 @@ class ObsoleteReceiptMediaCleanupTests(unittest.TestCase):
         for key in ("hideReceipt", "viewReceipt", "receiptImageAlt",
                     "tipOverrideLabel", "tipDetected"):
             self.assertNotIn(key, split["assign"])
-        self.assertIn("receiptSummary", split["assign"])
+        # TASK-BILLOK-002 16–19 removed the unused legacy quick-split
+        # receiptSummary translation. Keep checking the actual unified UI labels.
+        self.assertNotIn("receiptSummary", split["assign"])
+        self.assertIn("title", split["assign"])
+        self.assertIn("addItem", split["assign"])
         self.assertIn("whoPaid", split["people"])
 
     def test_manual_group_editor_keeps_real_messages_only(self):
