@@ -45,7 +45,10 @@ export type GuestSessionPerson = {
   // 3.8.4: server-only audit of explicit creator reissues, no old credential.
   // Keeping the most recent request id makes a network retry idempotent.
   personalLinkRotation?: { requestKey: string; rotatedAt: string; count: number };
-  groupSize?: number; // defaults to 1, > 1 means this person represents a group
+  // Historical read-only compatibility. New participants cannot set this.
+  groupSize?: number;
+  // Bounded idempotency keys for atomic item allocation by the actor.
+  itemAllocationSaves?: { key: string; hash: string }[];
   // 3.24.1.1: optional server-controlled reimbursement group leader personId;
   // separate from legacy groupSize (which changes weights, not identities).
   paymentGroupRepresentativeId?: string;

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { loginWithPasskey } from './passkey-auth';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, request, type Page } from '@playwright/test';
 import {
   authedContext,
   joinGuestSession,
@@ -185,7 +185,7 @@ test('TASK-BILLOK-002: one mobile flow keeps all dish names and expands guests a
   // The obsolete "distribute immediately" form is gone. A creator can still
   // assign a dish after creating the receipt in the real claim interface.
   await expect(page.getByTestId('claim-item-0')).toBeVisible();
-  await page.getByTestId('claim-item-0').click();
+  await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
   await expect(page.getByTestId('save-claims-btn')).toBeEnabled();
   await page.getByTestId('save-claims-btn').click();
   const createdShareToken = new URL(page.url()).pathname.split('/').at(-2)!;
@@ -255,6 +255,106 @@ test('TASK-BILLOK-002: one mobile flow keeps all dish names and expands guests a
   }
   await expect(page.getByTestId('guest-color-person-3')).toContainText('Борис');
   expect(remoteCalls).toEqual([]);
+});
+
+test('TASK-BILLOK-002 23–30: compact real mobile portions 4/2/1, single-tap claim and contrast', async ({ page }) => {
+  test.setTimeout(150_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const anonymous = await request.newContext({ baseURL: process.env.BASE_URL || 'http://localhost:3001' });
+  try {
+    const created = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: {
+        merchantName: 'Пицца для троих',
+        subtotal: 700,
+        tax: 0,
+        tip: 0,
+        total: 700,
+        currency: 'RUB',
+      },
+      items: [{ name: 'Пицца Маргарита с дополнительным сыром', quantity: 1, unitPrice: 700, totalPrice: 700 }],
+      guestCount: 2,
+      joinCreator: true,
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    const { shareToken, creator } = (await created.json()).result.data.json;
+    const first = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: shareToken }));
+    for (const [index, name] of ['Гость 1', 'Анна Александровна Петрова'].entries()) {
+      const joined = await trpcMutation(anonymous, 'guest.joinGuestSlot', {
+        token: shareToken,
+        slotId: first.people[index + 1].id,
+        name,
+        joinKey: randomUUID(),
+      });
+      expect(joined.ok(), await joined.text()).toBe(true);
+    }
+
+    await loginWithPasskey(page, users.alice.email);
+    await page.setViewportSize({ width: 320, height: 720 });
+    await page.goto('/split/' + shareToken + '/claim');
+    await expect(page.getByTestId('claim-item-0')).toBeVisible();
+    await expect(page.getByTestId('dish-people-0')).toBeVisible();
+    await expect(page.getByTestId('group-size-input')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="group-badge-"]')).toHaveCount(0);
+    await expect(page.getByTestId('guest-claimed-parts-progress-0')).not.toBeVisible();
+    await expect(page.getByTestId('dish-people-0').locator('button')).toHaveCount(3);
+    await expect(page.getByTestId('dish-parts-count-0-0')).toHaveCount(0);
+    await expect(page.getByTestId('dish-parts-count-0-1')).toHaveCount(0);
+
+    await page.getByTestId('dish-parts-open-0').click();
+    await expect(page.getByTestId('dish-parts-editor-0')).toBeVisible();
+    for (const [i, count] of ['4', '2', '1'].entries()) {
+      await page.getByTestId('dish-parts-input-0-' + i).fill(count);
+    }
+    await page.getByTestId('dish-parts-save-0').click();
+    for (const [i, count] of ['4', '2', '1'].entries()) {
+      await expect(page.getByTestId('dish-parts-count-0-' + i)).toHaveText(count);
+    }
+    const parts = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: shareToken }));
+    expect(parts.assignments).toHaveLength(1);
+    expect(parts.assignments[0].partsByPersonId).toMatchObject({
+      [creator.personId]: 4,
+      [parts.people[1].id]: 2,
+      [parts.people[2].id]: 1,
+    });
+
+    // Single-tap only removes a 1-part claimant. Larger counts stay protected
+    // until the user opens the pencil editor again.
+    await expect(page.getByTestId('dish-person-0-1')).toBeDisabled();
+    await page.getByTestId('dish-person-0-2').click();
+    await expect(page.getByTestId('dish-parts-count-0-2')).toHaveCount(0);
+    await page.getByTestId('dish-person-0-2').click();
+    await expect(page.getByTestId('dish-parts-count-0-2')).toHaveText('1');
+    await expect(page.getByTestId('account-status-registered').first()).toBeVisible();
+    const contrast = await page
+      .getByTestId('account-status-registered')
+      .first()
+      .evaluate((element) => {
+        const style = getComputedStyle(element);
+        return { color: style.color, background: style.backgroundColor };
+      });
+    expect(contrast.color).not.toEqual(contrast.background);
+    expect(contrast.background).not.toBe('rgba(0, 0, 0, 0)');
+
+    // Superscripts are discrete badges, not appended digits in the name.
+    const countBadge = page.getByTestId('dish-parts-count-0-1');
+    const guestText = page.getByTestId('dish-person-0-1').locator('span').first();
+    const textBounds = await guestText.boundingBox();
+    const badgeBounds = await countBadge.boundingBox();
+    expect(textBounds).not.toBeNull();
+    expect(badgeBounds).not.toBeNull();
+    expect(badgeBounds!.x).toBeGreaterThanOrEqual(textBounds!.x + textBounds!.width);
+
+    for (const width of [320, 360, 375, 430, 600, 720]) {
+      await page.setViewportSize({ width, height: 720 });
+      await fitsPhone(page);
+      for (let index = 0; index < 3; index++) {
+        await expect(page.getByTestId('dish-person-0-' + index)).toBeVisible();
+      }
+    }
+  } finally {
+    await anonymous.dispose();
+    await owner.dispose();
+  }
 });
 
 test('TASK-BILLOK-002 20–22: new receipt keeps visible items, edits, deletions, totals and long mobile names', async ({
@@ -800,6 +900,8 @@ test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobil
     const bobPage = await second.newPage();
     await alicePage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await bobPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    await alicePage.getByTestId('dish-parts-open-0').click();
+    await bobPage.getByTestId('dish-parts-open-0').click();
     const aliceInput = alicePage.getByTestId('personal-parts-input-0');
     const bobInput = bobPage.getByTestId('personal-parts-input-0');
     await expect(alicePage.getByTestId('guest-parts-preliminary')).toContainText('Предварительный расчёт');
@@ -1001,6 +1103,7 @@ test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobil
 
     await loginWithPasskey(alicePage, users.alice.email);
     await alicePage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    await alicePage.getByTestId('dish-parts-open-0').click();
     const original = alicePage.getByTestId('guest-known-parts-input-0');
     const saveOriginal = alicePage.getByTestId('guest-known-parts-save-0');
     await expect(original).toBeVisible();
@@ -2218,9 +2321,7 @@ test('anonymous mobile participant can join a long-name slot and edit it with to
     const nameInput = page.getByTestId('claim-name-input');
     expect(await nameInput.getAttribute('maxlength')).toBe('40');
     expect((await nameInput.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-    const groupCount = page.getByTestId('group-size-input');
-    expect(await groupCount.getAttribute('inputmode')).toBe('numeric');
-    expect((await groupCount.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await expect(page.getByTestId('group-size-input')).toHaveCount(0);
     const joinButton = page.getByTestId('claim-join-btn');
     expect((await joinButton.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     const freePerson = page.getByTestId('rejoin-person-0');
@@ -2259,7 +2360,7 @@ test('anonymous mobile participant can join a long-name slot and edit it with to
 
     // The save action contains the full 40-character name. With Android text
     // scaling it must wrap rather than extending beyond the phone viewport.
-    await page.getByTestId('claim-item-0').click();
+    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
     const saveClaims = page.getByTestId('save-claims-btn');
     await expect(saveClaims).toContainText(longName);
     for (const width of [360, 430, 720]) {
@@ -2351,7 +2452,7 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
       {
         itemIndex: ownPart,
         personIndices: [guestIndex],
-        partsByPersonId: { [saved.people[guestIndex].id]: saved.people[guestIndex].groupSize ?? 1 },
+        partsByPersonId: { [saved.people[guestIndex].id]: 1 },
       },
     ]);
 
@@ -2686,8 +2787,8 @@ test('Issue 3.3: guest joins by name without account or email, shares a dish and
     await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
 
     // The guest may claim an already selected *shared* dish and their own tea.
-    await page.getByTestId('claim-item-0').click();
-    await page.getByTestId('claim-item-1').click();
+    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
+    await page.getByTestId('claim-item-1').click({ position: { x: 24, y: 20 } });
     await expect(page.getByTestId('save-claims-btn')).toBeEnabled();
     await page.getByTestId('save-claims-btn').click();
     await expect
@@ -3875,6 +3976,7 @@ test('Issue 3.15: receipt corrections recalculate claims and known pieces on thr
       });
     }
     await expect(guestPage.getByTestId('receipt-item-edit-0')).toHaveCount(0);
+    await creatorPage.getByTestId('dish-parts-open-0').click();
     await creatorPage.getByTestId('receipt-item-edit-0').click();
     await creatorPage.getByTestId('receipt-item-name-0').fill('Салат исправленный');
     await creatorPage.getByTestId('receipt-item-qty-0').fill('2');
@@ -4723,6 +4825,7 @@ test('Issue 3.14: claims and shared positions reach every open mobile receipt', 
     expect(firstSave.assignments.some((row: { itemIndex: number }) => row.itemIndex === 2)).toBe(false);
 
     // The amount actually consumed is published, without inventing a total.
+    await page.getByTestId('dish-parts-open-0').click();
     await expect(page.getByTestId('personal-parts-0')).toBeVisible({ timeout: 25_000 });
     await page.getByTestId('personal-parts-input-0').fill('3');
     await page.getByTestId('personal-parts-save-0').click();
@@ -5297,7 +5400,7 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await expect(page.getByTestId('switch-person-' + childIndex)).toBeEnabled();
     await page.getByTestId('switch-person-' + childIndex).click();
     await expect(page.getByTestId('payment-group-edit-target')).toContainText('Ребёнок');
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
     await page.getByTestId('save-claims-btn').click();
     await expect
       .poll(
@@ -5313,6 +5416,7 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
 
     // The same representative records the child eating two parts, without
     // requiring the child to log in or possess a personal device.
+    await page.getByTestId('dish-parts-open-2').click();
     await expect(page.getByTestId('personal-parts-2')).toBeVisible({ timeout: 20_000 });
     await page.getByTestId('personal-parts-input-2').fill('2');
     await page.getByTestId('personal-parts-save-2').click();
@@ -5343,7 +5447,7 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
       .toBe(50);
 
     await page.getByTestId('switch-person-' + husbandIndex).click();
-    await page.getByTestId('claim-item-1').click();
+    await page.getByTestId('claim-item-1').click({ position: { x: 24, y: 20 } });
     await page.getByTestId('save-claims-btn').click();
     await expect
       .poll(
@@ -5357,7 +5461,7 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
       )
       .toBe(true);
     await page.getByTestId('switch-person-' + wifeIndex).click();
-    await page.getByTestId('claim-item-0').click();
+    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
     await page.getByTestId('save-claims-btn').click();
     await expect
       .poll(

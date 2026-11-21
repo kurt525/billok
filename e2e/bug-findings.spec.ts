@@ -46,7 +46,7 @@ test.describe('Finding #3: removal must not corrupt stable person IDs', () => {
       });
       await page.goto('/split/' + shareToken + '/claim');
       await expect(page.getByTestId('claim-item-0')).toBeVisible();
-      await page.getByTestId('claim-item-0').click();
+      await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
       await page.getByTestId('save-claims-btn').click();
       await expect
         .poll(async () => {

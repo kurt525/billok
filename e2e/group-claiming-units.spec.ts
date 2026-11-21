@@ -1,492 +1,131 @@
+import { randomUUID } from 'node:crypto';
 import { test, expect, request } from '@playwright/test';
-import { joinGuestSession, trpcMutation } from './helpers';
+import { authedContext, createUnifiedReceiptFixture, trpcMutation, trpcQuery, trpcResult } from './helpers';
 
 const BASE = process.env.BASE_URL || 'http://localhost:3001';
 
-test.describe('Group claiming units', () => {
-  test('join form shows group size input', async ({ browser }) => {
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    const createRes = await trpcMutation(ctx, 'guest.createClaimSession', {
-      receiptData: {
-        merchantName: 'Group Test Cafe',
-        subtotal: 2000,
-        tax: 200,
-        tip: 0,
-        total: 2200,
-        currency: 'USD',
-      },
-      items: [
-        { name: 'Coffee', quantity: 1, unitPrice: 1000, totalPrice: 1000 },
-        { name: 'Tea', quantity: 1, unitPrice: 1000, totalPrice: 1000 },
-      ],
-      creatorName: 'Alice',
-      paidByName: 'Alice',
-    });
-    const shareToken = (await createRes.json()).result?.data?.json?.shareToken;
-    await ctx.dispose();
-
-    const browserCtx = await browser.newContext();
-    const page = await browserCtx.newPage();
-    await page.goto(`/en/split/${shareToken}/claim`);
-
-    await expect(page.getByTestId('claim-join-form')).toBeVisible({ timeout: 15000 });
-
-    // Group size input should be visible with default value 1
-    const groupSizeInput = page.getByTestId('group-size-input');
-    await expect(groupSizeInput).toBeVisible();
-    await expect(groupSizeInput).toHaveValue('1');
-
-    await page.close();
-    await browserCtx.close();
+// Issue #10 23: the obsolete groupSize flow must not be revived by old
+// clients, while payment groups keep separate identities, debts and tokens.
+test.describe('Individual family members and payment groups, not legacy groupSize', () => {
+  test('new shared-link join has no company-size field and rejected legacy API input', async ({ page }) => {
+    const owner = await authedContext('alice@qa.billok.ru');
+    const guest = await request.newContext({ baseURL: BASE });
+    try {
+      const receipt = await createUnifiedReceiptFixture(owner, {
+        merchantName: 'Семейный ужин',
+        guestCount: 1,
+        items: [{ name: 'Суп', quantity: 1, totalPrice: 700, unitPrice: 700 }],
+      });
+      await page.goto('/split/' + receipt.shareToken + '/claim');
+      await expect(page.getByTestId('claim-join-form')).toBeVisible();
+      await expect(page.getByTestId('group-size-input')).toHaveCount(0);
+      await expect(page.getByTestId('edit-group-size-1')).toHaveCount(0);
+      const stale = await trpcMutation(guest, 'guest.joinSession', {
+        token: receipt.shareToken,
+        name: 'Компания',
+        groupSize: 3,
+      });
+      expect(stale.ok(), await stale.text()).toBe(false);
+      const session = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: receipt.shareToken }));
+      expect(session.people).toHaveLength(2);
+    } finally {
+      await guest.dispose();
+      await owner.dispose();
+    }
   });
 
-  test('joining as a couple shows group badge', async ({ browser }) => {
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    const createRes = await trpcMutation(ctx, 'guest.createClaimSession', {
-      receiptData: {
-        merchantName: 'Couple Test',
-        subtotal: 3000,
-        tax: 300,
-        tip: 0,
-        total: 3300,
-        currency: 'USD',
-      },
-      items: [
-        { name: 'Pizza', quantity: 1, unitPrice: 1500, totalPrice: 1500 },
-        { name: 'Pasta', quantity: 1, unitPrice: 1500, totalPrice: 1500 },
-      ],
-      creatorName: 'Alice',
-      paidByName: 'Alice',
-    });
-    const shareToken = (await createRes.json()).result?.data?.json?.shareToken;
-    await ctx.dispose();
-
-    const browserCtx = await browser.newContext();
-    const page = await browserCtx.newPage();
-    await page.goto(`/en/split/${shareToken}/claim`);
-
-    await expect(page.getByTestId('claim-join-form')).toBeVisible({ timeout: 15000 });
-
-    // Join as "Alice & Bob" with group size 2
-    await page.getByTestId('claim-name-input').fill('Alice & Bob');
-    await page.getByTestId('group-size-input').fill('2');
-    await page.getByTestId('claim-join-btn').click();
-
-    await expect(page.locator('[data-testid^="claim-item-"]').first()).toBeVisible({ timeout: 15000 });
-
-    // Should show group badge (×2) — Alice & Bob is person index 1 (creator Alice is 0)
-    await expect(page.getByTestId('group-badge-1')).toBeVisible();
-
-    await page.close();
-    await browserCtx.close();
+  test('wife assigns 4/2/1 for three separate members of one payment group', async () => {
+    const owner = await authedContext('alice@qa.billok.ru');
+    const anon = await request.newContext({ baseURL: BASE });
+    try {
+      const receipt = await createUnifiedReceiptFixture(owner, {
+        merchantName: 'Семейное распределение',
+        guestCount: 3,
+        items: [{ name: 'Общая пицца', quantity: 1, totalPrice: 700, unitPrice: 700 }],
+      });
+      let session = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: receipt.shareToken }));
+      const personIds: string[] = [];
+      const personalTokens: string[] = [];
+      for (let index = 1; index <= 3; index++) {
+        const response = await trpcMutation(anon, 'guest.joinGuestSlot', {
+          token: receipt.shareToken,
+          slotId: session.people[index].id,
+          name: ['Жена', 'Муж', 'Ребёнок'][index - 1],
+          joinKey: randomUUID(),
+        });
+        expect(response.ok(), await response.text()).toBe(true);
+        const joined = (await response.json()).result.data.json;
+        personIds.push(joined.personId);
+        personalTokens.push(joined.personToken);
+      }
+      expect(new Set(personIds).size).toBe(3);
+      const grouped = await trpcMutation(owner, 'guest.setPaymentGroups', {
+        token: receipt.shareToken,
+        groups: [{ representativeId: personIds[0], memberIds: personIds }],
+      });
+      expect(grouped.ok(), await grouped.text()).toBe(true);
+      const assigned = await trpcMutation(anon, 'guest.setReceiptItemParts', {
+        token: receipt.shareToken,
+        personToken: personalTokens[0],
+        itemIndex: 0,
+        changes: personIds.map((personId, index) => ({ personId, parts: [4, 2, 1][index] })),
+        requestKey: randomUUID(),
+      });
+      expect(assigned.ok(), await assigned.text()).toBe(true);
+      session = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: receipt.shareToken }));
+      expect(session.people.map((person: { id: string }) => person.id).slice(1, 4)).toEqual(personIds);
+      expect(session.assignments[0].partsByPersonId).toMatchObject(
+        Object.fromEntries(personIds.map((personId, index) => [personId, [4, 2, 1][index]])),
+      );
+      expect(session.people[2].paymentGroupRepresentativeId).toBe(personIds[0]);
+      const wrong = await trpcMutation(anon, 'guest.setReceiptItemParts', {
+        token: receipt.shareToken,
+        personToken: personalTokens[1],
+        itemIndex: 0,
+        changes: [{ personId: personIds[2], parts: 2 }],
+        requestKey: randomUUID(),
+      });
+      expect(wrong.ok(), await wrong.text()).toBe(false);
+      session = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: receipt.shareToken }));
+      expect(session.assignments[0].partsByPersonId[personIds[2]!]).toBe(1);
+    } finally {
+      await anon.dispose();
+      await owner.dispose();
+    }
   });
 
-  test('solo person does not show group badge', async ({ browser }) => {
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    const createRes = await trpcMutation(ctx, 'guest.createClaimSession', {
-      receiptData: {
-        merchantName: 'Solo Test',
-        subtotal: 1000,
-        tax: 100,
-        tip: 0,
-        total: 1100,
-        currency: 'USD',
-      },
-      items: [{ name: 'Salad', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
-      creatorName: 'Alice',
-      paidByName: 'Alice',
-    });
-    const shareToken = (await createRes.json()).result?.data?.json?.shareToken;
-    await ctx.dispose();
-
-    const browserCtx = await browser.newContext();
-    const page = await browserCtx.newPage();
-    await page.goto(`/en/split/${shareToken}/claim`);
-
-    await expect(page.getByTestId('claim-join-form')).toBeVisible({ timeout: 15000 });
-    await page.getByTestId('claim-name-input').fill('Charlie');
-    // Leave group size as default (1)
-    await page.getByTestId('claim-join-btn').click();
-
-    await expect(page.locator('[data-testid^="claim-item-"]').first()).toBeVisible({ timeout: 15000 });
-
-    // Should NOT show any group badge for any person
-    await expect(page.locator('[data-testid^="group-badge-"]')).toHaveCount(0);
-
-    await page.close();
-    await browserCtx.close();
-  });
-
-  test('API: weighted split gives couple proportionally more of shared items', async () => {
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    // Scenario: 3 people split a bill
-    // - Alice & Bob (couple, groupSize=2)
-    // - Charlie (solo, groupSize=1)
-    // They all share a $30 item
-    // Couple should pay 2/3 ($20), Charlie 1/3 ($10)
-    const createRes = await trpcMutation(ctx, 'guest.createClaimSession', {
-      receiptData: {
-        merchantName: 'Weighted Split Test',
-        subtotal: 3000,
-        tax: 0,
-        tip: 0,
-        total: 3000,
-        currency: 'USD',
-      },
-      items: [{ name: 'Shared Nachos', quantity: 1, unitPrice: 3000, totalPrice: 3000 }],
-      creatorName: 'Alice & Bob',
-      paidByName: 'Alice & Bob',
-    });
-    const shareToken = (await createRes.json()).result?.data?.json?.shareToken;
-
-    // Alice & Bob join as a couple (groupSize=2)
-    const coupleData = await joinGuestSession(ctx, { token: shareToken, name: 'Alice & Bob', groupSize: 2 });
-
-    // Charlie joins solo
-    const charlieData = await joinGuestSession(ctx, { token: shareToken, name: 'Charlie' });
-
-    // Both claim the shared nachos
-    await trpcMutation(ctx, 'guest.claimItems', {
-      token: shareToken,
-      personId: coupleData.personId,
-      personToken: coupleData.personToken,
-      claimedItemIndices: [0],
-    });
-    await trpcMutation(ctx, 'guest.claimItems', {
-      token: shareToken,
-      personId: charlieData.personId,
-      personToken: charlieData.personToken,
-      claimedItemIndices: [0],
-    });
-
-    // Finalize
-    const finalizeRes = await trpcMutation(ctx, 'guest.finalizeSession', {
-      token: shareToken,
-      personId: coupleData.personId,
-      personToken: coupleData.personToken,
-    });
-    expect(finalizeRes.ok()).toBe(true);
-
-    // Get session to check summary
-    const getRes = await ctx.get(
-      `/api/trpc/guest.getSession?batch=1&input=${encodeURIComponent(JSON.stringify({ '0': { json: { token: shareToken } } }))}`,
-    );
-    const session = (await getRes.json())[0]?.result?.data?.json;
-
-    expect(session.status).toBe('FINALIZED');
-    expect(session.summary).toHaveLength(2);
-
-    const coupleSummary = session.summary.find((s: { name: string }) => s.name === 'Alice & Bob');
-    const charlieSummary = session.summary.find((s: { name: string }) => s.name === 'Charlie');
-
-    expect(coupleSummary).toBeDefined();
-    expect(charlieSummary).toBeDefined();
-
-    // Couple (weight 2) should pay 2/3, Charlie (weight 1) should pay 1/3
-    // $3000 * 2/3 = $2000, $3000 * 1/3 = $1000
-    expect(coupleSummary.total).toBe(2000);
-    expect(charlieSummary.total).toBe(1000);
-
-    // Totals should sum to $30
-    expect(coupleSummary.total + charlieSummary.total).toBe(3000);
-
-    await ctx.dispose();
-  });
-
-  test('API: groupSize=1 (default) produces equal split as before', async () => {
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    const createRes = await trpcMutation(ctx, 'guest.createClaimSession', {
-      receiptData: {
-        merchantName: 'Default Split Test',
-        subtotal: 3000,
-        tax: 0,
-        tip: 0,
-        total: 3000,
-        currency: 'USD',
-      },
-      items: [{ name: 'Shared Item', quantity: 1, unitPrice: 3000, totalPrice: 3000 }],
-      creatorName: 'Alice',
-      paidByName: 'Alice',
-    });
-    const shareToken = (await createRes.json()).result?.data?.json?.shareToken;
-
-    // Both join with default groupSize (1)
-    const aliceData = await joinGuestSession(ctx, { token: shareToken, name: 'Alice' });
-    const bobData = await joinGuestSession(ctx, { token: shareToken, name: 'Bob' });
-
-    // Both claim the shared item
-    await trpcMutation(ctx, 'guest.claimItems', {
-      token: shareToken,
-      personId: aliceData.personId,
-      personToken: aliceData.personToken,
-      claimedItemIndices: [0],
-    });
-    await trpcMutation(ctx, 'guest.claimItems', {
-      token: shareToken,
-      personId: bobData.personId,
-      personToken: bobData.personToken,
-      claimedItemIndices: [0],
-    });
-
-    // Finalize
-    await trpcMutation(ctx, 'guest.finalizeSession', {
-      token: shareToken,
-      personId: aliceData.personId,
-      personToken: aliceData.personToken,
-    });
-
-    const getRes = await ctx.get(
-      `/api/trpc/guest.getSession?batch=1&input=${encodeURIComponent(JSON.stringify({ '0': { json: { token: shareToken } } }))}`,
-    );
-    const session = (await getRes.json())[0]?.result?.data?.json;
-
-    // Equal split: $1500 each
-    const aliceSummary = session.summary.find((s: { name: string }) => s.name === 'Alice');
-    const bobSummary = session.summary.find((s: { name: string }) => s.name === 'Bob');
-
-    expect(aliceSummary.total).toBe(1500);
-    expect(bobSummary.total).toBe(1500);
-
-    await ctx.dispose();
-  });
-
-  test('full UI flow: couple and solo person claim and finalize', async ({ browser }) => {
-    test.setTimeout(60_000);
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    const createRes = await trpcMutation(ctx, 'guest.createClaimSession', {
-      receiptData: {
-        merchantName: 'Full Group Flow',
-        subtotal: 4000,
-        tax: 400,
-        tip: 600,
-        total: 5000,
-        currency: 'USD',
-      },
-      items: [
-        { name: 'Steak', quantity: 1, unitPrice: 2000, totalPrice: 2000 },
-        { name: 'Shared Appetizer', quantity: 1, unitPrice: 1000, totalPrice: 1000 },
-        { name: 'Fish', quantity: 1, unitPrice: 1000, totalPrice: 1000 },
-      ],
-      creatorName: 'Alice & Bob',
-      paidByName: 'Alice & Bob',
-    });
-    const shareToken = (await createRes.json()).result?.data?.json?.shareToken;
-
-    // Charlie claims Fish via API
-    const charlieData = await joinGuestSession(ctx, { token: shareToken, name: 'Charlie' });
-    await trpcMutation(ctx, 'guest.claimItems', {
-      token: shareToken,
-      personId: charlieData.personId,
-      personToken: charlieData.personToken,
-      claimedItemIndices: [2],
-    });
-    await ctx.dispose();
-
-    // Alice & Bob open in browser
-    const browserCtx = await browser.newContext();
-    const page = await browserCtx.newPage();
-    await page.goto(`/en/split/${shareToken}/claim`);
-
-    await expect(page.getByTestId('claim-join-form')).toBeVisible({ timeout: 15000 });
-
-    // Join as couple
-    await page.getByTestId('claim-name-input').fill('Alice & Bob');
-    await page.getByTestId('group-size-input').fill('2');
-    await page.getByTestId('claim-join-btn').click();
-
-    await expect(page.locator('[data-testid^="claim-item-"]').first()).toBeVisible({ timeout: 15000 });
-    await expect(page.locator('[data-sonner-toast]')).toBeHidden({ timeout: 10000 });
-
-    // Couple claims Steak + Shared Appetizer
-    await page.getByTestId('claim-item-0').click(); // Steak
-    await page.getByTestId('claim-item-1').click(); // Shared Appetizer
-
-    // Charlie also claims the appetizer (shared item)
-    // This is already done via API, but the couple also claims it
-
-    // Save
-    const saveBtn = page.getByTestId('save-claims-btn');
-    await saveBtn.scrollIntoViewIfNeeded();
-    await saveBtn.click();
-    await expect(saveBtn).toContainText(/saved/i, { timeout: 10000 });
-
-    // Group badge should be visible
-    await expect(page.getByTestId('group-badge-0')).toBeVisible();
-
-    // Per-person totals should show the couple paying more
-    await expect(page.getByText('Alice & Bob').first()).toBeVisible();
-    await expect(page.getByText('Charlie').first()).toBeVisible();
-
-    await page.close();
-    await browserCtx.close();
-  });
-
-  test('edit group size via inline edit form', async ({ browser }) => {
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    const createRes = await trpcMutation(ctx, 'guest.createClaimSession', {
-      receiptData: {
-        merchantName: 'Edit Group Test',
-        subtotal: 2000,
-        tax: 200,
-        tip: 0,
-        total: 2200,
-        currency: 'USD',
-      },
-      items: [
-        { name: 'Item A', quantity: 1, unitPrice: 1000, totalPrice: 1000 },
-        { name: 'Item B', quantity: 1, unitPrice: 1000, totalPrice: 1000 },
-      ],
-      creatorName: 'Alice',
-      paidByName: 'Alice',
-    });
-    const shareToken = (await createRes.json()).result?.data?.json?.shareToken;
-    await ctx.dispose();
-
-    const browserCtx = await browser.newContext();
-    const page = await browserCtx.newPage();
-    await page.goto(`/en/split/${shareToken}/claim`);
-
-    // Join as Alice solo
-    await expect(page.getByTestId('claim-join-form')).toBeVisible({ timeout: 15000 });
-    await page.getByTestId('claim-name-input').fill('Alice');
-    await page.getByTestId('claim-join-btn').click();
-    await expect(page.locator('[data-testid^="claim-item-"]').first()).toBeVisible({ timeout: 15000 });
-    await expect(page.locator('[data-sonner-toast]')).toBeHidden({ timeout: 10000 });
-
-    // No group badge initially (solo)
-    await expect(page.locator('[data-testid^="group-badge-"]')).toHaveCount(0);
-
-    // Click edit pencil on Alice
-    await page.getByTestId('edit-person-0').click();
-
-    // Group size input should appear with value 1
-    const groupSizeEdit = page.getByTestId('edit-group-size-0');
-    await expect(groupSizeEdit).toBeVisible();
-    await expect(groupSizeEdit).toHaveValue('1');
-
-    // Change group size to 2
-    await groupSizeEdit.fill('2');
-
-    // Also update name to "Alice & Bob"
-    const nameEdit = page.getByTestId('edit-name-input-0');
-    await nameEdit.fill('Alice & Bob');
-
-    // Submit the edit (click the check button)
-    await page.locator('button[type="submit"]').click();
-
-    // Wait for the edit to save
-    await page.waitForTimeout(1500);
-
-    // Should now show ×2 badge
-    await expect(page.getByTestId('group-badge-0')).toBeVisible({ timeout: 5000 });
-
-    // Name should be updated
-    await expect(page.getByText('Alice & Bob').first()).toBeVisible();
-
-    await page.close();
-    await browserCtx.close();
-  });
-
-  test('changing group size from 2 to 1 removes badge', async ({ browser }) => {
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    const createRes = await trpcMutation(ctx, 'guest.createClaimSession', {
-      receiptData: {
-        merchantName: 'Ungroup Test',
-        subtotal: 1000,
-        tax: 100,
-        tip: 0,
-        total: 1100,
-        currency: 'USD',
-      },
-      items: [{ name: 'Item', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
-      creatorName: 'Couple',
-      paidByName: 'Couple',
-    });
-    const shareToken = (await createRes.json()).result?.data?.json?.shareToken;
-    await ctx.dispose();
-
-    const browserCtx = await browser.newContext();
-    const page = await browserCtx.newPage();
-    await page.goto(`/en/split/${shareToken}/claim`);
-
-    // Join as the creator "Couple" (nobody has joined as them yet) with groupSize=2
-    await expect(page.getByTestId('claim-join-form')).toBeVisible({ timeout: 15000 });
-    await page.getByTestId('claim-name-input').fill('Couple');
-    await page.getByTestId('group-size-input').fill('2');
-    await page.getByTestId('claim-join-btn').click();
-    await expect(page.locator('[data-testid^="claim-item-"]').first()).toBeVisible({ timeout: 15000 });
-
-    // Dismiss any toasts by waiting
-    await page.waitForTimeout(5000);
-
-    // Should show ×2 badge
-    await expect(page.getByTestId('group-badge-0')).toBeVisible();
-
-    // Click edit to change group size back to 1
-    await page.getByTestId('edit-person-0').click();
-    const groupSizeEdit = page.getByTestId('edit-group-size-0');
-    await expect(groupSizeEdit).toHaveValue('2');
-    await groupSizeEdit.fill('1');
-    await page.locator('button[type="submit"]').click();
-
-    // Wait for save
-    await page.waitForTimeout(1500);
-
-    // ×2 badge should be gone
-    await expect(page.getByTestId('group-badge-0')).not.toBeVisible();
-
-    await page.close();
-    await browserCtx.close();
-  });
-
-  test('API: editPersonName with groupSize updates the group size', async () => {
-    const ctx = await request.newContext({ baseURL: BASE });
-
-    const createRes = await trpcMutation(ctx, 'guest.createClaimSession', {
-      receiptData: {
-        merchantName: 'API Edit Group',
-        subtotal: 1000,
-        tax: 100,
-        tip: 0,
-        total: 1100,
-        currency: 'USD',
-      },
-      items: [{ name: 'Item', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
-      creatorName: 'Alice',
-      paidByName: 'Alice',
-    });
-    const shareToken = (await createRes.json()).result?.data?.json?.shareToken;
-
-    // Join as solo
-    const { personToken, personId } = await joinGuestSession(ctx, { token: shareToken, name: 'Alice' });
-
-    // Edit to group size 3
-    const editRes = await trpcMutation(ctx, 'guest.editPersonName', {
-      token: shareToken,
-      personToken,
-      targetId: personId,
-      newName: 'Alice & Friends',
-      groupSize: 3,
-    });
-    expect(editRes.ok()).toBe(true);
-
-    // Verify via getSession
-    const getRes = await ctx.get(
-      `/api/trpc/guest.getSession?batch=1&input=${encodeURIComponent(JSON.stringify({ '0': { json: { token: shareToken } } }))}`,
-    );
-    const session = (await getRes.json())[0]?.result?.data?.json;
-
-    expect(session.people[0].name).toBe('Alice & Friends');
-    expect(session.people[0].groupSize).toBe(3);
-
-    await ctx.dispose();
+  test('regular guest cannot recreate a merged 2-person card through name editor', async () => {
+    const owner = await authedContext('alice@qa.billok.ru');
+    const guest = await request.newContext({ baseURL: BASE });
+    try {
+      const receipt = await createUnifiedReceiptFixture(owner, {
+        merchantName: 'Без устаревшей группы',
+        guestCount: 1,
+        items: [{ name: 'Чай', quantity: 1, totalPrice: 300, unitPrice: 300 }],
+      });
+      const session = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: receipt.shareToken }));
+      const joined = await trpcMutation(guest, 'guest.joinGuestSlot', {
+        token: receipt.shareToken,
+        slotId: session.people[1].id,
+        name: 'Гость 1',
+        joinKey: randomUUID(),
+      });
+      expect(joined.ok(), await joined.text()).toBe(true);
+      const { personId, personToken } = (await joined.json()).result.data.json;
+      const refused = await trpcMutation(guest, 'guest.editPersonName', {
+        token: receipt.shareToken,
+        targetId: personId,
+        personToken,
+        newName: 'Гость 1',
+        groupSize: 2,
+      });
+      expect(refused.ok(), await refused.text()).toBe(false);
+      const after = await trpcResult(await trpcQuery(guest, 'guest.getSession', { token: receipt.shareToken }));
+      expect(after.people[1].name).toBe('Гость 1');
+      expect(after.people[1].groupSize).toBe(1);
+    } finally {
+      await guest.dispose();
+      await owner.dispose();
+    }
   });
 });

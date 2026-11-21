@@ -157,10 +157,14 @@ describe('Issue 3.8.4: creator personal-link rotation at narrow mobile widths', 
 describe('Guest claiming join screen Android keyboard and listed names', () => {
   it('offers numeric keyboard, 44px controls and wraps long free participant names', () => {
     const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
-    // Indentation changes when the old group-size control is correctly hidden
-    // for fixed individual guest slots. Assert the element behavior instead.
-    expect(claim).toMatch(/id="group-size"\s+type="number"\s+inputMode="numeric"/);
-    expect(claim).toContain('className="h-11 w-20 shrink-0 text-base"');
+    // The obsolete per-card company size is removed. Real claim links
+    // contain only individual participants; numeric portions live in the
+    // dedicated compact dish pencil editor.
+    expect(claim).not.toContain('id="group-size"');
+    expect(claim).not.toContain('group-size-input');
+    const allocation = read('src/components/guest-item-allocations.tsx');
+    expect(allocation).toContain('inputMode="numeric"');
+    expect(allocation).toContain('h-11 w-24 min-w-0 shrink-0 text-base');
     expect(claim).toContain('className="h-11 min-w-0 text-base"');
     expect(claim).toContain('min-h-11 min-w-0 max-w-full items-center gap-2 rounded-2xl');
     expect(claim).toContain('min-w-0 text-sm font-medium [overflow-wrap:anywhere]');
@@ -180,10 +184,17 @@ describe('Guest claim item splitting on Android', () => {
   });
 });
 
-describe('Android numeric input for editing guest group size', () => {
-  it('opens the numeric keypad when editing guest group size', () => {
+describe('Android numeric allocation per independent family member', () => {
+  it('uses a real numeric keyboard and 44px target for individual dish parts, not merged people', () => {
+    const allocation = read('src/components/guest-item-allocations.tsx');
     const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
-    expect(claim).toMatch(/type="number"\s+inputMode="numeric"\s+min=\{1\}\s+max=\{20\}\s+value=\{editingGroupSize\}/);
-    expect(claim).toContain('className="h-11 w-16 min-w-0 text-base"');
+    expect(allocation).toContain('inputMode="numeric"');
+    expect(allocation).toContain('type="number"');
+    expect(allocation).toContain('step={1}');
+    expect(allocation).toContain('min={0}');
+    expect(allocation).toContain('max={10000}');
+    expect(allocation).toContain('className="h-11 w-24 min-w-0 shrink-0 text-base"');
+    expect(claim).not.toContain('editingGroupSize');
+    expect(claim).not.toContain('edit-group-size-');
   });
 });

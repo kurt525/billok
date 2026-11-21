@@ -12,9 +12,10 @@ const JOIN_LIMIT_PER_SESSION = 200;
 const JOIN_WINDOW_MS = 60 * 1000;
 
 /**
- * Rate limit for guest.joinSession. A token holder rejoining with a
- * different groupSize writes the session row on every call, so an unlimited
- * loop keeps that row busy and other people's claims can run out of retries.
+ * Rate limit for guest joins and resumed bearer credentials. A repeated
+ * join still consumes transaction and token-bucket resources; unlimited
+ * requests could keep the same session row busy and starve other participants.
+ * The obsolete company-size/groupSize mutation is no longer accepted.
  *
  * The per-person budget stops a client looping on one person. It follows the
  * identity joinSession uses: a caller that sends a person token (a returning

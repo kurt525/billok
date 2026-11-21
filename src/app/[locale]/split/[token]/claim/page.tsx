@@ -88,6 +88,7 @@ import { GuestSbpReimbursementDetails } from '@/components/guest-sbp-reimburseme
 import { GuestPaymentDeclaration } from '@/components/guest-payment-declaration';
 import { GuestPayerPaymentReview } from '@/components/guest-payer-payment-review';
 import { GuestPaymentGroupsEditor } from '@/components/guest-payment-groups-editor';
+import { GuestItemAllocations } from '@/components/guest-item-allocations';
 
 // How one claim save attempt ended: the answer's conflicts when stored, the server's message
 // when refused
@@ -239,7 +240,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
   // --- State ---
   const [name, setName] = useState('');
-  const [groupSize, setGroupSize] = useState(1);
   // Fixed slot selection is separate from a human's editable display name.
   const [selectedGuestSlotId, setSelectedGuestSlotId] = useState<string | null>(null);
   // Only the owner of this device's personToken can edit these tips.
@@ -305,13 +305,13 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // could accidentally invalidate the already minted replacement link.
   const pendingRotation = useRef<{ personId: string; requestKey: string } | null>(null);
   const [editingName, setEditingName] = useState('');
-  const [editingGroupSize, setEditingGroupSize] = useState(1);
   const [receiptItemEdit, setReceiptItemEdit] = useState<{
     itemIndex: number;
     name: string;
     quantity: string;
     price: string;
   } | null>(null);
+  const [allocationEditorIdx, setAllocationEditorIdx] = useState<number | null>(null);
   const [splittingItemIdx, setSplittingItemIdx] = useState<number | null>(null);
   const [splitQty, setSplitQty] = useState('');
   const [removeFor, setRemoveFor] = useState<{ id: string; name: string } | null>(null);
@@ -975,7 +975,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     });
   }
 
-  function startJoin(input: { name: string; groupSize?: number }) {
+  function startJoin(input: { name: string }) {
     if (joinInFlight.current) return;
     joinInFlight.current = true;
     const personToken = getStoredClaimIdentity(token)?.personToken;
@@ -1246,7 +1246,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       startGuestSlotJoin({ ...(selected ? { slotId: selected.id } : {}), name: trimmed });
       return;
     }
-    startJoin({ name: trimmed, ...(groupSize > 1 ? { groupSize } : {}) });
+    startJoin({ name: trimmed });
   }
 
   function toggleClaim(itemIndex: number) {
@@ -2231,7 +2231,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         </Avatar>
                         <span className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">
                           {person.name}
-                          {person.groupSize > 1 && ' (×' + person.groupSize + ')'}
                         </span>
                         {roleMarks(idx)}
                         {accountMark(idx)}
@@ -2341,27 +2340,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 data-testid="claim-name-input"
               />
             </div>
-            {!data.receiptData.guestSlotsMode && (
-              <div className="space-y-2">
-                <label htmlFor="group-size" className="text-sm font-medium">
-                  {t('groupSize')}
-                </label>
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <Input
-                    id="group-size"
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    max={20}
-                    value={groupSize}
-                    onChange={(e) => setGroupSize(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-                    className="h-11 w-20 shrink-0 text-base"
-                    data-testid="group-size-input"
-                  />
-                  <span className="text-xs text-muted-foreground">{t('groupSizeHint')}</span>
-                </div>
-              </div>
-            )}
             {data.receiptData.guestSlotsMode && (
               <div className="min-w-0 space-y-3" data-testid="guest-slot-choice">
                 <p className="text-sm font-semibold">{t('chooseGuestPlace')}</p>
@@ -2615,7 +2593,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           ...(personToken ? { personToken } : {}),
                           targetId: person.id,
                           newName: editingName.trim(),
-                          groupSize: editingGroupSize,
                         });
                       }}
                     >
@@ -2628,17 +2605,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         autoFocus
                         aria-label={t('editName')}
                         data-testid={`edit-name-input-${idx}`}
-                      />
-                      <Input
-                        type="number"
-                        inputMode="numeric"
-                        min={1}
-                        max={20}
-                        value={editingGroupSize}
-                        onChange={(e) => setEditingGroupSize(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-                        className="h-11 w-16 min-w-0 text-base"
-                        aria-label={t('groupSize')}
-                        data-testid={`edit-group-size-${idx}`}
                       />
                       <Button
                         type="submit"
@@ -2670,9 +2636,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         data-testid={'guest-display-name-' + idx}
                       >
                         {person.name}
-                        {person.groupSize > 1 && (
-                          <span data-testid={`group-badge-${idx}`}>{` (×${person.groupSize})`}</span>
-                        )}
                         {idx === myPersonIndex && ` ${t('you')}`}
                       </span>
                       <div className="flex min-w-0 flex-wrap items-center gap-1">
@@ -2690,7 +2653,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         onClick={() => {
                           setEditingPersonId(person.id);
                           setEditingName(person.name);
-                          setEditingGroupSize(person.groupSize ?? 1);
                         }}
                         className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
                         aria-label={t('editName')}
@@ -2759,7 +2721,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               </Avatar>
               <span className="min-w-0 text-left text-sm font-medium [overflow-wrap:anywhere]">
                 {person.name}
-                {person.groupSize > 1 && ` (×${person.groupSize})`}
                 {idx === myPersonIndex && ` ${t('you')}`}
               </span>
               {roleMarks(idx)}
@@ -2846,439 +2807,504 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
                         <span
-                          className={`font-medium truncate ${isClaimed ? 'text-foreground' : 'text-muted-foreground'}`}
+                          className={`font-medium [overflow-wrap:anywhere] ${isClaimed ? 'text-foreground' : 'text-muted-foreground'}`}
                         >
                           {item.name}
                           {item.quantity > 1 && <span className="text-muted-foreground ml-1">x{item.quantity}</span>}
                         </span>
                         <div className="flex items-center gap-1 shrink-0">
-                          {item.quantity > 1 &&
-                            !!personToken &&
-                            (data.isCreator ||
-                              (myPersonIndex !== null &&
-                                !data.assignments.some(
-                                  (assignment) =>
-                                    assignment.itemIndex === idx &&
-                                    assignment.personIndices.some((index) => index !== myPersonIndex),
-                                ))) && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSplittingItemIdx(idx);
-                                  setSplitQty('1');
-                                }}
-                                className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
-                                aria-label={t('splitItem')}
-                                data-testid={`split-claim-item-${idx}`}
-                              >
-                                <Scissors className="h-3.5 w-3.5" />
-                              </button>
-                            )}
+                          {data.status === 'CLAIMING' && (data.isCreator || !!myPersonId) && (
+                            <button
+                              type="button"
+                              className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                              aria-label={t('partsForPeople')}
+                              aria-expanded={allocationEditorIdx === idx}
+                              data-testid={'dish-parts-open-' + idx}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setAllocationEditorIdx((previous) => (previous === idx ? null : idx));
+                              }}
+                            >
+                              <Pencil className="size-4" aria-hidden="true" />
+                            </button>
+                          )}
                           <span className="font-semibold">{formatCents(item.totalPrice, currency, locale)}</span>
                         </div>
                       </div>
 
-                      {/* The original is optional and must never be inferred from item.quantity.
-                          All phones see the same saved consumed/remaining totals. */}
+                      {/* Saved technical progress is not shown in the compact card.
+                          Existing regression checks can still read this semantic snapshot;
+                          the pencil editor displays these details when explicitly opened. */}
                       <div
-                        className="mt-1 space-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]"
+                        aria-hidden="true"
+                        className="relative h-0 w-full overflow-hidden text-xs opacity-0 pointer-events-none"
                         data-testid={'guest-claimed-parts-progress-' + idx}
                       >
-                        <p>{t('partsCounted', { count: savedPortionProgress.countedParts })}</p>
-                        <p
-                          className={
-                            savedPortionProgress.remainingParts !== null && savedPortionProgress.remainingParts < 0
-                              ? 'text-destructive'
-                              : ''
-                          }
-                        >
+                        <span>{t('partsCounted', { count: savedPortionProgress.countedParts })}</span>
+                        <span>
                           {savedPortionProgress.remainingParts === null
                             ? t('partsUnknownOriginal')
                             : savedPortionProgress.remainingParts < 0
                               ? t('knownPartsOverclaimed', { count: -savedPortionProgress.remainingParts })
                               : t('knownPartsRemaining', { count: savedPortionProgress.remainingParts })}
-                        </p>
+                        </span>
                       </div>
-                      {/* 3.15: editing the receipt is a creator-only correction
+                      <GuestItemAllocations
+                        token={token}
+                        itemIndex={idx}
+                        people={data.people}
+                        {...(data.assignments.find((assignment) => assignment.itemIndex === idx)
+                          ? { assignment: data.assignments.find((assignment) => assignment.itemIndex === idx)! }
+                          : {})}
+                        knownParts={savedOriginal}
+                        actorId={myPersonId}
+                        personToken={personToken}
+                        isCreator={data.isCreator}
+                        disabled={saving || anyParked || hasAnyUnsavedChanges}
+                        open={allocationEditorIdx === idx}
+                        onOpenChange={(next) => setAllocationEditorIdx(next ? idx : null)}
+                      >
+                        {/* The original is optional and must never be inferred from item.quantity.
+                          All phones see the same saved consumed/remaining totals. */}
+                        <div
+                          className="mt-1 space-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]"
+                          data-testid={'guest-claimed-parts-progress-detail-' + idx}
+                        >
+                          <p>{t('partsCounted', { count: savedPortionProgress.countedParts })}</p>
+                          <p
+                            className={
+                              savedPortionProgress.remainingParts !== null && savedPortionProgress.remainingParts < 0
+                                ? 'text-destructive'
+                                : ''
+                            }
+                          >
+                            {savedPortionProgress.remainingParts === null
+                              ? t('partsUnknownOriginal')
+                              : savedPortionProgress.remainingParts < 0
+                                ? t('knownPartsOverclaimed', { count: -savedPortionProgress.remainingParts })
+                                : t('knownPartsRemaining', { count: savedPortionProgress.remainingParts })}
+                          </p>
+                        </div>
+                        {/* 3.15: editing the receipt is a creator-only correction
                           of existing line data. It never edits guest claims,
                           phone/bank details or creates an expense outside it. */}
-                      {data.isCreator && data.status === 'CLAIMING' && (
-                        <div
-                          className="mt-2 min-w-0 space-y-2"
-                          data-testid={'receipt-item-correction-' + idx}
-                          onClick={(event) => event.stopPropagation()}
-                          onKeyDown={(event) => event.stopPropagation()}
-                        >
-                          {receiptItemEdit?.itemIndex !== idx ? (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="min-h-11 min-w-11"
-                              data-testid={'receipt-item-edit-' + idx}
-                              onClick={() =>
-                                setReceiptItemEdit({
-                                  itemIndex: idx,
-                                  name: item.name,
-                                  quantity: String(item.quantity),
-                                  price: centsToDecimal(item.unitPrice),
-                                })
-                              }
-                            >
-                              <Pencil className="mr-1 h-4 w-4" />
-                              {t('itemCorrectionEdit')}
-                            </Button>
-                          ) : (
-                            <Dialog open onOpenChange={(open) => !open && setReceiptItemEdit(null)}>
-                              <DialogContent className="min-w-0 max-w-[calc(100%-1rem)] sm:max-w-sm">
-                                <form
-                                  className="min-w-0 space-y-2"
-                                  data-testid={'receipt-item-edit-form-' + idx}
-                                  onSubmit={(event) => {
-                                    event.preventDefault();
-                                    if (!receiptItemEdit) return;
-                                    const qty = Number(receiptItemEdit.quantity);
-                                    const price = parseToCents(receiptItemEdit.price);
-                                    if (
-                                      !receiptItemEdit.name.trim() ||
-                                      !Number.isSafeInteger(qty) ||
-                                      qty < 1 ||
-                                      qty > 200 ||
-                                      !isValidMoneyInput(receiptItemEdit.price) ||
-                                      price < 1 ||
-                                      price * qty > MAX_MONEY_CENTS ||
-                                      updateClaimReceiptItem.isPending
-                                    )
-                                      return;
-                                    updateClaimReceiptItem.mutate({
-                                      token,
-                                      itemIndex: idx,
-                                      name: receiptItemEdit.name.trim(),
-                                      quantity: qty,
-                                      unitPrice: price,
-                                    });
-                                  }}
-                                >
-                                  <DialogTitle>{t('itemCorrectionTitle')}</DialogTitle>
-                                  <DialogDescription>{t('itemCorrectionHint')}</DialogDescription>
-                                  <label htmlFor={'receipt-item-name-' + idx} className="block text-xs font-medium">
-                                    {t('itemCorrectionName')}
-                                  </label>
-                                  <Input
-                                    id={'receipt-item-name-' + idx}
-                                    className="min-h-11 min-w-0 text-base"
-                                    maxLength={160}
-                                    value={receiptItemEdit.name}
-                                    onChange={(event) =>
-                                      setReceiptItemEdit((previous) =>
-                                        previous ? { ...previous, name: event.target.value } : null,
+                        {data.isCreator && data.status === 'CLAIMING' && (
+                          <div
+                            className="mt-2 min-w-0 space-y-2"
+                            data-testid={'receipt-item-correction-' + idx}
+                            onClick={(event) => event.stopPropagation()}
+                            onKeyDown={(event) => event.stopPropagation()}
+                          >
+                            {receiptItemEdit?.itemIndex !== idx ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="min-h-11 min-w-11"
+                                aria-label={t('itemCorrectionEdit')}
+                                title={t('itemCorrectionEdit')}
+                                data-testid={'receipt-item-edit-' + idx}
+                                onClick={() =>
+                                  setReceiptItemEdit({
+                                    itemIndex: idx,
+                                    name: item.name,
+                                    quantity: String(item.quantity),
+                                    price: centsToDecimal(item.unitPrice),
+                                  })
+                                }
+                              >
+                                <Pencil className="size-4" aria-hidden="true" />
+                              </Button>
+                            ) : (
+                              <Dialog open onOpenChange={(open) => !open && setReceiptItemEdit(null)}>
+                                <DialogContent className="min-w-0 max-w-[calc(100%-1rem)] sm:max-w-sm">
+                                  <form
+                                    className="min-w-0 space-y-2"
+                                    data-testid={'receipt-item-edit-form-' + idx}
+                                    onSubmit={(event) => {
+                                      event.preventDefault();
+                                      if (!receiptItemEdit) return;
+                                      const qty = Number(receiptItemEdit.quantity);
+                                      const price = parseToCents(receiptItemEdit.price);
+                                      if (
+                                        !receiptItemEdit.name.trim() ||
+                                        !Number.isSafeInteger(qty) ||
+                                        qty < 1 ||
+                                        qty > 200 ||
+                                        !isValidMoneyInput(receiptItemEdit.price) ||
+                                        price < 1 ||
+                                        price * qty > MAX_MONEY_CENTS ||
+                                        updateClaimReceiptItem.isPending
                                       )
-                                    }
-                                    data-testid={'receipt-item-name-' + idx}
-                                  />
-                                  <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2">
-                                    <div className="min-w-0 space-y-1">
-                                      <label htmlFor={'receipt-item-qty-' + idx} className="block text-xs font-medium">
-                                        {t('itemCorrectionQuantity')}
-                                      </label>
-                                      <Input
-                                        id={'receipt-item-qty-' + idx}
-                                        className="min-h-11 min-w-0 text-base"
-                                        type="number"
-                                        inputMode="numeric"
-                                        min={1}
-                                        max={200}
-                                        value={receiptItemEdit.quantity}
-                                        onChange={(event) =>
-                                          setReceiptItemEdit((previous) =>
-                                            previous ? { ...previous, quantity: event.target.value } : null,
-                                          )
-                                        }
-                                        data-testid={'receipt-item-qty-' + idx}
-                                      />
+                                        return;
+                                      updateClaimReceiptItem.mutate({
+                                        token,
+                                        itemIndex: idx,
+                                        name: receiptItemEdit.name.trim(),
+                                        quantity: qty,
+                                        unitPrice: price,
+                                      });
+                                    }}
+                                  >
+                                    <DialogTitle>{t('itemCorrectionTitle')}</DialogTitle>
+                                    <DialogDescription>{t('itemCorrectionHint')}</DialogDescription>
+                                    <label htmlFor={'receipt-item-name-' + idx} className="block text-xs font-medium">
+                                      {t('itemCorrectionName')}
+                                    </label>
+                                    <Input
+                                      id={'receipt-item-name-' + idx}
+                                      className="min-h-11 min-w-0 text-base"
+                                      maxLength={160}
+                                      value={receiptItemEdit.name}
+                                      onChange={(event) =>
+                                        setReceiptItemEdit((previous) =>
+                                          previous ? { ...previous, name: event.target.value } : null,
+                                        )
+                                      }
+                                      data-testid={'receipt-item-name-' + idx}
+                                    />
+                                    <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2">
+                                      <div className="min-w-0 space-y-1">
+                                        <label
+                                          htmlFor={'receipt-item-qty-' + idx}
+                                          className="block text-xs font-medium"
+                                        >
+                                          {t('itemCorrectionQuantity')}
+                                        </label>
+                                        <Input
+                                          id={'receipt-item-qty-' + idx}
+                                          className="min-h-11 min-w-0 text-base"
+                                          type="number"
+                                          inputMode="numeric"
+                                          min={1}
+                                          max={200}
+                                          value={receiptItemEdit.quantity}
+                                          onChange={(event) =>
+                                            setReceiptItemEdit((previous) =>
+                                              previous ? { ...previous, quantity: event.target.value } : null,
+                                            )
+                                          }
+                                          data-testid={'receipt-item-qty-' + idx}
+                                        />
+                                      </div>
+                                      <div className="min-w-0 space-y-1">
+                                        <label
+                                          htmlFor={'receipt-item-price-' + idx}
+                                          className="block text-xs font-medium"
+                                        >
+                                          {t('itemCorrectionPrice')}
+                                        </label>
+                                        <Input
+                                          id={'receipt-item-price-' + idx}
+                                          className="min-h-11 min-w-0 text-base"
+                                          type="text"
+                                          inputMode="decimal"
+                                          value={receiptItemEdit.price}
+                                          onChange={(event) =>
+                                            setReceiptItemEdit((previous) =>
+                                              previous ? { ...previous, price: event.target.value } : null,
+                                            )
+                                          }
+                                          data-testid={'receipt-item-price-' + idx}
+                                        />
+                                      </div>
                                     </div>
-                                    <div className="min-w-0 space-y-1">
-                                      <label
-                                        htmlFor={'receipt-item-price-' + idx}
-                                        className="block text-xs font-medium"
+                                    <div className="flex min-w-0 flex-wrap gap-2">
+                                      <Button
+                                        type="submit"
+                                        className="min-h-11 min-w-11 whitespace-normal"
+                                        disabled={updateClaimReceiptItem.isPending}
+                                        data-testid={'receipt-item-save-' + idx}
                                       >
-                                        {t('itemCorrectionPrice')}
-                                      </label>
-                                      <Input
-                                        id={'receipt-item-price-' + idx}
-                                        className="min-h-11 min-w-0 text-base"
-                                        type="text"
-                                        inputMode="decimal"
-                                        value={receiptItemEdit.price}
-                                        onChange={(event) =>
-                                          setReceiptItemEdit((previous) =>
-                                            previous ? { ...previous, price: event.target.value } : null,
-                                          )
-                                        }
-                                        data-testid={'receipt-item-price-' + idx}
-                                      />
+                                        {updateClaimReceiptItem.isPending ? t('saving') : t('itemCorrectionSave')}
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        className="min-h-11 min-w-11"
+                                        onClick={() => setReceiptItemEdit(null)}
+                                        data-testid={'receipt-item-cancel-' + idx}
+                                      >
+                                        {t('cancelButton')}
+                                      </Button>
                                     </div>
-                                  </div>
-                                  <div className="flex min-w-0 flex-wrap gap-2">
-                                    <Button
-                                      type="submit"
-                                      className="min-h-11 min-w-11 whitespace-normal"
-                                      disabled={updateClaimReceiptItem.isPending}
-                                      data-testid={'receipt-item-save-' + idx}
-                                    >
-                                      {updateClaimReceiptItem.isPending ? t('saving') : t('itemCorrectionSave')}
-                                    </Button>
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      className="min-h-11 min-w-11"
-                                      onClick={() => setReceiptItemEdit(null)}
-                                      data-testid={'receipt-item-cancel-' + idx}
-                                    >
-                                      {t('cancelButton')}
-                                    </Button>
-                                  </div>
-                                </form>
-                              </DialogContent>
-                            </Dialog>
-                          )}
-                        </div>
-                      )}
-                      {data.isCreator && (
-                        <div
-                          className="mt-2 space-y-1 rounded-md border p-2 text-xs"
-                          data-testid={'guest-known-parts-editor-' + idx}
-                          onClick={(event) => event.stopPropagation()}
-                          onKeyDown={(event) => event.stopPropagation()}
-                        >
-                          <label htmlFor={'guest-original-parts-' + idx} className="block font-medium">
-                            {t('knownPartsLabel')}
-                          </label>
-                          <p className="text-muted-foreground">{t('knownPartsHint')}</p>
-                          <div className="flex min-w-0 flex-wrap items-center gap-2">
-                            <Input
-                              id={'guest-original-parts-' + idx}
-                              type="number"
-                              inputMode="numeric"
-                              min={1}
-                              max={10000}
-                              step={1}
-                              className="h-11 w-24 min-w-0 text-base"
-                              data-testid={'guest-known-parts-input-' + idx}
-                              value={originalDraft}
-                              onChange={(event) =>
-                                setKnownPartsDrafts((prev) => ({
-                                  ...prev,
-                                  [idx]: event.target.value,
-                                }))
-                              }
-                              disabled={setKnownItemParts.isPending}
-                            />
-                            <Button
-                              type="button"
-                              size="sm"
-                              className="min-h-11 min-w-11"
-                              data-testid={'guest-known-parts-save-' + idx}
-                              disabled={
-                                setKnownItemParts.isPending || !originalIsValid || parsedOriginal === savedOriginal
-                              }
-                              onClick={() =>
-                                setKnownItemParts.mutate({ token, itemIndex: idx, totalParts: parsedOriginal })
-                              }
-                            >
-                              {t('knownPartsSave')}
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="min-h-11 min-w-11"
-                              data-testid={'guest-known-parts-clear-' + idx}
-                              disabled={setKnownItemParts.isPending || savedOriginal === null}
-                              onClick={() => setKnownItemParts.mutate({ token, itemIndex: idx, totalParts: null })}
-                            >
-                              {t('knownPartsClear')}
-                            </Button>
+                                  </form>
+                                </DialogContent>
+                              </Dialog>
+                            )}
                           </div>
-                        </div>
-                      )}
-
-                      {/* Split form */}
-                      {splittingItemIdx === idx &&
-                        (() => {
-                          const parsed = Number(splitQty);
-                          const validQty = Number.isSafeInteger(parsed) && parsed >= 1 && parsed < item.quantity;
-                          return (
-                            <div
-                              className="mt-2 flex min-w-0 flex-wrap items-center gap-2"
-                              onClick={(e) => e.stopPropagation()}
-                              onKeyDown={(e) => e.stopPropagation()}
-                            >
-                              <span className="text-xs text-muted-foreground">{t('splitOff')}</span>
+                        )}
+                        {data.isCreator && (
+                          <div
+                            className="mt-2 space-y-1 rounded-md border p-2 text-xs"
+                            data-testid={'guest-known-parts-editor-' + idx}
+                            onClick={(event) => event.stopPropagation()}
+                            onKeyDown={(event) => event.stopPropagation()}
+                          >
+                            <label htmlFor={'guest-original-parts-' + idx} className="block font-medium">
+                              {t('knownPartsLabel')}
+                            </label>
+                            <p className="text-muted-foreground">{t('knownPartsHint')}</p>
+                            <div className="flex min-w-0 flex-wrap items-center gap-2">
                               <Input
+                                id={'guest-original-parts-' + idx}
                                 type="number"
                                 inputMode="numeric"
                                 min={1}
-                                max={item.quantity - 1}
-                                value={splitQty}
-                                onChange={(e) => setSplitQty(e.target.value)}
-                                className="h-11 w-20 min-w-0 text-base"
-                                aria-label={t('splitOff')}
-                                data-testid={`split-qty-input-${idx}`}
+                                max={10000}
+                                step={1}
+                                className="h-11 w-24 min-w-0 text-base"
+                                data-testid={'guest-known-parts-input-' + idx}
+                                value={originalDraft}
+                                onChange={(event) =>
+                                  setKnownPartsDrafts((prev) => ({
+                                    ...prev,
+                                    [idx]: event.target.value,
+                                  }))
+                                }
+                                disabled={setKnownItemParts.isPending}
                               />
-                              <span className="text-xs text-muted-foreground">
-                                {t('splitOfTotal', { total: item.quantity })}
-                              </span>
                               <Button
                                 type="button"
                                 size="sm"
-                                className="min-h-11 min-w-11 text-sm"
-                                // Not while a save is in flight or parked: splitting shifts the item
-                                // indexes its changes are keyed by, and a parked save is sent again as it
-                                // was
-                                disabled={splitClaimItem.isPending || saving || anyParked || !validQty}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (!validQty || !personToken || saving || anyParked) return;
-                                  splitClaimItem.mutate({
-                                    token,
-                                    personToken,
-                                    itemIndex: idx,
-                                    splitQuantity: parsed,
-                                  });
-                                }}
+                                className="min-h-11 min-w-11"
+                                data-testid={'guest-known-parts-save-' + idx}
+                                disabled={
+                                  setKnownItemParts.isPending || !originalIsValid || parsedOriginal === savedOriginal
+                                }
+                                onClick={() =>
+                                  setKnownItemParts.mutate({ token, itemIndex: idx, totalParts: parsedOriginal })
+                                }
                               >
-                                {t('splitButton')}
+                                {t('knownPartsSave')}
                               </Button>
                               <Button
                                 type="button"
-                                variant="ghost"
                                 size="sm"
-                                className="min-h-11 min-w-11 text-sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSplittingItemIdx(null);
-                                }}
+                                variant="outline"
+                                className="min-h-11 min-w-11"
+                                data-testid={'guest-known-parts-clear-' + idx}
+                                disabled={setKnownItemParts.isPending || savedOriginal === null}
+                                onClick={() => setKnownItemParts.mutate({ token, itemIndex: idx, totalParts: null })}
                               >
-                                {t('cancelButton')}
+                                {t('knownPartsClear')}
                               </Button>
                             </div>
-                          );
-                        })()}
+                          </div>
+                        )}
 
-                      {/* The representative may edit portions of their own group
-                          without altering other people's shares or original totals. */}
-                      {myPersonIndex !== null &&
-                        personIndex !== null &&
-                        activeId !== null &&
-                        canEditFor(activeId) &&
-                        personToken &&
-                        data.assignments.some(
-                          (assignment) =>
-                            assignment.itemIndex === idx && assignment.personIndices.includes(personIndex),
-                        ) &&
-                        (() => {
-                          const savedAssignment = data.assignments.find((assignment) => assignment.itemIndex === idx)!;
-                          const savedParts =
-                            savedAssignment.partsByPersonId?.[activeId] ?? data.people[personIndex]?.groupSize ?? 1;
-                          const value = portionDrafts[idx] ?? String(savedParts);
-                          const parsed = /^\d+$/.test(value) ? Number(value) : NaN;
-                          const valid =
-                            Number.isSafeInteger(parsed) &&
-                            parsed >= 1 &&
-                            parsed <= 10000 &&
-                            !hasUnsavedChanges &&
-                            !saving &&
-                            !anyParked;
-                          const progress = guestPortionProgress(savedAssignment, data.people);
-                          const original = data.receiptData.knownPartsByItem?.[String(idx)] ?? null;
-                          const projectedParts = progress.countedParts - savedParts + parsed;
-                          const respectsOriginal = original === null || projectedParts <= original;
-                          return (
-                            <div
-                              className="mt-3 min-w-0 space-y-1 rounded-lg border p-2"
-                              data-testid={'personal-parts-' + idx}
-                              onClick={(event) => event.stopPropagation()}
-                              onKeyDown={(event) => event.stopPropagation()}
-                            >
-                              <p className="text-xs text-muted-foreground">{t('partsPersonalHint')}</p>
-                              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        {item.quantity > 1 &&
+                          !!personToken &&
+                          (data.isCreator ||
+                            (myPersonIndex !== null &&
+                              !data.assignments.some(
+                                (assignment) =>
+                                  assignment.itemIndex === idx &&
+                                  assignment.personIndices.some((index) => index !== myPersonIndex),
+                              ))) && (
+                            <div className="flex justify-end">
+                              {item.quantity > 1 &&
+                                !!personToken &&
+                                (data.isCreator ||
+                                  (myPersonIndex !== null &&
+                                    !data.assignments.some(
+                                      (assignment) =>
+                                        assignment.itemIndex === idx &&
+                                        assignment.personIndices.some((index) => index !== myPersonIndex),
+                                    ))) && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSplittingItemIdx(idx);
+                                      setSplitQty('1');
+                                    }}
+                                    className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                                    aria-label={t('splitItem')}
+                                    data-testid={`split-claim-item-${idx}`}
+                                  >
+                                    <Scissors className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
+                            </div>
+                          )}
+                        {/* Split form */}
+                        {splittingItemIdx === idx &&
+                          (() => {
+                            const parsed = Number(splitQty);
+                            const validQty = Number.isSafeInteger(parsed) && parsed >= 1 && parsed < item.quantity;
+                            return (
+                              <div
+                                className="mt-2 flex min-w-0 flex-wrap items-center gap-2"
+                                onClick={(e) => e.stopPropagation()}
+                                onKeyDown={(e) => e.stopPropagation()}
+                              >
+                                <span className="text-xs text-muted-foreground">{t('splitOff')}</span>
                                 <Input
                                   type="number"
                                   inputMode="numeric"
                                   min={1}
-                                  max={10000}
-                                  step={1}
-                                  className="h-11 w-24 min-w-0 text-base"
-                                  data-testid={'personal-parts-input-' + idx}
-                                  aria-label={t('partsPersonalLabel')}
-                                  value={value}
-                                  onChange={(event) =>
-                                    setPortionDrafts((prev) => ({ ...prev, [idx]: event.target.value }))
-                                  }
+                                  max={item.quantity - 1}
+                                  value={splitQty}
+                                  onChange={(e) => setSplitQty(e.target.value)}
+                                  className="h-11 w-20 min-w-0 text-base"
+                                  aria-label={t('splitOff')}
+                                  data-testid={`split-qty-input-${idx}`}
                                 />
+                                <span className="text-xs text-muted-foreground">
+                                  {t('splitOfTotal', { total: item.quantity })}
+                                </span>
                                 <Button
                                   type="button"
                                   size="sm"
-                                  className="min-h-11 min-w-11"
-                                  data-testid={'personal-parts-save-' + idx}
-                                  disabled={
-                                    !valid || !respectsOriginal || parsed === savedParts || setMyItemParts.isPending
-                                  }
-                                  onClick={() => {
-                                    if (
-                                      !valid ||
-                                      !respectsOriginal ||
-                                      !activeId ||
-                                      !personToken ||
-                                      setMyItemParts.isPending
-                                    )
-                                      return;
-                                    setMyItemParts.mutate({
+                                  className="min-h-11 min-w-11 text-sm"
+                                  // Not while a save is in flight or parked: splitting shifts the item
+                                  // indexes its changes are keyed by, and a parked save is sent again as it
+                                  // was
+                                  disabled={splitClaimItem.isPending || saving || anyParked || !validQty}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (!validQty || !personToken || saving || anyParked) return;
+                                    splitClaimItem.mutate({
                                       token,
-                                      personId: activeId,
                                       personToken,
                                       itemIndex: idx,
-                                      parts: parsed,
-                                      saveKey: newRequestKey(),
+                                      splitQuantity: parsed,
                                     });
                                   }}
                                 >
-                                  {t('partsSave')}
+                                  {t('splitButton')}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="min-h-11 min-w-11 text-sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSplittingItemIdx(null);
+                                  }}
+                                >
+                                  {t('cancelButton')}
                                 </Button>
                               </div>
-                              <p
-                                className="text-xs text-muted-foreground"
-                                data-testid={'personal-parts-counted-' + idx}
-                              >
-                                {t('partsCounted', { count: progress.countedParts })}
-                              </p>
-                            </div>
-                          );
-                        })()}
+                            );
+                          })()}
 
-                      {/* Other claimants */}
-                      {otherClaimants.length > 0 && (
-                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
-                          <span className="text-xs text-muted-foreground">{t('alsoClaimedBy')}</span>
-                          <div className="flex -space-x-1">
-                            {otherClaimants.map((pi) => (
-                              <Avatar key={pi} className="h-5 w-5 border-2 border-background">
-                                <AvatarFallback
-                                  className="text-[8px] font-semibold"
-                                  style={guestVisualColorStyle(data.people[pi], pi)}
+                        {/* The representative may edit portions of their own group
+                          without altering other people's shares or original totals. */}
+                        {myPersonIndex !== null &&
+                          personIndex !== null &&
+                          activeId !== null &&
+                          canEditFor(activeId) &&
+                          personToken &&
+                          data.assignments.some(
+                            (assignment) =>
+                              assignment.itemIndex === idx && assignment.personIndices.includes(personIndex),
+                          ) &&
+                          (() => {
+                            const savedAssignment = data.assignments.find(
+                              (assignment) => assignment.itemIndex === idx,
+                            )!;
+                            const savedParts = savedAssignment.partsByPersonId?.[activeId] ?? 1;
+                            const value = portionDrafts[idx] ?? String(savedParts);
+                            const parsed = /^\d+$/.test(value) ? Number(value) : NaN;
+                            const valid =
+                              Number.isSafeInteger(parsed) &&
+                              parsed >= 1 &&
+                              parsed <= 10000 &&
+                              !hasUnsavedChanges &&
+                              !saving &&
+                              !anyParked;
+                            const progress = guestPortionProgress(savedAssignment, data.people);
+                            const original = data.receiptData.knownPartsByItem?.[String(idx)] ?? null;
+                            const projectedParts = progress.countedParts - savedParts + parsed;
+                            const respectsOriginal = original === null || projectedParts <= original;
+                            return (
+                              <div
+                                className="mt-3 min-w-0 space-y-1 rounded-lg border p-2"
+                                data-testid={'personal-parts-' + idx}
+                                onClick={(event) => event.stopPropagation()}
+                                onKeyDown={(event) => event.stopPropagation()}
+                              >
+                                <p className="text-xs text-muted-foreground">{t('partsPersonalHint')}</p>
+                                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                  <Input
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={1}
+                                    max={10000}
+                                    step={1}
+                                    className="h-11 w-24 min-w-0 text-base"
+                                    data-testid={'personal-parts-input-' + idx}
+                                    aria-label={t('partsPersonalLabel')}
+                                    value={value}
+                                    onChange={(event) =>
+                                      setPortionDrafts((prev) => ({ ...prev, [idx]: event.target.value }))
+                                    }
+                                  />
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    className="min-h-11 min-w-11"
+                                    data-testid={'personal-parts-save-' + idx}
+                                    disabled={
+                                      !valid || !respectsOriginal || parsed === savedParts || setMyItemParts.isPending
+                                    }
+                                    onClick={() => {
+                                      if (
+                                        !valid ||
+                                        !respectsOriginal ||
+                                        !activeId ||
+                                        !personToken ||
+                                        setMyItemParts.isPending
+                                      )
+                                        return;
+                                      setMyItemParts.mutate({
+                                        token,
+                                        personId: activeId,
+                                        personToken,
+                                        itemIndex: idx,
+                                        parts: parsed,
+                                        saveKey: newRequestKey(),
+                                      });
+                                    }}
+                                  >
+                                    {t('partsSave')}
+                                  </Button>
+                                </div>
+                                <p
+                                  className="text-xs text-muted-foreground"
+                                  data-testid={'personal-parts-counted-' + idx}
                                 >
-                                  {getInitials(data.people[pi]?.name ?? '?')}
-                                </AvatarFallback>
-                              </Avatar>
-                            ))}
+                                  {t('partsCounted', { count: progress.countedParts })}
+                                </p>
+                              </div>
+                            );
+                          })()}
+
+                        {/* Other claimants */}
+                        {otherClaimants.length > 0 && (
+                          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
+                            <span className="text-xs text-muted-foreground">{t('alsoClaimedBy')}</span>
+                            <div className="flex -space-x-1">
+                              {otherClaimants.map((pi) => (
+                                <Avatar key={pi} className="h-5 w-5 border-2 border-background">
+                                  <AvatarFallback
+                                    className="text-[8px] font-semibold"
+                                    style={guestVisualColorStyle(data.people[pi], pi)}
+                                  >
+                                    {getInitials(data.people[pi]?.name ?? '?')}
+                                  </AvatarFallback>
+                                </Avatar>
+                              ))}
+                            </div>
+                            <span className="min-w-0 flex-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                              {otherClaimants.map((pi) => data.people[pi]?.name ?? '?').join(', ')}
+                            </span>
                           </div>
-                          <span className="min-w-0 flex-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                            {otherClaimants.map((pi) => data.people[pi]?.name ?? '?').join(', ')}
-                          </span>
-                        </div>
-                      )}
+                        )}
+                      </GuestItemAllocations>
                     </div>
                   </div>
                 </CardContent>

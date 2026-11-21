@@ -88,7 +88,7 @@ test.describe('Finalize claim session', () => {
     await expect(page.locator('[data-sonner-toast]')).toBeHidden({ timeout: 10000 });
 
     // Toggle a claim — creates unsaved changes
-    await page.getByTestId('claim-item-0').click();
+    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
 
     // Finalize button should NOT be visible
     await expect(page.getByTestId('finalize-btn')).not.toBeVisible();
@@ -145,7 +145,7 @@ test.describe('Finalize claim session', () => {
     await expect(page.locator('[data-sonner-toast]')).toBeHidden({ timeout: 10000 });
 
     // Alice claims item 0 (Burger)
-    await page.getByTestId('claim-item-0').click();
+    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
 
     // Save claims first
     const saveBtn = page.getByTestId('save-claims-btn');

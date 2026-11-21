@@ -72,7 +72,7 @@ export async function trpcMutation(
  */
 export async function joinGuestSession(
   ctx: Awaited<ReturnType<typeof request.newContext>>,
-  input: { token: string; name: string; groupSize?: number; personToken?: string; joinKey?: string },
+  input: { token: string; name: string; personToken?: string; joinKey?: string },
 ) {
   const res = await trpcMutation(ctx, 'guest.joinSession', input);
   const body = await res.text();

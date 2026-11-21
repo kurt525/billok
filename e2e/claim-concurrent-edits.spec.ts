@@ -120,7 +120,7 @@ async function parkCatsPie(page: Page, merchantName: string) {
     { times: SAVE_ATTEMPTS },
   );
 
-  await page.getByTestId('claim-item-2').click();
+  await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
   await page.getByTestId('save-claims-btn').click();
   await expect
     .poll(
@@ -141,7 +141,7 @@ test.describe('Claim page — two devices edit the same person (#226)', () => {
     const { ctx, shareToken, catSaves } = await annClaimingForCat(page, 'Two Devices Diner');
 
     // Ann taps the pie for Cat; before she saves, Cat's phone saves the tea and the cake
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
     await catSaves([0, 1]);
     await save(page);
 
@@ -163,7 +163,7 @@ test.describe('Claim page — two devices edit the same person (#226)', () => {
     await expect(page.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'true', { timeout: 15000 });
 
     // Ann untaps the tea for Cat; before she saves, Cat's phone adds the cake
-    await page.getByTestId('claim-item-0').click();
+    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
     await catSaves([0, 1]);
     await save(page);
 
@@ -191,10 +191,10 @@ test.describe('Claim page — two devices edit the same person (#226)', () => {
       { times: 1 },
     );
 
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
     await page.getByTestId('save-claims-btn').click();
     await sent;
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
     release();
     await expect(page.getByText('Claims saved!').first()).toBeVisible({ timeout: 15000 });
 
@@ -230,12 +230,12 @@ test.describe('Claim page — two devices edit the same person (#226)', () => {
       { times: 1 },
     );
 
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
     await page.getByTestId('save-claims-btn').click();
     await sent;
-    await page.getByTestId('claim-item-2').click();
-    await page.getByTestId('claim-item-2').click();
-    await page.getByTestId('claim-item-0').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
+    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
     fail();
 
     // The page sends the save again with the same key, and it's stored; the pie taps cancelled
@@ -268,7 +268,7 @@ test.describe('Claim page — two devices edit the same person (#226)', () => {
       { times: 1 },
     );
 
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
     await page.getByTestId('save-claims-btn').click();
 
     // Nothing was stored; the pie is still claimed here, waiting to be saved
@@ -300,7 +300,7 @@ test.describe('Claim page — two devices edit the same person (#226)', () => {
     );
 
     // Ann claims the pie for Cat and saves
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
     await page.getByTestId('save-claims-btn').click();
     await expect(page.getByTestId('save-claims-btn')).toHaveText('Claims saved', { timeout: 15000 });
     await expect.poll(() => claimsOf(ctx, shareToken, 'Cat'), { timeout: 15000 }).toEqual(['Pie']);
@@ -327,7 +327,7 @@ test.describe('Claim page — two devices edit the same person (#226)', () => {
     // Ann claims the tea and saves again. The page first sends the save it gave up on, with its
     // own key: the server answers it as stored without applying it again, so the pie stays
     // unclaimed as Cat's phone left it.
-    await page.getByTestId('claim-item-0').click();
+    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
     await save(page);
     await expect.poll(() => claimsOf(ctx, shareToken, 'Cat'), { timeout: 15000 }).toEqual(['Tea']);
     await expect(page.getByTestId('claim-item-2')).toHaveAttribute('aria-pressed', 'false', { timeout: 15000 });
@@ -348,7 +348,7 @@ test.describe('Claim page — two devices edit the same person (#226)', () => {
     // keys of the person saving, and Ann's saves for anyone count, so the page first sends the
     // save it gave up on for Cat, with its own key.
     await page.getByTestId('switch-person-0').click();
-    await page.getByTestId('claim-item-1').click();
+    await page.getByTestId('claim-item-1').click({ position: { x: 24, y: 20 } });
     await save(page);
     await expect.poll(() => claimsOf(ctx, shareToken, 'Ann'), { timeout: 15000 }).toEqual(['Cake']);
     expect(await claimsOf(ctx, shareToken, 'Cat')).toEqual([]);
@@ -385,7 +385,7 @@ test.describe('Claim page — two devices edit the same person (#226)', () => {
       { times: 1 },
     );
 
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
     await page.getByTestId('save-claims-btn').click();
 
     // The page forgets Ann (she was removed) instead of sending the save again with her
@@ -428,7 +428,7 @@ test.describe('Claim page — two devices edit the same person (#226)', () => {
       { times: 1 },
     );
 
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
     await page.getByTestId('save-claims-btn').click();
     await sent;
     // The pie is in the save now, not an unsaved change; watch from here until the save ends
@@ -474,10 +474,10 @@ test.describe('Claim page — two devices edit the same person (#226)', () => {
     );
 
     // Ann claims the pie for Cat and saves; while the save is out, she taps the pie off again
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
     await page.getByTestId('save-claims-btn').click();
     await serverStored;
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
     drop();
 
     // The pie was stored; the tap-off is still here, waiting to be saved
@@ -512,7 +512,7 @@ test.describe('Claim page — two devices edit the same person (#226)', () => {
     );
 
     // Ann unclaims the tea for Cat and saves; until the save lands, Finalize can't be pressed
-    await page.getByTestId('claim-item-0').click();
+    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
     await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
     await page.getByTestId('save-claims-btn').click();
     await sent;
@@ -528,7 +528,7 @@ test.describe('Claim page — two devices edit the same person (#226)', () => {
   test("another device's saves show under changes not saved yet", async ({ page }) => {
     const { ctx, catSaves } = await annClaimingForCat(page, 'Two Devices Cafe');
 
-    await page.getByTestId('claim-item-2').click();
+    await page.getByTestId('claim-item-2').click({ position: { x: 24, y: 20 } });
     await catSaves([0]);
     // The next poll shows Cat's tea, and the pie is still waiting to be saved
     await expect(page.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'true', { timeout: 15000 });

@@ -94,7 +94,7 @@ test.describe('Claim page — someone else removes a person listed earlier', () 
 
     // Cat, now second in the list, claims the tea and saves
     await expect(page.getByText('Cat (you)').first()).toBeVisible();
-    await page.getByTestId('claim-item-0').click();
+    await page.getByTestId('claim-item-0').click({ position: { x: 24, y: 20 } });
     await page.getByTestId('save-claims-btn').click();
     await expect(page.getByText('Claims saved!').first()).toBeVisible({ timeout: 15000 });
 
