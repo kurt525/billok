@@ -2594,6 +2594,16 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         peopleCount={data.people.length}
         itemCount={data.items.length}
       />
+      {/* Copy link, and this person's own link for their other devices */}
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={copyLink} data-testid="copy-link-btn">
+          <Link2 className="mr-2 h-4 w-4" />
+          {t('copyLink')}
+        </Button>
+        {personalLinkButton}
+      </div>
+      {personalLinkHint}
+
       <section
         id="claim-people-panel"
         role="tabpanel"
@@ -2602,78 +2612,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         className="w-full min-w-0 space-y-6"
         data-testid="claim-people-panel"
       >
-        {/* Copy link, and this person's own link for their other devices */}
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={copyLink} data-testid="copy-link-btn">
-            <Link2 className="mr-2 h-4 w-4" />
-            {t('copyLink')}
-          </Button>
-          {personalLinkButton}
-        </div>
-        {personalLinkHint}
-
-        {/* Personal tips belong to this device's identity, never the person selected
-          for editing dish claims. Individual tips are included when finalizing. */}
-        {tipTarget && myPersonId && personToken && (
-          <Card data-testid="personal-tip-card">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">
-                {tipTarget.id === myPersonId
-                  ? t('personalTipTitle')
-                  : t('paymentGroupTipFor', { name: tipTarget.name })}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                {tipTarget.id === myPersonId ? t('personalTipDescription') : t('paymentGroupDisclaimer')}
-              </p>
-              {tipTarget.id !== myPersonId && (
-                <p className="text-sm font-medium" data-testid="payment-group-tip-target">
-                  {t('paymentGroupTipFor', { name: tipTarget.name })}
-                </p>
-              )}
-              <form
-                className="flex flex-wrap items-end gap-3"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  if (!personalTipIsValid || personalTipCents === savedPersonalTip || setPersonalTip.isPending) return;
-                  setPersonalTip.mutate({ token, personId: tipTarget.id, personToken, tipCents: personalTipCents });
-                }}
-              >
-                <div className="min-w-0 flex-1 space-y-1">
-                  <label htmlFor="personal-tip-amount" className="text-sm font-medium">
-                    {t('personalTipAmount')}
-                  </label>
-                  <Input
-                    id="personal-tip-amount"
-                    type="text"
-                    inputMode="decimal"
-                    className="h-11 min-w-0 text-base"
-                    value={personalTipValue}
-                    onChange={(event) => setPersonalTipDraft(event.target.value)}
-                    aria-invalid={!personalTipIsValid}
-                    data-testid="personal-tip-input"
-                  />
-                </div>
-                <Button
-                  type="submit"
-                  className="min-h-11"
-                  disabled={!personalTipIsValid || personalTipCents === savedPersonalTip || setPersonalTip.isPending}
-                  data-testid="personal-tip-save"
-                >
-                  {setPersonalTip.isPending ? t('saving') : t('personalTipSave')}
-                </Button>
-              </form>
-              {!personalTipIsValid && (
-                <p className="text-sm text-destructive" role="alert">
-                  {t('personalTipInvalid')}
-                </p>
-              )}
-              <p className="text-xs text-muted-foreground">{t('personalTipPendingTotals')}</p>
-            </CardContent>
-          </Card>
-        )}
-
         {data.isCreator && (
           <GuestPaymentGroupsEditor token={token} people={data.people} paidByIndex={data.paidByIndex} />
         )}
@@ -2891,6 +2829,68 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         className="w-full min-w-0 space-y-6"
         data-testid="claim-items-panel"
       >
+        {/* Personal tips belong to this device's identity, never the person selected
+          for editing dish claims. Individual tips are included when finalizing. */}
+        {tipTarget && myPersonId && personToken && (
+          <Card data-testid="personal-tip-card">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">
+                {tipTarget.id === myPersonId
+                  ? t('personalTipTitle')
+                  : t('paymentGroupTipFor', { name: tipTarget.name })}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                {tipTarget.id === myPersonId ? t('personalTipDescription') : t('paymentGroupDisclaimer')}
+              </p>
+              {tipTarget.id !== myPersonId && (
+                <p className="text-sm font-medium" data-testid="payment-group-tip-target">
+                  {t('paymentGroupTipFor', { name: tipTarget.name })}
+                </p>
+              )}
+              <form
+                className="flex flex-wrap items-end gap-3"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!personalTipIsValid || personalTipCents === savedPersonalTip || setPersonalTip.isPending) return;
+                  setPersonalTip.mutate({ token, personId: tipTarget.id, personToken, tipCents: personalTipCents });
+                }}
+              >
+                <div className="min-w-0 flex-1 space-y-1">
+                  <label htmlFor="personal-tip-amount" className="text-sm font-medium">
+                    {t('personalTipAmount')}
+                  </label>
+                  <Input
+                    id="personal-tip-amount"
+                    type="text"
+                    inputMode="decimal"
+                    className="h-11 min-w-0 text-base"
+                    value={personalTipValue}
+                    onChange={(event) => setPersonalTipDraft(event.target.value)}
+                    aria-invalid={!personalTipIsValid}
+                    data-testid="personal-tip-input"
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  className="min-h-11"
+                  disabled={!personalTipIsValid || personalTipCents === savedPersonalTip || setPersonalTip.isPending}
+                  data-testid="personal-tip-save"
+                >
+                  {setPersonalTip.isPending ? t('saving') : t('personalTipSave')}
+                </Button>
+              </form>
+              {!personalTipIsValid && (
+                <p className="text-sm text-destructive" role="alert">
+                  {t('personalTipInvalid')}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">{t('personalTipPendingTotals')}</p>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Claim as selector */}
         <div className="space-y-2">
           <p className="text-sm font-medium">{t('claimingFor')}</p>

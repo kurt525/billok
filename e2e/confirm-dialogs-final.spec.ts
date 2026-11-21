@@ -22,6 +22,15 @@ function rejectNativeDialogs(page: Page) {
 
 async function ensureReceiptTab(page: Page, tab: 'people' | 'items') {
   const control = page.getByTestId('claim-tab-' + tab);
+  // A page may still be restoring the guest's identity after navigation.
+  // Wait for the tab itself rather than treating its absence as completion.
+  if ((await control.count()) === 0) {
+    await expect
+      .poll(async () => (await control.count()) > 0 || (await page.getByTestId('finalized-bill-total').count()) > 0, {
+        timeout: 20_000,
+      })
+      .toBe(true);
+  }
   if ((await control.count()) > 0 && (await control.getAttribute('aria-selected')) !== 'true') {
     await control.click();
   }

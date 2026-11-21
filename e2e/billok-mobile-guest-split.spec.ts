@@ -115,6 +115,15 @@ async function requireNoPaintedPayerReviewDuplicates(page: Page) {
 
 async function ensureReceiptTab(page: Page, tab: 'people' | 'items') {
   const control = page.getByTestId('claim-tab-' + tab);
+  // A page may still be restoring the guest's identity after navigation.
+  // Wait for the tab itself rather than treating its absence as completion.
+  if ((await control.count()) === 0) {
+    await expect
+      .poll(async () => (await control.count()) > 0 || (await page.getByTestId('finalized-bill-total').count()) > 0, {
+        timeout: 20_000,
+      })
+      .toBe(true);
+  }
   if ((await control.count()) > 0 && (await control.getAttribute('aria-selected')) !== 'true') {
     await control.click();
   }
@@ -375,6 +384,7 @@ test('TASK-BILLOK-002 23–30: compact real mobile portions 4/2/1, single-tap cl
     await page.getByTestId('dish-person-0-2').click();
     await ensureReceiptTab(page, 'items');
     await expect(page.getByTestId('dish-parts-count-0-2')).toHaveText('1');
+    await ensureReceiptTab(page, 'people');
     await expect(page.getByTestId('account-status-registered').first()).toBeVisible();
     const contrast = await page
       .getByTestId('account-status-registered')
@@ -2438,6 +2448,7 @@ test('anonymous mobile participant can join a long-name slot and edit it with to
     // The unclaimed remainder has to fit even when the system font is large,
     // before this participant assigns any share of the receipt.
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    await ensureReceiptTab(page, 'items');
     const unclaimedTotal = page.getByTestId('unclaimed-total');
     for (const width of [360, 430, 720]) {
       await page.setViewportSize({ width, height: 380 });
@@ -2459,6 +2470,7 @@ test('anonymous mobile participant can join a long-name slot and edit it with to
     await expect(saveClaims).toContainText(longName);
     for (const width of [360, 430, 720]) {
       await page.setViewportSize({ width, height: 380 });
+      await ensureReceiptTab(page, 'people');
       const editForm = nameEdit.locator('xpath=ancestor::form');
       await expect(nameEdit).toHaveValue(longName);
       const editControls = [nameEdit, editForm.locator('button').nth(0), editForm.locator('button').nth(1)];
@@ -2470,6 +2482,7 @@ test('anonymous mobile participant can join a long-name slot and edit it with to
         expect(rect!.x).toBeGreaterThanOrEqual(0);
         expect(rect!.x + rect!.width).toBeLessThanOrEqual(width);
       }
+      await ensureReceiptTab(page, 'items');
       await saveClaims.scrollIntoViewIfNeeded();
       await expect(saveClaims).toBeInViewport();
       const bounds = await saveClaims.boundingBox();
@@ -2617,6 +2630,7 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
         'Card is clipped at right on ' + width + 'px: ' + JSON.stringify(geometry),
       ).toBeGreaterThanOrEqual(0);
       for (const testId of ['personal-link-btn', 'claim-actions', 'save-claims-btn']) {
+        await ensureReceiptTab(page, testId === 'personal-link-btn' ? 'people' : 'items');
         const bounds = await page.getByTestId(testId).evaluate((element) => {
           const rect = element.getBoundingClientRect();
           return { left: rect.left, right: rect.right, height: rect.height };
@@ -3961,7 +3975,9 @@ test('Issue 3.12: two guest devices count as one; joins, name changes and roles 
     await expect(ownerPage.getByTestId('presence-person-' + firstId)).toContainText('Борис П.', {
       timeout: 25_000,
     });
+    await ensureReceiptTab(page, 'people');
     await expect(page.getByText('Борис П.').first()).toBeVisible({ timeout: 25_000 });
+    await ensureReceiptTab(otherGuestPage, 'people');
     await expect(otherGuestPage.getByText('Борис П.').first()).toBeVisible({ timeout: 25_000 });
 
     const joinTwo = await trpcMutation(page.request, 'guest.joinGuestSlot', {
@@ -5147,6 +5163,7 @@ test('Issue 3.5: organizer sees joined, live, lost and reconnected mobile guests
 
     // Network loss does not remove a joined participant. Server TTL, rather
     // than a client-supplied 'offline' flag, is the authority for presence.
+    await ensureReceiptTab(page, 'people');
     await page.context().setOffline(true);
     await expect(page.getByTestId('presence-connection-lost')).toBeVisible({ timeout: 15_000 });
     await expect(borisStatus).toHaveText('Не в сети — был подключён ранее', { timeout: 68_000 });
@@ -5258,6 +5275,7 @@ test('Issue 3.4: mobile creator explicitly delegates approval and finalization, 
     await loginWithPasskey(ownerPage, users.alice.email);
     await rememberClaimIdentity(organizerBrowser, token, anna);
     await ownerPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    await ensureReceiptTab(ownerPage, 'people');
     const panel = ownerPage.getByTestId('finalization-organizer-panel');
     await expect(panel).toBeVisible({ timeout: 15_000 });
     await panel.getByTestId('finalization-organizer-email').fill(users.charlie.email);
@@ -6022,6 +6040,7 @@ test('Issue 3.25.3.1: guest cannot remove a different participant by ID on mobil
     await rememberClaimIdentity(page.context(), token, andrey);
     await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+    await ensureReceiptTab(page, 'people');
     await expect(page.getByTestId('remove-person-1')).toBeVisible();
     await expect(page.getByTestId('remove-person-0')).toHaveCount(0);
     await expect(page.getByTestId('remove-person-2')).toHaveCount(0);
@@ -6429,5 +6448,40 @@ test('Issue 3.25.4.2: public REST and SSE never reveal a guest personal credenti
   } finally {
     if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
     await creator.dispose();
+  }
+});
+
+test('Issue 10.31: mobile tabs keep receipt data and draft edits', async ({ page }) => {
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  try {
+    const response = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Вкладки', subtotal: 800, tax: 0, tip: 0, total: 800, currency: 'RUB' },
+      items: [{ name: 'Пицца', quantity: 1, unitPrice: 800, totalPrice: 800 }],
+      guestCount: 0,
+      joinCreator: true,
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    const { shareToken } = (await response.json()).result.data.json;
+    await loginWithPasskey(page, users.alice.email);
+    await page.goto('/split/' + shareToken + '/claim');
+    await expect(page.getByTestId('claim-tab-items')).toHaveAttribute('aria-selected', 'true');
+    await page.getByTestId('receipt-item-edit-0').click();
+    await page.getByTestId('receipt-item-name-0').fill('Новое название');
+    await page.getByTestId('claim-tab-people').click();
+    await expect(page.getByTestId('guest-color-person-0')).toBeVisible();
+    await expect(page.getByTestId('claim-item-0')).toBeHidden();
+    await page.getByTestId('claim-tab-items').click();
+    await expect(page.getByTestId('receipt-item-name-0')).toHaveValue('Новое название');
+    await page.getByTestId('receipt-item-cancel-0').click();
+    for (const width of [320, 375, 720]) {
+      await page.setViewportSize({ width, height: 740 });
+      for (const tab of ['people', 'items']) {
+        await page.getByTestId('claim-tab-' + tab).click();
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+        expect(overflow).toBeLessThanOrEqual(1);
+      }
+    }
+  } finally {
+    await owner.dispose();
   }
 });

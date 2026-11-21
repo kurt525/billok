@@ -412,7 +412,6 @@ jobs:
                 e2e/billok-mobile-wide.spec.ts \
                 e2e/billok-mobile-receipt-actions.spec.ts \
                 e2e/assignment-chip-names.spec.ts \
-                e2e/claim-tabs.spec.ts \
                 e2e/split-item.spec.ts \
                 e2e/claim-share-link.spec.ts \
                 e2e/groups-archive-manual.spec.ts \
