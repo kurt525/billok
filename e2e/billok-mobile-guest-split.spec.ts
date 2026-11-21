@@ -114,19 +114,12 @@ async function requireNoPaintedPayerReviewDuplicates(page: Page) {
 }
 
 async function ensureReceiptTab(page: Page, tab: 'people' | 'items') {
+  if (!/\/split\/[^/]+\/claim(?:\?|$)/.test(new URL(page.url()).pathname + new URL(page.url()).search)) return;
   const control = page.getByTestId('claim-tab-' + tab);
-  // A page may still be restoring the guest's identity after navigation.
-  // Wait for the tab itself rather than treating its absence as completion.
-  if ((await control.count()) === 0) {
-    await expect
-      .poll(async () => (await control.count()) > 0 || (await page.getByTestId('finalized-bill-total').count()) > 0, {
-        timeout: 20_000,
-      })
-      .toBe(true);
-  }
-  if ((await control.count()) > 0 && (await control.getAttribute('aria-selected')) !== 'true') {
-    await control.click();
-  }
+  await expect(control).toBeVisible({ timeout: 20_000 });
+  if ((await control.getAttribute('aria-selected')) !== 'true') await control.click();
+  await expect(control).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#claim-' + tab + '-panel')).toBeVisible({ timeout: 10_000 });
 }
 
 test.use({ viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
@@ -5136,6 +5129,7 @@ test('Issue 3.5: organizer sees joined, live, lost and reconnected mobile guests
     const creatorId = ownerSession.people[0].id as string;
     const borisId = ownerSession.people[1].id as string;
     const victorId = ownerSession.people[2].id as string;
+    await expect(ownerPage.getByTestId('claim-people-panel')).toBeAttached({ timeout: 20_000 });
     await ensureReceiptTab(ownerPage, 'people');
     const presence = ownerPage.getByTestId('organizer-presence');
     await expect(presence).toBeVisible({ timeout: 15_000 });
@@ -5174,6 +5168,7 @@ test('Issue 3.5: organizer sees joined, live, lost and reconnected mobile guests
 
     for (const width of [320, 360, 430, 720]) {
       await ownerPage.setViewportSize({ width, height: 620 });
+      await ensureReceiptTab(ownerPage, 'people');
       const card = presence.getByTestId('presence-person-' + borisId);
       await card.scrollIntoViewIfNeeded();
       const bounds = await card.boundingBox();
@@ -5275,6 +5270,7 @@ test('Issue 3.4: mobile creator explicitly delegates approval and finalization, 
     await loginWithPasskey(ownerPage, users.alice.email);
     await rememberClaimIdentity(organizerBrowser, token, anna);
     await ownerPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    await expect(ownerPage.getByTestId('claim-people-panel')).toBeAttached({ timeout: 20_000 });
     await ensureReceiptTab(ownerPage, 'people');
     const panel = ownerPage.getByTestId('finalization-organizer-panel');
     await expect(panel).toBeVisible({ timeout: 15_000 });
@@ -6040,6 +6036,7 @@ test('Issue 3.25.3.1: guest cannot remove a different participant by ID on mobil
     await rememberClaimIdentity(page.context(), token, andrey);
     await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+    await expect(page.getByTestId('claim-people-panel')).toBeAttached({ timeout: 20_000 });
     await ensureReceiptTab(page, 'people');
     await expect(page.getByTestId('remove-person-1')).toBeVisible();
     await expect(page.getByTestId('remove-person-0')).toHaveCount(0);
@@ -6465,14 +6462,15 @@ test('Issue 10.31: mobile tabs keep receipt data and draft edits', async ({ page
     await loginWithPasskey(page, users.alice.email);
     await page.goto('/split/' + shareToken + '/claim');
     await expect(page.getByTestId('claim-tab-items')).toHaveAttribute('aria-selected', 'true');
-    await page.getByTestId('receipt-item-edit-0').click();
-    await page.getByTestId('receipt-item-name-0').fill('Новое название');
+    await page.getByTestId('dish-parts-open-0').click();
+    await expect(page.getByTestId('dish-parts-editor-0')).toBeVisible();
+    await page.getByTestId('dish-parts-input-0-0').fill('4');
     await page.getByTestId('claim-tab-people').click();
     await expect(page.getByTestId('guest-color-person-0')).toBeVisible();
     await expect(page.getByTestId('claim-item-0')).toBeHidden();
     await page.getByTestId('claim-tab-items').click();
-    await expect(page.getByTestId('receipt-item-name-0')).toHaveValue('Новое название');
-    await page.getByTestId('receipt-item-cancel-0').click();
+    await expect(page.getByTestId('dish-parts-input-0-0')).toHaveValue('4');
+    await page.getByTestId('dish-parts-cancel-0').click();
     for (const width of [320, 375, 720]) {
       await page.setViewportSize({ width, height: 740 });
       for (const tab of ['people', 'items']) {

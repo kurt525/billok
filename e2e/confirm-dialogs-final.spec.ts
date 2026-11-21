@@ -22,18 +22,10 @@ function rejectNativeDialogs(page: Page) {
 
 async function ensureReceiptTab(page: Page, tab: 'people' | 'items') {
   const control = page.getByTestId('claim-tab-' + tab);
-  // A page may still be restoring the guest's identity after navigation.
-  // Wait for the tab itself rather than treating its absence as completion.
-  if ((await control.count()) === 0) {
-    await expect
-      .poll(async () => (await control.count()) > 0 || (await page.getByTestId('finalized-bill-total').count()) > 0, {
-        timeout: 20_000,
-      })
-      .toBe(true);
-  }
-  if ((await control.count()) > 0 && (await control.getAttribute('aria-selected')) !== 'true') {
-    await control.click();
-  }
+  await expect(control).toBeVisible({ timeout: 20_000 });
+  if ((await control.getAttribute('aria-selected')) !== 'true') await control.click();
+  await expect(control).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#claim-' + tab + '-panel')).toBeVisible({ timeout: 10_000 });
 }
 
 test.use({ viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
@@ -105,6 +97,7 @@ test('9.3: organizer removes a joined person only after an in-page confirmation'
   await rememberClaimIdentity(page.context(), token, creator);
   await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.getByTestId('claim-people-panel')).toBeAttached({ timeout: 20_000 });
 
   // Editing a person's name is cancellable, and the icon buttons have accessible names.
   await ensureReceiptTab(page, 'people');
