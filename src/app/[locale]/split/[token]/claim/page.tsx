@@ -2782,6 +2782,10 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                 tabIndex={0}
                 data-testid={`claim-item-${idx}`}
                 onKeyDown={(e) => {
+                  // Nested per-person chips and editor buttons implement their
+                  // own keyboard actions. Enter/Space on those controls must
+                  // never trigger the outer card's staged whole-dish claim.
+                  if (e.target !== e.currentTarget) return;
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
                     toggleClaim(idx);
@@ -2826,6 +2830,30 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                               }}
                             >
                               <Pencil className="size-4" aria-hidden="true" />
+                            </button>
+                          )}
+                          {/* Keep the receipt correction action in the always-visible
+                              header while the parts panel is open. Putting the
+                              trigger below the per-person inputs made its touch
+                              target inaccessible under fixed mobile bars. */}
+                          {data.isCreator && data.status === 'CLAIMING' && allocationEditorIdx === idx && (
+                            <button
+                              type="button"
+                              className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                              data-testid={'receipt-item-edit-' + idx}
+                              aria-label={t('itemCorrectionEdit')}
+                              title={t('itemCorrectionEdit')}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setReceiptItemEdit({
+                                  itemIndex: idx,
+                                  name: item.name,
+                                  quantity: String(item.quantity),
+                                  price: centsToDecimal(item.unitPrice),
+                                });
+                              }}
+                            >
+                              <Receipt className="size-4" aria-hidden="true" />
                             </button>
                           )}
                           <span className="font-semibold">{formatCents(item.totalPrice, currency, locale)}</span>
@@ -2895,27 +2923,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                             onClick={(event) => event.stopPropagation()}
                             onKeyDown={(event) => event.stopPropagation()}
                           >
-                            {receiptItemEdit?.itemIndex !== idx ? (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="min-h-11 min-w-11"
-                                aria-label={t('itemCorrectionEdit')}
-                                title={t('itemCorrectionEdit')}
-                                data-testid={'receipt-item-edit-' + idx}
-                                onClick={() =>
-                                  setReceiptItemEdit({
-                                    itemIndex: idx,
-                                    name: item.name,
-                                    quantity: String(item.quantity),
-                                    price: centsToDecimal(item.unitPrice),
-                                  })
-                                }
-                              >
-                                <Pencil className="size-4" aria-hidden="true" />
-                              </Button>
-                            ) : (
+                            {receiptItemEdit?.itemIndex === idx && (
                               <Dialog open onOpenChange={(open) => !open && setReceiptItemEdit(null)}>
                                 <DialogContent className="min-w-0 max-w-[calc(100%-1rem)] sm:max-w-sm">
                                   <form

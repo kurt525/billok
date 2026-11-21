@@ -297,6 +297,14 @@ test('TASK-BILLOK-002 23–30: compact real mobile portions 4/2/1, single-tap cl
     await expect(page.locator('[data-testid^="group-badge-"]')).toHaveCount(0);
     await expect(page.getByTestId('guest-claimed-parts-progress-0')).not.toBeVisible();
     await expect(page.getByTestId('dish-people-0').locator('button')).toHaveCount(3);
+    // Enter on a nested pencil must open the editor without inadvertently
+    // selecting the entire dish via the parent role=button keyboard handler.
+    await page.getByTestId('dish-parts-open-0').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('dish-parts-editor-0')).toBeVisible();
+    await expect(page.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'false');
+    await page.getByTestId('dish-parts-open-0').click();
+    await expect(page.getByTestId('dish-parts-editor-0')).toHaveCount(0);
     await expect(page.getByTestId('dish-parts-count-0-0')).toHaveCount(0);
     await expect(page.getByTestId('dish-parts-count-0-1')).toHaveCount(0);
 
@@ -3977,7 +3985,21 @@ test('Issue 3.15: receipt corrections recalculate claims and known pieces on thr
     }
     await expect(guestPage.getByTestId('receipt-item-edit-0')).toHaveCount(0);
     await creatorPage.getByTestId('dish-parts-open-0').click();
-    await creatorPage.getByTestId('receipt-item-edit-0').click();
+    const correctionAction = creatorPage.getByTestId('receipt-item-edit-0');
+    // Diagnoses the actual touch target; never mask a mobile overlay with force:true.
+    await expect(correctionAction).toBeVisible();
+    const correctionHit = await correctionAction.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return {
+        clickable: Boolean(hit && element.contains(hit)),
+        bounds: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+        viewport: { width: innerWidth, height: innerHeight },
+        intercepting: hit?.getAttribute('data-testid') ?? hit?.tagName ?? null,
+      };
+    });
+    expect(correctionHit.clickable, JSON.stringify(correctionHit)).toBe(true);
+    await correctionAction.click();
     await creatorPage.getByTestId('receipt-item-name-0').fill('Салат исправленный');
     await creatorPage.getByTestId('receipt-item-qty-0').fill('2');
     await creatorPage.getByTestId('receipt-item-price-0').fill('2,50');
@@ -4503,7 +4525,10 @@ test('Issue 3.17: concurrent guests preserve each others claims and all open scr
       await expect(viewer.getByTestId('claim-unallocated-total')).toContainText('0,00');
       await expect(viewer.getByTestId('person-total-1')).toContainText('2,00');
       await expect(viewer.getByTestId('person-total-2')).toContainText('7,01');
-      await expect(viewer.getByTestId('claim-item-0')).not.toContainText('Анна');
+      // All participants remain visible as chips after Issue #10 26.
+      // An unassigned diner must have neither an active chip nor a parts badge.
+      await expect(viewer.getByTestId('dish-person-0-1')).toHaveAttribute('aria-pressed', 'false');
+      await expect(viewer.getByTestId('dish-parts-count-0-1')).toHaveCount(0);
       await fitsPhone(viewer);
     }
     // Boris is the only claimant now: other devices name him and his own
