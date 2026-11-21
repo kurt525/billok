@@ -2986,7 +2986,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                             data-testid={'preview-person-name-' + person.personIndex}
                           >
                             {personName}
-                            {isMe && ' (' + t('you') + ')'}
+                            {isMe && ' ' + t('you')}
                           </span>
                           <div
                             className="flex min-w-0 flex-wrap items-center gap-1"
