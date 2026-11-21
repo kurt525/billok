@@ -5,7 +5,7 @@
  * sign an assertion over a real, browser-bound server challenge.
  */
 import { createHash, createPrivateKey, sign } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { expect, request, test, type BrowserContext, type Page } from '@playwright/test';
 
 type Entry = { id: string; privateKey: string; rowId?: string };
@@ -14,7 +14,6 @@ type Fixtures = Record<string, UserFixture>;
 
 const BASE = process.env.BASE_URL || 'http://localhost:3001';
 let cached: Fixtures | undefined;
-const nextIndexByEmail = new Map<string, number>();
 const sessions = new WeakMap<Page, { cdp: Awaited<ReturnType<BrowserContext['newCDPSession']>>; id: string }>();
 
 function fixture(email: string): UserFixture {
@@ -77,14 +76,15 @@ export async function installSeedPasskey(page: Page, email: string) {
   const user = fixture(email);
   const { cdp, id } = await enableVirtualPasskey(page);
   await cdp.send('WebAuthn.clearCredentials', { authenticatorId: id });
-  // Each CI spec has its own reserved region of the disposable key fixture.
-  // Playwright executes multiple tests in separate worker *processes*, and
-  // module-level counters alone cannot coordinate distinct processes. The
-  // TEST_WORKER_INDEX env is not a Playwright contract and was never supplied.
-  // test.info().parallelIndex is the supported stable 0/1 worker slot.
+  // Reserve each CI-only WebAuthn credential exactly once per disposable
+  // Playwright container. A failed test causes Playwright to restart its worker
+  // process, resetting module-level counters; reusing a seeded credential with
+  // signCount=0 then fails server-side replay protection on all later tests.
+  // Atomic O_EXCL lease files survive those worker restarts and also coordinate
+  // the two concurrently running Playwright workers. The QA key file itself
+  // stays read-only and real/prod authentication is never changed.
   const info = test.info();
-  const parallelIndex = info.parallelIndex;
-  if (parallelIndex !== 0 && parallelIndex !== 1) {
+  if (info.parallelIndex !== 0 && info.parallelIndex !== 1) {
     throw new Error('Passkey QA fixture requires exactly the configured two worker slots');
   }
   const allocations = [
@@ -96,25 +96,28 @@ export async function installSeedPasskey(page: Page, email: string) {
   ] as const;
   const allocation = allocations.find(({ spec }) => info.file.endsWith('/' + spec));
   if (!allocation) throw new Error('Unallocated disposable Passkey test file: ' + info.file);
-  // Credential 0 belongs exclusively to signed API assertions, which always
-  // use the standard zero-counter multi-device semantics. Browser CTAP2
-  // authenticators increment counters, so MUST have distinct key IDs.
   const usable = user.credentials.length - 1;
   const rangeStart = 1 + Math.floor(usable * allocation.from);
-  const rangeEnd = 1 + Math.floor(usable * allocation.to); // exclusive
-  const half = Math.floor((rangeEnd - rangeStart) / 2);
-  const workerStart = rangeStart + (parallelIndex === 0 ? 0 : half);
-  const workerEnd = parallelIndex === 0 ? rangeStart + half : rangeEnd;
-  const serialKey = allocation.spec + ':' + parallelIndex + ':' + email;
-  const serial = nextIndexByEmail.get(serialKey) ?? 0;
-  nextIndexByEmail.set(serialKey, serial + 1);
+  const rangeEnd = 1 + Math.floor(usable * allocation.to);
   const offset = Number.parseInt(process.env.BILLOK_QA_PASSKEY_OFFSET || '0', 10);
   if (!Number.isInteger(offset) || offset < 0 || offset > 20) throw new Error('Invalid test credential offset');
-  const index = workerStart + serial + offset;
-  if (index >= workerEnd) {
-    throw new Error('Exhausted reserved disposable Passkeys for ' + allocation.spec + '/' + email);
+  const leases = '/tmp/billok-qa-passkey-leases/' + allocation.spec + '/' + email.split('@', 1)[0];
+  mkdirSync(leases, { recursive: true });
+  let selected: Entry | undefined;
+  for (let i = rangeStart + offset; i < rangeEnd; i++) {
+    try {
+      // POSIX O_EXCL: exactly one worker/process gets this index. Deliberately
+      // never release it, because a successful signature permanently advances
+      // the stored sign counter in the short-lived PostgreSQL fixture.
+      closeSync(openSync(leases + '/' + i, 'wx', 0o600));
+      selected = user.credentials[i];
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
   }
-  const credential = user.credentials[index]!;
+  if (!selected) throw new Error('Exhausted disposable Passkeys for ' + allocation.spec + '/' + email);
+  const credential = selected;
   await cdp.send('WebAuthn.addCredential', {
     authenticatorId: id,
     credential: {

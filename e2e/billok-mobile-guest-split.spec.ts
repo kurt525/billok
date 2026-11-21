@@ -1090,9 +1090,18 @@ test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobil
         { timeout: 15_000 },
       )
       .toBe(2);
+    // A server-side poll can see the new value before the in-flight browser
+    // mutation has refreshed its local cache. Wait for the actual displayed
+    // allocation (3 + 5 -> 2 + 5), not only an HTTP GET from a second context.
+    await expect(alicePage.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 7', {
+      timeout: 15_000,
+    });
     await expect(aliceInput).toHaveValue('2', { timeout: 15_000 });
+    const personalSave = alicePage.getByTestId('personal-parts-save-0');
+    await expect(personalSave).toBeDisabled();
     await aliceInput.fill('3');
-    await alicePage.getByTestId('personal-parts-save-0').click();
+    await expect(personalSave).toBeEnabled({ timeout: 15_000 });
+    await personalSave.click();
     // The controlled input changes before the mutation is committed. Never
     // finalize based only on the visible draft: wait for the personal token's
     // durable server value, which is what finalization actually uses.
@@ -4878,8 +4887,14 @@ test('Issue 3.14: claims and shared positions reach every open mobile receipt', 
     // A withdraws from the shared position; B's portion must remain.
     await page.getByTestId('claim-item-0').click({ position: { x: 36, y: 44 } });
     await page.getByTestId('save-claims-btn').click();
-    await expect(creatorPage.getByTestId('claim-item-0')).not.toContainText('Андрей', { timeout: 25_000 });
-    await expect(creatorPage.getByTestId('claim-item-0')).toContainText('Борис');
+    // All diners remain listed by design; the departed diner has no active
+    // allocation chip or superscript, while Boris's allocated part survives.
+    await expect(creatorPage.getByTestId('dish-person-0-1')).toHaveAttribute('aria-pressed', 'false', {
+      timeout: 25_000,
+    });
+    await expect(creatorPage.getByTestId('dish-parts-count-0-1')).toHaveCount(0);
+    await expect(creatorPage.getByTestId('dish-person-0-2')).toHaveAttribute('aria-pressed', 'true');
+    await expect(creatorPage.getByTestId('dish-parts-count-0-2')).toHaveText('1');
     await expect(guestPage.getByTestId('claim-item-0')).toHaveAttribute('aria-pressed', 'true');
     await expect(guestPage.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 1', {
       timeout: 25_000,
