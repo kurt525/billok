@@ -98,7 +98,7 @@ test('9.3: ordinary member receives a Russian access error when deleting an expe
     await page.getByTestId('expense-detail-delete').click();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Удалить', exact: true }).click();
     await expect(
-      page.getByText('Удалять расход могут только его создатель, плательщик, владелец группы или администратор.'),
+      page.getByText('Удалять расход могут только его автор, плательщик, владелец группы или администратор.'),
     ).toBeVisible();
     await expect(page).toHaveURL(new RegExp('/expenses/' + expenseId + '$'));
     const expense = await trpcResult(await trpcQuery(owner, 'expenses.get', { groupId, expenseId }));

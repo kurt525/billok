@@ -3049,7 +3049,7 @@ test('Issue 3.11: account binding, not guest token or name, controls mobile Regi
     await expect(creatorRow.getByTestId('account-status-registered')).toContainText('Зарегистрирован', {
       timeout: 20_000,
     });
-    await expect(creatorRow.getByTestId('receipt-role-creator')).toContainText('Создатель');
+    await expect(creatorRow.getByTestId('receipt-role-creator')).toContainText('Автор');
     await expect(creatorRow.getByTestId('receipt-role-payer')).toContainText('Плательщик');
     await expect(anonymousRow.getByTestId('account-status-guest')).toContainText('Гость');
     await expect(anonymousRow.getByTestId('receipt-roles')).toHaveCount(0);
@@ -3118,7 +3118,7 @@ test('Issue 3.10: receipt creator and the one payer have independent visible rol
       const guestOneRow = page.getByTestId('invited-person-1');
       await ensureReceiptTab(page, 'people');
       const guestTwoRow = page.getByTestId('invited-person-2');
-      await expect(creatorRow.getByTestId('receipt-role-creator')).toContainText('Создатель');
+      await expect(creatorRow.getByTestId('receipt-role-creator')).toContainText('Автор');
       await expect(creatorRow.getByTestId('receipt-role-creator')).toContainText('👑');
       await expect(guestOneRow.getByTestId('receipt-roles')).toHaveCount(0);
       if (paidByGuestSlot === 0) {
