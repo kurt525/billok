@@ -6734,8 +6734,9 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
     const sampleToken = String(example.shareToken);
     try {
       const sample = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: sampleToken }));
+      let andrey: { name: string; personId: string; personToken: string } | undefined;
       for (const [index, name] of [
-        [1, guestName],
+        [1, 'Андрей'],
         [2, 'Гость 2'],
       ] as const) {
         const join = await trpcMutation(guestDevice.request, 'guest.joinGuestSlot', {
@@ -6745,9 +6746,12 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
           joinKey: randomUUID(),
         });
         expect(join.ok(), await join.text()).toBe(true);
+        if (index === 1) andrey = (await join.json()).result.data.json;
       }
+      if (!andrey) throw new Error('Андрей не присоединился к чеку');
+      expect(andrey.personId).toBe(sample.people[1].id);
       for (let itemIndex = 0; itemIndex < 3; itemIndex++) {
-        const changes = (itemIndex === 0 ? sample.people.slice(0, 1) : sample.people).map((p: { id: string }) => ({
+        const changes = (itemIndex === 0 ? sample.people.slice(1, 2) : sample.people).map((p: { id: string }) => ({
           personId: p.id,
           parts: 1,
         }));
@@ -6761,8 +6765,8 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
       }
       const tip = await trpcMutation(owner, 'guest.setPersonalTip', {
         token: sampleToken,
-        personId: example.creator.personId,
-        personToken: example.creator.personToken,
+        personId: andrey.personId,
+        personToken: andrey.personToken,
         tipCents: 10000,
       });
       expect(tip.ok(), await tip.text()).toBe(true);
@@ -6772,24 +6776,59 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
         expectedRevision: ready.finalizationRevision,
       });
       expect(finishExample.ok(), await finishExample.text()).toBe(true);
+      const savedExample = await trpcResult(await trpcQuery(owner, 'guest.getSplit', { token: sampleToken }));
+      expect(savedExample.summary.map((person: { personIndex: number }) => person.personIndex)).toEqual([1, 0, 2]);
+      expect(savedExample.summary.map((person: { total: number }) => person.total)).toEqual([66000, 16000, 16000]);
+      expect(savedExample.organizerIndex).toBe(0);
+      expect(savedExample.paidByIndex).toBe(0);
       const clean = await browser.newContext({ viewport: { width: 320, height: 570 }, isMobile: true, hasTouch: true });
       const publicPage = await clean.newPage();
       const signedPage = await page.context().newPage();
       try {
+        const identityPage = await clean.newPage();
+        await rememberClaimIdentity(clean, sampleToken, andrey);
+        await identityPage.goto('/split/' + sampleToken + '/claim');
+        await expect(identityPage.getByTestId('finalized-person-name-1')).toHaveText('Андрей (вы)');
+        const visualIdentity = async (card: ReturnType<typeof page.getByTestId>) =>
+          card.evaluate((element) => ({
+            border: (element.closest('[data-slot="card"]') as HTMLElement).style.borderLeftColor,
+            avatar: (element.querySelector('[data-slot="avatar-fallback"]') as HTMLElement).style.backgroundColor,
+          }));
         for (const viewer of [publicPage, signedPage]) {
           await viewer.goto('/split/' + sampleToken);
           await expect(viewer.getByTestId('split-result-total')).toContainText('980,00');
+          await expect(viewer.locator('[data-testid^="result-person-name-"]').first()).toHaveText('Андрей');
           await viewer.addStyleTag({ content: 'html { font-size: 20px !important; }' });
           for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
             await viewer.setViewportSize({ width, height: 570 });
             for (const [index, amountText] of [
-              [0, '660,00'],
-              [1, '160,00'],
+              [1, '660,00'],
+              [0, '160,00'],
               [2, '160,00'],
             ] as const) {
               const card = viewer.getByTestId('result-person-layout-' + index);
               const badges = card.getByTestId('result-person-badges-' + index);
-              const money = card.getByTestId('person-total-' + index);
+              const money = card.locator('[data-testid^="person-total-"]');
+              const personalCard = identityPage.getByTestId('finalized-person-layout-' + index);
+              const name = index === 0 ? example.creator.name : index === 1 ? 'Андрей' : 'Гость 2';
+              await expect(card.getByTestId('result-person-name-' + index)).toHaveText(name);
+              await expect(personalCard.getByTestId('finalized-person-name-' + index)).toHaveText(
+                name + (index === 1 ? ' (вы)' : ''),
+              );
+              await expect(personalCard.getByTestId('finalized-person-total-' + index)).toContainText(amountText);
+              const personalBadges = personalCard.getByTestId('finalized-person-badges-' + index);
+              for (const badge of [
+                'receipt-role-creator',
+                'receipt-role-payer',
+                'account-status-registered',
+                'account-status-guest',
+              ]) {
+                await expect(personalBadges.getByTestId(badge)).toHaveCount(await badges.getByTestId(badge).count());
+              }
+              const publicColors = await visualIdentity(card);
+              expect(publicColors.border).not.toBe('');
+              expect(publicColors.avatar).not.toBe('');
+              expect(publicColors).toEqual(await visualIdentity(personalCard));
               await expect(money).toContainText(amountText);
               if (index === 0) {
                 await expect(badges.getByTestId('receipt-role-creator')).toContainText('Автор чека');
@@ -6797,6 +6836,9 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
                 await expect(badges.getByTestId('account-status-registered')).toBeVisible();
               } else {
                 await expect(badges.getByTestId('account-status-guest')).toBeVisible();
+                for (const badge of ['receipt-role-creator', 'receipt-role-payer', 'account-status-registered']) {
+                  await expect(badges.getByTestId(badge)).toHaveCount(0);
+                }
               }
               const bounds = await card.boundingBox();
               const b = await badges.boundingBox(),
@@ -6810,6 +6852,21 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
               await fitsPhone(viewer);
             }
           }
+        }
+        // Different author and payer, with the earlier long guest name.
+        await publicPage.goto('/split/' + token);
+        await expect(publicPage.getByTestId('split-result')).toBeVisible();
+        for (const index of [0, 1, 2]) {
+          const card = publicPage.getByTestId('result-person-layout-' + index);
+          const personalCard = guestPage.getByTestId('finalized-person-layout-' + index);
+          const badges = card.getByTestId('result-person-badges-' + index);
+          await expect(badges.getByTestId('receipt-role-creator')).toHaveCount(index === 0 ? 1 : 0);
+          await expect(badges.getByTestId('receipt-role-payer')).toHaveCount(index === 2 ? 1 : 0);
+          await expect(badges.getByTestId('account-status-registered')).toHaveCount(index === 1 ? 0 : 1);
+          await expect(card.getByTestId('result-person-name-' + index)).toHaveText(
+            savedAfterFinalize.people[index].name,
+          );
+          expect(await visualIdentity(card)).toEqual(await visualIdentity(personalCard));
         }
       } finally {
         await signedPage.close();
