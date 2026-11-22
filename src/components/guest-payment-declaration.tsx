@@ -530,7 +530,9 @@ export function GuestPaymentDeclaration({
           >
             {t('markMyPayment')}
           </Button>
-          <p className="text-xs text-muted-foreground">{t('paymentDeclarationDisclaimer')}</p>
+          <p className="text-xs text-muted-foreground">
+            {t('personalReimbursementTransfer')} {t('paymentDeclarationDisclaimer')}
+          </p>
         </>
       ) : (
         <p className="text-xs text-muted-foreground" data-testid="guest-group-payment-readonly">

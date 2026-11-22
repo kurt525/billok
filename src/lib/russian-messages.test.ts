@@ -61,6 +61,23 @@ describe('BillOK Russian-only translations', () => {
     });
   }
 
+  it('uses Author for the receipt role without renaming the payer or finalization organizer (Issue #19)', () => {
+    const split = flatten(load('ru', 'split'));
+    const role = Object.entries(split).find(([key]) => key.endsWith('.creator') || key === 'creator');
+    expect(role?.[1]).toBe('Автор чека');
+    expect(split['people.creatorAlwaysIncluded']).toContain('Автор чека');
+    expect(split['people.creatorPayer']).toBe('Я — автор чека');
+    expect(split['claim.finalizationOrganizerHint']).toContain('Только автор чека');
+    expect(split['claim.finalizationOrganizerHint']).toContain('уполномоченный пользователь');
+    expect(split['roles.payer']).toBe('Плательщик');
+    expect(split['claim.finalizationOrganizerAppoint']).toBe('Предоставить право завершения');
+    for (const namespace of namespaces) {
+      for (const [key, text] of Object.entries(flatten(load('ru', namespace)))) {
+        expect(text, namespace + '.' + key).not.toMatch(/создател|организатор/iu);
+      }
+    }
+  });
+
   it('has no abandoned language catalogs', () => {
     const names = readdirSync(resolve(process.cwd(), 'messages'), { withFileTypes: true })
       .filter((entry) => entry.isDirectory())

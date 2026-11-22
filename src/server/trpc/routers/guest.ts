@@ -140,6 +140,33 @@ function guestPartsDigest(input: {
   return createHash('sha256').update(guestPartsConfirmationSnapshot(input)).digest('hex');
 }
 
+/** Financial revision for the one-step finalization dialog. No credentials or
+ * subscription endpoints are included. The same fields are checked under the
+ * finalization transaction lock, including tips, payer and reimbursement groups.
+ */
+function guestFinalizationRevision(input: {
+  items: Parameters<typeof guestPartsDigest>[0]['items'];
+  people: readonly GuestSessionPerson[];
+  assignments: readonly GuestPortionAssignment[];
+  receiptData: ReturnType<typeof parseExtractedData>;
+  paidByIndex: number;
+}): string {
+  const data = input.receiptData;
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        parts: guestPartsDigest({ ...input, knownPartsByItem: data.knownPartsByItem }),
+        people: input.people.map((p) => [p.id, p.name, p.tipCents ?? 0, p.paymentGroupRepresentativeId ?? null]),
+        payer: input.paidByIndex,
+        payerRevision: data.payerRevision ?? null,
+        total: [data.subtotal, data.tax, data.tip, data.total, data.currency, data.roundingBalanced ?? false],
+        author: data.organizerPersonId ?? null,
+        delegate: data.finalizationOrganizerUserId ?? null,
+      }),
+    )
+    .digest('hex');
+}
+
 /** 3.4: a signed-in creator or a single creator-appointed registered organizer can
  * approve and finalize a guest bill. A payer/guest token never grants this role.
  * Store the delegation in the existing receipt JSON: no unused DB column.
@@ -2578,6 +2605,13 @@ export const guestRouter = createTRPCRouter({
           : null,
       presence, // organizer-only; never leaks personal tokens or heartbeat timestamps
       assignments: session.assignments as GuestPortionAssignment[],
+      finalizationRevision: guestFinalizationRevision({
+        items: parseGuestItems(session.items),
+        people: session.people as GuestSessionPerson[],
+        assignments: parseGuestAssignments(session.assignments),
+        receiptData: parsedData,
+        paidByIndex: session.paidByIndex,
+      }),
       partsConfirmed: (() => {
         const data = parseExtractedData(session.receiptData);
         if (typeof data.organizerPersonId !== 'string') return true; // old sessions
@@ -2898,6 +2932,10 @@ export const guestRouter = createTRPCRouter({
           // can finalize without becoming a bill participant who owes money.
           personId: personIdSchema.optional(),
           personToken: guestLinkSecretSchema.optional(),
+          expectedRevision: z
+            .string()
+            .regex(/^[a-f0-9]{64}$/)
+            .optional(),
           tipOverride: z.never().optional(), // no shared tip override
         })
         .refine((value) => (value.personId === undefined) === (value.personToken === undefined), {
@@ -2940,9 +2978,21 @@ export const guestRouter = createTRPCRouter({
           throw new AppError('PRECONDITION_FAILED', 'itemsUnassigned');
         }
 
+        const revision = guestFinalizationRevision({
+          items,
+          people: session.people as GuestSessionPerson[],
+          assignments,
+          receiptData,
+          paidByIndex: session.paidByIndex,
+        });
+        if (input.expectedRevision !== undefined && input.expectedRevision !== revision) {
+          throw new AppError('CONFLICT', 'receiptFinalizationChanged');
+        }
+
         // A receipt creator must have acknowledged this exact set of claims
         // in the same repeatable-read snapshot used to produce the final shares.
         if (
+          input.expectedRevision === undefined &&
           typeof receiptData.organizerPersonId === 'string' &&
           (typeof receiptData.partsApprovalHash !== 'string' ||
             receiptData.partsApprovalHash !==
@@ -3039,7 +3089,16 @@ export const guestRouter = createTRPCRouter({
             status: GuestSplitStatus.FINALIZED,
             people: finalizedPeople as unknown as Prisma.InputJsonValue,
             summary: summaryWithNames as unknown as Prisma.InputJsonValue,
-            receiptData: { ...receiptData, paymentSettlementLock } as Prisma.InputJsonValue,
+            receiptData: {
+              ...receiptData,
+              partsApprovalHash: guestPartsDigest({
+                items,
+                people,
+                assignments,
+                knownPartsByItem: receiptData.knownPartsByItem,
+              }),
+              paymentSettlementLock,
+            } as Prisma.InputJsonValue,
             assignments: assignments as unknown as Prisma.InputJsonValue,
           },
         });

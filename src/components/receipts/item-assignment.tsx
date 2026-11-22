@@ -56,7 +56,12 @@ export function ItemAssignment({
 
   const [assignments, setAssignments] = useState<Assignments>({});
   // A changed item, consumer or portion invalidates a previous confirmation.
-  const [approvedPartsSnapshot, setApprovedPartsSnapshot] = useState<string | null>(null);
+  const [approvedPartsSnapshot, setApprovedPartsSnapshot] = useState<{
+    parts: string;
+    revision: string;
+    payer: string;
+    title: string;
+  } | null>(null);
   const [partsByItem, setPartsByItem] = useState<Record<string, Record<string, number>>>({});
   const [totalPartsDrafts, setTotalPartsDrafts] = useState<Record<string, string>>({});
   const [title, setTitle] = useState('');
@@ -77,6 +82,9 @@ export function ItemAssignment({
 
   const createExpense = trpc.receipts.assignItemsAndCreateExpense.useMutation({
     onSuccess: onComplete,
+    onError: () => {
+      void utils.receipts.getReceiptItems.invalidate({ receiptId });
+    },
   });
   const updateItem = trpc.receipts.updateItem.useMutation({
     onSuccess: () => {
@@ -388,7 +396,7 @@ export function ItemAssignment({
     [items, extracted, assignments, partsByItem],
   );
   const isManualCreator = !!receipt?.isManual && !!currentUserId && receipt.creatorId === currentUserId;
-  const partsConfirmed = approvedPartsSnapshot === currentPartsSnapshot && canConfirmParts;
+  const finalizationRevision = receiptData.data?.finalizationRevision;
 
   // Precompute member initials to avoid recalculation every render (Finding #37)
   const memberInitials = useMemo(
@@ -433,14 +441,43 @@ export function ItemAssignment({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!effectivePaidById || !allAssigned || (receipt?.isManual && (!isManualCreator || !partsConfirmed))) return;
+    if (!effectivePaidById || !allAssigned || createExpense.isPending) return;
+    if (receipt?.isManual) {
+      if (!isManualCreator || !canConfirmParts || !finalizationRevision) return;
+      setApprovedPartsSnapshot({
+        parts: currentPartsSnapshot,
+        revision: finalizationRevision,
+        payer: effectivePaidById,
+        title,
+      });
+      return;
+    }
+    finishExpense();
+  }
+
+  function finishExpense(approval?: NonNullable<typeof approvedPartsSnapshot>) {
+    if (createExpense.isPending || !effectivePaidById || !allAssigned) return;
+    if (
+      receipt?.isManual &&
+      (!approval ||
+        !isManualCreator ||
+        !canConfirmParts ||
+        approval.parts !== currentPartsSnapshot ||
+        approval.revision !== finalizationRevision ||
+        approval.payer !== effectivePaidById ||
+        approval.title !== title)
+    ) {
+      toast.error(tc('errors.generic'));
+      void utils.receipts.getReceiptItems.invalidate({ receiptId });
+      return;
+    }
 
     createExpense.mutate({
       groupId,
       receiptId,
       title,
       paidById: effectivePaidById,
-      ...(receipt?.isManual ? { confirmedPartsSnapshot: currentPartsSnapshot } : {}),
+      ...(approval ? { confirmedPartsSnapshot: approval.parts, expectedRevision: approval.revision } : {}),
       assignments: Object.entries(assignments)
         .filter(([itemId, userIds]) => userIds.size > 0 && items.some((item) => item.id === itemId))
         .map(([receiptItemId, userIds]) => ({
@@ -1091,24 +1128,8 @@ export function ItemAssignment({
           {knownParts.overclaimed ? t('totalPartsSaveOverclaimed') : t('totalPartsFinishRemaining')}
         </p>
       )}
-      {receipt?.isManual && (
-        <div className="min-w-0 rounded-lg border p-3 text-sm" data-testid="group-parts-confirmation">
-          {isManualCreator ? (
-            <label className="flex min-w-0 items-start gap-3">
-              <input
-                type="checkbox"
-                className="mt-1 size-5 shrink-0"
-                data-testid="group-parts-confirm-checkbox"
-                checked={partsConfirmed}
-                disabled={!canConfirmParts || createExpense.isPending}
-                onChange={(event) => setApprovedPartsSnapshot(event.target.checked ? currentPartsSnapshot : null)}
-              />
-              <span className="min-w-0 [overflow-wrap:anywhere]">{t('partsConfirmComplete')}</span>
-            </label>
-          ) : (
-            <p className="text-muted-foreground">{t('partsConfirmCreatorOnly')}</p>
-          )}
-        </div>
+      {receipt?.isManual && !isManualCreator && (
+        <p className="text-sm text-muted-foreground">{t('partsConfirmCreatorOnly')}</p>
       )}
 
       {createExpense.error && (
@@ -1124,7 +1145,7 @@ export function ItemAssignment({
           createExpense.isPending ||
           !allAssigned ||
           !effectivePaidById ||
-          (receipt?.isManual && (!isManualCreator || !partsConfirmed))
+          (receipt?.isManual && (!isManualCreator || !canConfirmParts || !finalizationRevision))
         }
         data-testid="create-expense-btn"
       >
@@ -1132,7 +1153,9 @@ export function ItemAssignment({
           ? t('creatingExpense')
           : !allAssigned
             ? t('assignAllItems', { remaining: items.length - assignedItemCount })
-            : t('createExpense')}
+            : receipt?.isManual
+              ? t('finalizeButton')
+              : t('createExpense')}
       </Button>
 
       {onSaveForLater && (
@@ -1148,6 +1171,19 @@ export function ItemAssignment({
           {saveForLater.isPending ? t('saving') : t('saveForLater')}
         </Button>
       )}
+      <ConfirmDialog
+        open={approvedPartsSnapshot !== null}
+        onOpenChange={(open) => {
+          if (!open) setApprovedPartsSnapshot(null);
+        }}
+        title={t('finalizeTitle')}
+        description={t('finalizeDescription')}
+        confirmLabel={t('finalizeConfirm')}
+        destructive={false}
+        onConfirm={() => {
+          if (approvedPartsSnapshot) finishExpense(approvedPartsSnapshot);
+        }}
+      />
       <ConfirmDialog
         open={removeItem !== null}
         onOpenChange={(open) => !open && setRemoveItem(null)}

@@ -1,4 +1,5 @@
 import ruErrors from '../../../../messages/ru/errors.json';
+import { createECDH } from 'node:crypto';
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('next/headers', () => ({
@@ -4921,6 +4922,48 @@ describe('Issue 3.4: only registered finalization organizers can close a guest r
 });
 
 describe('guest.finalizeSession', () => {
+  test('Issue #19: one-step finalization rejects stale tips and accepts current revision once', async () => {
+    claimSession(
+      [
+        { id: pid(0), name: 'Автор', personToken: ALICE_TOKEN },
+        { id: pid(1), name: 'Гость', personToken: OTHER_TOKEN },
+      ],
+      {
+        receiptData: { subtotal: 100, total: 100, tax: 0, tip: 0, currency: 'RUB', organizerPersonId: pid(0) },
+        items: items(1),
+        assignments: [{ itemIndex: 0, personIndices: [0, 1] }],
+      },
+    );
+    const api = await caller(signedIn);
+    const initial = await api.getSession({ token: 'share-1' });
+    const before = await mockDb.guestSplit.findUnique();
+    const changed = {
+      ...before,
+      people: before.people.map((person: TestPerson, index: number) =>
+        index === 1 ? { ...person, tipCents: 1 } : person,
+      ),
+    };
+    mockDb.guestSplit.findUnique.mockResolvedValue(changed);
+    await expect(
+      api.finalizeSession({ token: 'share-1', expectedRevision: initial.finalizationRevision }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    const current = await api.getSession({ token: 'share-1' });
+    await expect(
+      (await caller({ user: { id: 'other' } })).finalizeSession({
+        token: 'share-1',
+        expectedRevision: current.finalizationRevision,
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await api.finalizeSession({ token: 'share-1', expectedRevision: current.finalizationRevision });
+    const saved = mockDb.guestSplit.update.mock.calls.at(-1)![0].data;
+    expect(saved.status).toBe('FINALIZED');
+    expect(saved.summary.reduce((sum: number, person: { total: number }) => sum + person.total, 0)).toBe(101);
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...changed, ...saved });
+    await expect(
+      api.finalizeSession({ token: 'share-1', expectedRevision: current.finalizationRevision }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
   function savedStatus() {
     const call = mockDb.guestSplit.update.mock.calls.at(-1)?.[0] as { data: { status?: string } } | undefined;
     return call?.data.status;
@@ -6295,10 +6338,10 @@ describe('BillOK guest payment declaration (Issue #1 1.3.19)', () => {
       },
     };
     try {
-      process.env.WEB_PUSH_VAPID_PUBLIC_KEY = Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 4)]).toString(
-        'base64url',
-      );
-      process.env.WEB_PUSH_VAPID_PRIVATE_KEY = Buffer.alloc(32, 1).toString('base64url');
+      const vapid = createECDH('prime256v1');
+      vapid.generateKeys();
+      process.env.WEB_PUSH_VAPID_PUBLIC_KEY = vapid.getPublicKey().toString('base64url');
+      process.env.WEB_PUSH_VAPID_PRIVATE_KEY = vapid.getPrivateKey().toString('base64url');
       const api = await caller();
       expect((await api.getGuestPushConfig()).publicKey).toBe(process.env.WEB_PUSH_VAPID_PUBLIC_KEY);
       await expect(

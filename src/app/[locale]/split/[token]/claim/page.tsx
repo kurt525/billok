@@ -313,7 +313,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const [payerChoice, setPayerChoice] = useState<{ personId: string; revision: string | null } | null>(null);
   const [confirmPayerChange, setConfirmPayerChange] = useState(false);
   const [removeFor, setRemoveFor] = useState<{ id: string; name: string } | null>(null);
-  const [confirmFinalize, setConfirmFinalize] = useState(false);
+  const [confirmFinalize, setConfirmFinalize] = useState<string | null>(null);
   const { data: authSession } = useSession();
 
   // --- tRPC ---
@@ -678,20 +678,15 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
   });
 
-  const confirmSessionParts = trpc.guest.confirmSessionParts.useMutation({
-    onSuccess: async () => {
-      await utils.guest.getSession.invalidate({ token });
-      toast.success(t('partsConfirmationSaved'));
-    },
-    onError: (error) => toast.error(localizedTrpcError(error, tc('errors.generic'))),
-  });
-
   const finalizeSession = trpc.guest.finalizeSession.useMutation({
     onSuccess: () => {
       session.refetch();
       toast.success(t('splitFinalized'));
     },
-    onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
+    onError: (err) => {
+      toast.error(localizedTrpcError(err, tc('errors.generic')));
+      void session.refetch();
+    },
   });
 
   const splitClaimItem = trpc.guest.splitClaimItem.useMutation({
@@ -1039,7 +1034,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
   // All items have at least one saved claimant
   const allItemsClaimed = useMemo(() => {
-    if (!session.data) return false;
+    if (!session.data || !session.data.items.length) return false;
     return session.data.items.every((_, idx) =>
       session.data!.assignments.some((a) => a.itemIndex === idx && a.personIndices.length > 0),
     );
@@ -2035,24 +2030,13 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               </CardHeader>
               <CardContent className="space-y-3">
                 <p className="text-sm text-muted-foreground">{t('finalizationOrganizerNoClaimHint')}</p>
-                {!data.partsConfirmed && allItemsClaimed && knownPartsReady && (
-                  <Button
-                    type="button"
-                    className="min-h-11 w-full whitespace-normal"
-                    disabled={confirmSessionParts.isPending}
-                    data-testid="guest-confirm-parts-btn"
-                    onClick={() => confirmSessionParts.mutate({ token })}
-                  >
-                    {t('confirmPartsComplete')}
-                  </Button>
-                )}
-                {data.partsConfirmed && allItemsClaimed && knownPartsReady && (
+                {allItemsClaimed && knownPartsReady && (
                   <Button
                     type="button"
                     className="min-h-11 w-full whitespace-normal"
                     disabled={finalizeSession.isPending}
                     data-testid="finalize-btn"
-                    onClick={() => setConfirmFinalize(true)}
+                    onClick={() => setConfirmFinalize(data.finalizationRevision)}
                   >
                     {t('finalizeSplit')}
                   </Button>
@@ -2061,13 +2045,20 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             </Card>
           )}
           <ConfirmDialog
-            open={confirmFinalize}
-            onOpenChange={setConfirmFinalize}
+            open={confirmFinalize !== null}
+            onOpenChange={(open) => {
+              if (!open) setConfirmFinalize(null);
+            }}
             title={t('finalizeTitle')}
             description={t('finalizeDescription')}
-            confirmLabel={t('finalizeSplit')}
+            confirmLabel={t('finalizeConfirm')}
             destructive={false}
-            onConfirm={() => data.canFinalize && finalizeSession.mutate({ token })}
+            onConfirm={() =>
+              data.canFinalize &&
+              confirmFinalize &&
+              !finalizeSession.isPending &&
+              finalizeSession.mutate({ token, expectedRevision: confirmFinalize })
+            }
           />
 
           {data.presence && (
@@ -2709,9 +2700,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           actorId={myPersonId}
                           personToken={personToken}
                           isCreator={data.isCreator}
-                          disabled={
-                            splitClaimItem.isPending || confirmSessionParts.isPending || finalizeSession.isPending
-                          }
+                          disabled={splitClaimItem.isPending || finalizeSession.isPending}
                           open={allocationEditorIdx === idx}
                           onOpenChange={(next) => setAllocationEditorIdx(next ? idx : null)}
                         >
@@ -3201,11 +3190,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               </span>
             </div>
             <p className="text-muted-foreground" data-testid="claim-distribution-status">
-              {!allItemsClaimed
-                ? t('distributionIncomplete')
-                : data.partsConfirmed
-                  ? t('distributionConfirmed')
-                  : t('distributionComplete')}
+              {!allItemsClaimed ? t('distributionIncomplete') : t('distributionComplete')}
             </p>
           </CardContent>
         </Card>
@@ -3216,18 +3201,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             data-testid="guest-known-parts-not-reconciled"
           >
             {knownPartsBalance.overclaimed ? t('knownPartsOverLimit') : t('knownPartsNotFullyClaimed')}
-          </p>
-        )}
-
-        {/* Non-interactive approval state belongs to the scrollable content, not
-          the fixed action bar. On short Android viewports it otherwise makes
-          the bar cover the personal-tip save button. */}
-        {!data.partsConfirmed && (
-          <p
-            className="min-w-0 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground [overflow-wrap:anywhere]"
-            data-testid="guest-parts-awaiting-confirmation"
-          >
-            {t('partsAwaitingConfirmation')}
           </p>
         )}
 
@@ -3248,33 +3221,17 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           className="mx-auto w-full min-w-0 max-w-lg space-y-2 pb-[env(safe-area-inset-bottom)]"
           data-testid="claim-actions"
         >
-          {!data.partsConfirmed && (
+          {personToken && myPersonId !== null && myPersonIndex !== null && !finalizeSession.isPending && (
             <Button
               type="button"
               variant="outline"
-              className="min-h-12 w-full whitespace-normal"
-              data-testid="guest-confirm-parts-btn"
-              disabled={confirmSessionParts.isPending}
-              onClick={() => confirmSessionParts.mutate({ token })}
+              className="min-h-12 w-full"
+              data-testid="finalize-btn"
+              onClick={() => setConfirmFinalize(data.finalizationRevision)}
             >
-              {t('confirmPartsComplete')}
+              {t('finalizeSplit')}
             </Button>
           )}
-          {data.partsConfirmed &&
-            personToken &&
-            myPersonId !== null &&
-            myPersonIndex !== null &&
-            !finalizeSession.isPending && (
-              <Button
-                type="button"
-                variant="outline"
-                className="min-h-12 w-full"
-                data-testid="finalize-btn"
-                onClick={() => setConfirmFinalize(true)}
-              >
-                {t('finalizeSplit')}
-              </Button>
-            )}
           {finalizeSession.isPending && (
             <Button variant="outline" className="min-h-12 w-full" disabled>
               <Loader2 className="mr-2 size-5 animate-spin" />
@@ -3301,20 +3258,25 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         }
       />
       <ConfirmDialog
-        open={confirmFinalize}
-        onOpenChange={setConfirmFinalize}
+        open={confirmFinalize !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmFinalize(null);
+        }}
         title={t('finalizeTitle')}
         description={t('finalizeDescription')}
-        confirmLabel={t('finalizeSplit')}
+        confirmLabel={t('finalizeConfirm')}
         destructive={false}
         onConfirm={() =>
           data.canFinalize &&
+          confirmFinalize &&
+          !finalizeSession.isPending &&
           personToken &&
           myPersonId !== null &&
           finalizeSession.mutate({
             token,
             personId: myPersonId,
             personToken,
+            expectedRevision: confirmFinalize,
           })
         }
       />

@@ -171,30 +171,44 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
             <Card
               key={idx}
               className="border-l-4"
-              style={{ borderLeftColor: guestVisualColorBorder(data.people[idx], idx) }}
+              style={{ borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex) }}
               data-testid={`person-card-${idx}`}
             >
               <CardContent className="py-4">
-                <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
-                  <div className="flex min-w-0 flex-1 items-center gap-3">
-                    <Avatar className="h-10 w-10">
+                <div className="mb-3 min-w-0 space-y-2" data-testid={'result-person-layout-' + person.personIndex}>
+                  <div className="flex min-w-0 items-start gap-3">
+                    <Avatar className="h-8 w-8 shrink-0">
                       <AvatarFallback
                         className="text-sm font-semibold"
-                        style={guestVisualColorStyle(data.people[idx], idx)}
+                        style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
                       >
                         {initials(person.name)}
                       </AvatarFallback>
                     </Avatar>
-                    <span className="min-w-0 font-semibold [overflow-wrap:anywhere]">{person.name}</span>
-                    {roleMarks(idx)}
-                    {accountMark(idx)}
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <span
+                        className="block min-w-0 font-semibold [overflow-wrap:anywhere]"
+                        data-testid={'result-person-name-' + person.personIndex}
+                      >
+                        {person.name}
+                      </span>
+                      <div
+                        className="flex min-w-0 flex-wrap items-center gap-1"
+                        data-testid={'result-person-badges-' + person.personIndex}
+                      >
+                        {roleMarks(person.personIndex)}
+                        {accountMark(person.personIndex)}
+                      </div>
+                    </div>
                   </div>
-                  <span
-                    className="min-w-0 text-xl font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
-                    data-testid={`person-total-${idx}`}
-                  >
-                    {formatCents(person.total, currency, locale)}
-                  </span>
+                  <div className="flex min-w-0 justify-end border-t pt-2">
+                    <span
+                      className="max-w-full text-xl font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
+                      data-testid={`person-total-${idx}`}
+                    >
+                      {formatCents(person.total, currency, locale)}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Item details */}
