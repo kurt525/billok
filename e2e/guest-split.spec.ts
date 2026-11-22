@@ -59,6 +59,48 @@ test.describe('BillOK — only unified receipt creation and legacy finalized rea
     }
   });
 
+  test('Issue #19: link deadline is the same Moscow date and time on every device', async ({ browser }) => {
+    const owner = await authedContext('alice@qa.billok.ru');
+    const contexts = [];
+    try {
+      const receipt = await createUnifiedReceiptFixture(owner, {
+        merchantName: 'Срок действия ссылки',
+        items: [{ name: 'Чай', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
+      });
+      const token = receipt.shareToken;
+      const before = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+      const date = new Intl.DateTimeFormat('ru-RU', {
+        timeZone: 'Europe/Moscow',
+        dateStyle: 'long',
+        timeStyle: 'medium',
+        hourCycle: 'h23',
+      }).format(new Date(before.expiresAt));
+      const expected = 'Ссылка на этот чек действует до ' + date + ' (МСК).';
+      for (const timezoneId of ['Pacific/Honolulu', 'Asia/Vladivostok']) {
+        contexts.push(await browser.newContext({ timezoneId, viewport: { width: 320, height: 650 } }));
+      }
+      for (const context of contexts) {
+        const page = await context.newPage();
+        await page.goto('/split/' + token + '/claim');
+        await expect(page.getByTestId('receipt-link-expiry')).toHaveText(expected);
+      }
+      await finalizeUnifiedReceiptFixture(owner, receipt, [0]);
+      const after = await trpcResult(await trpcQuery(owner, 'guest.getSplit', { token }));
+      expect(after.expiresAt).toBe(before.expiresAt);
+      for (const context of contexts) {
+        const page = context.pages()[0]!;
+        for (const route of ['/split/' + token, '/split/' + token + '/claim']) {
+          await page.goto(route);
+          await expect(page.getByTestId('receipt-link-expiry')).toHaveText(expected);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(321);
+        }
+      }
+    } finally {
+      await Promise.all(contexts.map((context) => context.close()));
+      await owner.dispose();
+    }
+  });
+
   test('two participants can share one dish, and their finalized totals add up', async () => {
     const ctx = await authedContext('alice@qa.billok.ru');
     try {

@@ -56,6 +56,7 @@ import { guestVisualColorStyle, guestVisualColorBorder } from '@/lib/guest-visua
 import { organizerPersonIndex, guestReceiptRoleFlags } from '@/lib/guest-receipt-roles';
 import { GuestReceiptRoles } from '@/components/guest-receipt-roles';
 import { GuestAccountStatus } from '@/components/guest-account-status';
+import { ReceiptLinkExpiry } from '@/components/receipt-link-expiry';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
@@ -1869,6 +1870,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           </Button>
           {personalLinkButton}
           {personalLinkHint}
+          <ReceiptLinkExpiry expiresAt={data.expiresAt} />
         </div>
       </div>
     );
@@ -1882,6 +1884,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         <div className="text-center space-y-1 pt-4">
           <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
           {data.receiptData.date && <p className="text-sm text-muted-foreground">{data.receiptData.date}</p>}
+          <ReceiptLinkExpiry expiresAt={data.expiresAt} />
         </div>
 
         {/* Total */}
@@ -2240,6 +2243,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       <div className="text-center space-y-1 pt-4">
         <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
         {data.receiptData.date && <p className="text-sm text-muted-foreground">{data.receiptData.date}</p>}
+        <ReceiptLinkExpiry expiresAt={data.expiresAt} />
       </div>
 
       {/* Total */}
