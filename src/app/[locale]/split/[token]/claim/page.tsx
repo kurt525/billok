@@ -513,13 +513,13 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // null while this device's person isn't in the session as loaded: they just joined (the
   // session is loaded again right away), or someone removed them (checked below)
   const myPersonIndex = myPersonId === null ? null : (indexById.get(myPersonId) ?? null);
-  // A guest may allocate only for themselves. The authenticated creator may
-  // also allocate on an ungrouped receipt; a group representative may change
-  // portions only for members of their current validated payment group.
+  // These permissions govern PERSONAL tips only. Dish allocations have a
+  // separate creator override, even when payment groups exist. Never reuse
+  // this tip-specific ACL for the dish editor.
   const hasPaymentGroups =
     session.data?.people.some((person) => person.paymentGroupRepresentativeId !== undefined) ?? false;
   const myPerson = myPersonIndex === null ? null : session.data?.people[myPersonIndex];
-  const canEditFor = (targetId: string) => {
+  const canEditPersonalTipFor = (targetId: string) => {
     if (!hasPaymentGroups) return targetId === myPersonId || (!!personToken && !!session.data?.isCreator);
     if (myPersonId === targetId) return true;
     return (
@@ -1450,7 +1450,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // The tip target is chosen only inside this form, never by selecting a dish claimant.
   const canSelectGroupMemberTip = !!myPersonId && myPerson?.paymentGroupRepresentativeId === myPersonId;
   const requestedTipTarget =
-    hasPaymentGroups && canSelectGroupMemberTip && tipTargetPersonId && canEditFor(tipTargetPersonId)
+    hasPaymentGroups && canSelectGroupMemberTip && tipTargetPersonId && canEditPersonalTipFor(tipTargetPersonId)
       ? indexById.get(tipTargetPersonId)
       : undefined;
   const tipTargetIndex = requestedTipTarget ?? myPersonIndex;
@@ -2588,7 +2588,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                     onChange={(event) => setTipTargetPersonId(event.target.value)}
                   >
                     {data.people
-                      .filter((person) => canEditFor(person.id))
+                      .filter((person) => canEditPersonalTipFor(person.id))
                       .map((person) => (
                         <option key={person.id} value={person.id}>
                           {person.name}

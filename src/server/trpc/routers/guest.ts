@@ -1983,19 +1983,17 @@ export const guestRouter = createTRPCRouter({
         const people = assignPersonIds(session.people as GuestSessionPerson[]);
         const isCreator = !!session.userId && session.userId === ctx.session?.user?.id && !ctx.impersonating;
         const creatorId = parseExtractedData(session.receiptData).organizerPersonId ?? people[0]?.id;
-        const hasPaymentGroups = people.some((person) => person.paymentGroupRepresentativeId !== undefined);
-        const canCreatorAllocate = isCreator && !hasPaymentGroups;
+        // Author controls dish portions for everyone in THIS receipt, including
+        // when any payment groups exist. This is not a financial or tip permission.
+        const canCreatorAllocate = isCreator;
         const actorIndex = isCreator
           ? people.findIndex((p) => p.id === creatorId)
           : people.findIndex((p) => !!input.personToken && p.personToken === input.personToken);
         if (actorIndex < 0 || (!isCreator && !input.personToken)) {
           throw new AppError('FORBIDDEN', 'notParticipant');
         }
-        // A receipt creator can allocate for anyone ONLY while the receipt is
-        // ungrouped. Once the creator builds payment groups, the same server
-        // group boundary applies to everyone, including the creator. Existing
-        // claimItems already enforces this exact rule; do not introduce a
-        // bypass by exposing a new bulk allocation route.
+        // Creator authority comes exclusively from authenticated userId (not a
+        // person token); non-creators must still prove their own/group permission.
         for (const entry of orderedChanges) {
           if (canCreatorAllocate) {
             if (!people.some((p) => p.id === entry.personId)) throw new AppError('NOT_FOUND', 'personGone');
@@ -2242,7 +2240,9 @@ export const guestRouter = createTRPCRouter({
           token: shareTokenSchema,
           // Whose claims these are, by id (see targetIndexOrThrow)
           personId: personIdSchema,
-          personToken: guestLinkSecretSchema,
+          // Authenticated creator can allocate without a recovered personal
+          // bearer credential; every other caller still needs their own token.
+          personToken: guestLinkSecretSchema.optional(),
           // The person's whole claim set, replacing what is stored (older clients) ...
           claimedItemIndices: z.array(z.number().int().min(0)).max(1000).optional(),
           // ... or the items added to and removed from it (the claim page), applied to whatever is
@@ -2262,7 +2262,8 @@ export const guestRouter = createTRPCRouter({
         .refine((input) => addsAndRemovesApart(input.addItemIndices, input.removeItemIndices), ADD_OR_REMOVE),
     )
     .mutation(async ({ ctx, input }) => {
-      if (!checkClaimWriteRateLimit('claim', input.token, input.personToken)) {
+      const rateActor = input.personToken ?? (ctx.session?.user?.id ? 'creator:' + ctx.session.user.id : '');
+      if (!rateActor || !checkClaimWriteRateLimit('claim', input.token, rateActor)) {
         throw new AppError('TOO_MANY_REQUESTS', 'claimRateLimited');
       }
 
@@ -2276,31 +2277,30 @@ export const guestRouter = createTRPCRouter({
         const people = session.people as GuestSessionPerson[];
         const items = session.items as { name: string; quantity: number; unitPrice: number; totalPrice: number }[];
 
-        // Validate an actual participant token; in grouped receipts, edits
-        // for others require the current group's representative credential.
-        const callerIndex = people.findIndex((p) => p.personToken === input.personToken);
-        if (callerIndex < 0) {
+        // Only the authenticated, non-impersonated author can allocate to
+        // anybody in this receipt, independent of payment group membership.
+        // Author idempotency is stored on the original organizer's stable row.
+        const creatorCanAllocate = !!session.userId && session.userId === ctx.session?.user?.id && !ctx.impersonating;
+        const creatorId = parseExtractedData(session.receiptData).organizerPersonId ?? people[0]?.id;
+        // Preserve the caller's original retry-key owner when a real personal
+        // token is supplied, including by a signed-in creator. An author who
+        // lost that token falls back to their stable organizer row.
+        const tokenActorIndex = people.findIndex((p) => !!input.personToken && p.personToken === input.personToken);
+        const callerIndex =
+          tokenActorIndex >= 0
+            ? tokenActorIndex
+            : creatorCanAllocate
+              ? people.findIndex((p) => p.id === creatorId)
+              : -1;
+        if (callerIndex < 0 || (!creatorCanAllocate && !input.personToken)) {
           throw new AppError('FORBIDDEN', 'invalidPersonToken');
         }
-        // The public personId never grants rights to change someone else's
-        // claims. A group representative may delegate within the current
-        // group; on ungrouped receipts, only the authenticated receipt creator
-        // may explicitly allocate for another diner. Apply this to retries as
-        // well, so an old save key cannot bypass revoked privileges.
-        const groupedReceipt = people.some((p) => p.paymentGroupRepresentativeId !== undefined);
-        const creatorCanAllocate =
-          !groupedReceipt && !!session.userId && session.userId === ctx.session?.user?.id && !ctx.impersonating;
-        // If a creator's previous allocation targets a subsequently removed
-        // person, its exact idempotent replay is still safe to acknowledge.
-        // Everyone else must have a live, authorized target.
+        // A public personId alone never grants access. For anyone other than
+        // the verified creator, enforce the existing representative/self ACL.
         if (people.some((p) => p.id === input.personId)) {
-          authorizeReceiptPersonEdit(
-            people,
-            session.paidByIndex,
-            input.personToken,
-            input.personId,
-            creatorCanAllocate,
-          );
+          if (!creatorCanAllocate) {
+            authorizeReceiptPersonEdit(people, session.paidByIndex, input.personToken!, input.personId);
+          }
         } else if (!creatorCanAllocate) {
           throw new AppError('FORBIDDEN', 'invalidPersonToken');
         }
@@ -2324,13 +2324,9 @@ export const guestRouter = createTRPCRouter({
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
 
         const personIndex = targetIndexOrThrow(people, input.personId);
-        const { delegated } = authorizeReceiptPersonEdit(
-          people,
-          session.paidByIndex,
-          input.personToken,
-          input.personId,
-          creatorCanAllocate,
-        );
+        const delegated = creatorCanAllocate
+          ? false
+          : authorizeReceiptPersonEdit(people, session.paidByIndex, input.personToken!, input.personId).delegated;
 
         for (const idx of [
           ...(input.claimedItemIndices ?? []),

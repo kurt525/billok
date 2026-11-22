@@ -194,8 +194,8 @@ describe('TASK-BILLOK-002 23–30: indivisible family identities and atomic dish
   });
 
   test('creator assigns 4/2/1 on an ungrouped receipt while keeping separate person IDs and tips', async () => {
-    // Creator delegation is allowed only before payment groups exist; after
-    // grouping the delegated representative owns its members' assignments.
+    // Both grouped and ungrouped receipts retain exact individual shares;
+    // the signed-in author can manage assignments for everyone.
     for (const person of persisted.people)
       delete (person as { paymentGroupRepresentativeId?: string }).paymentGroupRepresentativeId;
     const api = await caller(signedIn);
@@ -228,16 +228,92 @@ describe('TASK-BILLOK-002 23–30: indivisible family identities and atomic dish
     ).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 
-  test('the creator cannot bypass a payment group and change its members through bulk allocation', async () => {
+  test('Issue 19.13: creator allocates across payment groups without a personal token', async () => {
     const api = await caller(signedIn);
+    await api.setReceiptItemParts({
+      token: 'share-1',
+      itemIndex: 0,
+      changes: [
+        { personId: husband, parts: 3 },
+        { personId: child, parts: 1 },
+        { personId: outsider, parts: 2 },
+      ],
+      requestKey: '40000000-0000-4000-8000-000000000005',
+    });
+    expect(persisted.assignments[0]?.partsByPersonId).toEqual({
+      [husband]: 3,
+      [child]: 1,
+      [outsider]: 2,
+    });
+    expect(persisted.people[2]?.tipCents).toBe(15);
+    expect(persisted.people[3]?.paymentGroupRepresentativeId).toBe(wife);
+    expect(persisted.people.map((person) => person.id)).toEqual(base().people.map((person) => person.id));
+  });
+
+  test('Issue 19.13: grouped author retains powers when another person represents author group', async () => {
+    // The original author is grouped under Wife; their saved personal token
+    // is deliberately absent. Author identity comes from the authenticated account.
+    persisted.people[0] = { ...persisted.people[0]!, paymentGroupRepresentativeId: wife, personToken: '' };
+    const api = await caller(signedIn);
+    await api.setReceiptItemParts({
+      token: 'share-1',
+      itemIndex: 0,
+      changes: [
+        { personId: outsider, parts: 2 },
+        { personId: husband, parts: 1 },
+      ],
+      requestKey: key,
+    });
+    expect(persisted.assignments[0]?.partsByPersonId).toEqual({ [husband]: 1, [outsider]: 2 });
+    // Reassigning representation does not change author permissions.
+    persisted.people[0] = { ...persisted.people[0]!, paymentGroupRepresentativeId: creator };
+    await api.setReceiptItemParts({
+      token: 'share-1',
+      itemIndex: 0,
+      changes: [{ personId: wife, parts: 2 }],
+      requestKey: '40000000-0000-4000-8000-000000000006',
+    });
+    expect(persisted.assignments[0]?.partsByPersonId).toEqual({ [husband]: 1, [outsider]: 2, [wife]: 2 });
+  });
+
+  test('Issue 19.13: foreign account, anonymous caller and impersonator cannot allocate across groups', async () => {
+    const changes = [{ personId: husband, parts: 1 }];
+    const input = { token: 'share-1', itemIndex: 0, changes, requestKey: key };
+    await expect((await caller()).setReceiptItemParts(input)).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
+    await expect((await caller({ user: { id: 'foreign' } })).setReceiptItemParts(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    const { guestRouter } = await import('./guest');
+    const impersonator = guestRouter.createCaller({
+      session: signedIn,
+      db: mockDb,
+      headers: new Headers(),
+      impersonating: { adminId: 'support' },
+    } as unknown as Parameters<typeof guestRouter.createCaller>[0]);
+    await expect(impersonator.setReceiptItemParts(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('Issue 19.13: completed and expired receipts still block even an authenticated author', async () => {
+    persisted.status = 'FINALIZED';
     await expect(
-      api.setReceiptItemParts({
+      (await caller(signedIn)).setReceiptItemParts({
         token: 'share-1',
         itemIndex: 0,
-        changes: [{ personId: husband, parts: 3 }],
-        requestKey: '40000000-0000-4000-8000-000000000005',
+        changes: [{ personId: husband, parts: 1 }],
+        requestKey: key,
       }),
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    persisted.status = 'CLAIMING';
+    persisted.expiresAt = new Date(Date.now() - 1000);
+    await expect(
+      (await caller(signedIn)).setReceiptItemParts({
+        token: 'share-1',
+        itemIndex: 0,
+        changes: [{ personId: husband, parts: 1 }],
+        requestKey: key,
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
@@ -283,10 +359,7 @@ describe('TASK-BILLOK-002 23–30: indivisible family identities and atomic dish
   });
 
   test('part counts are bounded, total original parts enforced and removal leaves other people', async () => {
-    // All-diner creator assignment is legal only before a payment group
-    // exists; the separate group ACL is asserted in the test above.
-    for (const person of persisted.people)
-      delete (person as { paymentGroupRepresentativeId?: string }).paymentGroupRepresentativeId;
+    // Same original-part limit holds for grouped and ungrouped author edits.
     const api = await caller(signedIn);
     await expect(
       api.setReceiptItemParts({
@@ -804,6 +877,7 @@ type TestPerson = {
   visualColorId?: number;
   personalLinkReadyAt?: string;
   personalLinkRotation?: { requestKey: string; rotatedAt: string; count: number };
+  paymentGroupRepresentativeId?: string;
   paymentDeclaredAt?: string;
   paymentVerifiedAt?: string;
   groupSize?: number;
@@ -4078,6 +4152,88 @@ describe('Issue 3.25.3.2: personId never authorizes editing another guest share'
       { itemIndex: 0, personIndices: [2], partsByPersonId: { [pid(2)]: 1 } },
       { itemIndex: 1, personIndices: [1], partsByPersonId: { [pid(1)]: 1 } },
     ]);
+  });
+  test('Issue 19.13: claimItems creator edits a grouped outsider without personal token', async () => {
+    claimSession(
+      [
+        { name: 'Илья', personToken: ALICE_TOKEN, paymentGroupRepresentativeId: pid(1) },
+        { name: 'Гость 1', personToken: OTHER_TOKEN, paymentGroupRepresentativeId: pid(1) },
+        { name: 'Гость 2', personToken: D_TOKEN, paymentGroupRepresentativeId: pid(1) },
+        { name: 'Гость 3', personToken: '77777777-7777-4777-8777-777777777777' },
+      ],
+      { items: items(2), assignments: [] },
+    );
+    const author = await caller(signedIn);
+    await author.claimItems({ token: 'share-1', personId: pid(2), addItemIndices: [1] });
+    expect(savedAssignments()).toEqual([{ itemIndex: 1, personIndices: [2], partsByPersonId: { [pid(2)]: 1 } }]);
+    // This mocked transaction doesn't persist writes by itself. Restore the
+    // committed state before the next independent author request.
+    claimSession(
+      [
+        { name: 'Илья', personToken: ALICE_TOKEN, paymentGroupRepresentativeId: pid(1) },
+        { name: 'Гость 1', personToken: OTHER_TOKEN, paymentGroupRepresentativeId: pid(1) },
+        { name: 'Гость 2', personToken: D_TOKEN, paymentGroupRepresentativeId: pid(1) },
+        { name: 'Гость 3', personToken: '77777777-7777-4777-8777-777777777777' },
+      ],
+      { items: items(2), assignments: [{ itemIndex: 1, personIndices: [2], partsByPersonId: { [pid(2)]: 1 } }] },
+    );
+    await author.claimItems({ token: 'share-1', personId: pid(3), addItemIndices: [0] });
+    expect(savedAssignments()).toEqual([
+      { itemIndex: 1, personIndices: [2], partsByPersonId: { [pid(2)]: 1 } },
+      { itemIndex: 0, personIndices: [3], partsByPersonId: { [pid(3)]: 1 } },
+    ]);
+    // A guest and a foreign registered account cannot gain this creator power.
+    await expect(
+      (await caller()).claimItems({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        personId: pid(3),
+        addItemIndices: [1],
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      (await caller({ user: { id: 'foreign' } })).claimItems({
+        token: 'share-1',
+        personId: pid(3),
+        addItemIndices: [1],
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const { guestRouter } = await import('./guest');
+    const impersonator = guestRouter.createCaller({
+      session: signedIn,
+      db: mockDb,
+      headers: new Headers(),
+      impersonating: { adminId: 'support' },
+    } as unknown as Parameters<typeof guestRouter.createCaller>[0]);
+    await expect(
+      impersonator.claimItems({
+        token: 'share-1',
+        personId: pid(3),
+        addItemIndices: [1],
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  test('Issue 19.13: claimItems creator cannot change a finalized or expired grouped receipt', async () => {
+    claimSession(
+      [
+        { name: 'Илья', personToken: ALICE_TOKEN },
+        { name: 'Гость 1', personToken: OTHER_TOKEN, paymentGroupRepresentativeId: pid(1) },
+        { name: 'Гость 2', personToken: D_TOKEN, paymentGroupRepresentativeId: pid(1) },
+      ],
+      { items: items(2), assignments: [] },
+    );
+    const author = await caller(signedIn);
+    const current = mockDb.guestSplit.findUnique.getMockImplementation()!;
+    const row = await current({ where: { shareToken: 'share-1' } });
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...row, status: 'FINALIZED' });
+    await expect(author.claimItems({ token: 'share-1', personId: pid(2), addItemIndices: [1] })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...row, expiresAt: new Date(Date.now() - 1000) });
+    await expect(author.claimItems({ token: 'share-1', personId: pid(2), addItemIndices: [1] })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
   });
 });
 

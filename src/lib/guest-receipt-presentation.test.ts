@@ -72,9 +72,11 @@ describe('Issue #19 section 10: colors follow existing edit permissions', () => 
     expect(editable('member')).toEqual(['member']);
     expect(editable('outsider')).toEqual(['outsider']);
   });
-  it('leader sees exactly own group, grouped author cannot cross boundaries', () => {
+  it('leader sees group, but a verified author can edit every row even when grouped', () => {
     expect(editable('leader')).toEqual(['member', 'leader', 'child']);
-    expect(editable('author', true)).toEqual(['author']);
+    expect(editable('author', true)).toEqual(people.map((p) => p.id));
+    expect(editable(null, true)).toEqual(people.map((p) => p.id));
+    expect(editable('member', true)).toEqual(people.map((p) => p.id));
     expect(editable(null)).toEqual([]);
   });
   it('ungrouped authorized author sees all colors; others only own', () => {

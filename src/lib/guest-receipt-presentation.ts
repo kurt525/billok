@@ -6,7 +6,9 @@ export function canEditReceiptPerson(
   isCreator: boolean,
   targetId: string,
 ): boolean {
-  if (isCreator && !people.some((person) => person.paymentGroupRepresentativeId !== undefined)) return true;
+  // Creator role is server-verified; payment groups never take away the
+  // creator's receipt allocation rights. Guests still need own/group identity.
+  if (isCreator) return people.some((person) => person.id === targetId);
   return (
     !!actorId &&
     (targetId === actorId ||
