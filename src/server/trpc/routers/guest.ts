@@ -1,3 +1,4 @@
+import { GUEST_OWNER_COLOR_ID, GUEST_PALETTE_V2_BASE } from '@/lib/guest-visual-color';
 import { createHash, randomUUID } from 'crypto';
 import { z } from 'zod';
 import { AppError } from '@/server/lib/app-error';
@@ -212,7 +213,14 @@ const JOIN_REPLAY_WINDOW_MS = 24 * 60 * 60 * 1000;
 // The most people a claim session holds
 const MAX_SESSION_PEOPLE = 100;
 
-function toPublicPerson({ name, groupSize, personToken, accountUserId, visualColorId }: GuestSessionPerson) {
+function toPublicPerson({
+  name,
+  groupSize,
+  personToken,
+  accountUserId,
+  visualColorId,
+  reservedOwner,
+}: GuestSessionPerson) {
   // Public receipts never expose personal tokens or account identifiers.
   // An account-bound creator is occupied even if device storage was unavailable
   // when the receipt was created and there is no guest token yet.
@@ -225,7 +233,13 @@ function toPublicPerson({ name, groupSize, personToken, accountUserId, visualCol
     // Only a trusted server-issued account binding qualifies, not a display
     // name, phone, share URL, or possession of a guest bearer credential.
     isRegistered: typeof accountUserId === 'string' && accountUserId.length > 0,
-    ...(Number.isSafeInteger(visualColorId) && visualColorId! >= 0 ? { visualColorId } : {}),
+    // Publish only the harmless palette selector, never the server-only owner marker
+    // or account id. The owner identity was authenticated when reservedOwner was saved.
+    ...(reservedOwner && accountUserId
+      ? { visualColorId: GUEST_OWNER_COLOR_ID }
+      : Number.isSafeInteger(visualColorId) && visualColorId! >= 0
+        ? { visualColorId }
+        : {}),
   };
 }
 
@@ -978,7 +992,7 @@ export const guestRouter = createTRPCRouter({
       // Assign once, before any names are changed or people can be removed.
       // The key will survive retries, joins, renames and index compaction.
       for (const [index, person] of people.entries()) {
-        people[index] = { ...person, visualColorId: index };
+        people[index] = { ...person, visualColorId: GUEST_PALETTE_V2_BASE + index };
       }
       const paidByIndex = usingGuestSlots ? (input.paidByGuestSlot ?? 0) : indexOf(paidByName);
       // A persistent participant ID identifies the creator even if names are

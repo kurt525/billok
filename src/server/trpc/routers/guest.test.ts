@@ -801,6 +801,7 @@ type TestPerson = {
   accountUserId?: string;
   guestSlotNumber?: number;
   reservedOwner?: boolean;
+  visualColorId?: number;
   personalLinkReadyAt?: string;
   personalLinkRotation?: { requestKey: string; rotatedAt: string; count: number };
   paymentDeclaredAt?: string;
@@ -1588,6 +1589,31 @@ describe('Issue 3.6.1: reserved owner name Илья, verified by account, not gu
     expect(new Set(people.map((p) => p.name.trim().toLocaleLowerCase('ru-RU'))).size).toBe(4);
     expect(mockDb.guestSplit.update.mock.calls[0]![0].data.assignments).toBeUndefined();
     expect(mockDb.guestSplit.update.mock.calls[0]![0].data.paidByIndex).toBeUndefined();
+  });
+
+  test('owner joining late receives fixed blue only in public palette, no financial or identity mutation', async () => {
+    claimSession(
+      [
+        { name: 'Автор', personToken: OTHER_TOKEN, visualColorId: 1 },
+        { name: 'Гость', personToken: ALICE_TOKEN, visualColorId: 2 },
+      ],
+      { items, assignments: [{ itemIndex: 0, personIndices: [1] }] },
+    );
+    const before = await (await caller()).getSession({ token: 'share-1' });
+    expect(before.people.map((person) => person.visualColorId)).toEqual([1, 2]);
+    const joined = await (await caller(ownerAccount)).joinSession({ token: 'share-1', name: 'Илья' });
+    expect(joined.personIndex).toBe(2);
+    // The mocked DB stores the mutation payload separately; re-read its saved
+    // snapshot exactly as the real subsequent getSession would.
+    const storedPeople = savedPeople() as TestPerson[];
+    claimSession(storedPeople, { items, assignments: [{ itemIndex: 0, personIndices: [1] }] });
+    const after = await (await caller()).getSession({ token: 'share-1' });
+    const { GUEST_OWNER_COLOR_ID } = await import('@/lib/guest-visual-color');
+    expect(after.people.map((person) => person.visualColorId)).toEqual([1, 2, GUEST_OWNER_COLOR_ID]);
+    expect(JSON.stringify(after)).not.toContain('billok-owner');
+    expect(JSON.stringify(after)).not.toContain('reservedOwner');
+    expect((savedPeople() as TestPerson[]).map((person) => person.name)).toEqual(['Автор', 'Гость', 'Илья']);
+    expect(mockDb.guestSplit.update.mock.calls.at(-1)![0].data.assignments).toBeUndefined();
   });
 
   test('owner first: other users cannot claim or rename a different row to Илья', async () => {
@@ -3201,8 +3227,8 @@ describe('guest.createClaimSession', () => {
     ).createClaimSession({ ...session, creatorName: 'Host', paidByName: 'Payer' });
     const { people } = created();
     expect(people).toEqual([
-      { id: expect.stringMatching(UUID), name: 'Host', visualColorId: 0 },
-      { id: expect.stringMatching(UUID), name: 'Payer', visualColorId: 1 },
+      { id: expect.stringMatching(UUID), name: 'Host', visualColorId: 1_000_000 },
+      { id: expect.stringMatching(UUID), name: 'Payer', visualColorId: 1_000_001 },
     ]);
     expect(people[0]!.id).not.toBe(people[1]!.id);
     // Nobody is joined unless the client asks: older clients join the creator by name afterwards

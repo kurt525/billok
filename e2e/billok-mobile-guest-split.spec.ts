@@ -3199,7 +3199,9 @@ test('Issue 3.9: mobile participant color stays with the person after rename and
     expect(created.ok(), await created.text()).toBe(true);
     token = (JSON.parse(await created.text()).result.data.json as { shareToken: string }).shareToken;
     const initial = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
-    expect(initial.people.map((p: { visualColorId: number }) => p.visualColorId)).toEqual([0, 1, 2]);
+    expect(initial.people.map((p: { visualColorId: number }) => p.visualColorId)).toEqual([
+      1_000_000, 1_000_001, 1_000_002,
+    ]);
     const targetId = initial.people[1].id as string;
 
     await loginWithPasskey(page, users.alice.email);
@@ -3228,13 +3230,21 @@ test('Issue 3.9: mobile participant color stays with the person after rename and
     await ensureReceiptTab(page, 'people');
     await expect(page.getByTestId('guest-color-person-1')).toContainText('Андрей П.', { timeout: 20_000 });
     expect([await colorOf(0), await colorOf(1), await colorOf(2)]).toEqual(before);
-    for (const width of [320, 412, 720]) {
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
       await page.setViewportSize({ width, height: 720 });
+      for (const index of [0, 1, 2]) {
+        const marker = page.getByTestId('guest-color-person-' + index);
+        const bounds = await marker.boundingBox();
+        expect(bounds && bounds.x >= -1 && bounds.x + bounds.width <= width + 1).toBeTruthy();
+      }
       await fitsPhone(page);
     }
     const after = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
     expect(after.people.map((p: { id: string }) => p.id)).toEqual(initial.people.map((p: { id: string }) => p.id));
-    expect(after.people.map((p: { visualColorId: number }) => p.visualColorId)).toEqual([0, 1, 2]);
+    expect(after.people.map((p: { visualColorId: number }) => p.visualColorId)).toEqual([
+      1_000_000, 1_000_001, 1_000_002,
+    ]);
   } finally {
     if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
     await creator.dispose();
