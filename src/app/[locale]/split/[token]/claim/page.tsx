@@ -1730,35 +1730,57 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             <CardContent className="space-y-3 py-4">
               <h3 className="font-semibold">{t('payerReimbursementsTitle')}</h3>
               <p className="text-xs text-muted-foreground">{t('payerReimbursementsNote')}</p>
-              {payerReimbursements.map((person) => (
-                <div key={person.personIndex} className="flex min-w-0 justify-between gap-3 text-sm">
-                  <span className="min-w-0 [overflow-wrap:anywhere]">{person.name}</span>
-                  <span
-                    className="shrink-0 tabular-nums"
-                    data-testid={'guest-payer-reimbursement-' + person.personIndex}
+              <div className="min-w-0 divide-y divide-border/70" data-testid="guest-payer-reimbursement-rows">
+                {payerReimbursements.map((person) => (
+                  <div
+                    key={person.personIndex}
+                    className="min-w-0 space-y-1 py-3 first:pt-1 last:pb-1"
+                    data-testid={'guest-payer-reimbursement-row-' + person.personIndex}
                   >
-                    {formatCents(person.total, currency, locale)}
-                  </span>
-                  {'memberNames' in person && person.memberNames && person.memberNames.length > 1 && (
-                    <span
-                      className="w-full break-words text-xs text-muted-foreground"
-                      data-testid={'guest-payer-group-members-' + person.personIndex}
-                    >
-                      {t('paymentGroupMembers', { names: person.memberNames.join(', ') })}
-                    </span>
-                  )}
-                </div>
-              ))}
+                    {/* A two-column layout that wraps the ENTIRE amount if the
+                        available width cannot fit a readable name and amount.
+                        Group member names always occupy a separate line. */}
+                    <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm">
+                      <span
+                        className="min-w-[min(100%,7rem)] flex-1 break-words"
+                        data-testid={'guest-payer-reimbursement-name-' + person.personIndex}
+                      >
+                        {person.name}
+                      </span>
+                      <span
+                        className="ml-auto shrink-0 whitespace-nowrap text-right tabular-nums"
+                        data-testid={'guest-payer-reimbursement-' + person.personIndex}
+                      >
+                        {formatCents(person.total, currency, locale)}
+                      </span>
+                    </div>
+                    {'memberNames' in person && person.memberNames && person.memberNames.length > 1 && (
+                      <p
+                        className="min-w-0 break-words text-xs leading-relaxed text-muted-foreground"
+                        data-testid={'guest-payer-group-members-' + person.personIndex}
+                      >
+                        {t('paymentGroupMembers', { names: person.memberNames.join(', ') })}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
               <Separator />
-              <div className="flex min-w-0 justify-between gap-3 text-sm">
-                <span>{t('payerOwnShare')}</span>
-                <span className="shrink-0 tabular-nums" data-testid="guest-payer-own-share">
+              <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm">
+                <span className="min-w-0 flex-1 break-words">{t('payerOwnShare')}</span>
+                <span
+                  className="ml-auto shrink-0 whitespace-nowrap text-right tabular-nums"
+                  data-testid="guest-payer-own-share"
+                >
                   {formatCents(payerSummary?.total ?? 0, currency, locale)}
                 </span>
               </div>
-              <div className="flex min-w-0 justify-between gap-3 font-semibold">
-                <span>{t('payerFromOthers')}</span>
-                <span className="shrink-0 tabular-nums" data-testid="guest-payer-reimbursement-total">
+              <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 font-semibold">
+                <span className="min-w-0 flex-1 break-words">{t('payerFromOthers')}</span>
+                <span
+                  className="ml-auto shrink-0 whitespace-nowrap text-right tabular-nums"
+                  data-testid="guest-payer-reimbursement-total"
+                >
                   {formatCents(payerReimbursementTotal, currency, locale)}
                 </span>
               </div>

@@ -7240,3 +7240,206 @@ test.describe('Issue 19 groups — real Passkey and mobile integration', () => {
     }
   });
 });
+
+// Issue 19.17: payer names and member descriptions are separate rows.
+test.describe('Issue 19.17: payer reimbursements layout', () => {
+  test.use({ viewport: { width: 320, height: 760 }, isMobile: true, hasTouch: true });
+  test('two grouped payments plus a solo guest retain exact amounts and readable labels', async ({ page }) => {
+    test.setTimeout(150_000);
+    const owner = await authedContext(users.alice.email, users.alice.password);
+    let token: string | null = null;
+    try {
+      const response = await trpcMutation(owner, 'guest.createClaimSession', {
+        receiptData: { merchantName: 'Ужин', subtotal: 180000, total: 180000, tax: 0, tip: 0, currency: 'RUB' },
+        items: [{ name: 'Ужин на всех', quantity: 1, unitPrice: 180000, totalPrice: 180000 }],
+        people: ['Андрей', 'Гость 2', 'Гость 3', 'Гость 4', 'Гость 5'],
+        creatorName: 'Илья',
+        paidByName: 'Илья',
+        joinCreator: true,
+      });
+      expect(response.ok(), await response.text()).toBe(true);
+      const created = (await response.json()).result.data.json as {
+        shareToken: string;
+        creator: { personId: string; personToken: string; name: string };
+      };
+      token = created.shareToken;
+      const before = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+      const people = before.people as { id: string; name: string }[];
+      const index = (name: string) => people.findIndex((p) => p.name === name);
+      const id = (name: string) => {
+        const n = index(name);
+        expect(n).toBeGreaterThanOrEqual(0);
+        return people[n]!.id;
+      };
+      const andrey = id('Андрей'),
+        g2 = id('Гость 2'),
+        g3 = id('Гость 3'),
+        g4 = id('Гость 4');
+      id('Гость 5');
+      const groups = await trpcMutation(owner, 'guest.setPaymentGroups', {
+        token,
+        groups: [
+          { representativeId: andrey, memberIds: [andrey, g2] },
+          { representativeId: g3, memberIds: [g3, g4] },
+        ],
+      });
+      expect(groups.ok(), await groups.text()).toBe(true);
+      const portion = await trpcMutation(owner, 'guest.setReceiptItemParts', {
+        token,
+        itemIndex: 0,
+        requestKey: randomUUID(),
+        changes: people.map((p) => ({
+          personId: p.id,
+          parts: [andrey, g2].includes(p.id) ? 4 : 1,
+        })),
+      });
+      expect(portion.ok(), await portion.text()).toBe(true);
+      const confirm = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
+      expect(confirm.ok(), await confirm.text()).toBe(true);
+      const finish = await trpcMutation(owner, 'guest.finalizeSession', { token });
+      expect(finish.ok(), await finish.text()).toBe(true);
+      const saved = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+      expect(saved.summary).toHaveLength(6);
+      expect(saved.summary.reduce((sum: number, x: { total: number }) => sum + x.total, 0)).toBe(180000);
+      await loginWithPasskey(page, users.alice.email);
+      await rememberClaimIdentity(page.context(), token, created.creator);
+      await page.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+      const card = page.getByTestId('guest-payer-reimbursements');
+      await expect(card).toBeVisible({ timeout: 20000 });
+      await expect(card.locator('[data-testid^="guest-payer-reimbursement-row-"]')).toHaveCount(3);
+      for (const [who, amount, members] of [
+        ['Андрей', '1 200,00', 'Участники: Андрей, Гость 2'],
+        ['Гость 3', '300,00', 'Участники: Гость 3, Гость 4'],
+        ['Гость 5', '150,00', null],
+      ] as const) {
+        const i = index(who);
+        await expect(card.getByTestId('guest-payer-reimbursement-name-' + i)).toHaveText(who);
+        await expect(card.getByTestId('guest-payer-reimbursement-' + i)).toContainText(amount);
+        const detail = card.getByTestId('guest-payer-group-members-' + i);
+        if (members) await expect(detail).toHaveText(members);
+        else await expect(detail).toHaveCount(0);
+      }
+      await expect(card.getByTestId('guest-payer-own-share')).toContainText('150,00');
+      await expect(card.getByTestId('guest-payer-reimbursement-total')).toContainText('1 650,00');
+      await page.addStyleTag({ content: 'html {font-size:20px !important}' });
+      const check = async (width: number, short: boolean) => {
+        await page.setViewportSize({ width, height: 760 });
+        const geometry = await card.evaluate(
+          (root, indices) => {
+            const rect = (el: Element) => el.getBoundingClientRect();
+            return {
+              scrollWidth: document.documentElement.scrollWidth,
+              rows: indices.map((i) => {
+                const name = root.querySelector('[data-testid="guest-payer-reimbursement-name-' + i + '"]')!;
+                const amount = root.querySelector('[data-testid="guest-payer-reimbursement-' + i + '"]')!;
+                const detail = root.querySelector('[data-testid="guest-payer-group-members-' + i + '"]');
+                const range = document.createRange();
+                range.selectNodeContents(name);
+                return {
+                  name: rect(name).toJSON(),
+                  amount: rect(amount).toJSON(),
+                  detail: detail ? rect(detail).toJSON() : null,
+                  nameLines: [...range.getClientRects()].filter((r) => r.width > 0).length,
+                };
+              }),
+            };
+          },
+          [index('Андрей'), index('Гость 3'), index('Гость 5')],
+        );
+        expect(geometry.scrollWidth, 'document overflow at ' + width).toBeLessThanOrEqual(width + 1);
+        for (const row of geometry.rows) {
+          expect(row.name.left).toBeGreaterThanOrEqual(-1);
+          expect(row.amount.right).toBeLessThanOrEqual(width + 1);
+          expect(
+            row.name.right <= row.amount.left + 1 || row.amount.top >= row.name.bottom - 1,
+            'text overlap at ' + width,
+          ).toBeTruthy();
+          if (row.detail) {
+            expect(row.detail.top).toBeGreaterThanOrEqual(Math.max(row.name.bottom, row.amount.bottom) - 2);
+            expect(row.detail.right).toBeLessThanOrEqual(width + 1);
+          }
+          if (short) expect(row.nameLines, 'short name split at ' + width).toBe(1);
+        }
+      };
+      for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) await check(width, true);
+      // Visual-only stress, not changing account or financial records.
+      await card.getByTestId('guest-payer-reimbursement-name-' + index('Гость 5')).evaluate((el) => {
+        el.textContent = 'АлександрИвановичДлиннофамильныйГость';
+      });
+      await card.getByTestId('guest-payer-group-members-' + index('Андрей')).evaluate((el) => {
+        el.textContent = 'Участники: Александр Иванович Длиннофамильный, Гость ВеликолепнаяФамилияБезПробелов';
+      });
+      await card.getByTestId('guest-payer-reimbursement-' + index('Гость 5')).evaluate((el) => {
+        el.textContent = '12 345 678,90 ₽';
+      });
+      for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) await check(width, false);
+      expect((await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).summary).toEqual(saved.summary);
+
+      // More than two groups must keep three distinct reimbursement rows.
+      const moreResponse = await trpcMutation(owner, 'guest.createClaimSession', {
+        receiptData: { merchantName: 'Три группы', subtotal: 70000, total: 70000, tax: 0, tip: 0, currency: 'RUB' },
+        items: [{ name: 'Общий счёт', quantity: 1, unitPrice: 70000, totalPrice: 70000 }],
+        people: ['Антон', 'Анна', 'Борис', 'Белла', 'Василий', 'Вера'],
+        creatorName: 'Илья',
+        paidByName: 'Илья',
+        joinCreator: true,
+      });
+      expect(moreResponse.ok(), await moreResponse.text()).toBe(true);
+      const more = (await moreResponse.json()).result.data.json as {
+        shareToken: string;
+        creator: { personId: string; personToken: string; name: string };
+      };
+      const moreToken = more.shareToken;
+      const moreInitial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: moreToken }));
+      const morePeople = moreInitial.people as { id: string; name: string }[];
+      const moreId = (name: string) => morePeople.find((p) => p.name === name)!.id;
+      const groupSets = [
+        ['Антон', 'Анна'],
+        ['Борис', 'Белла'],
+        ['Василий', 'Вера'],
+      ];
+      const moreGroups = await trpcMutation(owner, 'guest.setPaymentGroups', {
+        token: moreToken,
+        groups: groupSets.map(([head, member]) => ({
+          representativeId: moreId(head!),
+          memberIds: [moreId(head!), moreId(member!)],
+        })),
+      });
+      expect(moreGroups.ok(), await moreGroups.text()).toBe(true);
+      const moreParts = await trpcMutation(owner, 'guest.setReceiptItemParts', {
+        token: moreToken,
+        itemIndex: 0,
+        requestKey: randomUUID(),
+        changes: morePeople.map((p) => ({ personId: p.id, parts: 1 })),
+      });
+      expect(moreParts.ok(), await moreParts.text()).toBe(true);
+      const moreConfirm = await trpcMutation(owner, 'guest.confirmSessionParts', { token: moreToken });
+      expect(moreConfirm.ok(), await moreConfirm.text()).toBe(true);
+      const moreFinalize = await trpcMutation(owner, 'guest.finalizeSession', { token: moreToken });
+      expect(moreFinalize.ok(), await moreFinalize.text()).toBe(true);
+      token = moreToken;
+      await rememberClaimIdentity(page.context(), moreToken, more.creator);
+      await page.goto('/split/' + moreToken + '/claim', { waitUntil: 'domcontentloaded' });
+      const moreCard = page.getByTestId('guest-payer-reimbursements');
+      await expect(moreCard).toBeVisible({ timeout: 20000 });
+      await expect(moreCard.locator('[data-testid^="guest-payer-reimbursement-row-"]')).toHaveCount(3);
+      for (const [head, member] of groupSets) {
+        const personIndex = morePeople.findIndex((p) => p.name === head);
+        await expect(moreCard.getByTestId('guest-payer-reimbursement-name-' + personIndex)).toHaveText(head!);
+        await expect(moreCard.getByTestId('guest-payer-reimbursement-' + personIndex)).toContainText('200,00');
+        await expect(moreCard.getByTestId('guest-payer-group-members-' + personIndex)).toContainText(
+          head + ', ' + member,
+        );
+      }
+      await expect(moreCard.getByTestId('guest-payer-own-share')).toContainText('100,00');
+      await expect(moreCard.getByTestId('guest-payer-reimbursement-total')).toContainText('600,00');
+      for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
+        await page.setViewportSize({ width, height: 760 });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
+      }
+    } finally {
+      if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+      await owner.dispose();
+    }
+  });
+});
