@@ -1390,7 +1390,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     data.summary?.every((person) => Number.isSafeInteger(person.total) && person.total >= 0) &&
     finalizedTotal === data.receiptData.total + finalizedPersonalTips;
   const payerReimbursements =
-    summaryReconciled && myPersonIndex === data.paidByIndex && payerSummary
+    summaryReconciled && myPersonIndex === data.paidByIndex
       ? hasPaymentGroups
         ? (finalizedPaymentGroups
             ?.filter((group) => group.totalCents > 0)
@@ -1648,7 +1648,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           </CardContent>
         </Card>
 
-        {payerReimbursements && payerSummary && (
+        {payerReimbursements && (
           <Card data-testid="guest-payer-reimbursements">
             <CardContent className="space-y-3 py-4">
               <h3 className="font-semibold">{t('payerReimbursementsTitle')}</h3>
@@ -1676,7 +1676,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               <div className="flex min-w-0 justify-between gap-3 text-sm">
                 <span>{t('payerOwnShare')}</span>
                 <span className="shrink-0 tabular-nums" data-testid="guest-payer-own-share">
-                  {formatCents(payerSummary.total, currency, locale)}
+                  {formatCents(payerSummary?.total ?? 0, currency, locale)}
                 </span>
               </div>
               <div className="flex min-w-0 justify-between gap-3 font-semibold">
@@ -1689,7 +1689,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           </Card>
         )}
 
-        {payerReimbursements && payerSummary && myPersonId && personToken && (
+        {payerReimbursements && myPersonId && personToken && (
           <GuestPayerPaymentReview
             key={`payer-review:${personToken}`}
             token={token}
@@ -1699,7 +1699,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           />
         )}
 
-        {payerReimbursements && payerSummary && myPersonId && personToken && (
+        {payerReimbursements && myPersonId && personToken && (
           <GuestPayerSbpForm
             key={`payer-sbp:${personToken}`}
             token={token}
