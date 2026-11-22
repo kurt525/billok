@@ -5694,7 +5694,7 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await memberPage.goto('/split/' + token + '/claim');
     await expect(memberPage.getByTestId('guest-display-name-' + husbandIndex)).toHaveText('Муж (вы)');
     await expectDishColors(memberPage, 2, [husbandIndex], 4);
-    await expectDishColors(creatorPage, 2, [payerIndex], 4);
+    await expectDishColors(creatorPage, 2, [payerIndex, wifeIndex, husbandIndex, childIndex], 4);
     await expectDishColors(page, 2, [wifeIndex, husbandIndex, childIndex], 4);
     const childButton = page.getByTestId('dish-person-2-' + childIndex);
     const fillBefore = await childButton.evaluate((el) => getComputedStyle(el).backgroundColor);
