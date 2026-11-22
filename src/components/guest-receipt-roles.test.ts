@@ -3,13 +3,13 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { GuestReceiptRoles } from './guest-receipt-roles';
 
-const labels = { creatorLabel: 'Автор', payerLabel: 'Плательщик' };
+const labels = { creatorLabel: 'Автор чека', payerLabel: 'Плательщик' };
 
 describe('Issue 3.10: accessible role markers', () => {
   test('creator alone shows crown plus visible label, never a payer marker', () => {
     const html = renderToStaticMarkup(createElement(GuestReceiptRoles, { ...labels, isCreator: true, isPayer: false }));
     expect(html).toContain('👑');
-    expect(html).toContain('Автор');
+    expect(html).toContain('Автор чека');
     expect(html).toContain('receipt-role-creator');
     expect(html).not.toContain('receipt-role-payer');
   });
@@ -26,7 +26,7 @@ describe('Issue 3.10: accessible role markers', () => {
     const html = renderToStaticMarkup(createElement(GuestReceiptRoles, { ...labels, isCreator: true, isPayer: true }));
     expect(html).toContain('👑');
     expect(html).toContain('💵');
-    expect(html).toContain('Автор');
+    expect(html).toContain('Автор чека');
     expect(html).toContain('Плательщик');
     expect(html.match(/receipt-role-/g)?.length).toBe(2);
   });
