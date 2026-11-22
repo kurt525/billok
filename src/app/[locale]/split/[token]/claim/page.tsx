@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useState, useMemo, useEffect, useRef } from 'react';
+import { use, useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
@@ -64,6 +64,7 @@ import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
 import { GuestSbpReimbursementDetails } from '@/components/guest-sbp-reimbursement-details';
 import { GuestPaymentDeclaration } from '@/components/guest-payment-declaration';
 import { GuestPayerPaymentReview } from '@/components/guest-payer-payment-review';
+import { combinedWaiterTotals, type PayerActualTotals } from '@/lib/guest-payer-actual-summary';
 import { GuestPaymentGroupsEditor } from '@/components/guest-payment-groups-editor';
 import { GuestItemAllocations } from '@/components/guest-item-allocations';
 
@@ -287,6 +288,22 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   // is removed, on any device. Indexes are looked up in the session as last loaded (below).
   // This device's person, once it joined or resumed
   const [identity, setIdentityState] = useState<{ personId: string; personToken: string } | null>(null);
+  const [livePayerTotals, setLivePayerTotals] = useState<{
+    identity: string;
+    totals: PayerActualTotals | null;
+  } | null>(null);
+  const onActualTotals = useCallback(
+    (totals: PayerActualTotals | null, personalToken: string) => {
+      const identity = token + ':' + personalToken;
+      setLivePayerTotals((previous) =>
+        previous?.identity === identity && JSON.stringify(previous.totals) === JSON.stringify(totals)
+          ? previous
+          : { identity, totals },
+      );
+    },
+    [token],
+  );
+
   // The same, for mutation callbacks: they can run with an older render's closure (TanStack
   // Query only hands a pending mutation each render's options after that render commits), so
   // they read this device's identity from this ref, which setIdentity updates at once
@@ -1408,6 +1425,16 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         : data.summary!.filter((person) => person.personIndex !== data.paidByIndex && person.total > 0)
       : null;
   const payerReimbursementTotal = payerReimbursements?.reduce((sum, person) => sum + person.total, 0) ?? 0;
+  const payerActual =
+    payerReimbursements &&
+    personToken &&
+    livePayerTotals?.identity === token + ':' + personToken &&
+    livePayerTotals.totals?.expected === payerReimbursementTotal
+      ? livePayerTotals.totals
+      : null;
+  const combinedTotals = combinedWaiterTotals(data.receiptData.total, finalizedPersonalTips, payerActual);
+  const isPrivatePayerView = !!payerReimbursements && !!personToken && !!myPersonId;
+
   const myPaymentGroup = finalizedPaymentGroups?.find(
     (group) => myPersonIndex !== null && group.memberIndices.includes(myPersonIndex),
   );
@@ -1629,24 +1656,54 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                   </span>
                 </div>
                 <div className="flex min-w-0 justify-between gap-3 text-sm">
-                  <span>{t('tipForWaiter')}</span>
+                  <span>{isPrivatePayerView ? t('tipDeclaredBeforeFinalize') : t('tipForWaiter')}</span>
                   <span className="shrink-0 tabular-nums" data-testid="finalized-waiter-tip-total">
                     {formatCents(finalizedPersonalTips, currency, locale)}
                   </span>
                 </div>
+                {isPrivatePayerView && (
+                  <>
+                    <div className="flex min-w-0 justify-between gap-3 text-sm">
+                      <span className="min-w-0 [overflow-wrap:anywhere]">{t('tipAddedFromTransfers')}</span>
+                      <span className="shrink-0 tabular-nums" data-testid="finalized-extra-waiter-tips">
+                        {combinedTotals ? formatCents(payerActual!.extraTips, currency, locale) : '—'}
+                      </span>
+                    </div>
+                    <div className="flex min-w-0 justify-between gap-3 font-semibold text-sm">
+                      <span className="min-w-0 [overflow-wrap:anywhere]">{t('tipForWaiter')}</span>
+                      <span className="shrink-0 tabular-nums" data-testid="finalized-combined-waiter-tips">
+                        {combinedTotals ? formatCents(combinedTotals.tipCents, currency, locale) : '—'}
+                      </span>
+                    </div>
+                  </>
+                )}
                 <Separator />
               </>
             )}
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
               <span className="font-semibold text-lg">
                 {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0
-                  ? t('totalWithTips')
+                  ? isPrivatePayerView
+                    ? t('totalWithAllTips')
+                    : t('totalWithTips')
                   : t('totalBill')}
               </span>
               <span className="text-2xl font-bold text-primary" data-testid="finalized-bill-total">
-                {formatCents(finalizedTotal, currency, locale)}
+                {isPrivatePayerView
+                  ? combinedTotals
+                    ? formatCents(combinedTotals.totalCents, currency, locale)
+                    : '—'
+                  : formatCents(finalizedTotal, currency, locale)}
               </span>
             </div>
+            {isPrivatePayerView && !combinedTotals && (
+              <p className="text-xs text-muted-foreground" role="status" data-testid="finalized-live-tips-unavailable">
+                {t('payerLiveTotalsUnavailable')}
+              </p>
+            )}
+            {!isPrivatePayerView && (
+              <p className="text-xs text-muted-foreground">{t('payerOriginalTotalsWithoutExtra')}</p>
+            )}
           </CardContent>
         </Card>
 
@@ -1698,6 +1755,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             personId={myPersonId}
             personToken={personToken}
             people={data.people}
+            onActualTotals={onActualTotals}
           />
         )}
 
