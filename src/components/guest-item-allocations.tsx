@@ -8,8 +8,10 @@ import { Button } from '@/components/ui/button';
 import { trpc } from '@/lib/trpc';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { newRequestKey } from '@/lib/guest-session';
+import { guestVisualColorStyle } from '@/lib/guest-visual-color';
+import { canEditReceiptPerson } from '@/lib/guest-receipt-presentation';
 
-type Person = { id: string; name: string; paymentGroupRepresentativeId?: string };
+type Person = { id: string; name: string; visualColorId?: number; paymentGroupRepresentativeId?: string };
 type Allocation = { itemIndex: number; personIndices: number[]; partsByPersonId?: Record<string, number> | undefined };
 
 export function GuestItemAllocations({
@@ -46,13 +48,7 @@ export function GuestItemAllocations({
   const wasOpen = useRef(false);
   const currentCount = (person: Person, index: number) =>
     assignment?.personIndices.includes(index) ? (assignment.partsByPersonId?.[person.id] ?? 1) : 0;
-  const hasPaymentGroups = people.some((person) => person.paymentGroupRepresentativeId !== undefined);
-  const canEdit = (person: Person) =>
-    (isCreator && !hasPaymentGroups) ||
-    (!!actorId &&
-      (person.id === actorId ||
-        (people.find((entry) => entry.id === actorId)?.paymentGroupRepresentativeId === actorId &&
-          person.paymentGroupRepresentativeId === actorId)));
+  const canEdit = (person: Person) => canEditReceiptPerson(people, actorId, isCreator, person.id);
   useEffect(() => {
     if (open && !wasOpen.current) {
       setDrafts(
@@ -121,12 +117,13 @@ export function GuestItemAllocations({
               data-testid={'dish-person-' + itemIndex + '-' + index}
               aria-label={person.name + ', ' + parts + ' ' + t('allocatedPartsUnit')}
               aria-pressed={parts > 0}
+              style={editable ? guestVisualColorStyle(person, index) : undefined}
               disabled={blocked || !editable || parts > 1}
               onClick={() => save([{ personId: person.id, parts: parts === 0 ? 1 : 0 }])}
               className={
                 'relative inline-flex min-h-11 min-w-0 max-w-full items-center rounded-xl border px-3 py-2 text-sm font-medium ' +
                 'text-foreground shadow-sm [overflow-wrap:anywhere] disabled:cursor-default ' +
-                (parts > 0 ? 'border-primary bg-primary/10' : 'border-border bg-background') +
+                'border-border bg-background' +
                 (!editable ? ' opacity-65' : '')
               }
             >

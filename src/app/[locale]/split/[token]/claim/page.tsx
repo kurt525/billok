@@ -57,6 +57,7 @@ import { organizerPersonIndex, guestReceiptRoleFlags } from '@/lib/guest-receipt
 import { GuestReceiptRoles } from '@/components/guest-receipt-roles';
 import { GuestAccountStatus } from '@/components/guest-account-status';
 import { ReceiptLinkExpiry } from '@/components/receipt-link-expiry';
+import { personalReceiptTotals } from '@/lib/guest-receipt-presentation';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
@@ -1783,11 +1784,15 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         {data.summary && data.summary.length > 0 && (
           <div className="space-y-3">
             <h3 className="font-semibold text-base">{t('perPersonTotals')}</h3>
-            {data.summary.map((person: { name: string; total: number; personIndex: number }) => (
+            {personalReceiptTotals(data.summary, data.people, myPersonId, data.isCreator).map(({ person, muted }) => (
               <Card
                 key={person.personIndex}
                 className="border-l-4"
-                style={{ borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex) }}
+                data-testid={'finalized-person-card-' + person.personIndex}
+                style={{
+                  borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex),
+                  opacity: muted ? 0.5 : 1,
+                }}
               >
                 <CardContent className="py-3">
                   <div className="min-w-0 space-y-2" data-testid={'finalized-person-layout-' + person.personIndex}>
