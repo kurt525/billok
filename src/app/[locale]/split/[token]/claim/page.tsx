@@ -56,6 +56,8 @@ import { guestVisualColorStyle, guestVisualColorBorder } from '@/lib/guest-visua
 import { organizerPersonIndex, guestReceiptRoleFlags } from '@/lib/guest-receipt-roles';
 import { GuestReceiptRoles } from '@/components/guest-receipt-roles';
 import { GuestAccountStatus } from '@/components/guest-account-status';
+import { ReceiptLinkExpiry } from '@/components/receipt-link-expiry';
+import { personalReceiptTotals } from '@/lib/guest-receipt-presentation';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
@@ -1390,7 +1392,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     data.summary?.every((person) => Number.isSafeInteger(person.total) && person.total >= 0) &&
     finalizedTotal === data.receiptData.total + finalizedPersonalTips;
   const payerReimbursements =
-    summaryReconciled && myPersonIndex === data.paidByIndex && payerSummary
+    summaryReconciled && myPersonIndex === data.paidByIndex
       ? hasPaymentGroups
         ? (finalizedPaymentGroups
             ?.filter((group) => group.totalCents > 0)
@@ -1648,7 +1650,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           </CardContent>
         </Card>
 
-        {payerReimbursements && payerSummary && (
+        {payerReimbursements && (
           <Card data-testid="guest-payer-reimbursements">
             <CardContent className="space-y-3 py-4">
               <h3 className="font-semibold">{t('payerReimbursementsTitle')}</h3>
@@ -1676,7 +1678,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               <div className="flex min-w-0 justify-between gap-3 text-sm">
                 <span>{t('payerOwnShare')}</span>
                 <span className="shrink-0 tabular-nums" data-testid="guest-payer-own-share">
-                  {formatCents(payerSummary.total, currency, locale)}
+                  {formatCents(payerSummary?.total ?? 0, currency, locale)}
                 </span>
               </div>
               <div className="flex min-w-0 justify-between gap-3 font-semibold">
@@ -1689,7 +1691,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           </Card>
         )}
 
-        {payerReimbursements && payerSummary && myPersonId && personToken && (
+        {payerReimbursements && myPersonId && personToken && (
           <GuestPayerPaymentReview
             key={`payer-review:${personToken}`}
             token={token}
@@ -1699,7 +1701,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           />
         )}
 
-        {payerReimbursements && payerSummary && myPersonId && personToken && (
+        {payerReimbursements && myPersonId && personToken && (
           <GuestPayerSbpForm
             key={`payer-sbp:${personToken}`}
             token={token}
@@ -1782,11 +1784,15 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         {data.summary && data.summary.length > 0 && (
           <div className="space-y-3">
             <h3 className="font-semibold text-base">{t('perPersonTotals')}</h3>
-            {data.summary.map((person: { name: string; total: number; personIndex: number }) => (
+            {personalReceiptTotals(data.summary, data.people, myPersonId, data.isCreator).map(({ person, muted }) => (
               <Card
                 key={person.personIndex}
                 className="border-l-4"
-                style={{ borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex) }}
+                data-testid={'finalized-person-card-' + person.personIndex}
+                style={{
+                  borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex),
+                  opacity: muted ? 0.5 : 1,
+                }}
               >
                 <CardContent className="py-3">
                   <div className="min-w-0 space-y-2" data-testid={'finalized-person-layout-' + person.personIndex}>
@@ -1869,6 +1875,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           </Button>
           {personalLinkButton}
           {personalLinkHint}
+          <ReceiptLinkExpiry expiresAt={data.expiresAt} />
         </div>
       </div>
     );
@@ -1882,6 +1889,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         <div className="text-center space-y-1 pt-4">
           <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
           {data.receiptData.date && <p className="text-sm text-muted-foreground">{data.receiptData.date}</p>}
+          <ReceiptLinkExpiry expiresAt={data.expiresAt} />
         </div>
 
         {/* Total */}
@@ -2240,6 +2248,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       <div className="text-center space-y-1 pt-4">
         <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
         {data.receiptData.date && <p className="text-sm text-muted-foreground">{data.receiptData.date}</p>}
+        <ReceiptLinkExpiry expiresAt={data.expiresAt} />
       </div>
 
       {/* Total */}

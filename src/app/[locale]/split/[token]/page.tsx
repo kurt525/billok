@@ -1,7 +1,7 @@
 'use client';
 
 import { use } from 'react';
-import { useFormatter, useLocale, useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
 import { formatCents } from '@/lib/money';
 import { copyToClipboard } from '@/lib/clipboard';
@@ -17,6 +17,7 @@ import { guestVisualColorStyle, guestVisualColorBorder } from '@/lib/guest-visua
 import { guestReceiptRoleFlags } from '@/lib/guest-receipt-roles';
 import { GuestReceiptRoles } from '@/components/guest-receipt-roles';
 import { GuestAccountStatus } from '@/components/guest-account-status';
+import { ReceiptLinkExpiry } from '@/components/receipt-link-expiry';
 import { groupSizeWeights, personItemShares } from '@/lib/split-calculator';
 
 export default function SharedSplitPage({ params }: { params: Promise<{ token: string }> }) {
@@ -26,7 +27,6 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
   const tr = useTranslations('split.roles');
   const ta = useTranslations('split.accountStatus');
   const tc = useTranslations('common');
-  const format = useFormatter();
   const split = trpc.guest.getSplit.useQuery({ token });
   if (split.isLoading) {
     return (
@@ -319,11 +319,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
       </Card>
 
       {/* Expiry notice */}
-      <p className="text-xs text-center text-muted-foreground">
-        {expiredCreatorHistory
-          ? t('expiredCreatorHistory')
-          : t('expiresOn', { date: format.dateTime(new Date(data.expiresAt), { dateStyle: 'long' }) })}
-      </p>
+      <ReceiptLinkExpiry expiresAt={data.expiresAt} archived={expiredCreatorHistory} />
 
       {/* CTA */}
       <div className="text-center">

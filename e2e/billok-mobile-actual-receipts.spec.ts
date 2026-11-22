@@ -36,7 +36,7 @@ test('5.22: payer corrects actual incoming RUB amount and accounts for returned 
         currency: 'RUB',
       },
       items: [{ name: 'Общее блюдо', quantity: 1, unitPrice: 1200, totalPrice: 1200 }],
-      people: ['Плательщик', 'Участник'],
+      people: ['Плательщик', 'Участник', 'Без блюд'],
       creatorName: 'Плательщик',
       paidByName: 'Плательщик',
       joinCreator: true,
@@ -79,6 +79,17 @@ test('5.22: payer corrects actual incoming RUB amount and accounts for returned 
     await expect(row).toContainText('6,00', { timeout: 15_000 });
     await expect(senderPage.getByTestId('guest-payer-payment-review')).toHaveCount(0);
     await expect(senderPage.getByTestId('guest-actual-receipt-status')).toHaveCount(0);
+    const sparse = await trpcResult(await trpcQuery(other.request, 'guest.getSession', { token }));
+    expect(sparse.people).toHaveLength(3);
+    expect(sparse.summary).toHaveLength(2);
+    await expect(privateReview.getByText('Без блюд', { exact: true })).toHaveCount(0);
+    await expect(senderPage.getByTestId('guest-mark-paid')).toBeVisible();
+    const bank = await trpcMutation(other.request, 'guest.getPayerSbpForReimbursement', {
+      token,
+      personId: sender.personId,
+      personToken: sender.personToken,
+    });
+    expect(bank.ok(), await bank.text()).toBe(true);
 
     // Payer enters a real 6.60 transfer against a fixed 6.00 RUB debt.
     const receivedInput = row.getByTestId('guest-payer-received-input-' + sender.personId);
@@ -140,7 +151,7 @@ test('5.22: payer corrects actual incoming RUB amount and accounts for returned 
 
     // Inspect exact controls at all mandated mobile widths. No general
     // horizontal-scroll check can substitute a diagnosis of a clipped field.
-    for (const width of [320, 360, 393, 412, 600, 720]) {
+    for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
       await page.setViewportSize({ width, height: 480 });
       await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
       for (const control of [

@@ -1,3 +1,4 @@
+import { GUEST_OWNER_COLOR_ID, GUEST_PALETTE_V2_BASE } from '@/lib/guest-visual-color';
 import { createHash, randomUUID } from 'crypto';
 import { z } from 'zod';
 import { AppError } from '@/server/lib/app-error';
@@ -212,7 +213,14 @@ const JOIN_REPLAY_WINDOW_MS = 24 * 60 * 60 * 1000;
 // The most people a claim session holds
 const MAX_SESSION_PEOPLE = 100;
 
-function toPublicPerson({ name, groupSize, personToken, accountUserId, visualColorId }: GuestSessionPerson) {
+function toPublicPerson({
+  name,
+  groupSize,
+  personToken,
+  accountUserId,
+  visualColorId,
+  reservedOwner,
+}: GuestSessionPerson) {
   // Public receipts never expose personal tokens or account identifiers.
   // An account-bound creator is occupied even if device storage was unavailable
   // when the receipt was created and there is no guest token yet.
@@ -225,7 +233,13 @@ function toPublicPerson({ name, groupSize, personToken, accountUserId, visualCol
     // Only a trusted server-issued account binding qualifies, not a display
     // name, phone, share URL, or possession of a guest bearer credential.
     isRegistered: typeof accountUserId === 'string' && accountUserId.length > 0,
-    ...(Number.isSafeInteger(visualColorId) && visualColorId! >= 0 ? { visualColorId } : {}),
+    // Publish only the harmless palette selector, never the server-only owner marker
+    // or account id. The owner identity was authenticated when reservedOwner was saved.
+    ...(reservedOwner && accountUserId
+      ? { visualColorId: GUEST_OWNER_COLOR_ID }
+      : Number.isSafeInteger(visualColorId) && visualColorId! >= 0
+        ? { visualColorId }
+        : {}),
   };
 }
 
@@ -393,6 +407,103 @@ function finalizedPaymentGroups(
   }
 }
 
+/** Validate the stored settlement without rewriting it. Ordinary receipts
+ * intentionally omit people who consumed nothing; grouped receipts have a
+ * complete ledger. A missing row is not a debt and must never confer access.
+ * Before permitting a sparse historical ledger, prove every omitted person
+ * has no saved claim, tip, or payment history. The original checksum and
+ * declared amounts are checked by the callers against the unmodified rows.
+ */
+function requireFinalizedPaymentSummary(
+  split: {
+    people: Prisma.JsonValue;
+    paidByIndex: number;
+    receiptData: Prisma.JsonValue;
+    summary: Prisma.JsonValue | null;
+    assignments?: Prisma.JsonValue;
+  },
+  people: GuestSessionPerson[],
+) {
+  const receipt = split.receiptData as { currency?: string; tax?: number; tip?: number; total?: number };
+  const summary = split.summary as { personIndex: number; total: number; tip: number }[] | null;
+  const denied = () => new AppError('FORBIDDEN', 'invalidPersonToken');
+  if (
+    receipt.currency !== 'RUB' ||
+    receipt.tax !== 0 ||
+    receipt.tip !== 0 ||
+    !Number.isSafeInteger(receipt.total) ||
+    receipt.total! < 0 ||
+    !Array.isArray(summary) ||
+    summary.length === 0 ||
+    summary.length > people.length ||
+    !people[split.paidByIndex] ||
+    summary.some(
+      (entry) =>
+        !entry ||
+        !Number.isSafeInteger(entry.personIndex) ||
+        entry.personIndex < 0 ||
+        entry.personIndex >= people.length ||
+        !Number.isSafeInteger(entry.total) ||
+        entry.total < 0 ||
+        !Number.isSafeInteger(entry.tip) ||
+        entry.tip < 0 ||
+        entry.tip > entry.total,
+    ) ||
+    new Set(summary.map((entry) => entry.personIndex)).size !== summary.length ||
+    summary.reduce((sum, entry) => sum + entry.total, 0) !==
+      receipt.total! + summary.reduce((sum, entry) => sum + entry.tip, 0)
+  ) {
+    throw denied();
+  }
+
+  if (summary.length < people.length) {
+    // Grouped settlements require one explicit row for each participant.
+    if (
+      people.some((person) => person.paymentGroupRepresentativeId !== undefined) ||
+      !hasPersonIds(people) ||
+      !Array.isArray(split.assignments)
+    )
+      throw denied();
+
+    const included = new Set(summary.map((entry) => entry.personIndex));
+    const parsed = z
+      .array(
+        z.object({
+          itemIndex: z.number().int().min(0),
+          personIndices: z.array(
+            z
+              .number()
+              .int()
+              .min(0)
+              .max(people.length - 1),
+          ),
+          partsByPersonId: z.record(z.string(), z.number().int().min(1).max(10000)).optional(),
+        }),
+      )
+      .safeParse(split.assignments);
+    if (!parsed.success || parsed.data.length === 0) throw denied();
+    for (const assignment of parsed.data) {
+      if (
+        assignment.personIndices.some((index) => !included.has(index)) ||
+        Object.keys(assignment.partsByPersonId ?? {}).some(
+          (id) => !assignment.personIndices.some((index) => people[index]!.id === id),
+        )
+      )
+        throw denied();
+    }
+    for (const [index, person] of people.entries()) {
+      if (
+        !included.has(index) &&
+        ((person.tipCents ?? 0) !== 0 ||
+          Object.keys(person).some((key) => key.startsWith('payment') || key === 'guestPushSubscriptions'))
+      ) {
+        throw denied();
+      }
+    }
+  }
+  return { receiptTotal: receipt.total!, summary };
+}
+
 /** Return only a verified non-payer with a positive, reconciled personal debt.
  * Never authorize using a public share token, creator login or display name.
  */
@@ -403,6 +514,7 @@ function requireGuestDebtor(
     paidByIndex: number;
     receiptData: Prisma.JsonValue;
     summary: Prisma.JsonValue | null;
+    assignments?: Prisma.JsonValue;
   },
   personId: string,
   personToken: string,
@@ -416,40 +528,14 @@ function requireGuestDebtor(
     throw new AppError('FORBIDDEN', 'invalidPersonToken');
   }
   const person = people[personIndex]!;
-  const receipt = split.receiptData as { currency?: string; tax?: number; tip?: number; total?: number };
-  const summary = split.summary as { personIndex: number; total: number; tip: number }[] | null;
-  if (
-    receipt.currency !== 'RUB' ||
-    receipt.tax !== 0 ||
-    receipt.tip !== 0 ||
-    !Number.isSafeInteger(receipt.total) ||
-    receipt.total! < 0 ||
-    !Array.isArray(summary) ||
-    summary.length !== people.length ||
-    !people[split.paidByIndex] ||
-    summary.some(
-      (entry) =>
-        !Number.isSafeInteger(entry.personIndex) ||
-        entry.personIndex < 0 ||
-        entry.personIndex >= people.length ||
-        !Number.isSafeInteger(entry.total) ||
-        entry.total < 0 ||
-        !Number.isSafeInteger(entry.tip) ||
-        entry.tip < 0,
-    ) ||
-    new Set(summary.map((entry) => entry.personIndex)).size !== people.length ||
-    summary.reduce((sum, entry) => sum + entry.total, 0) !==
-      receipt.total! + summary.reduce((sum, entry) => sum + entry.tip, 0)
-  ) {
-    throw new AppError('FORBIDDEN', 'invalidPersonToken');
-  }
-  const paymentGroups = finalizedPaymentGroups(people, split.paidByIndex, summary, receipt.total!);
+  const { receiptTotal, summary } = requireFinalizedPaymentSummary(split, people);
+  const paymentGroups = finalizedPaymentGroups(people, split.paidByIndex, summary, receiptTotal);
   assertGuestSettlementUnchanged({
     receiptData: split.receiptData,
     people,
     paidByIndex: split.paidByIndex,
     summary,
-    receiptTotalCents: receipt.total!,
+    receiptTotalCents: receiptTotal,
   });
   assertGuestDeclaredAmountsUnchanged({
     people,
@@ -485,6 +571,7 @@ function requireGuestPayerReview(
     paidByIndex: number;
     receiptData: Prisma.JsonValue;
     summary: Prisma.JsonValue | null;
+    assignments?: Prisma.JsonValue;
   },
   payerId: string,
   payerToken: string,
@@ -497,39 +584,14 @@ function requireGuestPayerReview(
   if (split.status !== GuestSplitStatus.FINALIZED) {
     throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
   }
-  const receipt = split.receiptData as { currency?: string; tax?: number; tip?: number; total?: number };
-  const summary = split.summary as { personIndex: number; total: number; tip: number }[] | null;
-  if (
-    receipt.currency !== 'RUB' ||
-    receipt.tax !== 0 ||
-    receipt.tip !== 0 ||
-    !Number.isSafeInteger(receipt.total) ||
-    receipt.total! < 0 ||
-    !Array.isArray(summary) ||
-    summary.length !== people.length ||
-    summary.some(
-      (entry) =>
-        !Number.isSafeInteger(entry.personIndex) ||
-        entry.personIndex < 0 ||
-        entry.personIndex >= people.length ||
-        !Number.isSafeInteger(entry.total) ||
-        entry.total < 0 ||
-        !Number.isSafeInteger(entry.tip) ||
-        entry.tip < 0,
-    ) ||
-    new Set(summary.map((entry) => entry.personIndex)).size !== people.length ||
-    summary.reduce((sum, entry) => sum + entry.total, 0) !==
-      receipt.total! + summary.reduce((sum, entry) => sum + entry.tip, 0)
-  ) {
-    throw new AppError('FORBIDDEN', 'invalidPersonToken');
-  }
-  const paymentGroups = finalizedPaymentGroups(people, split.paidByIndex, summary, receipt.total!);
+  const { receiptTotal, summary } = requireFinalizedPaymentSummary(split, people);
+  const paymentGroups = finalizedPaymentGroups(people, split.paidByIndex, summary, receiptTotal);
   assertGuestSettlementUnchanged({
     receiptData: split.receiptData,
     people,
     paidByIndex: split.paidByIndex,
     summary,
-    receiptTotalCents: receipt.total!,
+    receiptTotalCents: receiptTotal,
   });
   assertGuestDeclaredAmountsUnchanged({
     people,
@@ -930,7 +992,7 @@ export const guestRouter = createTRPCRouter({
       // Assign once, before any names are changed or people can be removed.
       // The key will survive retries, joins, renames and index compaction.
       for (const [index, person] of people.entries()) {
-        people[index] = { ...person, visualColorId: index };
+        people[index] = { ...person, visualColorId: GUEST_PALETTE_V2_BASE + index };
       }
       const paidByIndex = usingGuestSlots ? (input.paidByGuestSlot ?? 0) : indexOf(paidByName);
       // A persistent participant ID identifies the creator even if names are
@@ -3124,7 +3186,15 @@ export const guestRouter = createTRPCRouter({
       }
       const split = await ctx.db.guestSplit.findUnique({
         where: { shareToken: shareLookupHash(input.token) },
-        select: { expiresAt: true, status: true, people: true, paidByIndex: true, receiptData: true, summary: true },
+        select: {
+          expiresAt: true,
+          status: true,
+          people: true,
+          paidByIndex: true,
+          receiptData: true,
+          summary: true,
+          assignments: true,
+        },
       });
       if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
       if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
@@ -3214,7 +3284,15 @@ export const guestRouter = createTRPCRouter({
       }
       const split = await ctx.db.guestSplit.findUnique({
         where: { shareToken: shareLookupHash(input.token) },
-        select: { expiresAt: true, status: true, people: true, paidByIndex: true, receiptData: true, summary: true },
+        select: {
+          expiresAt: true,
+          status: true,
+          people: true,
+          paidByIndex: true,
+          receiptData: true,
+          summary: true,
+          assignments: true,
+        },
       });
       if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
       if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
@@ -3568,7 +3646,15 @@ export const guestRouter = createTRPCRouter({
       }
       const split = await ctx.db.guestSplit.findUnique({
         where: { shareToken: shareLookupHash(input.token) },
-        select: { expiresAt: true, status: true, people: true, paidByIndex: true, receiptData: true, summary: true },
+        select: {
+          expiresAt: true,
+          status: true,
+          people: true,
+          paidByIndex: true,
+          receiptData: true,
+          summary: true,
+          assignments: true,
+        },
       });
       if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
       if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
@@ -4532,65 +4618,16 @@ export const guestRouter = createTRPCRouter({
           paidByIndex: true,
           receiptData: true,
           summary: true,
+          assignments: true,
           payerSbpPhone: true,
           payerSbpBankId: true,
         },
       });
       if (!split) throw new AppError('NOT_FOUND', 'sessionNotFound');
       if (split.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
-      if (split.status !== GuestSplitStatus.FINALIZED) {
-        throw new AppError('BAD_REQUEST', 'sessionClosedToClaims');
-      }
-      const people = split.people as GuestSessionPerson[];
-      const personIndex = people.findIndex(
-        (person) => person.id === input.personId && person.personToken === input.personToken,
-      );
-      if (personIndex < 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
-      if (personIndex === split.paidByIndex) throw new AppError('FORBIDDEN', 'invalidPersonToken');
-      const receipt = split.receiptData as { currency?: string; tax?: number; tip?: number; total?: number };
-      const summary = split.summary as { personIndex: number; total: number; tip: number }[] | null;
-      // Fail closed if stale or malformed settlement sums cannot be reconciled.
-      if (
-        receipt.currency !== 'RUB' ||
-        receipt.tax !== 0 ||
-        receipt.tip !== 0 ||
-        !Number.isSafeInteger(receipt.total) ||
-        !Array.isArray(summary) ||
-        summary.length !== people.length ||
-        summary.some(
-          (person) =>
-            !Number.isSafeInteger(person.total) ||
-            person.total < 0 ||
-            !Number.isSafeInteger(person.tip) ||
-            person.tip < 0,
-        ) ||
-        summary.reduce((sum, person) => sum + person.total, 0) !==
-          receipt.total! + summary.reduce((sum, person) => sum + person.tip, 0)
-      ) {
-        throw new AppError('FORBIDDEN', 'invalidPersonToken');
-      }
-      const groupPayments = finalizedPaymentGroups(people, split.paidByIndex, summary, receipt.total!);
-      assertGuestSettlementUnchanged({
-        receiptData: split.receiptData,
-        people,
-        paidByIndex: split.paidByIndex,
-        summary,
-        receiptTotalCents: receipt.total!,
-      });
-      assertGuestDeclaredAmountsUnchanged({
-        people,
-        paidByIndex: split.paidByIndex,
-        summary,
-        groupDebts: groupPayments,
-      });
-      if (groupPayments) {
-        const payment = groupPayments.find((group) => group.representativeId === input.personId);
-        // A group is paid once by its representative, not by every diner.
-        if (!payment || payment.totalCents <= 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
-      } else {
-        const owed = summary.find((person) => person.personIndex === personIndex);
-        if (!owed || owed.total <= 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
-      }
+      const { people, personIndex, paymentIndex } = requireGuestDebtor(split, input.personId, input.personToken);
+      // A group is paid once by its representative, never every diner.
+      if (personIndex !== paymentIndex) throw new AppError('FORBIDDEN', 'invalidPersonToken');
       // The verified account binding is the sole source for a registered
       // payer. No fallback to stale receipt contacts, even for an empty profile.
       const payer = people[split.paidByIndex];

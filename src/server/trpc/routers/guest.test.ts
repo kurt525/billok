@@ -801,6 +801,7 @@ type TestPerson = {
   accountUserId?: string;
   guestSlotNumber?: number;
   reservedOwner?: boolean;
+  visualColorId?: number;
   personalLinkReadyAt?: string;
   personalLinkRotation?: { requestKey: string; rotatedAt: string; count: number };
   paymentDeclaredAt?: string;
@@ -1588,6 +1589,31 @@ describe('Issue 3.6.1: reserved owner name Илья, verified by account, not gu
     expect(new Set(people.map((p) => p.name.trim().toLocaleLowerCase('ru-RU'))).size).toBe(4);
     expect(mockDb.guestSplit.update.mock.calls[0]![0].data.assignments).toBeUndefined();
     expect(mockDb.guestSplit.update.mock.calls[0]![0].data.paidByIndex).toBeUndefined();
+  });
+
+  test('owner joining late receives fixed blue only in public palette, no financial or identity mutation', async () => {
+    claimSession(
+      [
+        { name: 'Автор', personToken: OTHER_TOKEN, visualColorId: 1 },
+        { name: 'Гость', personToken: ALICE_TOKEN, visualColorId: 2 },
+      ],
+      { items, assignments: [{ itemIndex: 0, personIndices: [1] }] },
+    );
+    const before = await (await caller()).getSession({ token: 'share-1' });
+    expect(before.people.map((person) => person.visualColorId)).toEqual([1, 2]);
+    const joined = await (await caller(ownerAccount)).joinSession({ token: 'share-1', name: 'Илья' });
+    expect(joined.personIndex).toBe(2);
+    // The mocked DB stores the mutation payload separately; re-read its saved
+    // snapshot exactly as the real subsequent getSession would.
+    const storedPeople = savedPeople() as TestPerson[];
+    claimSession(storedPeople, { items, assignments: [{ itemIndex: 0, personIndices: [1] }] });
+    const after = await (await caller()).getSession({ token: 'share-1' });
+    const { GUEST_OWNER_COLOR_ID } = await import('@/lib/guest-visual-color');
+    expect(after.people.map((person) => person.visualColorId)).toEqual([1, 2, GUEST_OWNER_COLOR_ID]);
+    expect(JSON.stringify(after)).not.toContain('billok-owner');
+    expect(JSON.stringify(after)).not.toContain('reservedOwner');
+    expect((savedPeople() as TestPerson[]).map((person) => person.name)).toEqual(['Автор', 'Гость', 'Илья']);
+    expect(mockDb.guestSplit.update.mock.calls.at(-1)![0].data.assignments).toBeUndefined();
   });
 
   test('owner first: other users cannot claim or rename a different row to Илья', async () => {
@@ -3201,8 +3227,8 @@ describe('guest.createClaimSession', () => {
     ).createClaimSession({ ...session, creatorName: 'Host', paidByName: 'Payer' });
     const { people } = created();
     expect(people).toEqual([
-      { id: expect.stringMatching(UUID), name: 'Host', visualColorId: 0 },
-      { id: expect.stringMatching(UUID), name: 'Payer', visualColorId: 1 },
+      { id: expect.stringMatching(UUID), name: 'Host', visualColorId: 1_000_000 },
+      { id: expect.stringMatching(UUID), name: 'Payer', visualColorId: 1_000_001 },
     ]);
     expect(people[0]!.id).not.toBe(people[1]!.id);
     // Nobody is joined unless the client asks: older clients join the creator by name afterwards
@@ -4987,6 +5013,105 @@ describe('guest.finalizeSession', () => {
       },
     );
   }
+
+  test('Issue #19: three participants, two totals, 1600 RUB; unused slot must not block the original locked payment', async () => {
+    claimSession(
+      [
+        { id: pid(0), name: 'Илья', personToken: ALICE_TOKEN },
+        { id: pid(1), name: 'Андрей', personToken: OTHER_TOKEN },
+        { id: pid(2), name: 'Гость 2', personToken: D_TOKEN },
+      ],
+      {
+        receiptData: { subtotal: 160000, total: 160000, tax: 0, tip: 0, currency: 'RUB' },
+        items: [
+          { name: 'Блюдо Андрея', quantity: 1, unitPrice: 130000, totalPrice: 130000 },
+          { name: 'Блюдо Ильи', quantity: 1, unitPrice: 30000, totalPrice: 30000 },
+        ],
+        assignments: [
+          { itemIndex: 0, personIndices: [1] },
+          { itemIndex: 1, personIndices: [0] },
+        ],
+      },
+    );
+    const original = await mockDb.guestSplit.findUnique();
+    const owner = await caller(signedIn);
+    await owner.finalizeSession({ token: 'share-1' });
+    const finalized = mockDb.guestSplit.update.mock.calls.at(-1)![0].data;
+    expect(finalized.people).toHaveLength(3);
+    expect(
+      finalized.summary.map((entry: { personIndex: number; total: number }) => [entry.personIndex, entry.total]),
+    ).toEqual([
+      [1, 130000],
+      [0, 30000],
+    ]);
+    const row = { ...original, ...finalized, payerSbpPhone: '+79991234567', payerSbpBankId: 'tbank' };
+    mockDb.guestSplit.findUnique.mockResolvedValue(row);
+    mockDb.guestSplit.update.mockClear();
+    const api = await caller();
+    const payer = { token: 'share-1', personId: pid(0), personToken: ALICE_TOKEN };
+    const debtor = { token: 'share-1', personId: pid(1), personToken: OTHER_TOKEN };
+    const unused = { token: 'share-1', personId: pid(2), personToken: D_TOKEN };
+    expect(await api.getPayerSbpForReimbursement(debtor)).toEqual({ phone: '+79991234567', bankId: 'tbank' });
+    expect(await api.getMyPaymentDeclaration(debtor)).toMatchObject({ declaredPaidAt: null, verifiedAt: null });
+    const review = await api.getMyPayerPaymentReview(payer);
+    expect(review.payments).toHaveLength(1);
+    expect(review.payments[0]).toMatchObject({ personId: pid(1), amount: 130000 });
+    await expect(api.getPayerSbpForReimbursement(unused)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.markMyPayment(unused)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.getMyPayerPaymentReview(debtor)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.getMyPaymentDeclaration({ ...debtor, personToken: D_TOKEN })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+
+    // The already locked, sparse summary cannot conceal a real claim, tip,
+    // payment history or duplicate/invalid index.
+    for (const changed of [
+      {
+        ...row,
+        assignments: [
+          { itemIndex: 0, personIndices: [1, 2] },
+          { itemIndex: 1, personIndices: [0] },
+        ],
+      },
+      { ...row, assignments: null },
+      { ...row, people: row.people.map((p: TestPerson, i: number) => (i === 2 ? { ...p, tipCents: 1 } : p)) },
+      {
+        ...row,
+        people: row.people.map((p: TestPerson, i: number) =>
+          i === 2 ? { ...p, paymentDeclaredAt: '2026-11-22T08:00:00Z' } : p,
+        ),
+      },
+      {
+        ...row,
+        summary: row.summary.map((entry: { personIndex: number }, i: number) =>
+          i === 0 ? { ...entry, personIndex: 0 } : entry,
+        ),
+      },
+    ]) {
+      mockDb.guestSplit.findUnique.mockResolvedValue(changed);
+      await expect(api.getMyPaymentDeclaration(debtor)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(api.getMyPayerPaymentReview(payer)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(api.getPayerSbpForReimbursement(debtor)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    mockDb.guestSplit.findUnique.mockResolvedValue(row);
+    const declared = await api.markMyPayment(debtor);
+    expect(declared.declaredAmountCents).toBe(130000);
+    const afterMark = mockDb.guestSplit.update.mock.calls.at(-1)![0].data;
+    expect(afterMark).not.toHaveProperty('summary');
+    expect(afterMark).not.toHaveProperty('receiptData');
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...row, people: afterMark.people });
+    await api.confirmGuestPaymentReceived({ ...payer, debtorId: pid(1) });
+    const afterConfirm = mockDb.guestSplit.update.mock.calls.at(-1)![0].data;
+    expect(afterConfirm).not.toHaveProperty('summary');
+    expect(afterConfirm).not.toHaveProperty('receiptData');
+    mockDb.guestSplit.findUnique.mockResolvedValue({ ...row, people: afterConfirm.people });
+    expect(await api.getMyPaymentDeclaration(debtor)).toMatchObject({
+      declaredAmountCents: 130000,
+      verifiedAt: expect.any(String),
+    });
+    expect((await api.getSplit({ token: 'share-1' })).summary).toEqual(finalized.summary);
+  });
 
   test('5.20: freezes finalized cents atomically, never reassigns an old payment to a corrected split', async () => {
     claimSession(

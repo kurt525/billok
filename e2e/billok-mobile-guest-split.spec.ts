@@ -24,6 +24,44 @@ async function fitsPhone(page: Page) {
   expect(scrollWidth).toBeLessThanOrEqual(width + 1);
 }
 
+/** The color belongs to the editable participant, not to their selected state. */
+async function expectDishColors(page: Page, item: number, colored: number[], count: number) {
+  await ensureReceiptTab(page, 'people');
+  const fills = await Promise.all(
+    Array.from({ length: count }, (_, index) =>
+      page
+        .getByTestId('guest-color-person-' + index)
+        .locator('[data-slot="avatar-fallback"]')
+        .evaluate((element) => getComputedStyle(element).backgroundColor),
+    ),
+  );
+  await ensureReceiptTab(page, 'items');
+  for (let index = 0; index < count; index++) {
+    const button = page.getByTestId('dish-person-' + item + '-' + index);
+    if (colored.includes(index)) {
+      await expect(button).toHaveCSS('background-color', fills[index]!);
+    } else {
+      expect(await button.evaluate((element) => (element as HTMLElement).style.backgroundColor)).toBe('');
+    }
+  }
+}
+
+async function expectFinalCards(page: Page, order: number[], normal: number[]) {
+  const cards = page.locator('[data-testid^="finalized-person-card-"]');
+  await expect(cards).toHaveCount(order.length);
+  expect(
+    await cards.evaluateAll((elements) =>
+      elements.map((element) => Number(element.getAttribute('data-testid')!.split('-').at(-1))),
+    ),
+  ).toEqual(order);
+  for (const index of order) {
+    await expect(page.getByTestId('finalized-person-card-' + index)).toHaveCSS(
+      'opacity',
+      normal.includes(index) ? '1' : '0.5',
+    );
+  }
+}
+
 /** Only DOM structure, never private personal tokens or payment row data. */
 async function payerReviewDomDiagnostic(page: Page) {
   return page.evaluate(() => {
@@ -3161,7 +3199,9 @@ test('Issue 3.9: mobile participant color stays with the person after rename and
     expect(created.ok(), await created.text()).toBe(true);
     token = (JSON.parse(await created.text()).result.data.json as { shareToken: string }).shareToken;
     const initial = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
-    expect(initial.people.map((p: { visualColorId: number }) => p.visualColorId)).toEqual([0, 1, 2]);
+    expect(initial.people.map((p: { visualColorId: number }) => p.visualColorId)).toEqual([
+      1_000_000, 1_000_001, 1_000_002,
+    ]);
     const targetId = initial.people[1].id as string;
 
     await loginWithPasskey(page, users.alice.email);
@@ -3190,13 +3230,21 @@ test('Issue 3.9: mobile participant color stays with the person after rename and
     await ensureReceiptTab(page, 'people');
     await expect(page.getByTestId('guest-color-person-1')).toContainText('Андрей П.', { timeout: 20_000 });
     expect([await colorOf(0), await colorOf(1), await colorOf(2)]).toEqual(before);
-    for (const width of [320, 412, 720]) {
+    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
       await page.setViewportSize({ width, height: 720 });
+      for (const index of [0, 1, 2]) {
+        const marker = page.getByTestId('guest-color-person-' + index);
+        const bounds = await marker.boundingBox();
+        expect(bounds && bounds.x >= -1 && bounds.x + bounds.width <= width + 1).toBeTruthy();
+      }
       await fitsPhone(page);
     }
     const after = await trpcResult(await trpcQuery(creator, 'guest.getSession', { token }));
     expect(after.people.map((p: { id: string }) => p.id)).toEqual(initial.people.map((p: { id: string }) => p.id));
-    expect(after.people.map((p: { visualColorId: number }) => p.visualColorId)).toEqual([0, 1, 2]);
+    expect(after.people.map((p: { visualColorId: number }) => p.visualColorId)).toEqual([
+      1_000_000, 1_000_001, 1_000_002,
+    ]);
   } finally {
     if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
     await creator.dispose();
@@ -5559,6 +5607,11 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     isMobile: true,
     hasTouch: true,
   });
+  const memberDevice = await browser.newContext({
+    viewport: { width: 320, height: 760 },
+    isMobile: true,
+    hasTouch: true,
+  });
   let token: string | undefined;
   try {
     const create = await trpcMutation(owner, 'guest.createClaimSession', {
@@ -5634,9 +5687,21 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     const husbandIndex = initial.people.findIndex((person: { id: string }) => person.id === husbandId);
     const childIndex = initial.people.findIndex((person: { id: string }) => person.id === childId);
     await ensureReceiptTab(page, 'items');
+    const payerIndex = initial.people.findIndex((person: { id: string }) => person.id === created.creator.personId);
+    const member = await joinGuestSession(memberDevice.request, { token, name: 'Муж' });
+    await rememberClaimIdentity(memberDevice, token, member);
+    const memberPage = await memberDevice.newPage();
+    await memberPage.goto('/split/' + token + '/claim');
+    await expect(memberPage.getByTestId('guest-display-name-' + husbandIndex)).toHaveText('Муж (вы)');
+    await expectDishColors(memberPage, 2, [husbandIndex], 4);
+    await expectDishColors(creatorPage, 2, [payerIndex], 4);
+    await expectDishColors(page, 2, [wifeIndex, husbandIndex, childIndex], 4);
+    const childButton = page.getByTestId('dish-person-2-' + childIndex);
+    const fillBefore = await childButton.evaluate((el) => getComputedStyle(el).backgroundColor);
     await expect(page.getByTestId('dish-person-2-' + childIndex)).toBeEnabled();
     await page.getByTestId('dish-person-2-' + childIndex).click();
     await expect(page.getByTestId('dish-person-2-' + childIndex)).toHaveAttribute('aria-pressed', 'true');
+    await expect(childButton).toHaveCSS('background-color', fillBefore);
     await expect
       .poll(
         async () => {
@@ -5673,6 +5738,8 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
       )
       .toBe(2);
 
+    await expect(childButton).toBeDisabled();
+    await expect(childButton).toHaveCSS('background-color', fillBefore);
     await page.getByTestId('personal-tip-target').selectOption(childId);
     await page.getByTestId('personal-tip-input').fill('0,50');
     await page.getByTestId('personal-tip-save').click();
@@ -5733,6 +5800,35 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await page.reload({ waitUntil: 'domcontentloaded' });
     const familyView = page.getByTestId('guest-group-reimbursement-detail');
     await expect(familyView).toBeVisible({ timeout: 20_000 });
+    const savedOrder = finalized.summary.map((entry: { personIndex: number }) => entry.personIndex) as number[];
+    const groupIndices = [wifeIndex, husbandIndex, childIndex];
+    await expectFinalCards(
+      page,
+      [
+        wifeIndex,
+        ...savedOrder.filter((i) => i !== wifeIndex && groupIndices.includes(i)),
+        ...savedOrder.filter((i) => !groupIndices.includes(i)),
+      ],
+      groupIndices,
+    );
+    await memberPage.reload({ waitUntil: 'domcontentloaded' });
+    await expect(memberPage.getByTestId('finalized-person-name-' + husbandIndex)).toHaveText('Муж (вы)');
+    await expectFinalCards(memberPage, [husbandIndex, ...savedOrder.filter((i) => i !== husbandIndex)], [husbandIndex]);
+    for (const viewer of [page, memberPage]) {
+      await viewer.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
+        await viewer.setViewportSize({ width, height: 760 });
+        for (const index of savedOrder) {
+          const card = viewer.getByTestId('finalized-person-card-' + index);
+          const rect = await card.boundingBox();
+          expect(rect && rect.x >= -1 && rect.x + rect.width <= width + 1).toBeTruthy();
+        }
+        await fitsPhone(viewer);
+      }
+      await viewer.addStyleTag({ content: 'html { font-size: 16px !important; }' });
+      await viewer.setViewportSize({ width: 320, height: 760 });
+    }
+
     await expect(familyView).toContainText('Жена');
     await expect(familyView).toContainText('Муж');
     await expect(familyView).toContainText('Ребёнок');
@@ -5798,6 +5894,7 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await fitsPhone(creatorPage);
   } finally {
     if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await memberDevice.close();
     await organizerDevice.close();
     await owner.dispose();
   }
@@ -6584,6 +6681,14 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
     await ensureReceiptTab(guestPage, 'items');
     await expect(guestPage.getByTestId('preview-person-name-1')).toHaveText(guestName + ' (вы)');
     await expect(guestPage.getByTestId('preview-person-name-0')).toHaveText(result.creator.name);
+    await expectDishColors(page, 0, [0, 1, 2], 3);
+    await expectDishColors(guestPage, 0, [1], 3);
+    const registeredPage = await registeredDevice.newPage();
+    await loginWithPasskey(registeredPage, users.bob.email);
+    await registeredPage.goto('/split/' + token + '/claim');
+    await expect(registeredPage.getByTestId('guest-display-name-2')).toContainText('(вы)');
+    await expectDishColors(registeredPage, 0, [2], 3);
+
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
     await guestPage.addStyleTag({ content: 'html { font-size: 20px !important; }' });
     for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
@@ -6695,6 +6800,11 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
     await page.getByRole('alertdialog').getByRole('button', { name: 'Завершить', exact: true }).click();
     await expect(page.getByTestId('finalized-bill-total')).toBeVisible({ timeout: 20_000 });
     const savedAfterFinalize = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const order = savedAfterFinalize.summary.map((entry: { personIndex: number }) => entry.personIndex) as number[];
+    await registeredPage.reload({ waitUntil: 'domcontentloaded' });
+    await expect(registeredPage.getByTestId('finalized-person-name-2')).toContainText('(вы)');
+    await expectFinalCards(registeredPage, [2, ...order.filter((i) => i !== 2)], [2]);
+
     const forbidden = await trpcMutation(owner, 'guest.changePayer', {
       token,
       personId: initial.people[0].id,
@@ -6707,6 +6817,8 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
     ] as const) {
       await viewer.reload({ waitUntil: 'domcontentloaded' });
       await expect(viewer.getByTestId('finalized-person-name-' + index)).toHaveText(name + ' (вы)');
+      await expectFinalCards(viewer, [index, ...order.filter((i) => i !== index)], index === 0 ? order : [index]);
+
       await expect(viewer.getByTestId('finalized-person-name-' + (index === 0 ? 1 : 0))).not.toContainText('(вы)');
       await viewer.addStyleTag({ content: 'html { font-size: 20px !important; }' });
       for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
@@ -6876,8 +6988,6 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
       await trpcMutation(owner, 'guest.expireSession', { token: sampleToken }).catch(() => undefined);
     }
     await expect(guestPage.getByTestId('guest-sbp-not-configured')).toBeVisible();
-    const registeredPage = await registeredDevice.newPage();
-    await loginWithPasskey(registeredPage, users.bob.email);
     await registeredPage.goto('/split/' + token + '/claim');
     const profileLink = registeredPage.getByTestId('guest-payer-sbp-profile-link');
     await expect(profileLink).toHaveText('Заполнить реквизиты в профиле');
