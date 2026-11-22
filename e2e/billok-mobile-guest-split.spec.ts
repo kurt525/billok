@@ -3745,12 +3745,12 @@ test('Issue 3.6.2: creator renames unjoined guests on mobile; guests can edit on
     await ownerPage.getByTestId('creator-save-name-1').click();
     await ensureReceiptTab(ownerPage, 'people');
     await expect(ownerPage.getByTestId('creator-edit-person-1')).toBeVisible();
-    await expect(ownerPage.getByText('Андрей', { exact: true }).first()).toBeVisible();
+    await expect(ownerPage.getByTestId('invited-person-1')).toContainText('Андрей');
     await ensureReceiptTab(ownerPage, 'people');
     await ownerPage.getByTestId('creator-edit-person-1').click();
     await ownerPage.getByTestId('creator-edit-name-input-1').fill('Андрей П.');
     await ownerPage.getByTestId('creator-save-name-1').click();
-    await expect(ownerPage.getByText('Андрей П.', { exact: true }).first()).toBeVisible();
+    await expect(ownerPage.getByTestId('invited-person-1')).toContainText('Андрей П.');
     await fitsPhone(ownerPage);
 
     const after = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
@@ -3788,7 +3788,7 @@ test('Issue 3.6.2: creator renames unjoined guests on mobile; guests can edit on
     await ownerPage.getByTestId('creator-edit-person-1').click();
     await ownerPage.getByTestId('creator-edit-name-input-1').fill('Андрей Иванов');
     await ownerPage.getByTestId('creator-save-name-1').click();
-    await expect(ownerPage.getByText('Андрей Иванов', { exact: true }).first()).toBeVisible();
+    await expect(ownerPage.getByTestId('invited-person-1')).toContainText('Андрей Иванов');
     await expect(page.getByText('Ваше имя в этом чеке изменено: Андрей Иванов')).toBeVisible({ timeout: 25_000 });
     const finalState = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     expect(finalState.people[1]).toMatchObject({ id: guestId, name: 'Андрей Иванов', hasJoined: true });
@@ -5745,10 +5745,9 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('10,01');
     // The responsible group member gets one total; missing payer bank details
     // must not trigger a fake payment destination or a second payer.
-    await expect(page.getByTestId('guest-sbp-not-configured')).toContainText(
-      'Попросите его заполнить их на его персональной странице чека',
-      { timeout: 15_000 },
-    );
+    await expect(page.getByTestId('guest-sbp-not-configured')).toContainText('Попросите его заполнить свои реквизиты', {
+      timeout: 15_000,
+    });
     await expect(page.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 20_000 });
     await fitsPhone(page);
     await page.getByTestId('guest-mark-paid').click();
@@ -6489,8 +6488,25 @@ test('Issue 10.31: mobile tabs keep receipt data and draft edits', async ({ page
   }
 });
 
-test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight mobile widths', async ({ page }) => {
-  test.setTimeout(150_000);
+test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight mobile widths', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(240_000);
+  const guestDevice = await browser.newContext({
+    viewport: { width: 320, height: 720 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const registeredDevice = await browser.newContext({
+    viewport: { width: 320, height: 720 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const registered = await authedContext(users.bob.email, users.bob.password);
+  const originalProfile = await trpcResult(await trpcQuery(registered, 'auth.getProfile'));
+  const guestName = 'ОченьДлинноеИмяУчастникаБезПробелов123';
+
   const owner = await authedContext(users.alice.email, users.alice.password);
   let token: string | undefined;
   try {
@@ -6508,20 +6524,35 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
         { name: 'Суп', quantity: 1, unitPrice: 30000, totalPrice: 30000 },
         { name: 'Чай', quantity: 1, unitPrice: 30000, totalPrice: 30000 },
       ],
-      guestCount: 1,
+      guestCount: 2,
       joinCreator: true,
     });
     expect(create.ok(), await create.text()).toBe(true);
     const result = (await create.json()).result.data.json;
-    token = result.shareToken;
+    token = String(result.shareToken);
     const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
-    const joined = await trpcMutation(page.request, 'guest.joinGuestSlot', {
+    const joined = await trpcMutation(guestDevice.request, 'guest.joinGuestSlot', {
       token,
       slotId: initial.people[1].id,
-      name: 'Гость 1',
+      name: guestName,
       joinKey: randomUUID(),
     });
     expect(joined.ok(), await joined.text()).toBe(true);
+    const guestIdentity = (await joined.json()).result.data.json;
+    expect(guestIdentity).toMatchObject({ personId: initial.people[1].id, name: guestName });
+    expect(typeof guestIdentity.personToken).toBe('string');
+    const joinedRegistered = await trpcMutation(registered, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[2].id,
+      name: users.bob.name,
+      joinKey: randomUUID(),
+    });
+    expect(joinedRegistered.ok(), await joinedRegistered.text()).toBe(true);
+    const registeredIdentity = (await joinedRegistered.json()).result.data.json;
+    expect(registeredIdentity).toMatchObject({ personId: initial.people[2].id, name: users.bob.name });
+    expect(typeof registeredIdentity.personToken).toBe('string');
+    await rememberClaimIdentity(guestDevice, token, guestIdentity);
+    await rememberClaimIdentity(registeredDevice, token, registeredIdentity);
     for (const [itemIndex, personId] of [
       [0, result.creator.personId],
       [1, initial.people[1].id],
@@ -6553,9 +6584,38 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
     await expect(page.locator('[data-testid^="switch-person-"]')).toHaveCount(0);
     await expect(page.getByTestId('save-claims-btn')).toHaveCount(0);
     await expect(page.getByTestId('claim-item-0')).not.toHaveAttribute('role', 'button');
+    const guestPage = await guestDevice.newPage();
+    await guestPage.goto('/split/' + token + '/claim');
+    await expect(guestPage.getByTestId('guest-display-name-1')).toHaveText(guestName + ' (вы)');
+    await ensureReceiptTab(guestPage, 'items');
+    await expect(guestPage.getByTestId('preview-person-name-1')).toHaveText(guestName + ' (вы)');
+    await expect(guestPage.getByTestId('preview-person-name-0')).toHaveText(result.creator.name);
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    await guestPage.addStyleTag({ content: 'html { font-size: 20px !important; }' });
     for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
       await page.setViewportSize({ width, height: 570 });
+      await amount.scrollIntoViewIfNeeded();
+      await expect(ownerLabel).toHaveText(result.creator.name + ' (вы)');
+      await guestPage.setViewportSize({ width, height: 570 });
+      for (const [viewer, index, name] of [
+        [page, 0, result.creator.name],
+        [guestPage, 1, guestName],
+      ] as const) {
+        await ensureReceiptTab(viewer, 'people');
+        const label = viewer.getByTestId('guest-display-name-' + index);
+        await expect(label).toHaveText(name + ' (вы)');
+        await label.scrollIntoViewIfNeeded();
+        const bounds = await label.boundingBox();
+        expect(bounds && bounds.x >= -1 && bounds.x + bounds.width <= width + 1).toBeTruthy();
+        await ensureReceiptTab(viewer, 'items');
+        const preview = viewer.getByTestId('preview-person-name-' + index);
+        await expect(preview).toHaveText(name + ' (вы)');
+        const previewBounds = await preview.boundingBox();
+        expect(
+          previewBounds && previewBounds.x >= -1 && previewBounds.x + previewBounds.width <= width + 1,
+        ).toBeTruthy();
+        await fitsPhone(viewer);
+      }
       await amount.scrollIntoViewIfNeeded();
       const badgeBox = await statuses.boundingBox();
       const moneyBox = await amount.boundingBox();
@@ -6567,8 +6627,142 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
       }
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
     }
+    // Issue #17: payer role is synchronized on two live devices.
+    await ensureReceiptTab(page, 'people');
+    await ensureReceiptTab(guestPage, 'people');
+    await expect(guestPage.getByTestId('change-payer-panel')).toHaveCount(0);
+    const beforeChange = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const unauthorized = await trpcMutation(registered, 'guest.changePayer', {
+      token,
+      personId: initial.people[2].id,
+      expectedRevision: null,
+    });
+    expect((await trpcError(unauthorized))?.data?.code).toBe('FORBIDDEN');
+    await page.getByTestId('change-payer-person').selectOption(initial.people[1].id);
+    await page.getByTestId('change-payer-submit').click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Изменить плательщика' }).click();
+    await expect(page.getByTestId('current-payer-name')).toContainText(guestName);
+    await expect(guestPage.getByTestId('guest-color-person-1').getByTestId('receipt-role-payer')).toBeVisible({
+      timeout: 25_000,
+    });
+    const changed = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(changed.paidByIndex).toBe(1);
+    expect(changed.assignments).toEqual(beforeChange.assignments);
+    expect(changed.items).toEqual(beforeChange.items);
+    expect(
+      changed.people.map((p: { id: string; name: string; tipCents: number }) => [p.id, p.name, p.tipCents]),
+    ).toEqual(
+      beforeChange.people.map((p: { id: string; name: string; tipCents: number }) => [p.id, p.name, p.tipCents]),
+    );
+    expect(changed.receiptData.total).toBe(beforeChange.receiptData.total);
+    const concurrent = await Promise.all(
+      [initial.people[0].id, initial.people[2].id].map((personId) =>
+        trpcMutation(owner, 'guest.changePayer', { token, personId, expectedRevision: changed.payerRevision }),
+      ),
+    );
+    expect(concurrent.filter((response) => response.ok())).toHaveLength(1);
+    const afterRace = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    if (afterRace.paidByIndex !== 2) {
+      const setRegistered = await trpcMutation(owner, 'guest.changePayer', {
+        token,
+        personId: initial.people[2].id,
+        expectedRevision: afterRace.payerRevision,
+      });
+      expect(setRegistered.ok(), await setRegistered.text()).toBe(true);
+    }
+    const finalClaim = await trpcMutation(owner, 'guest.setReceiptItemParts', {
+      token,
+      itemIndex: 2,
+      changes: [{ personId: initial.people[2].id, parts: 1 }],
+      requestKey: randomUUID(),
+    });
+    expect(finalClaim.ok(), await finalClaim.text()).toBe(true);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    // The temporary unjoined view has its own tabs and defaults to People.
+    // Wait for the resumed personal view before selecting a tab on it.
+    await expect(page.getByTestId('guest-display-name-0')).toHaveText(result.creator.name + ' (вы)', {
+      timeout: 20_000,
+    });
+    await ensureReceiptTab(page, 'people');
+    await expect(page.getByTestId('guest-display-name-0')).toBeVisible();
+    await guestPage.reload({ waitUntil: 'domcontentloaded' });
+    await expect(guestPage.getByTestId('guest-display-name-1')).toHaveText(guestName + ' (вы)', {
+      timeout: 20_000,
+    });
+    await ensureReceiptTab(guestPage, 'items');
+    await expect(guestPage.getByTestId('preview-person-name-1')).toHaveText(guestName + ' (вы)');
+    const partialProfile = await trpcMutation(registered, 'auth.updateProfile', {
+      sbpPhone: '+79005550001',
+      sbpBankId: null,
+    });
+    expect(partialProfile.ok(), await partialProfile.text()).toBe(true);
+    const confirm = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
+    expect(confirm.ok(), await confirm.text()).toBe(true);
+    const finalize = await trpcMutation(owner, 'guest.finalizeSession', { token });
+    expect(finalize.ok(), await finalize.text()).toBe(true);
+    const savedAfterFinalize = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const forbidden = await trpcMutation(owner, 'guest.changePayer', {
+      token,
+      personId: initial.people[0].id,
+      expectedRevision: savedAfterFinalize.payerRevision,
+    });
+    expect((await trpcError(forbidden))?.data?.code).toBe('BAD_REQUEST');
+    for (const [viewer, index, name] of [
+      [page, 0, result.creator.name],
+      [guestPage, 1, guestName],
+    ] as const) {
+      await viewer.reload({ waitUntil: 'domcontentloaded' });
+      await expect(viewer.getByTestId('finalized-person-name-' + index)).toHaveText(name + ' (вы)');
+      await expect(viewer.getByTestId('finalized-person-name-' + (index === 0 ? 1 : 0))).not.toContainText('(вы)');
+      await viewer.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+      for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
+        await viewer.setViewportSize({ width, height: 570 });
+        const label = viewer.getByTestId('finalized-person-name-' + index);
+        await expect(label).toHaveText(name + ' (вы)');
+        const bounds = await label.boundingBox();
+        expect(bounds && bounds.x >= -1 && bounds.x + bounds.width <= width + 1).toBeTruthy();
+        await fitsPhone(viewer);
+      }
+    }
+    await expect(guestPage.getByTestId('guest-sbp-not-configured')).toBeVisible();
+    const registeredPage = await registeredDevice.newPage();
+    await loginWithPasskey(registeredPage, users.bob.email);
+    await registeredPage.goto('/split/' + token + '/claim');
+    const profileLink = registeredPage.getByTestId('guest-payer-sbp-profile-link');
+    await expect(profileLink).toHaveText('Заполнить реквизиты в профиле');
+    await expect(registeredPage.getByTestId('guest-payer-sbp-phone')).toHaveCount(0);
+    await expect(profileLink).toHaveAttribute('href', /\/settings#sbp-phone$/);
+    await profileLink.click();
+    await expect(registeredPage.getByTestId('sbp-phone-input')).toHaveValue('+79005550001');
+    const completeProfile = await trpcMutation(registered, 'auth.updateProfile', {
+      sbpPhone: '+79005550002',
+      sbpBankId: 'tbank',
+    });
+    expect(completeProfile.ok(), await completeProfile.text()).toBe(true);
+    await registeredPage.goBack({ waitUntil: 'domcontentloaded' });
+    await expect(profileLink).toHaveText('Изменить реквизиты');
+    await expect(registeredPage.getByTestId('guest-payer-profile-phone')).toHaveText('+79005550002');
+    await expect(registeredPage.getByTestId('guest-payer-profile-bank').locator('img')).toHaveAttribute(
+      'src',
+      '/banks/tbank.svg',
+    );
+    await guestPage.reload({ waitUntil: 'domcontentloaded' });
+    await expect(guestPage.getByTestId('guest-sbp-reimbursement-phone')).toBeVisible();
+    const afterProfile = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    expect(afterProfile.summary).toEqual(savedAfterFinalize.summary);
+    expect(JSON.stringify(afterProfile)).not.toContain('+79005550002');
+    expect(afterProfile.people.map((p: { name: string }) => p.name)).toEqual(
+      savedAfterFinalize.people.map((p: { name: string }) => p.name),
+    );
   } finally {
     if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await trpcMutation(registered, 'auth.updateProfile', {
+      sbpPhone: originalProfile.sbpPhone,
+      sbpBankId: originalProfile.sbpBankId,
+    }).catch(() => undefined);
+    await registered.dispose();
+    await guestDevice.close();
+    await registeredDevice.close();
     await owner.dispose();
   }
 });

@@ -20,7 +20,9 @@ const forbidden = [
   ['payment protocol/deep link', /(?:\bpayto:|\bsbp:|bank100000|intent:\/\/)/i],
   ['payment QR generator', /\b(?:QRCodeSVG|QRCodeCanvas|QRCode|qrcode|qrCode)\b/],
   ['bank-app navigation', /\b(?:window\.open|window\.location|location\.assign|location\.replace)\b/],
-  ['external payment anchor', /\bhref\s*=/i],
+  // Only the fixed, same-origin profile destination is allowed under Issue #17.
+  // Dynamic, protocol-relative, payment and all other hrefs still fail closed.
+  ['external payment anchor', /\bhref\s*=(?!\s*["']\/settings#sbp-phone["'])/i],
   [
     'payment URL import',
     /(?:import\s+.*(?:pay.?url|payment.?link|deep.?link)|from\s+['"][^'"]*(?:qr.?code|qrcode)[^'"]*['"])/i,
@@ -49,6 +51,10 @@ describe('BillOK 4.7: SBP is manual phone/bank transfer, never a payment link or
       'window.location.href = someBankUrl;',
       'window.open(paymentUrl);',
       '<a href={paymentUrl}>Оплатить</a>',
+      '<Link href="https://bank.example/settings#sbp-phone">Оплатить</Link>',
+      '<Link href="//bank.example/settings#sbp-phone">Оплатить</Link>',
+      '<Link href="/settings#sbp-phone?pay=1">Оплатить</Link>',
+      '<Link href={profileUrl}>Оплатить</Link>',
       "import QRCode from 'qrcode';",
     ]) {
       assert.ok(verifyNoSbpPaymentLink(attempt), attempt);
@@ -61,6 +67,7 @@ describe('BillOK 4.7: SBP is manual phone/bank transfer, never a payment link or
       'await copyToClipboard(contact.phone);',
       '<SbpBankLogo bank={selected} unavailableLabel={label} />',
       'const phone = normalizeSbpPhone(value);',
+      '<Link href="/settings#sbp-phone">Изменить реквизиты</Link>',
     ];
     for (const source of expected) assert.equal(verifyNoSbpPaymentLink(source), null, source);
   });

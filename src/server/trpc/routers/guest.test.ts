@@ -5561,6 +5561,132 @@ describe('making a split from a receipt', () => {
   );
 });
 
+describe('Issue #17: change payer by current revision, without editing a receipt', () => {
+  const input = { token: 'share-1', personId: pid(1), expectedRevision: null };
+
+  async function setup(overrides: Record<string, unknown> = {}) {
+    claimSession(
+      [
+        { name: 'Создатель', personToken: ALICE_TOKEN, accountUserId: 'user-1', tipCents: 12 },
+        { name: 'Новый плательщик', personToken: OTHER_TOKEN, tipCents: 34 },
+        { name: 'Другой участник', personToken: D_TOKEN, tipCents: 56 },
+        { name: 'Четвёртый', tipCents: 78 },
+      ],
+      { items: items(3), assignments: [{ itemIndex: 0, personIndices: [0, 1] }] },
+    );
+    let row = {
+      ...structuredClone(await mockDb.guestSplit.findUnique()),
+      payerSbpPhone: '+79991234567',
+      payerSbpBankId: 'tbank',
+      ...overrides,
+    };
+    mockDb.guestSplit.findUnique.mockImplementation(async () => structuredClone(row));
+    mockDb.guestSplit.update.mockImplementation(async ({ data }) => {
+      row = { ...row, ...data };
+      return structuredClone(row);
+    });
+    return () => structuredClone(row);
+  }
+
+  test('only receipt creator changes payer; requests without account, from another account or impersonation fail', async () => {
+    await setup();
+    await expect((await caller()).changePayer(input)).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    await expect((await caller({ user: { id: 'other' } })).changePayer(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    const { guestRouter } = await import('./guest');
+    const impersonator = guestRouter.createCaller({
+      session: signedIn,
+      db: mockDb,
+      headers: new Headers(),
+      impersonating: { adminId: 'other-user' },
+    } as unknown as Parameters<typeof guestRouter.createCaller>[0]);
+    await expect(impersonator.changePayer(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect((await caller(signedIn)).changePayer({ ...input, personId: pid(7) })).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('preserves amounts, assignments, ids, names, tips; clears old guest contact and handles replay', async () => {
+    const getRow = await setup();
+    const before = getRow();
+    const api = await caller(signedIn);
+    const changed = await api.changePayer(input);
+    const after = getRow();
+    expect(after.paidByIndex).toBe(1);
+    expect(after.people).toEqual(before.people);
+    expect(after.items).toEqual(before.items);
+    expect(after.assignments).toEqual(before.assignments);
+    expect(after.payerSbpPhone).toBeNull();
+    expect(after.payerSbpBankId).toBeNull();
+    expect(after.receiptData).toEqual({ ...before.receiptData, payerRevision: changed.revision });
+    expect(changed.revision).toBeTruthy();
+    expect(await api.changePayer(input)).toEqual(changed);
+    expect(mockDb.guestSplit.update).toHaveBeenCalledTimes(1);
+    await expect(api.changePayer({ ...input, personId: pid(2) })).rejects.toMatchObject({ code: 'CONFLICT' });
+    const back = await api.changePayer({ ...input, personId: pid(0), expectedRevision: changed.revision });
+    expect(back.revision).not.toBe(changed.revision);
+    // An old delayed request must not revert a newer change (ABA).
+    await expect(api.changePayer(input)).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(getRow().paidByIndex).toBe(0);
+  });
+
+  test('preserves remaining group and elects a representative when the leader becomes payer', async () => {
+    const getRow = await setup();
+    const row = getRow();
+    row.people = row.people.map((person: { id: string }, i: number) =>
+      i === 0 ? person : { ...person, paymentGroupRepresentativeId: pid(1) },
+    );
+    mockDb.guestSplit.findUnique.mockResolvedValueOnce(row);
+    await (await caller(signedIn)).changePayer(input);
+    const updated = getRow();
+    expect(
+      updated.people.map((person: { paymentGroupRepresentativeId?: string }) => person.paymentGroupRepresentativeId),
+    ).toEqual([undefined, undefined, pid(2), pid(2)]);
+    expect(updated.paidByIndex).toBe(1);
+  });
+
+  test('refuses finalized sessions and all payment history even in a stale CLAIMING row', async () => {
+    await setup({ status: 'FINALIZED' });
+    const api = await caller(signedIn);
+    await expect(api.changePayer(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    for (const payment of [
+      { paymentDeclaredAt: '2026-11-22' },
+      { paymentUnmarkedAt: '2026-11-22' },
+      { paymentVerifiedAt: '2026-11-22' },
+      { paymentReceivedTransfers: [{ id: 'received' }] },
+      { paymentRefunds: [{ id: 'refund' }] },
+      { paymentReceiptStatusRequests: [{ id: 'corrected' }] },
+    ]) {
+      const getRow = await setup();
+      const row = getRow();
+      row.people[1] = { ...row.people[1], ...payment };
+      mockDb.guestSplit.findUnique.mockResolvedValueOnce(row);
+      await expect(api.changePayer(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('cannot remove the current payer; after explicit replacement another row can be removed without changing payer identity', async () => {
+    const getRow = await setup();
+    const api = await caller(signedIn);
+    await expect(
+      api.removePerson({ token: input.token, personToken: ALICE_TOKEN, targetId: pid(0) }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await api.changePayer(input);
+    await expect(
+      api.removePerson({ token: input.token, personToken: ALICE_TOKEN, targetId: pid(1) }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    // Remove a preceding unrelated row after choosing the last payer.
+    const row = getRow();
+    await api.changePayer({ ...input, personId: pid(3), expectedRevision: row.receiptData.payerRevision });
+    await api.removePerson({ token: input.token, personToken: ALICE_TOKEN, targetId: pid(1) });
+    const after = getRow();
+    expect(after.people[after.paidByIndex].id).toBe(pid(3));
+  });
+});
+
 describe('BillOK guest payer-only SBP contact (Issue #1 1.3.19)', () => {
   const payerId = '11111111-1111-4111-8111-111111111111';
   const payerToken = '22222222-2222-4222-8222-222222222222';
@@ -5611,6 +5737,33 @@ describe('BillOK guest payer-only SBP contact (Issue #1 1.3.19)', () => {
         api.setMyPayerSbpContact({ ...credentials, phone: '+79991234567', bankId: 'tbank' }),
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('Issue #17: account-bound payer reads only their profile using both identity and personal credential', async () => {
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...base,
+      payerSbpPhone: '+79990000000',
+      payerSbpBankId: 'tbank',
+      people: [base.people[0], { ...base.people[1], accountUserId: 'user-1' }],
+    });
+    mockDb.user.findUnique.mockResolvedValue({ sbpPhone: '+79005550000', sbpBankId: 'akbars', suspendedAt: null });
+    await expect((await caller()).getMyPayerSbpContact(payerAuth)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect((await caller({ user: { id: 'other' } })).getMyPayerSbpContact(payerAuth)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    const api = await caller(signedIn);
+    await expect(api.getMyPayerSbpContact(payerAuth)).resolves.toEqual({
+      phone: '+79005550000',
+      bankId: 'akbars',
+      profile: true,
+    });
+    expect(mockDb.user.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'user-1' } }));
+    await expect(api.setMyPayerSbpContact({ ...payerAuth, phone: null, bankId: null })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    mockDb.user.findUnique.mockResolvedValue({ sbpPhone: null, sbpBankId: null, suspendedAt: null });
+    await expect(api.getMyPayerSbpContact(payerAuth)).resolves.toEqual({ phone: null, bankId: null, profile: true });
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
@@ -5698,6 +5851,34 @@ describe('BillOK guest payer-only SBP contact (Issue #1 1.3.19)', () => {
       await expect(api.getPayerSbpForReimbursement(otherAuth)).resolves.toEqual({
         phone: '+79991234567',
         bankId: '100000000273',
+      });
+      expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+    });
+
+    test('Issue #17: read authoritative registered payer profile, never guest data; keep ledger intact', async () => {
+      mockDb.guestSplit.findUnique.mockResolvedValue({
+        ...base,
+        receiptData: receipt,
+        summary: shares,
+        payerSbpPhone: '+79991234567',
+        payerSbpBankId: 'tbank',
+        people: [base.people[0], { ...base.people[1], accountUserId: 'registered-payer' }],
+      });
+      const api = await caller();
+      mockDb.user.findUnique.mockResolvedValue({ sbpPhone: '+79005550000', sbpBankId: 'akbars', suspendedAt: null });
+      await expect(api.getPayerSbpForReimbursement(otherAuth)).resolves.toEqual({
+        phone: '+79005550000',
+        bankId: 'akbars',
+      });
+      expect(mockDb.user.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'registered-payer' } }),
+      );
+      mockDb.user.findUnique.mockResolvedValue({ sbpPhone: '+79002220000', sbpBankId: null, suspendedAt: null });
+      await expect(api.getPayerSbpForReimbursement(otherAuth)).resolves.toEqual({ phone: null, bankId: null });
+      mockDb.user.findUnique.mockResolvedValue({ sbpPhone: '+79002220000', sbpBankId: 'tbank', suspendedAt: null });
+      await expect(api.getPayerSbpForReimbursement(otherAuth)).resolves.toEqual({
+        phone: '+79002220000',
+        bankId: 'tbank',
       });
       expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
     });
