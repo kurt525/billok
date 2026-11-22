@@ -31,6 +31,27 @@ async function startUnifiedReceipt(page: Page, initialGuests: number, payerGuest
   await expect(page).toHaveURL(/\/split\/[^/]+\/claim(?:\?.*)?$/);
 }
 
+async function openAllPeople(page: Page) {
+  // The share redirect may finish before the authenticated personal view
+  // mounts. Wait for its live allocation controls before switching tabs:
+  // clicking while the temporary view still mounts can be reset to Items.
+  await expect(page.getByTestId('dish-person-0-0')).toBeEnabled({ timeout: 20_000 });
+  const peoplePanel = page.getByTestId('claim-people-panel');
+  await expect
+    .poll(
+      async () => {
+        if (!(await peoplePanel.isVisible())) await page.getByTestId('claim-tab-people').click();
+        return peoplePanel.isVisible();
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(true);
+  const all = page.getByTestId('people-subtab-all');
+  await expect(all).toBeVisible();
+  if ((await all.getAttribute('aria-selected')) !== 'true') await all.click();
+  await expect(page.getByTestId('people-subpanel-all')).toBeVisible();
+}
+
 test.use({ viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
 
 test('TASK-BILLOK-002: a unified receipt keeps creator ownership and allows guest places', async ({
@@ -39,7 +60,7 @@ test('TASK-BILLOK-002: a unified receipt keeps creator ownership and allows gues
 }) => {
   await signIn(page);
   await startUnifiedReceipt(page, 2, 1);
-  await page.getByTestId('claim-tab-people').click();
+  await openAllPeople(page);
   await expect(page.getByTestId('creator-add-guest-place')).toBeVisible();
   await expect(page.getByTestId('claim-join-form')).toHaveCount(0);
   await page.getByTestId('claim-tab-items').click();
@@ -73,7 +94,7 @@ test('TASK-BILLOK-002: creator retains account-owned place without localStorage'
   await startUnifiedReceipt(page, 2, 0);
   // The server-bound creator is distinct from both empty guest slots.
   await expect(page.getByTestId('guest-slot-option-1')).toHaveCount(0);
-  await page.getByTestId('claim-tab-people').click();
+  await openAllPeople(page);
   await expect(page.getByTestId('creator-add-guest-place')).toBeVisible();
   await page.getByTestId('claim-tab-items').click();
   await expect(page.getByTestId('dish-person-0-0')).toBeEnabled();

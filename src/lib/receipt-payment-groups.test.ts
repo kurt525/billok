@@ -1,3 +1,4 @@
+import { receiptGroupsRevision } from './receipt-payment-groups';
 import { describe, expect, test } from 'vitest';
 import { aggregateReceiptPaymentGroups, receiptPaymentMemberships } from './receipt-payment-groups';
 
@@ -261,5 +262,18 @@ describe('Issue 3.24.1.2: merge, split and reassign without losing private perso
     const original = structuredClone(members);
     expect(() => setReceiptPaymentGroups(members, 0, groups)).toThrow();
     expect(members).toEqual(original);
+  });
+});
+
+describe('Issue #19 16: group revision rejects stale composition and survives display renames', () => {
+  const first = { representativeId: 'andrey', memberIds: ['andrey', 'guest2'] };
+  const second = { representativeId: 'guest3', memberIds: ['guest3', 'guest4'] };
+  test('change of representative or member set changes revision, member array order does not', () => {
+    const base = receiptGroupsRevision([first, second]);
+    expect(base).toBe(receiptGroupsRevision([second, { ...first, memberIds: ['guest2', 'andrey'] }]));
+    expect(base).not.toBe(receiptGroupsRevision([{ ...first, representativeId: 'guest2' }, second]));
+    expect(base).not.toBe(receiptGroupsRevision([{ ...first, memberIds: ['andrey', 'guest5'] }, second]));
+    expect(base).not.toBe(receiptGroupsRevision([first]));
+    expect(base).not.toBe(receiptGroupsRevision([]));
   });
 });

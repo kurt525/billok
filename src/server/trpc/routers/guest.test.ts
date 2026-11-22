@@ -494,6 +494,34 @@ describe('Issue 3.24.1.2: creator-only atomic payment group edits', () => {
     expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
+  test('Issue 19.16: stale tab cannot overwrite another device group edit', async () => {
+    const api = await caller(signedIn);
+    const initialRevision = '[]';
+    const saved = await api.setPaymentGroups({
+      token: 'share-1',
+      groups: [group],
+      expectedGroupRevision: initialRevision,
+    });
+    expect(saved.groups).toEqual([group]);
+    const after = base();
+    after.people = after.people.map((person) => {
+      if ([wife, husband, child].includes(person.id)) {
+        return { ...person, paymentGroupRepresentativeId: wife };
+      }
+      return person;
+    }) as typeof after.people;
+    mockDb.guestSplit.findUnique.mockResolvedValue(after);
+    mockDb.guestSplit.update.mockClear();
+    await expect(
+      api.setPaymentGroups({
+        token: 'share-1',
+        groups: [],
+        expectedGroupRevision: initialRevision,
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
   test('rejects unauthorized or invalid group layouts without writing', async () => {
     const api = await caller(signedIn);
     for (const invalid of [
@@ -4871,6 +4899,166 @@ describe('Issue 3.6.2: creator renames guests, guest edits only their own row', 
       30,
       60_000,
     );
+  });
+});
+
+describe('Issue #19 section 14: receipt-local name changes by current group representative', () => {
+  const original = (): TestPerson[] => [
+    { name: 'Создатель', personToken: ALICE_TOKEN, accountUserId: 'user-1' },
+    { name: 'Андрей', personToken: OTHER_TOKEN, paymentGroupRepresentativeId: pid(1) },
+    { name: 'Гость 2', personToken: D_TOKEN, paymentGroupRepresentativeId: pid(1), tipCents: 45 },
+    { name: 'Гость 3', personToken: '88888888-8888-4888-8888-888888888888' },
+    { name: 'Гость 4', personToken: '99999999-9999-4999-8999-999999999999' },
+  ];
+  beforeEach(() => {
+    claimSession(original(), {
+      items: items(2),
+      assignments: [{ itemIndex: 0, personIndices: [2] }],
+      receiptData: { subtotal: 0, total: 0, tax: 0, tip: 0, currency: 'USD', organizerPersonId: pid(0) },
+    });
+  });
+  test('Андрей renames Гость 2 without the member token; IDs and personal data stay unchanged', async () => {
+    const api = await caller();
+    await api.editPersonName({ token: 'share-1', personToken: OTHER_TOKEN, targetId: pid(2), newName: 'Мария' });
+    const people = savedPeople() as TestPerson[];
+    expect(people[2]).toMatchObject({
+      id: pid(2),
+      name: 'Мария',
+      personToken: D_TOKEN,
+      paymentGroupRepresentativeId: pid(1),
+      tipCents: 45,
+    });
+    expect(savedAssignments()).toBeUndefined();
+    const call = mockDb.guestSplit.update.mock.calls.at(-1)![0];
+    expect(call.data).not.toHaveProperty('assignments');
+    expect(call.data).not.toHaveProperty('paidByIndex');
+    expect(call.data).not.toHaveProperty('summary');
+    claimSession(people, {
+      items: items(2),
+      assignments: [{ itemIndex: 0, personIndices: [2] }],
+      receiptData: { subtotal: 0, total: 0, tax: 0, tip: 0, currency: 'USD', organizerPersonId: pid(0) },
+    });
+    const response = await (await caller()).getSession({ token: 'share-1' });
+    expect(response.people[2]!.name).toBe('Мария');
+    expect(response.assignments[0]!.personIndices).toEqual([2]);
+    expect(response.people[2]!.id).toBe(pid(2));
+  });
+  test('representative cannot rename other group, creator or ungrouped people', async () => {
+    const api = await caller();
+    for (const targetId of [pid(0), pid(3), pid(4)]) {
+      await expect(
+        api.editPersonName({ token: 'share-1', personToken: OTHER_TOKEN, targetId, newName: 'Новое' }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    await expect(api.editPersonName({ token: 'share-1', targetId: pid(2), newName: 'Новое' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      api.editPersonName({
+        token: 'share-1',
+        personToken: '11111111-1111-4111-8111-111111111111',
+        targetId: pid(2),
+        newName: 'Новое',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      api.editPersonName({ token: 'share-1', personToken: D_TOKEN, targetId: pid(1), newName: 'Новое' }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+  test('change of leader revokes the former leader immediately; own name remains editable', async () => {
+    const switched = original().map((person) =>
+      person.paymentGroupRepresentativeId === pid(1) ? { ...person, paymentGroupRepresentativeId: pid(2) } : person,
+    );
+    claimSession(switched, { items: items(2) });
+    const api = await caller();
+    await expect(
+      api.editPersonName({ token: 'share-1', personToken: OTHER_TOKEN, targetId: pid(2), newName: 'No' }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await api.editPersonName({ token: 'share-1', personToken: D_TOKEN, targetId: pid(1), newName: 'Андрей П.' });
+    expect((savedPeople() as TestPerson[])[1]).toMatchObject({ id: pid(1), name: 'Андрей П.' });
+    claimSession(
+      original().map(({ paymentGroupRepresentativeId: _old, ...person }) => {
+        void _old;
+        return person;
+      }),
+      { items: items(2) },
+    );
+    await expect(
+      api.editPersonName({ token: 'share-1', personToken: OTHER_TOKEN, targetId: pid(2), newName: 'No' }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+  test('other registered member gets only local alias; stored account association stays intact', async () => {
+    const people = original();
+    people[2] = { ...people[2]!, accountUserId: 'registered-elsewhere' };
+    claimSession(people, { items: items(2) });
+    await (
+      await caller()
+    ).editPersonName({ token: 'share-1', personToken: OTHER_TOKEN, targetId: pid(2), newName: 'Маша' });
+    expect((savedPeople() as TestPerson[])[2]).toMatchObject({
+      id: pid(2),
+      name: 'Маша',
+      accountUserId: 'registered-elsewhere',
+      personToken: D_TOKEN,
+    });
+    expect(mockDb.guestSplit.update).toHaveBeenCalledTimes(1);
+  });
+  test('verified owner name, protected account, duplicate name and expiry are guarded', async () => {
+    const people = original();
+    people[2] = { ...people[2]!, name: 'Илья', reservedOwner: true, accountUserId: 'billok-owner' };
+    claimSession(people, { items: items(2) });
+    await expect(
+      (await caller()).editPersonName({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        targetId: pid(2),
+        newName: 'Другой',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    claimSession(original(), { items: items(2) });
+    await expect(
+      (await caller()).editPersonName({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        targetId: pid(2),
+        newName: 'Гость 3',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    claimSession(original(), { items: items(2), expiresAt: new Date(Date.now() - 1000) });
+    await expect(
+      (await caller()).editPersonName({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        targetId: pid(2),
+        newName: 'Мария',
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    claimSession(original(), { items: items(2), status: 'FINALIZED' });
+    await expect(
+      (await caller()).editPersonName({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        targetId: pid(2),
+        newName: 'Мария',
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+  test('impersonation never authorizes name edits even with group token', async () => {
+    const { guestRouter } = await import('./guest');
+    const api = guestRouter.createCaller({
+      session: signedIn,
+      db: mockDb,
+      headers: new Headers(),
+      impersonating: { adminId: 'support' },
+    } as unknown as Parameters<typeof guestRouter.createCaller>[0]);
+    await expect(
+      api.editPersonName({
+        token: 'share-1',
+        personToken: OTHER_TOKEN,
+        targetId: pid(2),
+        newName: 'Мария',
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });
 
