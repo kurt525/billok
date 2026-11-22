@@ -3745,12 +3745,12 @@ test('Issue 3.6.2: creator renames unjoined guests on mobile; guests can edit on
     await ownerPage.getByTestId('creator-save-name-1').click();
     await ensureReceiptTab(ownerPage, 'people');
     await expect(ownerPage.getByTestId('creator-edit-person-1')).toBeVisible();
-    await expect(ownerPage.getByText('Андрей', { exact: true }).first()).toBeVisible();
+    await expect(ownerPage.getByTestId('invited-person-1')).toContainText('Андрей');
     await ensureReceiptTab(ownerPage, 'people');
     await ownerPage.getByTestId('creator-edit-person-1').click();
     await ownerPage.getByTestId('creator-edit-name-input-1').fill('Андрей П.');
     await ownerPage.getByTestId('creator-save-name-1').click();
-    await expect(ownerPage.getByText('Андрей П.', { exact: true }).first()).toBeVisible();
+    await expect(ownerPage.getByTestId('invited-person-1')).toContainText('Андрей П.');
     await fitsPhone(ownerPage);
 
     const after = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
@@ -3788,7 +3788,7 @@ test('Issue 3.6.2: creator renames unjoined guests on mobile; guests can edit on
     await ownerPage.getByTestId('creator-edit-person-1').click();
     await ownerPage.getByTestId('creator-edit-name-input-1').fill('Андрей Иванов');
     await ownerPage.getByTestId('creator-save-name-1').click();
-    await expect(ownerPage.getByText('Андрей Иванов', { exact: true }).first()).toBeVisible();
+    await expect(ownerPage.getByTestId('invited-person-1')).toContainText('Андрей Иванов');
     await expect(page.getByText('Ваше имя в этом чеке изменено: Андрей Иванов')).toBeVisible({ timeout: 25_000 });
     const finalState = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     expect(finalState.people[1]).toMatchObject({ id: guestId, name: 'Андрей Иванов', hasJoined: true });
@@ -5745,10 +5745,9 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await expect(page.getByTestId('guest-personal-reimbursement-amount')).toContainText('10,01');
     // The responsible group member gets one total; missing payer bank details
     // must not trigger a fake payment destination or a second payer.
-    await expect(page.getByTestId('guest-sbp-not-configured')).toContainText(
-      'Попросите его заполнить их на его персональной странице чека',
-      { timeout: 15_000 },
-    );
+    await expect(page.getByTestId('guest-sbp-not-configured')).toContainText('Попросите его заполнить свои реквизиты', {
+      timeout: 15_000,
+    });
     await expect(page.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 20_000 });
     await fitsPhone(page);
     await page.getByTestId('guest-mark-paid').click();
@@ -6539,7 +6538,9 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
       joinKey: randomUUID(),
     });
     expect(joined.ok(), await joined.text()).toBe(true);
-    const guestIdentity = await trpcResult(joined);
+    const guestIdentity = (await joined.json()).result.data.json;
+    expect(guestIdentity).toMatchObject({ personId: initial.people[1].id, name: guestName });
+    expect(typeof guestIdentity.personToken).toBe('string');
     const joinedRegistered = await trpcMutation(registered, 'guest.joinGuestSlot', {
       token,
       slotId: initial.people[2].id,
@@ -6547,7 +6548,9 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
       joinKey: randomUUID(),
     });
     expect(joinedRegistered.ok(), await joinedRegistered.text()).toBe(true);
-    const registeredIdentity = await trpcResult(joinedRegistered);
+    const registeredIdentity = (await joinedRegistered.json()).result.data.json;
+    expect(registeredIdentity).toMatchObject({ personId: initial.people[2].id, name: users.bob.name });
+    expect(typeof registeredIdentity.personToken).toBe('string');
     await rememberClaimIdentity(guestDevice, token, guestIdentity);
     await rememberClaimIdentity(registeredDevice, token, registeredIdentity);
     for (const [itemIndex, personId] of [
@@ -6583,6 +6586,7 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
     await expect(page.getByTestId('claim-item-0')).not.toHaveAttribute('role', 'button');
     const guestPage = await guestDevice.newPage();
     await guestPage.goto('/split/' + token + '/claim');
+    await expect(guestPage.getByTestId('guest-display-name-1')).toHaveText(guestName + ' (вы)');
     await ensureReceiptTab(guestPage, 'items');
     await expect(guestPage.getByTestId('preview-person-name-1')).toHaveText(guestName + ' (вы)');
     await expect(guestPage.getByTestId('preview-person-name-0')).toHaveText(result.creator.name);
