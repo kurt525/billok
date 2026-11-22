@@ -6678,9 +6678,17 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
     });
     expect(finalClaim.ok(), await finalClaim.text()).toBe(true);
     await page.reload({ waitUntil: 'domcontentloaded' });
+    // The temporary unjoined view has its own tabs and defaults to People.
+    // Wait for the resumed personal view before selecting a tab on it.
+    await expect(page.getByTestId('guest-display-name-0')).toHaveText(result.creator.name + ' (вы)', {
+      timeout: 20_000,
+    });
     await ensureReceiptTab(page, 'people');
-    await expect(page.getByTestId('guest-display-name-0')).toHaveText(result.creator.name + ' (вы)');
+    await expect(page.getByTestId('guest-display-name-0')).toBeVisible();
     await guestPage.reload({ waitUntil: 'domcontentloaded' });
+    await expect(guestPage.getByTestId('guest-display-name-1')).toHaveText(guestName + ' (вы)', {
+      timeout: 20_000,
+    });
     await ensureReceiptTab(guestPage, 'items');
     await expect(guestPage.getByTestId('preview-person-name-1')).toHaveText(guestName + ' (вы)');
     const partialProfile = await trpcMutation(registered, 'auth.updateProfile', {
