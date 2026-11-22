@@ -72,20 +72,23 @@ export function activeGuestPushSubscriptions(value: unknown, currentPersonToken:
 }
 
 function vapidSettings() {
-  const publicKey = process.env.WEB_PUSH_VAPID_PUBLIC_KEY?.trim() ?? '';
+  const configuredPublicKey = process.env.WEB_PUSH_VAPID_PUBLIC_KEY?.trim() ?? '';
   const privateKey = process.env.WEB_PUSH_VAPID_PRIVATE_KEY?.trim() ?? '';
   const subject = process.env.WEB_PUSH_VAPID_SUBJECT?.trim() || 'mailto:noreply@billok.ru';
-  if (!/^[A-Za-z0-9_-]+$/.test(publicKey) || Buffer.from(publicKey, 'base64url').length !== 65) return null;
   if (!/^[A-Za-z0-9_-]+$/.test(privateKey) || Buffer.from(privateKey, 'base64url').length !== 32) return null;
   if (!/^mailto:[^\s@]+@[^\s@]+$/.test(subject) && !/^https:\/\/[^\s]+$/.test(subject)) return null;
   try {
+    // Production already loads the private scalar from a root-owned secret.
+    // Derive its public point without modifying Compose or duplicating secrets.
+    // If a deployment specifies a public key explicitly, require an exact match.
     const key = createECDH('prime256v1');
     key.setPrivateKey(Buffer.from(privateKey, 'base64url'));
-    if (!key.getPublicKey().equals(Buffer.from(publicKey, 'base64url'))) return null;
+    const publicKey = key.getPublicKey().toString('base64url');
+    if (configuredPublicKey && configuredPublicKey !== publicKey) return null;
+    return { publicKey, privateKey, subject };
   } catch {
     return null;
   }
-  return { publicKey, privateKey, subject };
 }
 
 /** Public VAPID key; private key never reaches the browser. */

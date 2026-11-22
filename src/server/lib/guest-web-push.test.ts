@@ -72,6 +72,12 @@ describe('5.12 guest Web Push safety and fallback', () => {
       process.env.WEB_PUSH_VAPID_PUBLIC_KEY = key.getPublicKey().toString('base64url');
       process.env.WEB_PUSH_VAPID_PRIVATE_KEY = key.getPrivateKey().toString('base64url');
       expect(guestPushPublicKey()).toBe(process.env.WEB_PUSH_VAPID_PUBLIC_KEY);
+      // The production secret loader provides only the private scalar.
+      const expectedPublic = key.getPublicKey().toString('base64url');
+      delete process.env.WEB_PUSH_VAPID_PUBLIC_KEY;
+      expect(guestPushPublicKey()).toBe(expectedPublic);
+      expect(guestPushPublicKey()).toBe(expectedPublic);
+      process.env.WEB_PUSH_VAPID_PUBLIC_KEY = expectedPublic;
       const other = createECDH('prime256v1');
       other.generateKeys();
       process.env.WEB_PUSH_VAPID_PRIVATE_KEY = other.getPrivateKey().toString('base64url');
