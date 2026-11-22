@@ -7,6 +7,7 @@ import { formatCents } from '@/lib/money';
 import { parseExactReceivedRub, type ReceiptOverpaymentChoice } from '@/lib/actual-receipt-payments';
 import { groupGuestPayerPayments, type GuestPayerPaymentGroup } from '@/lib/guest-payer-payment-groups';
 import { summarizeGuestPayerPaymentGroups } from '@/lib/guest-payer-payment-summary';
+import { summarizePayerActualReceipts, type PayerActualTotals } from '@/lib/guest-payer-actual-summary';
 import {
   mergeGuestPaymentStatuses,
   newlyDeclaredGuestPayments,
@@ -24,8 +25,10 @@ type PaymentRow = {
   foodCents: number;
   declaredTipCents: number;
   receivedCents: number;
+  appliedToDebtCents: number;
   outstandingCents: number;
   extraTipCents: number;
+  pendingExcessCents: number;
   refundDueCents: number;
   refundedCents: number;
   excessCents: number;
@@ -54,11 +57,13 @@ export function GuestPayerPaymentReview({
   personId,
   personToken,
   people,
+  onActualTotals,
 }: {
   token: string;
   personId: string;
   personToken: string;
   people?: { id: string; name: string }[];
+  onActualTotals?: (totals: PayerActualTotals | null, personalToken: string) => void;
 }) {
   const t = useTranslations('split.claim');
   const locale = useLocale();
@@ -121,6 +126,7 @@ export function GuestPayerPaymentReview({
           const newlyRevoked = newlyRevokedGuestPayments(latestPayments.current, merged);
           latestPayments.current = merged;
           setPayments(merged);
+          onActualTotals?.(summarizePayerActualReceipts(merged, personId), personToken);
           // One stable Sonner ID per private event: a temporary second route
           // observer must not display the same event twice.
           if (newlyDeclared.length > 0) {
@@ -161,7 +167,10 @@ export function GuestPayerPaymentReview({
           setLoadFailed(false);
         })
         .catch(() => {
-          if (!cancelled && !writeInFlight.current && readId === latestRead.current) setLoadFailed(true);
+          if (!cancelled && !writeInFlight.current && readId === latestRead.current) {
+            setLoadFailed(true);
+            onActualTotals?.(null, personToken);
+          }
         });
     };
     refreshCurrent.current = refresh;
@@ -184,7 +193,7 @@ export function GuestPayerPaymentReview({
       document.removeEventListener('visibilitychange', refreshWhenVisible);
       refreshCurrent.current = () => {};
     };
-  }, [isActiveReview, readPayments, token, personId, personToken, t, locale]);
+  }, [isActiveReview, readPayments, token, personId, personToken, t, locale, onActualTotals]);
 
   // 5.5: receive receipt-scoped change hints promptly, but fetch the actual
   // amounts only through the payer's existing private tRPC procedure.
@@ -255,6 +264,7 @@ export function GuestPayerPaymentReview({
     if (verifyingId || writeInFlight.current || !payments?.some((p) => p.personId === debtorId && !p.verifiedAt))
       return;
     writeInFlight.current = true;
+    onActualTotals?.(null, personToken);
     latestRead.current += 1;
     setVerifyingId(debtorId);
     try {
@@ -290,6 +300,7 @@ export function GuestPayerPaymentReview({
     const choice = overpaymentChoices[debtorId];
     if (extra > 0 && !choice) return;
     writeInFlight.current = true;
+    onActualTotals?.(null, personToken);
     latestRead.current += 1;
     setVerifyingId(debtorId);
     try {
@@ -335,6 +346,7 @@ export function GuestPayerPaymentReview({
     if (!payment || !choice || payment.overpaymentChoice === choice || verifyingId || writeInFlight.current) return;
     if (choice === 'tip' && payment.refundedCents > 0) return;
     writeInFlight.current = true;
+    onActualTotals?.(null, personToken);
     latestRead.current += 1;
     setVerifyingId(debtorId);
     try {
@@ -370,6 +382,7 @@ export function GuestPayerPaymentReview({
     )
       return;
     writeInFlight.current = true;
+    onActualTotals?.(null, personToken);
     latestRead.current += 1;
     setVerifyingId(debtorId);
     try {
@@ -413,6 +426,7 @@ export function GuestPayerPaymentReview({
     if (payment.refundedCents > 0 && choice === 'tip') return;
     if (!window.confirm(t('payerActualCorrectionConfirm'))) return;
     writeInFlight.current = true;
+    onActualTotals?.(null, personToken);
     latestRead.current += 1;
     setVerifyingId(debtorId);
     try {
@@ -452,6 +466,7 @@ export function GuestPayerPaymentReview({
     )
       return;
     writeInFlight.current = true;
+    onActualTotals?.(null, personToken);
     latestRead.current += 1;
     setVerifyingId(debtorId);
     try {
@@ -498,6 +513,7 @@ export function GuestPayerPaymentReview({
     )
       return;
     writeInFlight.current = true;
+    onActualTotals?.(null, personToken);
     latestRead.current += 1;
     setVerifyingId(debtorId);
     try {
@@ -526,7 +542,8 @@ export function GuestPayerPaymentReview({
 
   const paymentGroups = groupGuestPayerPayments(payments ?? [], personId);
   const paymentSummary = summarizeGuestPayerPaymentGroups(paymentGroups);
-  const additionalTipsCents = payments?.reduce((sum, payment) => sum + payment.extraTipCents, 0) ?? 0;
+  const actualTotals = payments === null || loadFailed ? null : summarizePayerActualReceipts(payments, personId);
+  const additionalTipsCents = actualTotals?.extraTips ?? 0;
 
   const groupLabels: Record<GuestPayerPaymentGroup, string> = {
     verified: t('payerPaymentGroupVerified'),
@@ -558,7 +575,7 @@ export function GuestPayerPaymentReview({
         )}
         {!payments ? null : (
           <div className="space-y-3" data-testid="guest-payer-payment-groups">
-            {paymentSummary ? (
+            {paymentSummary && actualTotals ? (
               <dl
                 className="min-w-0 space-y-2 rounded-lg border p-3 text-sm"
                 data-testid="guest-payer-payment-summary"
@@ -578,6 +595,26 @@ export function GuestPayerPaymentReview({
                     <dd
                       className="min-w-0 max-w-full font-semibold tabular-nums [overflow-wrap:anywhere]"
                       data-testid={'guest-payer-summary-' + key}
+                    >
+                      {formatCents(amount, 'RUB', locale)}
+                    </dd>
+                  </div>
+                ))}
+                <div className="border-t pt-2" />
+                {(
+                  [
+                    ['received', 'payerActualReceivedTotal', actualTotals.received],
+                    ['credited', 'payerActualCreditedTotal', actualTotals.credited],
+                    ['toRefund', 'payerActualRefundDueTotal', actualTotals.toRefund],
+                    ['refunded', 'payerActualRefundedTotal', actualTotals.refunded],
+                    ['undecided', 'payerActualUndecidedTotal', actualTotals.undecided],
+                  ] as const
+                ).map(([key, label, amount]) => (
+                  <div key={key} className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                    <dt className="min-w-0 [overflow-wrap:anywhere]">{t(label)}</dt>
+                    <dd
+                      className="min-w-0 max-w-full font-semibold tabular-nums [overflow-wrap:anywhere]"
+                      data-testid={'guest-payer-actual-' + key}
                     >
                       {formatCents(amount, 'RUB', locale)}
                     </dd>

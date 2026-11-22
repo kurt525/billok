@@ -374,7 +374,17 @@
     "partsForPerson": "Количество частей для {name}",
     "finalizeConfirm": "Завершить",
     "pushLoading": "Проверяем доступность уведомлений…",
-    "pushNetworkError": "Не удалось проверить доступность уведомлений. Уведомления сохраняются в BillOK."
+    "pushNetworkError": "Не удалось проверить доступность уведомлений. Уведомления сохраняются в BillOK.",
+    "tipDeclaredBeforeFinalize": "Чаевые, указанные при распределении",
+    "tipAddedFromTransfers": "Дополнительные чаевые из переводов",
+    "totalWithAllTips": "Итого за блюда и все чаевые",
+    "payerLiveTotalsUnavailable": "Итог с дополнительными чаевыми появится после проверки фактических поступлений. Сейчас он недоступен; исходный расчёт не изменён.",
+    "payerOriginalTotalsWithoutExtra": "Первоначальный расчёт: дополнительные чаевые из фактических переводов здесь не учитываются.",
+    "payerActualReceivedTotal": "Фактически получено переводами",
+    "payerActualCreditedTotal": "Зачтено в погашение долга",
+    "payerActualRefundDueTotal": "Переплата к возврату",
+    "payerActualRefundedTotal": "Возвращено отправителям",
+    "payerActualUndecidedTotal": "Переплата ожидает решения"
   },
   "result": {
     "loading": "Загрузка расчёта…",
