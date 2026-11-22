@@ -13,6 +13,15 @@ const receiptUrl = groupId && receiptId ? `/groups/${groupId}/scan?receiptId=${r
 const item = (page: Page, name: string): Locator =>
   page.locator('[data-testid^="item-card-"]').filter({ has: page.getByText(name, { exact: true }) });
 
+async function finishGroupReceipt(page: Page) {
+  const submit = page.getByTestId('create-expense-btn');
+  await expect(submit).toBeEnabled();
+  await submit.click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Завершить', exact: true }).click();
+}
+
 async function noDocumentOverflow(page: Page) {
   const sizes = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }));
   expect(sizes.document).toBeLessThanOrEqual(sizes.viewport + 1);
@@ -127,12 +136,12 @@ test('group receipt: add, edit, cancel, split, assign, save, delete and finalize
   // The creator must explicitly approve the complete portions after editing.
   // Removing photo metadata does not relax that mandatory manual-check safeguard.
   await page.getByTestId('split-all-btn').click();
-  const creatorConfirmation = page.getByTestId('group-parts-confirm-checkbox');
-  await expect(creatorConfirmation).toBeEnabled();
-  await expect(page.getByTestId('create-expense-btn')).toBeDisabled();
-  await creatorConfirmation.check();
+  await expect(page.getByTestId('group-parts-confirm-checkbox')).toHaveCount(0);
   await expect(page.getByTestId('create-expense-btn')).toBeEnabled();
   await page.getByTestId('create-expense-btn').click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Отмена' }).click();
+  await expect(page.getByRole('alertdialog')).toBeHidden();
+  await finishGroupReceipt(page);
   await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'));
   await expect(page.getByText('Тестовый чек', { exact: true }).first()).toBeVisible();
 });
@@ -194,7 +203,7 @@ test('Issue 2.20.3: group known original portions, creator reapproval, exact RUB
   await expect(originalInput).toHaveValue('10');
   await expect(originalProgress).toContainText('Осталось нераспределённых частей: 2');
   // 2.20.1: known remainder cannot be silently marked complete.
-  const approve = page.getByTestId('group-parts-confirm-checkbox');
+  const approve = page.getByTestId('create-expense-btn');
   await expect(approve).toBeDisabled();
   await expect(page.getByTestId('create-expense-btn')).toBeDisabled();
   await expect(page.getByTestId('known-parts-must-reconcile')).toContainText('Есть нераспределённые части');
@@ -283,21 +292,15 @@ test('Issue 2.20.3: group known original portions, creator reapproval, exact RUB
   );
   await page.locator('#title').fill('Приёмка 2.20.3');
   await expect(approve).toBeEnabled();
-  await approve.check();
-  await expect(page.getByTestId('create-expense-btn')).toBeEnabled();
-
-  // A creator correction after sign-off must invalidate the old approval.
+  await approve.click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Отмена' }).click();
   await known.fill('9');
   await saveKnown.click();
-  await expect(approve).not.toBeChecked();
   await expect(approve).toBeDisabled();
-  await expect(page.getByTestId('create-expense-btn')).toBeDisabled();
   await known.fill('8');
   await saveKnown.click();
   await expect(approve).toBeEnabled();
-  await expect(approve).not.toBeChecked();
-  await approve.check();
-  await page.getByTestId('create-expense-btn').click();
+  await finishGroupReceipt(page);
   await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'), { timeout: 20_000 });
   const { expenses } = await trpcResult(await trpcQuery(page.request, 'expenses.list', { groupId, limit: 100 }));
   const finalized = (
@@ -411,12 +414,7 @@ test('Issue 2.16.3: manual group receipt balances two dishes and persists exact 
   // A new manual bill has no merchant/title by default. HTML form
   // validation correctly prevents submission until this required field is set.
   await page.locator('#title').fill('Проверка округления 2.16.3');
-  await expect(page.getByTestId('create-expense-btn')).toBeDisabled();
-  const approval = page.getByTestId('group-parts-confirm-checkbox');
-  await expect(approval).toBeEnabled();
-  await approval.check();
-  await expect(page.getByTestId('create-expense-btn')).toBeEnabled();
-  await page.getByTestId('create-expense-btn').click();
+  await finishGroupReceipt(page);
   await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'));
   await expect
     .poll(
@@ -549,19 +547,14 @@ test('two registered group members independently save voluntary RUB tips on a mo
     // The correction is NOT another line item or another payment.
     await expect(page.getByTestId('group-rounding-correction-preview')).toContainText('0,01');
     await expect(page.getByTestId('group-rounding-correction-preview')).toContainText('Bob');
-    const approval = page.getByTestId('group-parts-confirm-checkbox');
     const submit = page.getByTestId('create-expense-btn');
-    await expect(submit).toBeDisabled();
-    await approval.check();
-    await expect(submit).toBeEnabled();
-    const bobParts = dessert.getByLabel('Частей: Bob');
-    await bobParts.fill('2');
-    await expect(approval).not.toBeChecked();
-    await expect(submit).toBeDisabled();
-    await bobParts.fill('1');
-    await approval.check();
     await expect(submit).toBeEnabled();
     await submit.click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Отмена' }).click();
+    const bobParts = dessert.getByLabel('Частей: Bob');
+    await bobParts.fill('2');
+    await bobParts.fill('1');
+    await finishGroupReceipt(page);
     await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'), { timeout: 20_000 });
 
     const response = await trpcResult(await trpcQuery(page.request, 'expenses.list', { groupId, limit: 100 }));
@@ -713,10 +706,8 @@ test('Issue 2.19.3: original portions unknown, organizer re-approves current cla
   const drink = item(page, 'Напиток без общего количества');
   const pizzaProgress = pizza.locator('[data-testid^="item-total-parts-progress-"]');
   const submit = page.getByTestId('create-expense-btn');
-  const confirmation = page.getByTestId('group-parts-confirm-checkbox');
   await expect(page.getByTestId('group-parts-preliminary')).toContainText('Предварительный расчёт');
   await expect(submit).toBeDisabled();
-  await expect(confirmation).toBeDisabled();
 
   await pizza.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Bob' }).click();
   await pizza.getByLabel('Частей: Bob').fill('3');
@@ -727,25 +718,17 @@ test('Issue 2.19.3: original portions unknown, organizer re-approves current cla
   await expect(pizzaProgress).toContainText('Участниками учтено частей: 8');
   await expect(pizzaProgress).not.toContainText('Осталось нераспределённых');
   await expect(submit).toBeDisabled();
-  await expect(confirmation).toBeDisabled();
 
   await drink.locator('[data-testid^="member-toggle-"]').filter({ hasText: 'Bob' }).click();
   await expect(drink.locator('[data-testid^="item-total-parts-progress-"]')).toContainText(
     'Участниками учтено частей: 1',
   );
   await page.locator('#title').fill('Приёмка 2.19.3 — точные копейки');
-  await expect(confirmation).toBeEnabled();
-  await expect(submit).toBeDisabled();
-  await confirmation.check();
   await expect(submit).toBeEnabled();
-
-  // Changing a single consumed portion invalidates the previously accepted
-  // receipt, even if the creator later restores the former value.
+  await submit.click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Отмена' }).click();
   await pizza.getByLabel('Частей: Bob').fill('4');
-  await expect(confirmation).not.toBeChecked();
-  await expect(submit).toBeDisabled();
   await pizza.getByLabel('Частей: Bob').fill('3');
-  await expect(confirmation).not.toBeChecked();
   await expect(pizzaProgress).toContainText('Участниками учтено частей: 8');
 
   // Check the exact progress and confirmation controls, not only document
@@ -774,9 +757,7 @@ test('Issue 2.19.3: original portions unknown, organizer re-approves current cla
     await noDocumentOverflow(page);
   }
 
-  await confirmation.check();
-  await expect(submit).toBeEnabled();
-  await submit.click();
+  await finishGroupReceipt(page);
   await expect(page).toHaveURL(new RegExp('/groups/' + groupId + '$'), { timeout: 20_000 });
   const { expenses } = await trpcResult(await trpcQuery(page.request, 'expenses.list', { groupId, limit: 100 }));
   const saved = (

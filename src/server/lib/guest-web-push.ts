@@ -4,7 +4,7 @@
  * If not configured or unsupported the 5.11 server-backed unread notice
  * continues to work independently.
  */
-import { createHash } from 'node:crypto';
+import { createECDH, createHash } from 'node:crypto';
 
 export type GuestWebPushSubscription = {
   endpoint: string;
@@ -78,6 +78,13 @@ function vapidSettings() {
   if (!/^[A-Za-z0-9_-]+$/.test(publicKey) || Buffer.from(publicKey, 'base64url').length !== 65) return null;
   if (!/^[A-Za-z0-9_-]+$/.test(privateKey) || Buffer.from(privateKey, 'base64url').length !== 32) return null;
   if (!/^mailto:[^\s@]+@[^\s@]+$/.test(subject) && !/^https:\/\/[^\s]+$/.test(subject)) return null;
+  try {
+    const key = createECDH('prime256v1');
+    key.setPrivateKey(Buffer.from(privateKey, 'base64url'));
+    if (!key.getPublicKey().equals(Buffer.from(publicKey, 'base64url'))) return null;
+  } catch {
+    return null;
+  }
   return { publicKey, privateKey, subject };
 }
 

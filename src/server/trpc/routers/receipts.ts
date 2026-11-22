@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { AppError } from '@/server/lib/app-error';
 import { Prisma } from '@/generated/prisma/client';
 import type { PrismaClient } from '@/generated/prisma/client';
@@ -44,6 +45,46 @@ async function verifyReceiptAccess(
     }
   }
   return receipt;
+}
+
+function manualReceiptRevision(receipt: {
+  extractedData: unknown;
+  paidById?: string | null;
+  items: readonly {
+    id: string;
+    name: string;
+    quantity: number;
+    totalPrice: number;
+    assignments: readonly { userId: string; shareOfItem: number }[];
+  }[];
+}): string {
+  const data = parseExtractedData(receipt.extractedData);
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        parts: manualPartsConfirmationSnapshot({
+          items: receipt.items,
+          declaredTotalPartsByItem: data.declaredTotalPartsByItem,
+          assignments: receipt.items
+            .filter((item) => item.assignments.length > 0)
+            .map((item) => ({
+              receiptItemId: item.id,
+              people: item.assignments.map((assignment) => ({
+                userId: assignment.userId,
+                parts: assignment.shareOfItem,
+              })),
+            })),
+        }),
+        details: receipt.items
+          .map((item) => [item.id, item.name, item.quantity])
+          .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+        tips: Object.entries((data.personalTips ?? {}) as Record<string, number>).sort(([a], [b]) =>
+          a.localeCompare(b),
+        ),
+        payer: receipt.paidById ?? null,
+      }),
+    )
+    .digest('hex');
 }
 
 export const receiptsRouter = createTRPCRouter({
@@ -114,6 +155,7 @@ export const receiptsRouter = createTRPCRouter({
         } | null,
       },
       items: receiptWithItems.items as ReceiptItem[],
+      finalizationRevision: manualReceiptRevision(receiptWithItems),
     };
   }),
 
@@ -407,6 +449,10 @@ export const receiptsRouter = createTRPCRouter({
         paidById: z.string(),
         tipOverride: z.never().optional(), // shared tips are not part of BillOK receipts
         confirmedPartsSnapshot: z.string().max(500000).optional(),
+        expectedRevision: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
         assignments: z.array(
           z.object({
             receiptItemId: z.string(),
@@ -551,7 +597,7 @@ export const receiptsRouter = createTRPCRouter({
         {
           const currentReceipt = await tx.receipt.findUnique({
             where: { id: input.receiptId },
-            include: { items: { select: { id: true, totalPrice: true } } },
+            include: { items: { include: { assignments: true } } },
           });
           if (!currentReceipt || currentReceipt.groupId !== receipt.groupId || currentReceipt.status !== 'COMPLETED') {
             throw new AppError('CONFLICT', 'receiptRemovedFromGroup');
@@ -569,6 +615,12 @@ export const receiptsRouter = createTRPCRouter({
           // receipt; no stale or fabricated checkbox can finalize the expense.
           if (currentReceipt.uploadedById !== ctx.user.id) {
             throw new AppError('FORBIDDEN');
+          }
+          if (
+            input.expectedRevision !== undefined &&
+            input.expectedRevision !== manualReceiptRevision(currentReceipt)
+          ) {
+            throw new AppError('CONFLICT', 'receiptFinalizationChanged');
           }
           const snapshot = manualPartsConfirmationSnapshot({
             items: currentReceipt.items,

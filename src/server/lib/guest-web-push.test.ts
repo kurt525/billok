@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createECDH } from 'node:crypto';
 import {
   MAX_GUEST_PUSH_SUBSCRIPTIONS,
   activeGuestPushSubscriptions,
@@ -60,6 +61,29 @@ describe('5.12 guest Web Push safety and fallback', () => {
     expect(activeGuestPushSubscriptions([bound], oldPersonToken)).toEqual([bound]);
     expect(activeGuestPushSubscriptions([bound], newPersonToken)).toEqual([]);
     expect(activeGuestPushSubscriptions([validSubscription], oldPersonToken)).toEqual([]);
+  });
+
+  it('advertises only a matching valid VAPID key pair', () => {
+    const previous = [process.env.WEB_PUSH_VAPID_PUBLIC_KEY, process.env.WEB_PUSH_VAPID_PRIVATE_KEY];
+    const keys = ['WEB_PUSH_VAPID_PUBLIC_KEY', 'WEB_PUSH_VAPID_PRIVATE_KEY'] as const;
+    try {
+      const key = createECDH('prime256v1');
+      key.generateKeys();
+      process.env.WEB_PUSH_VAPID_PUBLIC_KEY = key.getPublicKey().toString('base64url');
+      process.env.WEB_PUSH_VAPID_PRIVATE_KEY = key.getPrivateKey().toString('base64url');
+      expect(guestPushPublicKey()).toBe(process.env.WEB_PUSH_VAPID_PUBLIC_KEY);
+      const other = createECDH('prime256v1');
+      other.generateKeys();
+      process.env.WEB_PUSH_VAPID_PRIVATE_KEY = other.getPrivateKey().toString('base64url');
+      expect(guestPushPublicKey()).toBeNull();
+      process.env.WEB_PUSH_VAPID_PRIVATE_KEY = Buffer.alloc(32).toString('base64url');
+      expect(guestPushPublicKey()).toBeNull();
+    } finally {
+      keys.forEach((name, index) => {
+        if (previous[index] === undefined) delete process.env[name];
+        else process.env[name] = previous[index];
+      });
+    }
   });
 
   it('does not advertise unconfigured Web Push while on-site unread notices still work', () => {

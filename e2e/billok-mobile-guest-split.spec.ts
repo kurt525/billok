@@ -872,9 +872,9 @@ test('anonymous participant chooses only own voluntary tips on mobile', async ({
       await expect(tipSave).toBeEnabled();
       // 2.19.2.2: the creator-approval hint must not enlarge the fixed
       // action panel and intercept the tip save button on keyboard-sized screens.
-      await expect(page.getByTestId('guest-parts-awaiting-confirmation')).toBeVisible();
+
       await ensureReceiptTab(page, 'items');
-      await expect(page.getByTestId('claim-actions').getByTestId('guest-parts-awaiting-confirmation')).toHaveCount(0);
+
       for (const testId of ['personal-tip-input', 'personal-tip-save', 'dish-person-0-0', 'dish-parts-open-0']) {
         const bounds = await page.getByTestId(testId).evaluate((element) => {
           const rect = element.getBoundingClientRect();
@@ -1260,40 +1260,33 @@ test('Issue 2.14 / 2.20.3: guest unknown and known original portions, real mobil
       expect(rect!.x + rect!.width).toBeLessThanOrEqual(width + 1);
       await fitsPhone(alicePage);
     }
-    await alicePage.getByTestId('guest-confirm-parts-btn').click();
-    await expect
-      .poll(async () => (await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).partsConfirmed)
-      .toBe(true);
+    const finish = alicePage.getByTestId('finalize-btn');
+    await expect(finish).toBeVisible();
+    await finish.click();
+    const finalizeDialog = alicePage.getByRole('alertdialog');
+    await expect(finalizeDialog).toBeVisible();
+    await finalizeDialog.getByRole('button', { name: 'Отмена', exact: true }).click();
+    await expect(finalizeDialog).toBeHidden();
+    expect((await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).status).toBe('CLAIMING');
 
-    // Any correction to the known original invalidates the saved sign-off.
-    await original.fill('9');
-    await saveOriginal.click();
+    await finish.click();
+    const oldRevision = (await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).finalizationRevision;
+    const change = await trpcMutation(owner, 'guest.setKnownItemParts', { token, itemIndex: 0, totalParts: 9 });
+    expect(change.ok(), await change.text()).toBe(true);
+    await finalizeDialog.getByRole('button', { name: 'Завершить', exact: true }).click();
     await expect(alicePage.getByTestId('guest-claimed-parts-progress-0')).toContainText(
       'Осталось нераспределённых частей: 1',
-      { timeout: 15_000 },
     );
-    await expect
-      .poll(async () => (await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).partsConfirmed)
-      .toBe(false);
-    const stale = await trpcMutation(owner, 'guest.finalizeSession', {
-      token,
-      personId: anna.personId,
-      personToken: anna.personToken,
-    });
+    expect((await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).status).toBe('CLAIMING');
+    await expect(finish).toHaveCount(0);
+    const stale = await trpcMutation(owner, 'guest.finalizeSession', { token, expectedRevision: oldRevision });
     expect(stale.ok()).toBe(false);
     await original.fill('8');
     await saveOriginal.click();
-    await expect(alicePage.getByTestId('guest-confirm-parts-btn')).toBeVisible();
-    await alicePage.getByTestId('guest-confirm-parts-btn').click();
-    await expect
-      .poll(async () => (await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).partsConfirmed)
-      .toBe(true);
-    const finalize = await trpcMutation(owner, 'guest.finalizeSession', {
-      token,
-      personId: anna.personId,
-      personToken: anna.personToken,
-    });
-    expect(finalize.ok(), await finalize.text()).toBe(true);
+    await expect(finish).toBeVisible();
+    await finish.click();
+    await finalizeDialog.getByRole('button', { name: 'Завершить', exact: true }).click();
+    await expect(alicePage.getByTestId('finalized-bill-total')).toContainText('8,00', { timeout: 20_000 });
     const finalized = await trpcResult(await trpcQuery(owner, 'guest.getSplit', { token }));
     expect(finalized.summary.map((entry: { itemTotal: number }) => entry.itemTotal)).toEqual([300, 500]);
     expect(finalized.summary.reduce((sum: number, entry: { total: number }) => sum + entry.total, 0)).toBe(800);
@@ -1488,13 +1481,13 @@ test('mobile guest finalization reconciles personal tips for three dining partic
 
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
-    await expect(page.getByTestId('guest-parts-awaiting-confirmation')).toBeVisible();
+
     // The anonymous personal-link page cannot approve for the registered creator.
     await expect(page.getByTestId('guest-confirm-parts-btn')).toHaveCount(0);
     const approved = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
     expect(approved.ok(), await approved.text()).toBe(true);
     // A live poll updates the guest's open page without a reload.
-    await expect(page.getByTestId('guest-parts-awaiting-confirmation')).toHaveCount(0, { timeout: 15_000 });
+
     // 3.4: the original personal token on this anonymous device does NOT
     // authorize finalization. Only the logged-in creator may finish by API.
     await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
@@ -1537,6 +1530,13 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       timeout: 15_000,
     });
     await expect(pushPanel.getByTestId('guest-web-push-enable')).toHaveCount(0);
+    await expect(pushPanel).not.toContainText('Web Push');
+    await expect(page.getByTestId('guest-personal-reimbursement')).not.toContainText(
+      'подтверждение поступления пока недоступны',
+    );
+    await expect(page.getByTestId('guest-personal-reimbursement')).toContainText(
+      'Плательщик проверит поступление денег.',
+    );
 
     // The public summary must not replace this guest's private settlement.
     // Navigation in both directions preserves their own total and payer.
@@ -2754,7 +2754,7 @@ test('Issue 2.19.3: guest personal links count 0, 3, 8 portions and cannot final
     await expect(pizzaProgress).toContainText('Всего заявлено частей: 8', { timeout: 15_000 });
     await expect(waterProgress).toContainText('Всего заявлено частей: 1');
     await expect(pizzaProgress).not.toContainText('Осталось');
-    await expect(page.getByTestId('guest-parts-awaiting-confirmation')).toBeVisible();
+
     await expect(page.getByTestId('finalize-btn')).toHaveCount(0);
     await expect(page.getByTestId('person-total-0')).toContainText('3,00');
     await expect(page.getByTestId('person-total-1')).toContainText('7,01');
@@ -2771,7 +2771,7 @@ test('Issue 2.19.3: guest personal links count 0, 3, 8 portions and cannot final
       await expect(page.getByTestId('guest-claimed-parts-progress-0')).toContainText('Всего заявлено частей: 8', {
         timeout: 15_000,
       });
-      await expect(page.getByTestId('guest-parts-awaiting-confirmation')).toBeVisible();
+
       const geometry = await page.getByTestId('guest-claimed-parts-progress-0').evaluate((element) => {
         const bounds = element.getBoundingClientRect();
         return {
@@ -4120,7 +4120,7 @@ test('Issue 3.15: receipt corrections recalculate claims and known pieces on thr
       await expect(viewer.getByTestId('claim-allocated-total')).toContainText('8,00', { timeout: 25_000 });
       await expect(viewer.getByTestId('claim-unallocated-total')).toContainText('0,00');
       await expect(viewer.getByTestId('person-total-2')).toContainText('5,00');
-      await expect(viewer.getByTestId('claim-distribution-status')).toContainText('Ожидается подтверждение');
+      await expect(viewer.getByTestId('claim-distribution-status')).toContainText('Все позиции распределены');
     }
     // A direct tap commits immediately and updates every device; there is no second save.
     await ensureReceiptTab(guestPage, 'items');
@@ -4135,12 +4135,8 @@ test('Issue 3.15: receipt corrections recalculate claims and known pieces on thr
     const approved = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
     expect(approved.ok(), await approved.text()).toBe(true);
     for (const viewer of [creatorPage, page, guestPage]) {
-      await expect(viewer.getByTestId('claim-distribution-status')).toContainText(
-        'Распределение частей подтверждено.',
-        {
-          timeout: 25_000,
-        },
-      );
+      await expect(viewer.getByTestId('claim-distribution-status')).toContainText('Все позиции распределены.');
+      await expect(viewer.getByTestId('guest-confirm-parts-btn')).toHaveCount(0);
     }
     await ensureReceiptTab(guestPage, 'items');
     await expect(guestPage.getByTestId('receipt-item-edit-0')).toHaveCount(0);
@@ -4180,7 +4176,7 @@ test('Issue 3.15: receipt corrections recalculate claims and known pieces on thr
       await expect(viewer.getByTestId('claim-distributed-total')).toContainText('10,00');
       await expect(viewer.getByTestId('person-total-1')).toContainText('5,00');
       await expect(viewer.getByTestId('person-total-2')).toContainText('5,00');
-      await expect(viewer.getByTestId('claim-distribution-status')).toContainText('Ожидается подтверждение');
+      await expect(viewer.getByTestId('claim-distribution-status')).toContainText('Все позиции распределены');
     }
     const corrected = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     expect(corrected.items.map((row: { totalPrice: number }) => row.totalPrice)).toEqual([500, 500]);
@@ -5301,14 +5297,9 @@ test('Issue 3.4: mobile creator explicitly delegates approval and finalization, 
     await expect(delegatePage.getByTestId('finalization-organizer-panel')).toHaveCount(0);
     await expect(delegatePage.getByTestId('finalization-organizer-no-claim')).toBeVisible();
     await expect(delegatePage.getByTestId('claim-join-form')).toBeVisible();
-    await expect(delegatePage.getByTestId('guest-confirm-parts-btn')).toBeVisible({ timeout: 15_000 });
+    await expect(delegatePage.getByTestId('guest-confirm-parts-btn')).toHaveCount(0);
+    await expect(delegatePage.getByTestId('finalize-btn')).toBeVisible({ timeout: 15_000 });
     await fitsPhone(delegatePage);
-    await delegatePage.getByTestId('guest-confirm-parts-btn').click();
-    await expect
-      .poll(async () => (await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }))).partsConfirmed, {
-        timeout: 15_000,
-      })
-      .toBe(true);
 
     // A payer or guest cannot bypass the creator/delegate check even after approval.
     const forbiddenAfter = await trpcMutation(payerAccount, 'guest.finalizeSession', {
@@ -5323,7 +5314,7 @@ test('Issue 3.4: mobile creator explicitly delegates approval and finalization, 
     await delegatePage.getByTestId('finalize-btn').click();
     const finalizeDialog = delegatePage.getByRole('alertdialog');
     await expect(finalizeDialog).toBeVisible();
-    await finalizeDialog.getByRole('button', { name: 'Завершить распределение' }).click();
+    await finalizeDialog.getByRole('button', { name: 'Завершить', exact: true }).click();
     await expect(delegatePage.getByTestId('finalized-bill-total')).toContainText('10,01', { timeout: 20_000 });
     const result = await trpcResult(await trpcQuery(owner, 'guest.getSplit', { token }));
     expect(result.receiptData.total).toBe(1001);
@@ -6699,10 +6690,10 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
       sbpBankId: null,
     });
     expect(partialProfile.ok(), await partialProfile.text()).toBe(true);
-    const confirm = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
-    expect(confirm.ok(), await confirm.text()).toBe(true);
-    const finalize = await trpcMutation(owner, 'guest.finalizeSession', { token });
-    expect(finalize.ok(), await finalize.text()).toBe(true);
+    await ensureReceiptTab(page, 'items');
+    await page.getByTestId('finalize-btn').click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Завершить', exact: true }).click();
+    await expect(page.getByTestId('finalized-bill-total')).toBeVisible({ timeout: 20_000 });
     const savedAfterFinalize = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     const forbidden = await trpcMutation(owner, 'guest.changePayer', {
       token,
@@ -6726,6 +6717,106 @@ test('TASK-BILLOK-003: creator statuses do not overlap 400 RUB amount at eight m
         expect(bounds && bounds.x >= -1 && bounds.x + bounds.width <= width + 1).toBeTruthy();
         await fitsPhone(viewer);
       }
+    }
+    // Issue #19: separate public summary, anonymous and signed-in viewers.
+    const screenshotReceipt = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Карточки итогов', subtotal: 88000, total: 88000, currency: 'RUB', tax: 0, tip: 0 },
+      items: [
+        { name: 'Карбонара', quantity: 1, unitPrice: 40000, totalPrice: 40000 },
+        { name: 'Пиво', quantity: 1, unitPrice: 30000, totalPrice: 30000 },
+        { name: 'Чипсы', quantity: 1, unitPrice: 18000, totalPrice: 18000 },
+      ],
+      guestCount: 2,
+      joinCreator: true,
+    });
+    expect(screenshotReceipt.ok(), await screenshotReceipt.text()).toBe(true);
+    const example = (await screenshotReceipt.json()).result.data.json;
+    const sampleToken = String(example.shareToken);
+    try {
+      const sample = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: sampleToken }));
+      for (const [index, name] of [
+        [1, guestName],
+        [2, 'Гость 2'],
+      ] as const) {
+        const join = await trpcMutation(guestDevice.request, 'guest.joinGuestSlot', {
+          token: sampleToken,
+          slotId: sample.people[index].id,
+          name,
+          joinKey: randomUUID(),
+        });
+        expect(join.ok(), await join.text()).toBe(true);
+      }
+      for (let itemIndex = 0; itemIndex < 3; itemIndex++) {
+        const changes = (itemIndex === 0 ? sample.people.slice(0, 1) : sample.people).map((p: { id: string }) => ({
+          personId: p.id,
+          parts: 1,
+        }));
+        const assign = await trpcMutation(owner, 'guest.setReceiptItemParts', {
+          token: sampleToken,
+          itemIndex,
+          changes,
+          requestKey: randomUUID(),
+        });
+        expect(assign.ok(), await assign.text()).toBe(true);
+      }
+      const tip = await trpcMutation(owner, 'guest.setPersonalTip', {
+        token: sampleToken,
+        personId: example.creator.personId,
+        personToken: example.creator.personToken,
+        tipCents: 10000,
+      });
+      expect(tip.ok(), await tip.text()).toBe(true);
+      const ready = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token: sampleToken }));
+      const finishExample = await trpcMutation(owner, 'guest.finalizeSession', {
+        token: sampleToken,
+        expectedRevision: ready.finalizationRevision,
+      });
+      expect(finishExample.ok(), await finishExample.text()).toBe(true);
+      const clean = await browser.newContext({ viewport: { width: 320, height: 570 }, isMobile: true, hasTouch: true });
+      const publicPage = await clean.newPage();
+      const signedPage = await page.context().newPage();
+      try {
+        for (const viewer of [publicPage, signedPage]) {
+          await viewer.goto('/split/' + sampleToken);
+          await expect(viewer.getByTestId('split-result-total')).toContainText('980,00');
+          await viewer.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+          for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
+            await viewer.setViewportSize({ width, height: 570 });
+            for (const [index, amountText] of [
+              [0, '660,00'],
+              [1, '160,00'],
+              [2, '160,00'],
+            ] as const) {
+              const card = viewer.getByTestId('result-person-layout-' + index);
+              const badges = card.getByTestId('result-person-badges-' + index);
+              const money = card.getByTestId('person-total-' + index);
+              await expect(money).toContainText(amountText);
+              if (index === 0) {
+                await expect(badges.getByTestId('receipt-role-creator')).toContainText('Автор чека');
+                await expect(badges.getByTestId('receipt-role-payer')).toBeVisible();
+                await expect(badges.getByTestId('account-status-registered')).toBeVisible();
+              } else {
+                await expect(badges.getByTestId('account-status-guest')).toBeVisible();
+              }
+              const bounds = await card.boundingBox();
+              const b = await badges.boundingBox(),
+                m = await money.boundingBox();
+              expect(bounds && b && m).toBeTruthy();
+              expect(b!.y + b!.height).toBeLessThanOrEqual(m!.y + 1);
+              for (const rect of [b!, m!]) {
+                expect(rect.x).toBeGreaterThanOrEqual(bounds!.x - 1);
+                expect(rect.x + rect.width).toBeLessThanOrEqual(bounds!.x + bounds!.width + 1);
+              }
+              await fitsPhone(viewer);
+            }
+          }
+        }
+      } finally {
+        await signedPage.close();
+        await clean.close();
+      }
+    } finally {
+      await trpcMutation(owner, 'guest.expireSession', { token: sampleToken }).catch(() => undefined);
     }
     await expect(guestPage.getByTestId('guest-sbp-not-configured')).toBeVisible();
     const registeredPage = await registeredDevice.newPage();

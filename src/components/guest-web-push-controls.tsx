@@ -105,7 +105,7 @@ export function GuestWebPushControls({
       if (!payload.endpoint || !payload.keys?.p256dh || !payload.keys?.auth) {
         throw new Error('missing encrypted push keys');
       }
-      await subscribe.mutateAsync({
+      const result = await subscribe.mutateAsync({
         token,
         personId,
         personToken,
@@ -114,6 +114,7 @@ export function GuestWebPushControls({
           keys: { p256dh: payload.keys.p256dh, auth: payload.keys.auth },
         },
       });
+      if (!result.subscribed) throw new Error('subscription was not confirmed');
       setSubscribed(true);
       toast.success(t('pushEnabled'));
     } catch {
@@ -151,7 +152,15 @@ export function GuestWebPushControls({
     >
       <h3 className="text-sm font-semibold">{t('pushTitle')}</h3>
       <p className="text-xs text-muted-foreground">{t('pushFallback')}</p>
-      {!publicKey ? (
+      {config.isPending ? (
+        <p className="text-xs text-muted-foreground" data-testid="guest-web-push-loading">
+          {t('pushLoading')}
+        </p>
+      ) : config.isError ? (
+        <p className="text-xs text-muted-foreground" data-testid="guest-web-push-network-error">
+          {t('pushNetworkError')}
+        </p>
+      ) : !publicKey ? (
         <p className="text-xs text-muted-foreground" data-testid="guest-web-push-unavailable">
           {t('pushServerUnavailable')}
         </p>
