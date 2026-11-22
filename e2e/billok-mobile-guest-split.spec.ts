@@ -5656,6 +5656,7 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await ensureReceiptTab(creatorPage, 'people');
     const editor = creatorPage.getByTestId('receipt-payment-groups-editor');
     await expect(editor).toBeVisible({ timeout: 20_000 });
+    await editor.getByTestId('people-subtab-create').click();
     await editor.getByTestId('payment-group-leader-select').selectOption(wifeId);
     await editor
       .getByTestId('payment-group-member-' + husbandId)
@@ -5682,7 +5683,8 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     await ensureReceiptTab(page, 'items');
     await expect(page.getByTestId('claim-item-0')).toBeVisible({ timeout: 20_000 });
     await ensureReceiptTab(page, 'people');
-    expect(await page.getByTestId('receipt-payment-groups-editor').count()).toBe(0);
+    await expect(page.getByTestId('receipt-payment-groups-editor')).toBeVisible();
+    await expect(page.getByTestId('people-subtab-create')).toHaveCount(0);
     const wifeIndex = initial.people.findIndex((person: { id: string }) => person.id === wifeId);
     const husbandIndex = initial.people.findIndex((person: { id: string }) => person.id === husbandId);
     const childIndex = initial.people.findIndex((person: { id: string }) => person.id === childId);
@@ -5813,7 +5815,11 @@ test('Issue 3.24.1.5: mobile family selects separate meals, one grouped transfer
     );
     await memberPage.reload({ waitUntil: 'domcontentloaded' });
     await expect(memberPage.getByTestId('finalized-person-name-' + husbandIndex)).toHaveText('Муж (вы)');
-    await expectFinalCards(memberPage, [husbandIndex, ...savedOrder.filter((i) => i !== husbandIndex)], [husbandIndex]);
+    await expectFinalCards(
+      memberPage,
+      [husbandIndex, ...savedOrder.filter((i) => !groupIndices.includes(i)), wifeIndex, childIndex],
+      [husbandIndex],
+    );
     for (const viewer of [page, memberPage]) {
       await viewer.addStyleTag({ content: 'html { font-size: 20px !important; }' });
       for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {

@@ -212,3 +212,18 @@ export function setReceiptPaymentGroups<T extends ReceiptPaymentPerson>(
   receiptPaymentMemberships(updated, paidByIndex);
   return updated;
 }
+
+/**
+ * Public-data-only optimistic concurrency stamp for the entire group set.
+ * Group numbers/labels are never keys; both the current representative and
+ * current membership enter this fingerprint. No account or private data.
+ */
+export function receiptGroupsRevision(
+  groups: readonly { representativeId: string; memberIds: readonly string[] }[],
+): string {
+  return JSON.stringify(
+    groups
+      .map((g) => [g.representativeId, ...[...g.memberIds].sort()])
+      .sort((a, b) => a.join('|').localeCompare(b.join('|'))),
+  );
+}

@@ -57,6 +57,7 @@ import {
   aggregateReceiptPaymentGroups,
   receiptPaymentMemberships,
   setReceiptPaymentGroups,
+  receiptGroupsRevision,
 } from '@/lib/receipt-payment-groups';
 import { authorizeReceiptPersonEdit, appendDelegatedReceiptAudit } from '../../lib/guest-group-delegation';
 import { normalizeSbpPhone, isSupportedSbpBankId } from '@/lib/sbp-banks';
@@ -1595,6 +1596,7 @@ export const guestRouter = createTRPCRouter({
         if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
         if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
         if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionFinalized');
+        if (ctx.impersonating) throw new AppError('FORBIDDEN', 'notParticipant');
 
         const people = [...(session.people as GuestSessionPerson[])];
         if (hasDuplicateGuestNames(people.map((p) => p.name))) {
@@ -1607,11 +1609,41 @@ export const guestRouter = createTRPCRouter({
         const isCreator =
           !!session.userId && !!ctx.session?.user?.id && session.userId === ctx.session.user.id && !ctx.impersonating;
         const isSelf = !!input.personToken && people[targetIndex]!.personToken === input.personToken;
-        if (!isCreator && !isSelf) throw new AppError('FORBIDDEN', 'notParticipant');
-        // The owner is not an editable guest, even if the creator of a
-        // different bill happens to have a valid signed-in session.
+        // Only the real current representative's bearer token delegates a
+        // receipt-local DISPLAY NAME edit. This does not update account profile
+        // names or provide the target's token. Verify group topology anew
+        // inside this same serializable receipt transaction.
+        let delegatedGroupRename = false;
+        if (!isCreator && !isSelf && input.personToken) {
+          try {
+            const authorization = authorizeReceiptPersonEdit(
+              people,
+              session.paidByIndex,
+              input.personToken,
+              input.targetId,
+            );
+            delegatedGroupRename = authorization.delegated;
+          } catch {
+            throw new AppError('FORBIDDEN', 'notParticipant');
+          }
+        }
+        if (!isCreator && !isSelf && !delegatedGroupRename) {
+          throw new AppError('FORBIDDEN', 'notParticipant');
+        }
+        // The verified owner and the creator's registered identity must never
+        // be rewritten by a different representative. Other registered
+        // members may receive a receipt-local display alias only.
         const targetAccount = people[targetIndex]!.accountUserId;
-        if (targetAccount && targetAccount !== ctx.session?.user?.id) {
+        const organizerId = parseExtractedData(session.receiptData).organizerPersonId;
+        if (
+          delegatedGroupRename &&
+          (people[targetIndex]!.reservedOwner ||
+            people[targetIndex]!.id === organizerId ||
+            (targetAccount && targetAccount === session.userId))
+        ) {
+          throw new AppError('FORBIDDEN', 'notParticipant');
+        }
+        if (targetAccount && targetAccount !== ctx.session?.user?.id && !delegatedGroupRename) {
           throw new AppError('FORBIDDEN', 'notParticipant');
         }
 
@@ -2729,6 +2761,9 @@ export const guestRouter = createTRPCRouter({
             }),
           )
           .max(Math.floor(MAX_SESSION_PEOPLE / 2)),
+        // New tabbed editor supplies this to reject stale whole-set writes.
+        // Optional for existing clients, which retain the legacy API contract.
+        expectedGroupRevision: z.string().max(20000).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -2748,6 +2783,19 @@ export const guestRouter = createTRPCRouter({
           throw new AppError('BAD_REQUEST', 'sessionFinalized');
         }
         const existing = assignPersonIds(session.people as GuestSessionPerson[]);
+        if (input.expectedGroupRevision !== undefined) {
+          let actualGroups: { representativeId: string; memberIds: string[] }[];
+          try {
+            actualGroups = receiptPaymentMemberships(existing, session.paidByIndex)
+              .filter((group) => group.grouped)
+              .map(({ representativeId, memberIds }) => ({ representativeId, memberIds }));
+          } catch {
+            throw new AppError('CONFLICT', 'splitBusy');
+          }
+          if (receiptGroupsRevision(actualGroups) !== input.expectedGroupRevision) {
+            throw new AppError('CONFLICT', 'splitBusy');
+          }
+        }
         let updated: IdentifiedGuestPerson[];
         try {
           updated = setReceiptPaymentGroups(existing, session.paidByIndex, input.groups);

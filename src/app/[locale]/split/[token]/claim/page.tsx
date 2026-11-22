@@ -52,12 +52,12 @@ import {
 import { toast } from 'sonner';
 import { Link } from '@/i18n/navigation';
 import { getInitials } from '@/lib/avatar';
-import { guestVisualColorStyle, guestVisualColorBorder } from '@/lib/guest-visual-color';
+import { GUEST_OWNER_COLOR_ID, guestVisualColorStyle, guestVisualColorBorder } from '@/lib/guest-visual-color';
 import { organizerPersonIndex, guestReceiptRoleFlags } from '@/lib/guest-receipt-roles';
 import { GuestReceiptRoles } from '@/components/guest-receipt-roles';
 import { GuestAccountStatus } from '@/components/guest-account-status';
 import { ReceiptLinkExpiry } from '@/components/receipt-link-expiry';
-import { personalReceiptTotals } from '@/lib/guest-receipt-presentation';
+import { canEditReceiptPerson, flatPeopleOrder, personalReceiptSections } from '@/lib/guest-receipt-presentation';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
@@ -1242,6 +1242,13 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
   const data = session.data!;
   const creatorIndex = organizerPersonIndex(data.people, data.receiptData.organizerPersonId);
+  const displayActorId =
+    myPersonIndex !== null
+      ? myPersonId
+      : data.isCreator && creatorIndex >= 0
+        ? (data.people[creatorIndex]?.id ?? null)
+        : null;
+  const displayActorIndex = displayActorId ? (indexById.get(displayActorId) ?? null) : null;
   const roleMarks = (index: number) => (
     <GuestReceiptRoles
       {...guestReceiptRoleFlags(index, creatorIndex, data.paidByIndex, data.people.length)}
@@ -1249,6 +1256,17 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       payerLabel={tr('payer')}
     />
   );
+  const canRenamePerson = (person: (typeof data.people)[number]) => {
+    if (data.status !== 'CLAIMING') return false;
+    if (data.isCreator) return true;
+    if (!personToken || !myPersonId) return false;
+    if (person.id === myPersonId) return true;
+    return (
+      person.id !== data.receiptData.organizerPersonId &&
+      person.visualColorId !== GUEST_OWNER_COLOR_ID &&
+      canEditReceiptPerson(data.people, myPersonId, false, person.id)
+    );
+  };
   const accountMark = (index: number) => {
     const person = data.people[index];
     return person ? (
@@ -1842,70 +1860,92 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         {data.summary && data.summary.length > 0 && (
           <div className="space-y-3">
             <h3 className="font-semibold text-base">{t('perPersonTotals')}</h3>
-            {personalReceiptTotals(data.summary, data.people, myPersonId, data.isCreator).map(({ person, muted }) => (
-              <Card
-                key={person.personIndex}
-                className="border-l-4"
-                data-testid={'finalized-person-card-' + person.personIndex}
-                style={{
-                  borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex),
-                  opacity: muted ? 0.5 : 1,
-                }}
+            {personalReceiptSections(data.summary, data.people, displayActorId, data.isCreator).map((section) => (
+              <div
+                key={section.key}
+                className={section.representativeId ? 'min-w-0 space-y-2 rounded-xl border bg-muted/20 p-3' : 'min-w-0'}
+                data-testid={section.representativeId ? 'finalized-group-' + section.representativeId : undefined}
               >
-                <CardContent className="py-3">
-                  <div className="min-w-0 space-y-2" data-testid={'finalized-person-layout-' + person.personIndex}>
-                    <div className="flex min-w-0 items-start gap-3">
-                      <Avatar className="h-8 w-8 shrink-0">
-                        <AvatarFallback
-                          className="text-xs font-semibold"
-                          style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
-                        >
-                          {getInitials(person.name)}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <span
-                          className="block min-w-0 font-medium [overflow-wrap:anywhere]"
-                          data-testid={'finalized-person-name-' + person.personIndex}
-                        >
-                          {person.name}
-                          {person.personIndex === myPersonIndex && ' ' + t('you')}
-                        </span>
-                        <div
-                          className="flex min-w-0 flex-wrap items-center gap-1"
-                          data-testid={'finalized-person-badges-' + person.personIndex}
-                        >
-                          {roleMarks(person.personIndex)}
-                          {accountMark(person.personIndex)}
+                {section.representativeId && (
+                  <div className="min-w-0 space-y-1">
+                    <p className="font-semibold text-sm">Группа</p>
+                    <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                      {t('paymentGroupResponsible')}:{' '}
+                      {section.representativeNameIndex === null
+                        ? '—'
+                        : data.people[section.representativeNameIndex]?.name}
+                    </p>
+                    {section.detachedOwnMember && (
+                      <p className="text-xs text-muted-foreground">Вы состоите в этой группе</p>
+                    )}
+                  </div>
+                )}
+                {section.members.map(({ person, muted }) => (
+                  <Card
+                    key={person.personIndex}
+                    className="border-l-4"
+                    data-testid={'finalized-person-card-' + person.personIndex}
+                    style={{
+                      borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex),
+                      opacity: muted ? 0.5 : 1,
+                    }}
+                  >
+                    <CardContent className="py-3">
+                      <div className="min-w-0 space-y-2" data-testid={'finalized-person-layout-' + person.personIndex}>
+                        <div className="flex min-w-0 items-start gap-3">
+                          <Avatar className="h-8 w-8 shrink-0">
+                            <AvatarFallback
+                              className="text-xs font-semibold"
+                              style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
+                            >
+                              {getInitials(person.name)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <span
+                              className="block min-w-0 font-medium [overflow-wrap:anywhere]"
+                              data-testid={'finalized-person-name-' + person.personIndex}
+                            >
+                              {person.name}
+                              {person.personIndex === displayActorIndex && ' ' + t('you')}
+                            </span>
+                            <div
+                              className="flex min-w-0 flex-wrap items-center gap-1"
+                              data-testid={'finalized-person-badges-' + person.personIndex}
+                            >
+                              {roleMarks(person.personIndex)}
+                              {accountMark(person.personIndex)}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex min-w-0 justify-end border-t pt-2">
+                          <span
+                            data-testid={'finalized-person-total-' + person.personIndex}
+                            className="max-w-full text-right text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
+                          >
+                            {formatCents(person.total, currency, locale)}
+                          </span>
                         </div>
                       </div>
-                    </div>
-                    <div className="flex min-w-0 justify-end border-t pt-2">
-                      <span
-                        data-testid={'finalized-person-total-' + person.personIndex}
-                        className="max-w-full text-right text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
-                      >
-                        {formatCents(person.total, currency, locale)}
-                      </span>
-                    </div>
-                  </div>
-                  {'roundingCorrectionCents' in person &&
-                    typeof person.roundingCorrectionCents === 'number' &&
-                    person.roundingCorrectionCents > 0 && (
-                      <div
-                        className="mt-2 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
-                        data-testid={'guest-finalized-rounding-correction-' + person.personIndex}
-                      >
-                        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-                          {t('organizerRoundingCorrection')}
-                        </span>
-                        <span className="shrink-0 tabular-nums">
-                          {formatCents(person.roundingCorrectionCents, currency, locale)}
-                        </span>
-                      </div>
-                    )}
-                </CardContent>
-              </Card>
+                      {'roundingCorrectionCents' in person &&
+                        typeof person.roundingCorrectionCents === 'number' &&
+                        person.roundingCorrectionCents > 0 && (
+                          <div
+                            className="mt-2 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
+                            data-testid={'guest-finalized-rounding-correction-' + person.personIndex}
+                          >
+                            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                              {t('organizerRoundingCorrection')}
+                            </span>
+                            <span className="shrink-0 tabular-nums">
+                              {formatCents(person.roundingCorrectionCents, currency, locale)}
+                            </span>
+                          </div>
+                        )}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
             ))}
           </div>
         )}
@@ -1996,89 +2036,92 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               </CardHeader>
               <CardContent>
                 <div className="flex flex-wrap gap-2">
-                  {data.people.map((person, idx) => (
-                    <div
-                      key={person.id}
-                      className="flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-2xl bg-muted px-3 py-1.5"
-                      data-testid={'invited-person-' + idx}
-                    >
-                      {data.isCreator && data.status === 'CLAIMING' && editingPersonId === person.id ? (
-                        <form
-                          className="flex min-w-0 w-full flex-wrap items-center gap-2"
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            if (!editingName.trim()) return;
-                            // The authenticated receipt creator can correct guest
-                            // labels even before joining their own personal slot.
-                            editPersonName.mutate({ token, targetId: person.id, newName: editingName.trim() });
-                          }}
-                        >
-                          <Input
-                            value={editingName}
-                            maxLength={MAX_GUEST_NAME_LENGTH}
-                            onChange={(event) => setEditingName(event.target.value)}
-                            autoComplete="off"
-                            className="h-11 min-w-0 flex-1 text-base"
-                            aria-label={t('editName')}
-                            data-testid={'creator-edit-name-input-' + idx}
-                            autoFocus
-                          />
-                          <Button
-                            type="submit"
-                            size="sm"
-                            variant="ghost"
-                            className="size-11 shrink-0 p-0"
-                            disabled={!editingName.trim() || editPersonName.isPending}
-                            aria-label={t('saveName')}
-                            data-testid={'creator-save-name-' + idx}
+                  {flatPeopleOrder(data.people, displayActorId).map((idx) => {
+                    const person = data.people[idx]!;
+                    return (
+                      <div
+                        key={person.id}
+                        className="flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-2xl bg-muted px-3 py-1.5"
+                        data-testid={'invited-person-' + idx}
+                      >
+                        {data.isCreator && data.status === 'CLAIMING' && editingPersonId === person.id ? (
+                          <form
+                            className="flex min-w-0 w-full flex-wrap items-center gap-2"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              if (!editingName.trim()) return;
+                              // The authenticated receipt creator can correct guest
+                              // labels even before joining their own personal slot.
+                              editPersonName.mutate({ token, targetId: person.id, newName: editingName.trim() });
+                            }}
                           >
-                            <Check className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            className="size-11 shrink-0 p-0"
-                            onClick={() => setEditingPersonId(null)}
-                            aria-label={t('cancelButton')}
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </form>
-                      ) : (
-                        <>
-                          <Avatar className="h-6 w-6 shrink-0">
-                            <AvatarFallback
-                              className="text-[10px] font-semibold"
-                              style={guestVisualColorStyle(data.people[idx], idx)}
-                            >
-                              {getInitials(person.name)}
-                            </AvatarFallback>
-                          </Avatar>
-                          <span className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">
-                            {person.name}
-                          </span>
-                          {roleMarks(idx)}
-                          {accountMark(idx)}
-                          {data.isCreator && data.status === 'CLAIMING' && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingPersonId(person.id);
-                                setEditingName(person.name);
-                              }}
-                              className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                            <Input
+                              value={editingName}
+                              maxLength={MAX_GUEST_NAME_LENGTH}
+                              onChange={(event) => setEditingName(event.target.value)}
+                              autoComplete="off"
+                              className="h-11 min-w-0 flex-1 text-base"
                               aria-label={t('editName')}
-                              data-testid={'creator-edit-person-' + idx}
+                              data-testid={'creator-edit-name-input-' + idx}
+                              autoFocus
+                            />
+                            <Button
+                              type="submit"
+                              size="sm"
+                              variant="ghost"
+                              className="size-11 shrink-0 p-0"
+                              disabled={!editingName.trim() || editPersonName.isPending}
+                              aria-label={t('saveName')}
+                              data-testid={'creator-save-name-' + idx}
                             >
-                              <Pencil className="h-4 w-4" />
-                            </button>
-                          )}
-                        </>
-                      )}
-                      {creatorGuestLinkControls(person, idx)}
-                    </div>
-                  ))}
+                              <Check className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="size-11 shrink-0 p-0"
+                              onClick={() => setEditingPersonId(null)}
+                              aria-label={t('cancelButton')}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </form>
+                        ) : (
+                          <>
+                            <Avatar className="h-6 w-6 shrink-0">
+                              <AvatarFallback
+                                className="text-[10px] font-semibold"
+                                style={guestVisualColorStyle(data.people[idx], idx)}
+                              >
+                                {getInitials(person.name)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <span className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">
+                              {person.name}
+                            </span>
+                            {roleMarks(idx)}
+                            {accountMark(idx)}
+                            {data.isCreator && data.status === 'CLAIMING' && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingPersonId(person.id);
+                                  setEditingName(person.name);
+                                }}
+                                className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                                aria-label={t('editName')}
+                                data-testid={'creator-edit-person-' + idx}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </button>
+                            )}
+                          </>
+                        )}
+                        {creatorGuestLinkControls(person, idx)}
+                      </div>
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
@@ -2345,217 +2388,227 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         className="w-full min-w-0 space-y-6"
         data-testid="claim-people-panel"
       >
-        {data.isCreator && (
-          <GuestPaymentGroupsEditor token={token} people={data.people} paidByIndex={data.paidByIndex} />
-        )}
+        <GuestPaymentGroupsEditor
+          token={token}
+          people={data.people}
+          paidByIndex={data.paidByIndex}
+          actorId={displayActorId}
+          actorToken={personToken}
+          isCreator={data.isCreator}
+          organizerPersonId={data.receiptData.organizerPersonId ?? null}
+          editable={data.status === 'CLAIMING'}
+        >
+          {data.isCreator && data.status === 'CLAIMING' && <CreatorAddGuestPlace token={token} />}
 
-        {data.isCreator && data.status === 'CLAIMING' && <CreatorAddGuestPlace token={token} />}
+          {payerChangePanel}
 
-        {payerChangePanel}
-
-        {/* People in session */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Users className="h-4 w-4" />
-              {t('peopleInSession', { count: data.people.length })}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {data.people.map((person, idx) => (
-                <div
-                  key={person.id}
-                  className={`flex min-w-0 flex-wrap items-center gap-2 rounded-lg border-l-4 px-3 py-2 ${
-                    idx === myPersonIndex ? 'bg-primary/10 ring-1 ring-primary' : 'bg-muted'
-                  }`}
-                  style={{ borderLeftColor: guestVisualColorBorder(person, idx) }}
-                  data-testid={'guest-color-person-' + idx}
-                >
-                  <div className="flex w-full min-w-0 items-start gap-2">
-                    <Avatar className="h-6 w-6 shrink-0">
-                      <AvatarFallback
-                        className="text-[10px] font-semibold"
-                        style={guestVisualColorStyle(data.people[idx], idx)}
-                      >
-                        {getInitials(person.name)}
-                      </AvatarFallback>
-                    </Avatar>
-                    {editingPersonId === person.id ? (
-                      <form
-                        className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          if (!editingName.trim() || (!data.isCreator && !personToken)) return;
-                          editPersonName.mutate({
-                            token,
-                            ...(personToken ? { personToken } : {}),
-                            targetId: person.id,
-                            newName: editingName.trim(),
-                          });
-                        }}
-                      >
-                        <Input
-                          value={editingName}
-                          maxLength={MAX_GUEST_NAME_LENGTH}
-                          autoComplete="off"
-                          onChange={(e) => setEditingName(e.target.value)}
-                          className="h-11 min-w-[7rem] flex-1 text-base"
-                          autoFocus
-                          aria-label={t('editName')}
-                          data-testid={`edit-name-input-${idx}`}
-                        />
-                        <Button
-                          type="submit"
-                          size="sm"
-                          variant="ghost"
-                          className="size-11 shrink-0 p-0"
-                          disabled={editPersonName.isPending}
-                          aria-label={t('saveName')}
-                          title={t('saveName')}
-                        >
-                          <Check className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className="size-11 shrink-0 p-0"
-                          onClick={() => setEditingPersonId(null)}
-                          aria-label={t('cancelButton')}
-                          title={t('cancelButton')}
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      </form>
-                    ) : (
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <span
-                          className="block w-full min-w-0 text-sm font-medium [overflow-wrap:anywhere]"
-                          data-testid={'guest-display-name-' + idx}
-                        >
-                          {person.name}
-                          {idx === myPersonIndex && ` ${t('you')}`}
-                        </span>
-                        <div className="flex min-w-0 flex-wrap items-center gap-1">
-                          {roleMarks(idx)}
-                          {accountMark(idx)}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  {editingPersonId !== person.id && (
-                    <div className="flex w-full flex-wrap items-center justify-end gap-2 empty:hidden">
-                      {(data.isCreator || person.id === myPersonId) && data.status === 'CLAIMING' && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingPersonId(person.id);
-                            setEditingName(person.name);
-                          }}
-                          className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
-                          aria-label={t('editName')}
-                          data-testid={'edit-person-' + idx}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                      {data.people.length > 1 &&
-                        idx !== data.paidByIndex &&
-                        !!personToken &&
-                        (data.isCreator || person.id === myPersonId) &&
-                        (!hasPaymentGroups || data.isCreator) && (
-                          <button
-                            type="button"
-                            onClick={() => setRemoveFor({ id: person.id, name: person.name })}
-                            className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-destructive"
-                            aria-label={t('removePerson')}
-                            data-testid={`remove-person-${idx}`}
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        )}
-                    </div>
-                  )}
-                  {creatorGuestLinkControls(person, idx)}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {data.isCreator && data.status === 'CLAIMING' && (
-          <Card className="w-full min-w-0 max-w-full" data-testid="finalization-organizer-panel">
+          {/* People in session */}
+          <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">{t('finalizationOrganizerTitle')}</CardTitle>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Users className="h-4 w-4" />
+                {t('peopleInSession', { count: data.people.length })}
+              </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-sm text-muted-foreground">{t('finalizationOrganizerHint')}</p>
-              {data.hasFinalizationOrganizer && (
-                <p className="text-sm" data-testid="finalization-organizer-active">
-                  {t('finalizationOrganizerActive')}
-                </p>
-              )}
-              <label htmlFor="finalization-organizer-email" className="block text-sm font-medium">
-                {t('finalizationOrganizerEmail')}
-              </label>
-              <Input
-                id="finalization-organizer-email"
-                type="email"
-                inputMode="email"
-                autoComplete="off"
-                className="h-11 min-w-0 text-base"
-                value={finalizationOrganizerEmail}
-                onChange={(event) => setFinalizationOrganizerEmail(event.target.value)}
-                data-testid="finalization-organizer-email"
-              />
-              <div className="flex min-w-0 flex-wrap gap-2">
-                <Button
-                  type="button"
-                  className="min-h-11 min-w-11"
-                  disabled={
-                    setFinalizationOrganizer.isPending ||
-                    !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(finalizationOrganizerEmail.trim())
-                  }
-                  data-testid="finalization-organizer-appoint"
-                  onClick={() =>
-                    setFinalizationOrganizer.mutate({
-                      token,
-                      email: finalizationOrganizerEmail.trim().toLowerCase(),
-                    })
-                  }
-                >
-                  {t('finalizationOrganizerAppoint')}
-                </Button>
-                {data.hasFinalizationOrganizer && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="min-h-11 min-w-11"
-                    disabled={setFinalizationOrganizer.isPending}
-                    data-testid="finalization-organizer-revoke"
-                    onClick={() => setFinalizationOrganizer.mutate({ token, email: null })}
-                  >
-                    {t('finalizationOrganizerRevoke')}
-                  </Button>
-                )}
+            <CardContent>
+              <div className="space-y-2">
+                {flatPeopleOrder(data.people, displayActorId).map((idx) => {
+                  const person = data.people[idx]!;
+                  return (
+                    <div
+                      key={person.id}
+                      className={`flex min-w-0 flex-wrap items-center gap-2 rounded-lg border-l-4 px-3 py-2 ${
+                        idx === displayActorIndex ? 'bg-primary/10 ring-1 ring-primary' : 'bg-muted'
+                      }`}
+                      style={{ borderLeftColor: guestVisualColorBorder(person, idx) }}
+                      data-testid={'guest-color-person-' + idx}
+                    >
+                      <div className="flex w-full min-w-0 items-start gap-2">
+                        <Avatar className="h-6 w-6 shrink-0">
+                          <AvatarFallback
+                            className="text-[10px] font-semibold"
+                            style={guestVisualColorStyle(data.people[idx], idx)}
+                          >
+                            {getInitials(person.name)}
+                          </AvatarFallback>
+                        </Avatar>
+                        {editingPersonId === person.id ? (
+                          <form
+                            className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              if (!editingName.trim() || !canRenamePerson(person)) return;
+                              editPersonName.mutate({
+                                token,
+                                ...(personToken ? { personToken } : {}),
+                                targetId: person.id,
+                                newName: editingName.trim(),
+                              });
+                            }}
+                          >
+                            <Input
+                              value={editingName}
+                              maxLength={MAX_GUEST_NAME_LENGTH}
+                              autoComplete="off"
+                              onChange={(e) => setEditingName(e.target.value)}
+                              className="h-11 min-w-[7rem] flex-1 text-base"
+                              autoFocus
+                              aria-label={t('editName')}
+                              data-testid={`edit-name-input-${idx}`}
+                            />
+                            <Button
+                              type="submit"
+                              size="sm"
+                              variant="ghost"
+                              className="size-11 shrink-0 p-0"
+                              disabled={editPersonName.isPending}
+                              aria-label={t('saveName')}
+                              title={t('saveName')}
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="size-11 shrink-0 p-0"
+                              onClick={() => setEditingPersonId(null)}
+                              aria-label={t('cancelButton')}
+                              title={t('cancelButton')}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </form>
+                        ) : (
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <span
+                              className="block w-full min-w-0 text-sm font-medium [overflow-wrap:anywhere]"
+                              data-testid={'guest-display-name-' + idx}
+                            >
+                              {person.name}
+                              {idx === displayActorIndex && ` ${t('you')}`}
+                            </span>
+                            <div className="flex min-w-0 flex-wrap items-center gap-1">
+                              {roleMarks(idx)}
+                              {accountMark(idx)}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      {editingPersonId !== person.id && (
+                        <div className="flex w-full flex-wrap items-center justify-end gap-2 empty:hidden">
+                          {canRenamePerson(person) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingPersonId(person.id);
+                                setEditingName(person.name);
+                              }}
+                              className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                              aria-label={t('editName')}
+                              data-testid={'edit-person-' + idx}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                          {data.people.length > 1 &&
+                            idx !== data.paidByIndex &&
+                            !!personToken &&
+                            (data.isCreator || person.id === myPersonId) &&
+                            (!hasPaymentGroups || data.isCreator) && (
+                              <button
+                                type="button"
+                                onClick={() => setRemoveFor({ id: person.id, name: person.name })}
+                                className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-destructive"
+                                aria-label={t('removePerson')}
+                                data-testid={`remove-person-${idx}`}
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                        </div>
+                      )}
+                      {creatorGuestLinkControls(person, idx)}
+                    </div>
+                  );
+                })}
               </div>
             </CardContent>
           </Card>
-        )}
 
-        {data.presence && (
-          <OrganizerPresence
-            people={data.people}
-            presence={data.presence}
-            organizerPersonId={data.receiptData.organizerPersonId}
-          />
-        )}
-        {presenceConnectionLost && (
-          <p className="text-sm text-destructive" role="status" data-testid="presence-connection-lost">
-            {t('presenceConnectionLost')}
-          </p>
-        )}
+          {data.isCreator && data.status === 'CLAIMING' && (
+            <Card className="w-full min-w-0 max-w-full" data-testid="finalization-organizer-panel">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">{t('finalizationOrganizerTitle')}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm text-muted-foreground">{t('finalizationOrganizerHint')}</p>
+                {data.hasFinalizationOrganizer && (
+                  <p className="text-sm" data-testid="finalization-organizer-active">
+                    {t('finalizationOrganizerActive')}
+                  </p>
+                )}
+                <label htmlFor="finalization-organizer-email" className="block text-sm font-medium">
+                  {t('finalizationOrganizerEmail')}
+                </label>
+                <Input
+                  id="finalization-organizer-email"
+                  type="email"
+                  inputMode="email"
+                  autoComplete="off"
+                  className="h-11 min-w-0 text-base"
+                  value={finalizationOrganizerEmail}
+                  onChange={(event) => setFinalizationOrganizerEmail(event.target.value)}
+                  data-testid="finalization-organizer-email"
+                />
+                <div className="flex min-w-0 flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    className="min-h-11 min-w-11"
+                    disabled={
+                      setFinalizationOrganizer.isPending ||
+                      !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(finalizationOrganizerEmail.trim())
+                    }
+                    data-testid="finalization-organizer-appoint"
+                    onClick={() =>
+                      setFinalizationOrganizer.mutate({
+                        token,
+                        email: finalizationOrganizerEmail.trim().toLowerCase(),
+                      })
+                    }
+                  >
+                    {t('finalizationOrganizerAppoint')}
+                  </Button>
+                  {data.hasFinalizationOrganizer && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="min-h-11 min-w-11"
+                      disabled={setFinalizationOrganizer.isPending}
+                      data-testid="finalization-organizer-revoke"
+                      onClick={() => setFinalizationOrganizer.mutate({ token, email: null })}
+                    >
+                      {t('finalizationOrganizerRevoke')}
+                    </Button>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {data.presence && (
+            <OrganizerPresence
+              people={data.people}
+              presence={data.presence}
+              organizerPersonId={data.receiptData.organizerPersonId}
+            />
+          )}
+          {presenceConnectionLost && (
+            <p className="text-sm text-destructive" role="status" data-testid="presence-connection-lost">
+              {t('presenceConnectionLost')}
+            </p>
+          )}
+        </GuestPaymentGroupsEditor>
       </section>
       <section
         id="claim-items-panel"
@@ -3098,89 +3151,111 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         {(splitTotals.people.length > 0 || splitTotals.unclaimed) && (
           <div className="w-full min-w-0 max-w-full space-y-3">
             <h3 className="font-semibold text-base">{t('perPersonTotals')}</h3>
-            {splitTotals.people.map((person) => {
-              const personName =
-                data.people[person.personIndex]?.name ?? t('personFallback', { index: person.personIndex + 1 });
-              const isMe = person.personIndex === myPersonIndex;
+            {personalReceiptSections(splitTotals.people, data.people, displayActorId, data.isCreator).map((section) => (
+              <div
+                key={section.key}
+                className={section.representativeId ? 'min-w-0 space-y-2 rounded-xl border bg-muted/20 p-3' : 'min-w-0'}
+                data-testid={section.representativeId ? 'preview-group-' + section.representativeId : undefined}
+              >
+                {section.representativeId && (
+                  <div className="min-w-0 space-y-1">
+                    <p className="font-semibold text-sm">Группа</p>
+                    <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                      {t('paymentGroupResponsible')}:{' '}
+                      {section.representativeNameIndex === null
+                        ? '—'
+                        : data.people[section.representativeNameIndex]?.name}
+                    </p>
+                    {section.detachedOwnMember && (
+                      <p className="text-xs text-muted-foreground">Вы состоите в этой группе</p>
+                    )}
+                  </div>
+                )}
+                {section.members.map(({ person }) => {
+                  const personName =
+                    data.people[person.personIndex]?.name ?? t('personFallback', { index: person.personIndex + 1 });
+                  const isMe = person.personIndex === displayActorIndex;
 
-              return (
-                <Card
-                  key={person.personIndex}
-                  className="border-l-4"
-                  style={{
-                    borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex),
-                  }}
-                  data-testid={`person-total-${person.personIndex}`}
-                >
-                  <CardContent className="py-3">
-                    <div className="min-w-0 space-y-2" data-testid={'preview-person-layout-' + person.personIndex}>
-                      <div className="flex min-w-0 items-start gap-3">
-                        <Avatar className="h-8 w-8 shrink-0">
-                          <AvatarFallback
-                            className="text-xs font-semibold"
-                            style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
-                          >
-                            {getInitials(personName)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="min-w-0 flex-1 space-y-1">
-                          <span
-                            className="block min-w-0 font-medium [overflow-wrap:anywhere]"
-                            data-testid={'preview-person-name-' + person.personIndex}
-                          >
-                            {personName}
-                            {isMe && ' ' + t('you')}
-                          </span>
-                          <div
-                            className="flex min-w-0 flex-wrap items-center gap-1"
-                            data-testid={'preview-person-badges-' + person.personIndex}
-                          >
-                            {roleMarks(person.personIndex)}
-                            {accountMark(person.personIndex)}
+                  return (
+                    <Card
+                      key={person.personIndex}
+                      className="border-l-4"
+                      style={{
+                        borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex),
+                      }}
+                      data-testid={`person-total-${person.personIndex}`}
+                    >
+                      <CardContent className="py-3">
+                        <div className="min-w-0 space-y-2" data-testid={'preview-person-layout-' + person.personIndex}>
+                          <div className="flex min-w-0 items-start gap-3">
+                            <Avatar className="h-8 w-8 shrink-0">
+                              <AvatarFallback
+                                className="text-xs font-semibold"
+                                style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
+                              >
+                                {getInitials(personName)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <span
+                                className="block min-w-0 font-medium [overflow-wrap:anywhere]"
+                                data-testid={'preview-person-name-' + person.personIndex}
+                              >
+                                {personName}
+                                {isMe && ' ' + t('you')}
+                              </span>
+                              <div
+                                className="flex min-w-0 flex-wrap items-center gap-1"
+                                data-testid={'preview-person-badges-' + person.personIndex}
+                              >
+                                {roleMarks(person.personIndex)}
+                                {accountMark(person.personIndex)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex min-w-0 justify-end border-t pt-2">
+                            <span
+                              className="max-w-full text-right text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
+                              data-testid={'preview-person-amount-' + person.personIndex}
+                            >
+                              {formatCents(person.total, currency, locale)}
+                            </span>
                           </div>
                         </div>
-                      </div>
-                      <div className="flex min-w-0 justify-end border-t pt-2">
-                        <span
-                          className="max-w-full text-right text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
-                          data-testid={'preview-person-amount-' + person.personIndex}
-                        >
-                          {formatCents(person.total, currency, locale)}
-                        </span>
-                      </div>
-                    </div>
-                    {(person.tax > 0 || person.tip > 0 || !!person.roundingCorrectionCents) && (
-                      <div className="ml-11 mt-1 flex min-w-0 flex-wrap gap-3 text-xs text-muted-foreground">
-                        <span>
-                          {t('items', {
-                            amount: formatCents(
-                              person.itemTotal - (person.roundingCorrectionCents ?? 0),
-                              currency,
-                              locale,
-                            ),
-                          })}
-                        </span>
-                        {person.tax > 0 && (
-                          <span>{t('taxAmount', { amount: formatCents(person.tax, currency, locale) })}</span>
+                        {(person.tax > 0 || person.tip > 0 || !!person.roundingCorrectionCents) && (
+                          <div className="ml-11 mt-1 flex min-w-0 flex-wrap gap-3 text-xs text-muted-foreground">
+                            <span>
+                              {t('items', {
+                                amount: formatCents(
+                                  person.itemTotal - (person.roundingCorrectionCents ?? 0),
+                                  currency,
+                                  locale,
+                                ),
+                              })}
+                            </span>
+                            {person.tax > 0 && (
+                              <span>{t('taxAmount', { amount: formatCents(person.tax, currency, locale) })}</span>
+                            )}
+                            {person.tip > 0 && (
+                              <span>{t('tipAmount', { amount: formatCents(person.tip, currency, locale) })}</span>
+                            )}
+                            {!!person.roundingCorrectionCents && (
+                              <span
+                                className="min-w-0 [overflow-wrap:anywhere]"
+                                data-testid={'guest-preview-rounding-correction-' + person.personIndex}
+                              >
+                                {t('organizerRoundingCorrection')}:{' '}
+                                {formatCents(person.roundingCorrectionCents, currency, locale)}
+                              </span>
+                            )}
+                          </div>
                         )}
-                        {person.tip > 0 && (
-                          <span>{t('tipAmount', { amount: formatCents(person.tip, currency, locale) })}</span>
-                        )}
-                        {!!person.roundingCorrectionCents && (
-                          <span
-                            className="min-w-0 [overflow-wrap:anywhere]"
-                            data-testid={'guest-preview-rounding-correction-' + person.personIndex}
-                          >
-                            {t('organizerRoundingCorrection')}:{' '}
-                            {formatCents(person.roundingCorrectionCents, currency, locale)}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              );
-            })}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            ))}
             {/* Items nobody has claimed yet, with their share of tax and tip, so the totals above don't look final */}
             {splitTotals.unclaimed && (
               <Card className="w-full min-w-0 max-w-full" data-testid="unclaimed-total">
