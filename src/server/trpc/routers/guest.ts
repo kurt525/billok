@@ -1563,6 +1563,84 @@ export const guestRouter = createTRPCRouter({
       });
     }),
 
+  // Issue #17 §1: compare-and-set the payer by stable identity inside the
+  // same retryable transaction as claims, finalization and payment writes.
+  changePayer: protectedProcedure
+    .input(
+      z
+        .object({
+          token: shareTokenSchema,
+          personId: personIdSchema,
+          expectedRevision: z.string().uuid().nullable(),
+        })
+        .strict(),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.impersonating) throw new AppError('FORBIDDEN', 'notParticipant');
+      if (!checkClaimWriteRateLimit('change-payer', input.token, 'creator:' + ctx.user.id)) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const session = await tx.guestSplit.findUnique({ where: { shareToken: shareLookupHash(input.token) } });
+        if (!session) throw new AppError('NOT_FOUND', 'sessionNotFound');
+        if (session.expiresAt < new Date()) throw new AppError('NOT_FOUND', 'sessionExpired');
+        if (session.userId !== ctx.user.id) throw new AppError('FORBIDDEN', 'notParticipant');
+        if (session.status !== GuestSplitStatus.CLAIMING) throw new AppError('BAD_REQUEST', 'sessionFinalized');
+
+        const people = session.people as GuestSessionPerson[];
+        // Even stale/imported CLAIMING rows must not rewrite payment history.
+        if (
+          people.some((person) =>
+            Object.entries(person).some(
+              ([key, value]) =>
+                key.startsWith('payment') &&
+                key !== 'paymentGroupRepresentativeId' &&
+                value !== undefined &&
+                value !== null &&
+                (!Array.isArray(value) || value.length > 0),
+            ),
+          )
+        )
+          throw new AppError('BAD_REQUEST', 'sessionFinalized');
+        const targetIndex = targetIndexOrThrow(people, input.personId);
+        const receipt = parseExtractedData(session.receiptData);
+        const revision = typeof receipt.payerRevision === 'string' ? receipt.payerRevision : null;
+        if (targetIndex === session.paidByIndex) return { success: true, revision };
+        if (revision !== input.expectedRevision) throw new AppError('CONFLICT', 'splitBusy');
+
+        // Remove the new payer from their reimbursement group. Preserve
+        // the others, choosing a remaining representative if necessary.
+        const identified = people as IdentifiedGuestPerson[];
+        const groups = receiptPaymentMemberships(identified, session.paidByIndex)
+          .filter((group) => group.grouped)
+          .map((group) => {
+            const memberIds = group.memberIds.filter((id) => id !== input.personId);
+            return {
+              memberIds,
+              representativeId: group.representativeId === input.personId ? memberIds[0]! : group.representativeId,
+            };
+          })
+          .filter((group) => group.memberIds.length >= 2);
+        const updated = identified.map(({ paymentGroupRepresentativeId: _old, ...person }) => {
+          void _old;
+          return person;
+        });
+        const nextPeople = setReceiptPaymentGroups(updated, targetIndex, groups);
+        const nextRevision = randomUUID();
+        await tx.guestSplit.update({
+          where: { id: session.id },
+          data: {
+            paidByIndex: targetIndex,
+            people: nextPeople as unknown as Prisma.InputJsonValue,
+            payerSbpPhone: null,
+            payerSbpBankId: null,
+            receiptData: { ...receipt, payerRevision: nextRevision } as Prisma.InputJsonValue,
+          },
+        });
+        return { success: true, revision: nextRevision };
+      });
+    }),
+
   removePerson: publicProcedure
     .input(
       z.object({
@@ -1606,6 +1684,9 @@ export const guestRouter = createTRPCRouter({
         }
         if (people.length <= 1) throw new AppError('BAD_REQUEST', 'cannotRemoveLastPerson');
 
+        // Never silently assign another payer during a removal.
+        if (targetIndex === session.paidByIndex) throw new AppError('BAD_REQUEST', 'changePayerBeforeRemove');
+
         const removedPersonId = people[targetIndex]?.id;
         people.splice(targetIndex, 1);
 
@@ -1624,13 +1705,8 @@ export const guestRouter = createTRPCRouter({
           })
           .filter((a) => a.personIndices.length > 0);
 
-        // Adjust paidByIndex
-        let paidByIndex = session.paidByIndex;
-        if (targetIndex === paidByIndex) {
-          paidByIndex = 0;
-        } else if (targetIndex < paidByIndex) {
-          paidByIndex--;
-        }
+        // Keep the very same payer identity when another row moves.
+        const paidByIndex = session.paidByIndex - (targetIndex < session.paidByIndex ? 1 : 0);
 
         await tx.guestSplit.update({
           where: { id: session.id },
@@ -2528,7 +2604,8 @@ export const guestRouter = createTRPCRouter({
           }[]
         | null,
       paidByIndex: session.paidByIndex,
-      isCreator: !!session.userId && session.userId === ctx.session?.user?.id,
+      payerRevision: typeof parsedData.payerRevision === 'string' ? parsedData.payerRevision : null,
+      isCreator: !!session.userId && session.userId === ctx.session?.user?.id && !ctx.impersonating,
       canFinalize: canFinalizeGuestSession(
         session.userId,
         parseExtractedData(session.receiptData),
@@ -4361,6 +4438,20 @@ export const guestRouter = createTRPCRouter({
       if (!payer || payer.id !== input.personId || payer.personToken !== input.personToken) {
         throw new AppError('FORBIDDEN', 'invalidPersonToken');
       }
+      if (payer.accountUserId) {
+        // A personal link alone cannot read the registered account's profile.
+        if (ctx.impersonating || ctx.session?.user?.id !== payer.accountUserId) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        const profile = await ctx.db.user.findUnique({
+          where: { id: payer.accountUserId },
+          select: { sbpPhone: true, sbpBankId: true, suspendedAt: true, isPlaceholder: true },
+        });
+        if (!profile || profile.suspendedAt || profile.isPlaceholder) {
+          throw new AppError('FORBIDDEN', 'invalidPersonToken');
+        }
+        return { phone: profile.sbpPhone, bankId: profile.sbpBankId, profile: true as const };
+      }
       return { phone: split.payerSbpPhone, bankId: split.payerSbpBankId };
     }),
 
@@ -4441,10 +4532,21 @@ export const guestRouter = createTRPCRouter({
         const owed = summary.find((person) => person.personIndex === personIndex);
         if (!owed || owed.total <= 0) throw new AppError('FORBIDDEN', 'invalidPersonToken');
       }
-      return {
-        phone: split.payerSbpPhone && split.payerSbpBankId ? split.payerSbpPhone : null,
-        bankId: split.payerSbpPhone && split.payerSbpBankId ? split.payerSbpBankId : null,
-      };
+      // The verified account binding is the sole source for a registered
+      // payer. No fallback to stale receipt contacts, even for an empty profile.
+      const payer = people[split.paidByIndex];
+      if (!payer) throw new AppError('FORBIDDEN', 'invalidPersonToken');
+      let phone = split.payerSbpPhone;
+      let bankId = split.payerSbpBankId;
+      if (payer.accountUserId) {
+        const profile = await ctx.db.user.findUnique({
+          where: { id: payer.accountUserId },
+          select: { sbpPhone: true, sbpBankId: true, suspendedAt: true, isPlaceholder: true },
+        });
+        phone = profile && !profile.suspendedAt && !profile.isPlaceholder ? profile.sbpPhone : null;
+        bankId = profile && !profile.suspendedAt && !profile.isPlaceholder ? profile.sbpBankId : null;
+      }
+      return { phone: phone && bankId ? phone : null, bankId: phone && bankId ? bankId : null };
     }),
 
   // Only the person holding the payer's actual personal token may configure
@@ -4480,6 +4582,7 @@ export const guestRouter = createTRPCRouter({
         if (!payer || payer.id !== input.personId || payer.personToken !== input.personToken) {
           throw new AppError('FORBIDDEN', 'invalidPersonToken');
         }
+        if (payer.accountUserId) throw new AppError('FORBIDDEN', 'payerSbpProfileOnly');
         if (split.payerSbpPhone !== phone || split.payerSbpBankId !== (emptyBank ? null : input.bankId)) {
           await tx.guestSplit.update({
             where: { id: split.id },

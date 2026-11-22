@@ -5,10 +5,11 @@ import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { trpc } from '@/lib/trpc';
 import { normalizeSbpPhone, searchSbpBanks, SBP_BANKS } from '@/lib/sbp-banks';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { SbpBankLogo } from '@/components/sbp-bank-logo';
+import { Link } from '@/i18n/navigation';
 
 export function GuestPayerSbpForm({
   token,
@@ -21,29 +22,55 @@ export function GuestPayerSbpForm({
 }) {
   const t = useTranslations('split.claim');
   const tc = useTranslations('common');
-  const read = trpc.guest.getMyPayerSbpContact.useMutation();
-  const write = trpc.guest.setMyPayerSbpContact.useMutation();
+  const read = trpc.guest.getMyPayerSbpContact.useMutation({ gcTime: 0 });
+  const write = trpc.guest.setMyPayerSbpContact.useMutation({ gcTime: 0 });
   const [phone, setPhone] = useState('');
   const [bankId, setBankId] = useState('');
   const [search, setSearch] = useState('');
+  const [profile, setProfile] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const readContact = read.mutateAsync;
 
   useEffect(() => {
     let cancelled = false;
-    void readContact({ token, personId, personToken })
-      .then((data) => {
-        if (cancelled) return;
-        setPhone(data.phone ?? '');
-        setBankId(data.bankId ?? '');
-        setLoaded(true);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
+    let accountBound = false;
+    let generation = 0;
+    const refresh = () => {
+      const current = ++generation;
+      void readContact({ token, personId, personToken })
+        .then((data) => {
+          if (cancelled || current !== generation) return;
+          accountBound = 'profile' in data && data.profile === true;
+          setProfile(accountBound);
+          setPhone(data.phone ?? '');
+          setBankId(data.bankId ?? '');
+          setFailed(false);
+          setLoaded(true);
+        })
+        .catch(() => {
+          if (cancelled || current !== generation) return;
+          setPhone('');
+          setBankId('');
+          setLoaded(false);
+          setFailed(true);
+        });
+    };
+    // Do not overwrite a guest's unsaved receipt-specific draft on focus.
+    // Registered accounts always reread their profile when returning from it.
+    const onVisible = () => {
+      if (accountBound && document.visibilityState === 'visible') refresh();
+    };
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted && accountBound) refresh();
+    };
+    refresh();
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pageshow', onPageShow);
     return () => {
       cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('pageshow', onPageShow);
     };
   }, [readContact, token, personId, personToken]);
 
@@ -52,7 +79,7 @@ export function GuestPayerSbpForm({
   const visible = selected && !matched.some((bank) => bank.id === selected.id) ? [selected, ...matched] : matched;
   const valid = (!phone.trim() && !bankId) || (!!normalizeSbpPhone(phone) && !!selected && selected.active !== false);
   async function save() {
-    if (!valid || write.isPending) return;
+    if (profile || !valid || write.isPending) return;
     const empty = !phone.trim();
     try {
       await write.mutateAsync({
@@ -72,11 +99,37 @@ export function GuestPayerSbpForm({
     <Card data-testid="guest-payer-sbp-form">
       <CardContent className="space-y-3 py-4">
         <h3 className="font-semibold">{t('payerSbpTitle')}</h3>
-        <p className="text-xs text-muted-foreground">{t('payerSbpPrivacy')}</p>
+        {loaded && (
+          <p className="text-xs text-muted-foreground">{t(profile ? 'payerSbpProfilePrivacy' : 'payerSbpPrivacy')}</p>
+        )}
         {!loaded ? (
           <p data-testid="guest-payer-sbp-loading" className="text-sm">
             {failed ? t('payerSbpLoadError') : t('payerSbpLoading')}
           </p>
+        ) : profile ? (
+          <div className="min-w-0 space-y-3" data-testid="guest-payer-sbp-profile">
+            {phone && (
+              <p className="break-all text-sm tabular-nums" data-testid="guest-payer-profile-phone">
+                {phone}
+              </p>
+            )}
+            {selected && (
+              <div
+                className="flex min-w-0 items-center gap-3 rounded-lg border p-2"
+                data-testid="guest-payer-profile-bank"
+              >
+                <SbpBankLogo bank={selected} unavailableLabel={t('payerSbpLogoUnavailable')} />
+                <span className="min-w-0 flex-1 break-words text-sm">{selected.name}</span>
+              </div>
+            )}
+            <Link
+              href="/settings#sbp-phone"
+              className={buttonVariants({ className: 'min-h-11 w-full whitespace-normal' })}
+              data-testid="guest-payer-sbp-profile-link"
+            >
+              {t(phone && selected ? 'payerSbpEditProfile' : 'payerSbpFillProfile')}
+            </Link>
+          </div>
         ) : (
           <>
             <label className="block text-sm font-medium" htmlFor="guest-sbp-phone">

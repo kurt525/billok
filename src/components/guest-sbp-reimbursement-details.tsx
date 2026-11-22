@@ -23,22 +23,41 @@ export function GuestSbpReimbursementDetails({
   payerName: string;
 }) {
   const t = useTranslations('split.claim');
-  const read = trpc.guest.getPayerSbpForReimbursement.useMutation();
+  const read = trpc.guest.getPayerSbpForReimbursement.useMutation({ gcTime: 0 });
   const [contact, setContact] = useState<{ phone: string | null; bankId: string | null } | null>(null);
   const [failed, setFailed] = useState(false);
   const readContact = read.mutateAsync;
 
   useEffect(() => {
     let cancelled = false;
-    void readContact({ token, personId, personToken })
-      .then((value) => {
-        if (!cancelled) setContact(value);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
+    let generation = 0;
+    const refresh = () => {
+      const current = ++generation;
+      void readContact({ token, personId, personToken })
+        .then((value) => {
+          if (cancelled || current !== generation) return;
+          setContact(value);
+          setFailed(false);
+        })
+        .catch(() => {
+          if (cancelled || current !== generation) return;
+          setContact(null);
+          setFailed(true);
+        });
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) refresh();
+    };
+    refresh();
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pageshow', onPageShow);
     return () => {
       cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('pageshow', onPageShow);
     };
   }, [readContact, token, personId, personToken]);
 

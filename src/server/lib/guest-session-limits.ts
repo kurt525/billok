@@ -25,6 +25,7 @@ export type ClaimWriteAction =
   | 'claim'
   | 'edit-name'
   | 'remove-person'
+  | 'change-payer'
   | 'split-item'
   | 'personal-tip'
   | 'personal-parts'

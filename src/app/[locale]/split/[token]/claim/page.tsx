@@ -310,6 +310,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   const [allocationEditorIdx, setAllocationEditorIdx] = useState<number | null>(null);
   const [splittingItemIdx, setSplittingItemIdx] = useState<number | null>(null);
   const [splitQty, setSplitQty] = useState('');
+  const [payerChoice, setPayerChoice] = useState<{ personId: string; revision: string | null } | null>(null);
+  const [confirmPayerChange, setConfirmPayerChange] = useState(false);
   const [removeFor, setRemoveFor] = useState<{ id: string; name: string } | null>(null);
   const [confirmFinalize, setConfirmFinalize] = useState(false);
   const { data: authSession } = useSession();
@@ -553,6 +555,21 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       toast.success(t('nameUpdated'));
     },
     onError: (err) => toast.error(localizedTrpcError(err, tc('errors.generic'))),
+  });
+
+  const changePayer = trpc.guest.changePayer.useMutation({
+    onSuccess: async () => {
+      setPayerChoice(null);
+      setConfirmPayerChange(false);
+      await utils.guest.getSession.invalidate({ token });
+      toast.success(t('payerChanged'));
+    },
+    onError: (error) => {
+      setPayerChoice(null);
+      setConfirmPayerChange(false);
+      void session.refetch();
+      toast.error(localizedTrpcError(error, tc('errors.generic')));
+    },
   });
 
   const removePerson = trpc.guest.removePerson.useMutation({
@@ -1529,6 +1546,65 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   );
 
   // --- Finalized state ---
+  const currentPayer = data.people[data.paidByIndex];
+  const selectedPayer = data.people.find((person) => person.id === payerChoice?.personId);
+  const payerChangePanel = data.isCreator && data.status === 'CLAIMING' && currentPayer && (
+    <Card className="w-full min-w-0 max-w-full" data-testid="change-payer-panel">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">{t('changePayerTitle')}</CardTitle>
+      </CardHeader>
+      <CardContent className="min-w-0 space-y-3">
+        <p className="min-w-0 text-sm [overflow-wrap:anywhere]" data-testid="current-payer-name">
+          {t('currentPayerName', { name: currentPayer.name })}
+        </p>
+        <label className="block text-sm font-medium" htmlFor="change-payer-person">
+          {t('selectPayer')}
+        </label>
+        <select
+          id="change-payer-person"
+          data-testid="change-payer-person"
+          className="min-h-11 w-full min-w-0 max-w-full rounded-md border bg-background px-2 text-base"
+          value={selectedPayer && selectedPayer.id !== currentPayer.id ? selectedPayer.id : ''}
+          onChange={(event) =>
+            setPayerChoice(event.target.value ? { personId: event.target.value, revision: data.payerRevision } : null)
+          }
+          disabled={changePayer.isPending}
+        >
+          <option value="">{t('selectPayer')}</option>
+          {data.people
+            .filter((person) => person.id !== currentPayer.id)
+            .map((person) => (
+              <option key={person.id} value={person.id}>
+                {person.name}
+              </option>
+            ))}
+        </select>
+        <Button
+          type="button"
+          className="min-h-11 w-full whitespace-normal"
+          disabled={!selectedPayer || selectedPayer.id === currentPayer.id || changePayer.isPending}
+          onClick={() => setConfirmPayerChange(true)}
+          data-testid="change-payer-submit"
+        >
+          {t('changePayerTitle')}
+        </Button>
+        <p className="text-xs text-muted-foreground">{t('changePayerHint')}</p>
+        <ConfirmDialog
+          open={confirmPayerChange}
+          onOpenChange={setConfirmPayerChange}
+          title={t('changePayerConfirm', { name: selectedPayer?.name ?? '' })}
+          description={t('changePayerHint')}
+          confirmLabel={t('changePayerTitle')}
+          destructive={false}
+          onConfirm={() =>
+            payerChoice &&
+            changePayer.mutate({ token, personId: payerChoice.personId, expectedRevision: payerChoice.revision })
+          }
+        />
+      </CardContent>
+    </Card>
+  );
+
   if (data.status === 'FINALIZED') {
     return (
       <div className="space-y-6 pb-8">
@@ -1729,7 +1805,13 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         </AvatarFallback>
                       </Avatar>
                       <div className="min-w-0 flex-1 space-y-1">
-                        <span className="block min-w-0 font-medium [overflow-wrap:anywhere]">{person.name}</span>
+                        <span
+                          className="block min-w-0 font-medium [overflow-wrap:anywhere]"
+                          data-testid={'finalized-person-name-' + person.personIndex}
+                        >
+                          {person.name}
+                          {person.personIndex === myPersonIndex && ' ' + t('you')}
+                        </span>
                         <div
                           className="flex min-w-0 flex-wrap items-center gap-1"
                           data-testid={'finalized-person-badges-' + person.personIndex}
@@ -1839,6 +1921,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           </Button>
 
           {data.isCreator && data.status === 'CLAIMING' && <CreatorAddGuestPlace token={token} />}
+
+          {payerChangePanel}
 
           {/* People already in session */}
           {data.people.length > 0 && (
@@ -2209,6 +2293,8 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
 
         {data.isCreator && data.status === 'CLAIMING' && <CreatorAddGuestPlace token={token} />}
 
+        {payerChangePanel}
+
         {/* People in session */}
         <Card>
           <CardHeader className="pb-2">
@@ -2317,6 +2403,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                         </button>
                       )}
                       {data.people.length > 1 &&
+                        idx !== data.paidByIndex &&
                         !!personToken &&
                         (data.isCreator || person.id === myPersonId) &&
                         (!hasPaymentGroups || data.isCreator) && (
