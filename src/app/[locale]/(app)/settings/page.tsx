@@ -16,9 +16,10 @@ import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { SbpPhoneInput } from '@/components/sbp-phone-input';
 import { Label } from '@/components/ui/label';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
-import { SBP_BANKS, searchSbpBanks } from '@/lib/sbp-banks';
+import { SBP_BANKS, searchSbpBanks, normalizeSbpPhone } from '@/lib/sbp-banks';
 import { SbpBankLogo } from '@/components/sbp-bank-logo';
 
 // Rendered only once the profile has loaded, so all fields can be
@@ -41,6 +42,7 @@ function ProfileForm({
   const router = useRouter();
   const [name, setName] = useState(initialName);
   const [sbpPhone, setSbpPhone] = useState(initialSbpPhone);
+  const [phoneRejected, setPhoneRejected] = useState<'typing' | 'paste' | null>(null);
   const [sbpBankId, setSbpBankId] = useState(initialSbpBankId);
   const [sbpBankSearch, setSbpBankSearch] = useState('');
   const matchingSbpBanks = searchSbpBanks(sbpBankSearch);
@@ -53,6 +55,7 @@ function ProfileForm({
 
   const updateProfile = trpc.auth.updateProfile.useMutation({
     onSuccess: async () => {
+      setPhoneRejected(null);
       await update();
       router.refresh();
     },
@@ -60,10 +63,10 @@ function ProfileForm({
 
   function handleSave(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || (sbpPhone !== '' && !normalizeSbpPhone(sbpPhone)) || phoneRejected === 'paste') return;
     updateProfile.mutate({
       name: name.trim(),
-      sbpPhone: sbpPhone.trim() || null,
+      sbpPhone: sbpPhone || null,
       sbpBankId: sbpBankId || null,
     });
   }
@@ -82,24 +85,46 @@ function ProfileForm({
           maxLength={100}
           className="h-11 min-w-0 text-base"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => {
+            setName(e.target.value);
+            updateProfile.reset();
+          }}
           required
         />
       </div>
       <div className="space-y-2">
         <Label htmlFor="sbp-phone">{t('profile.sbpPhone')}</Label>
-        <Input
+        <SbpPhoneInput
           id="sbp-phone"
-          type="tel"
-          inputMode="tel"
-          autoComplete="tel"
-          maxLength={24}
+          autoComplete="off"
           className="h-11 min-w-0 scroll-mt-20 text-base"
           value={sbpPhone}
-          onChange={(e) => setSbpPhone(e.target.value)}
+          onValueChange={(value) => {
+            setSbpPhone(value);
+            setPhoneRejected(null);
+            updateProfile.reset();
+          }}
+          onRejected={(reason) => {
+            setPhoneRejected(reason);
+            updateProfile.reset();
+          }}
+          aria-invalid={phoneRejected === 'paste' || (sbpPhone !== '' && !normalizeSbpPhone(sbpPhone))}
+          aria-describedby="sbp-phone-validation"
           placeholder={t('profile.sbpPhonePlaceholder')}
           data-testid="sbp-phone-input"
         />
+        <p
+          id="sbp-phone-validation"
+          className="text-xs text-destructive"
+          role="status"
+          data-testid="sbp-phone-validation"
+        >
+          {phoneRejected
+            ? t('profile.sbpPhoneRejected')
+            : sbpPhone !== '' && !normalizeSbpPhone(sbpPhone)
+              ? t('profile.sbpPhoneIncomplete')
+              : ''}
+        </p>
         <p className="text-xs text-muted-foreground">{t('profile.sbpPhoneUnverified')}</p>
       </div>
       <div className="space-y-2">
@@ -150,7 +175,10 @@ function ProfileForm({
               name="sbp-bank"
               value=""
               checked={sbpBankId === ''}
-              onChange={() => setSbpBankId('')}
+              onChange={() => {
+                setSbpBankId('');
+                updateProfile.reset();
+              }}
               className="sr-only"
               data-testid="sbp-bank-radio-none"
             />
@@ -171,7 +199,10 @@ function ProfileForm({
                 name="sbp-bank"
                 value={bank.id}
                 checked={sbpBankId === bank.id}
-                onChange={() => setSbpBankId(bank.id)}
+                onChange={() => {
+                  setSbpBankId(bank.id);
+                  updateProfile.reset();
+                }}
                 className="sr-only"
                 data-testid={'sbp-bank-radio-' + bank.id}
               />
@@ -194,7 +225,9 @@ function ProfileForm({
       <Button
         type="submit"
         className="min-h-11 w-full"
-        disabled={updateProfile.isPending}
+        disabled={
+          updateProfile.isPending || phoneRejected === 'paste' || (sbpPhone !== '' && !normalizeSbpPhone(sbpPhone))
+        }
         data-testid="save-profile-btn"
       >
         {updateProfile.isPending ? t('profile.saving') : t('profile.save')}

@@ -334,16 +334,16 @@ export const authRouter = createTRPCRouter({
     .input(
       z.strictObject({
         name: z.string().trim().min(1).max(100).optional(),
-        sbpPhone: z.string().max(24).nullable().optional(),
+        sbpPhone: z.string().max(12).nullable().optional(),
         sbpBankId: z.string().max(40).nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const phone =
-        input.sbpPhone === undefined || input.sbpPhone === null || input.sbpPhone.trim() === ''
+        input.sbpPhone === undefined || input.sbpPhone === null || input.sbpPhone === ''
           ? null
           : normalizeSbpPhone(input.sbpPhone);
-      if (input.sbpPhone && input.sbpPhone.trim() && !phone) {
+      if (input.sbpPhone !== undefined && input.sbpPhone !== null && input.sbpPhone !== '' && !phone) {
         throw new AppError('BAD_REQUEST', 'sbpPhoneInvalid');
       }
       if (input.sbpBankId && !isSupportedSbpBankId(input.sbpBankId)) {

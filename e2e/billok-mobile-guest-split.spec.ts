@@ -1724,7 +1724,29 @@ test('mobile guest finalization reconciles personal tips for three dining partic
     await expect(payerForm).toContainText('Изменение номера или банка в профиле не меняет их здесь');
     const payerPhone = otherPage.getByTestId('guest-payer-sbp-phone');
     await expect(payerPhone).toBeVisible({ timeout: 15_000 });
-    await payerPhone.fill('8 (999) 123-45-67');
+    await payerPhone.fill('89991234567');
+    await payerPhone.press('9');
+    await expect(payerPhone).toHaveValue('89991234567');
+    await payerPhone.press('3');
+    await expect(payerPhone).toHaveValue('89991234567');
+    await expect(otherPage.getByTestId('guest-payer-sbp-phone-validation')).toContainText('11 цифр');
+    await payerPhone.fill('79991234567');
+    await payerPhone.fill('+79991234567');
+    await payerPhone.press('8');
+    await expect(payerPhone).toHaveValue('+79991234567');
+    await payerPhone.fill('89991234567');
+    await payerPhone.evaluate((el) => {
+      const target = el as HTMLInputElement;
+      target.setSelectionRange(0, target.value.length);
+      const clipboard = new DataTransfer();
+      clipboard.setData('text', '8 (999) 123-45-67');
+      target.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: clipboard }));
+    });
+    await expect(payerPhone).toHaveValue('89991234567');
+    await expect(otherPage.getByTestId('guest-payer-sbp-phone-validation')).toContainText('вставка отклонены');
+    await payerPhone.fill('8999123456');
+    await expect(otherPage.getByTestId('guest-payer-sbp-save')).toBeDisabled();
+    await payerPhone.fill('89991234567');
     await otherPage.getByTestId('guest-payer-sbp-search').fill('Озон Банк');
 
     // The payer can choose a bank and save SBP details on Galaxy S23 and

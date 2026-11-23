@@ -6229,12 +6229,32 @@ describe('BillOK guest payer-only SBP contact (Issue #1 1.3.19)', () => {
   test('guest payer can save an unverified phone and active bank without a user account', async () => {
     const api = await caller();
     await expect(
-      api.setMyPayerSbpContact({ ...payerAuth, phone: '8 (999) 123-45-67', bankId: '100000000273' }),
+      api.setMyPayerSbpContact({ ...payerAuth, phone: '89991234567', bankId: '100000000273' }),
     ).resolves.toEqual({ success: true });
     expect(mockDb.guestSplit.update).toHaveBeenCalledWith({
       where: { id: base.id },
       data: { payerSbpPhone: '+79991234567', payerSbpBankId: '100000000273' },
     });
+  });
+
+  test('Issue 19.18: direct payer-contact API rejects illegal symbols and extra digits', async () => {
+    const api = await caller();
+    for (const bad of [
+      '8 (999) 123-45-67',
+      '8 999 123 45 67',
+      '899912345678',
+      '+799912345678',
+      '++79991234567',
+      '7999+1234567',
+      '8999123456',
+      '+7999123456',
+      '8x9991234567',
+    ]) {
+      await expect(api.setMyPayerSbpContact({ ...payerAuth, phone: bad, bankId: 'tbank' })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+    }
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
   });
 
   test('non-payer, creator and wrong personal token cannot read or overwrite payer contact', async () => {

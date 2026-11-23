@@ -8,6 +8,7 @@ import { normalizeSbpPhone, searchSbpBanks, SBP_BANKS } from '@/lib/sbp-banks';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { SbpPhoneInput } from '@/components/sbp-phone-input';
 import { SbpBankLogo } from '@/components/sbp-bank-logo';
 import { Link } from '@/i18n/navigation';
 
@@ -25,6 +26,7 @@ export function GuestPayerSbpForm({
   const read = trpc.guest.getMyPayerSbpContact.useMutation({ gcTime: 0 });
   const write = trpc.guest.setMyPayerSbpContact.useMutation({ gcTime: 0 });
   const [phone, setPhone] = useState('');
+  const [phoneRejected, setPhoneRejected] = useState<'typing' | 'paste' | null>(null);
   const [bankId, setBankId] = useState('');
   const [search, setSearch] = useState('');
   const [profile, setProfile] = useState(false);
@@ -44,6 +46,7 @@ export function GuestPayerSbpForm({
           accountBound = 'profile' in data && data.profile === true;
           setProfile(accountBound);
           setPhone(data.phone ?? '');
+          setPhoneRejected(null);
           setBankId(data.bankId ?? '');
           setFailed(false);
           setLoaded(true);
@@ -51,6 +54,7 @@ export function GuestPayerSbpForm({
         .catch(() => {
           if (cancelled || current !== generation) return;
           setPhone('');
+          setPhoneRejected(null);
           setBankId('');
           setLoaded(false);
           setFailed(true);
@@ -77,19 +81,22 @@ export function GuestPayerSbpForm({
   const matched = useMemo(() => searchSbpBanks(search), [search]);
   const selected = SBP_BANKS.find((bank) => bank.id === bankId);
   const visible = selected && !matched.some((bank) => bank.id === selected.id) ? [selected, ...matched] : matched;
-  const valid = (!phone.trim() && !bankId) || (!!normalizeSbpPhone(phone) && !!selected && selected.active !== false);
+  const valid =
+    phoneRejected !== 'paste' &&
+    ((!phone && !bankId) || (!!normalizeSbpPhone(phone) && !!selected && selected.active !== false));
   async function save() {
     if (profile || !valid || write.isPending) return;
-    const empty = !phone.trim();
+    const empty = phone === '';
     try {
       await write.mutateAsync({
         token,
         personId,
         personToken,
-        phone: empty ? null : phone.trim(),
+        phone: empty ? null : phone,
         bankId: empty ? null : bankId,
       });
       if (!empty) setPhone(normalizeSbpPhone(phone)!);
+      setPhoneRejected(null);
       toast.success(t('payerSbpSaved'));
     } catch {
       toast.error(tc('errors.generic'));
@@ -135,17 +142,32 @@ export function GuestPayerSbpForm({
             <label className="block text-sm font-medium" htmlFor="guest-sbp-phone">
               {t('payerSbpPhone')}
             </label>
-            <Input
+            <SbpPhoneInput
               id="guest-sbp-phone"
-              type="tel"
-              inputMode="tel"
-              maxLength={24}
               className="min-h-11 min-w-0 text-base"
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="+7 999 123-45-67"
+              onValueChange={(value) => {
+                setPhone(value);
+                setPhoneRejected(null);
+              }}
+              onRejected={(reason) => setPhoneRejected(reason)}
+              aria-invalid={phoneRejected === 'paste' || (phone !== '' && !normalizeSbpPhone(phone))}
+              aria-describedby="guest-sbp-phone-validation"
+              placeholder="+79991234567"
               data-testid="guest-payer-sbp-phone"
             />
+            <p
+              id="guest-sbp-phone-validation"
+              className="text-xs text-destructive"
+              role="status"
+              data-testid="guest-payer-sbp-phone-validation"
+            >
+              {phoneRejected
+                ? t('payerSbpPhoneRejected')
+                : phone !== '' && !normalizeSbpPhone(phone)
+                  ? t('payerSbpPhoneIncomplete')
+                  : ''}
+            </p>
             <label className="block text-sm font-medium" htmlFor="guest-sbp-search">
               {t('payerSbpBank')}
             </label>
@@ -212,6 +234,7 @@ export function GuestPayerSbpForm({
               onClick={() => {
                 setPhone('');
                 setBankId('');
+                setPhoneRejected(null);
               }}
               disabled={write.isPending}
               data-testid="guest-payer-sbp-clear"

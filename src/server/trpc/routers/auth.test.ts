@@ -550,7 +550,7 @@ describe('auth.updateProfile SBP details', () => {
       sbpBankId: 'tbank',
     });
     const api = await caller({ user: { id: 'u1' } });
-    const updated = await api.updateProfile({ sbpPhone: '8 (999) 123-45-67', sbpBankId: 'tbank' });
+    const updated = await api.updateProfile({ sbpPhone: '89991234567', sbpBankId: 'tbank' });
     expect(mockDb.user.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'u1' }, data: { sbpPhone: '+79991234567', sbpBankId: 'tbank' } }),
     );
@@ -560,7 +560,20 @@ describe('auth.updateProfile SBP details', () => {
   test('invalid phone and unknown bank never reach the database update', async () => {
     mockDb.user.findUnique.mockResolvedValue({ suspendedAt: null });
     const api = await caller({ user: { id: 'u1' } });
-    await expect(api.updateProfile({ sbpPhone: '+15551234567' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    for (const bad of [
+      '+15551234567',
+      '8 (999) 123-45-67',
+      '+7 999 123 45 67',
+      '899912345678',
+      '+799912345678',
+      '++79991234567',
+      '7999+1234567',
+      '8999123456',
+      '8999123456a',
+      ' 89991234567',
+    ]) {
+      await expect(api.updateProfile({ sbpPhone: bad })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
     await expect(api.updateProfile({ sbpBankId: 'fake-bank' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mockDb.user.update).not.toHaveBeenCalled();
   });
