@@ -53,11 +53,18 @@ export function searchSbpBanks(query: string): (typeof SBP_BANKS)[number][] {
   );
 }
 
-/** Normalize an unverified Russian phone for account profile storage. */
+/** Strict phone input: ASCII digits and one optional initial +, max 11 digits.
+ * Draft may be incomplete; successful save requires normalizeSbpPhone.
+ */
+export function isSbpPhoneDraft(value: string): boolean {
+  const match = /^\+?[0-9]{0,11}$/.exec(value);
+  return match !== null && match[0] === value;
+}
+
+/** Normalize raw unverified Russian phone without silently stripping characters. */
 export function normalizeSbpPhone(value: string): string | null {
-  const stripped = value.trim().replace(/[\s()\-]/g, '');
-  if (/^\+7\d{10}$/.test(stripped)) return stripped;
-  if (/^[78]\d{10}$/.test(stripped)) return '+7' + stripped.slice(1);
+  if (value.length === 12 && /^\+7[0-9]{10}$/.test(value)) return value;
+  if (value.length === 11 && /^[78][0-9]{10}$/.test(value)) return '+7' + value.slice(1);
   return null;
 }
 

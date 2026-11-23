@@ -4697,7 +4697,7 @@ export const guestRouter = createTRPCRouter({
         token: shareTokenSchema,
         personId: personIdSchema,
         personToken: guestLinkSecretSchema,
-        phone: z.string().max(24).nullable(),
+        phone: z.string().max(12).nullable(),
         bankId: z.string().max(40).nullable(),
       }),
     )
@@ -4705,7 +4705,7 @@ export const guestRouter = createTRPCRouter({
       if (!checkClaimWriteRateLimit('payer-sbp-write', input.token, input.personToken)) {
         throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
       }
-      const emptyPhone = input.phone === null || input.phone.trim() === '';
+      const emptyPhone = input.phone === null || input.phone === '';
       const emptyBank = input.bankId === null || input.bankId.trim() === '';
       if (emptyPhone !== emptyBank) throw new AppError('BAD_REQUEST', 'sbpBankInvalid');
       const phone = emptyPhone ? null : normalizeSbpPhone(input.phone!);

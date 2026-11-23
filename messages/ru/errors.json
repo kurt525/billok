@@ -157,7 +157,7 @@
   "providerCreateFailed": "Не удалось создать провайдера.",
   "providerUnavailable": "Провайдер «{provider}» недоступен.",
   "extractionFailed": "Не удалось извлечь данные.",
-  "sbpPhoneInvalid": "Укажите российский номер в формате +7XXXXXXXXXX или 8XXXXXXXXXX.",
+  "sbpPhoneInvalid": "Укажите 11 цифр без пробелов и скобок: +7XXXXXXXXXX, 7XXXXXXXXXX или 8XXXXXXXXXX.",
   "sbpBankInvalid": "Выберите банк из списка.",
   "paymentNotDeclared": "Участник ещё не отметил оплату.",
   "receiptFinalizationChanged": "Распределение или суммы изменились. Проверьте обновлённые данные и завершите чек заново.",

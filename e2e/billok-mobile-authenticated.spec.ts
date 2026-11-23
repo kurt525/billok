@@ -407,7 +407,7 @@ test('mobile SBP profile persists phone and selected bank without verification c
   await expect(page.getByText('Номер не проверяется по СМС')).toBeVisible();
   await expect(page.getByTestId('sbp-profile-receipt-scope')).toContainText('Суммы и история платежей не меняются');
 
-  await phone.fill('8 (999) 123-45-67');
+  await phone.fill('89991234567');
   await tbankRow.click();
   await expect(selectedTbank).toBeChecked();
   const selectedBank = page.getByTestId('sbp-bank-selected');
@@ -449,7 +449,7 @@ test('mobile SBP profile persists phone and selected bank without verification c
   const changedName = 'Участник BillOK ' + 'ОченьДлинноеИмя'.repeat(4);
   expect(changedName.length).toBeLessThanOrEqual(100);
   await name.fill(changedName);
-  await page.getByTestId('sbp-phone-input').fill('8 (999) 123-45-67');
+  await page.getByTestId('sbp-phone-input').fill('89991234567');
   await page.getByTestId('save-profile-btn').click();
   await expect(page.getByText('Профиль обновлён!')).toBeVisible();
   await page.reload({ waitUntil: 'networkidle' });
@@ -479,6 +479,80 @@ test('mobile SBP profile persists phone and selected bank without verification c
   await page.setViewportSize({ width: 320, height: 800 });
   await page.locator('#name').fill(originalName);
   // Leave the disposable CI account as it was before this test.
+  await page.getByTestId('sbp-phone-input').fill('');
+  await page.getByTestId('sbp-bank-option-none').click();
+  await page.getByTestId('save-profile-btn').click();
+  await expect(page.getByText('Профиль обновлён!')).toBeVisible();
+});
+
+test('Issue 19.18: strict profile SBP phone characters, digit ceiling, paste and reload', async ({ page }) => {
+  test.setTimeout(110_000);
+  await signInAsSeedAdmin(page);
+  await page.goto('/settings', { waitUntil: 'networkidle' });
+  const phone = page.getByTestId('sbp-phone-input');
+  const save = page.getByTestId('save-profile-btn');
+  const error = page.getByTestId('sbp-phone-validation');
+  await expect(phone).toBeVisible();
+  await phone.fill('89991234567');
+  await expect(save).toBeEnabled();
+  await phone.press('9'); // 12th digit is rejected, existing value preserved.
+  await expect(phone).toHaveValue('89991234567');
+  await phone.press('3'); // Repeated invalid digit must not stick in the DOM.
+  await expect(phone).toHaveValue('89991234567');
+  await expect(error).toContainText('11 цифр');
+  await expect(save).toBeEnabled(); // 11 valid digits remain savable after rejected 12th/13th.
+  await phone.fill('79991234567'); // edit clears rejected-input state.
+  await expect(error).toBeEmpty();
+  await expect(save).toBeEnabled();
+  await phone.fill('+79991234567');
+  await phone.press('8'); // 13th visible character cannot be added.
+  await expect(phone).toHaveValue('+79991234567');
+  await phone.fill('89991234567');
+  await phone.evaluate((el) => {
+    const target = el as HTMLInputElement;
+    target.setSelectionRange(0, target.value.length);
+    const clipboard = new DataTransfer();
+    clipboard.setData('text', '+7 (999) 123-45-67');
+    target.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: clipboard }));
+  });
+  await expect(phone).toHaveValue('89991234567');
+  await expect(error).toContainText('вставка отклонены');
+  await expect(save).toBeDisabled();
+  await phone.fill('899912345678'); // invalid overlong fill never silently truncates and saves.
+  await expect(phone).toHaveValue('89991234567');
+  await phone.fill('79991234567');
+  await expect(save).toBeEnabled();
+
+  await phone.evaluate((el) => (el as HTMLInputElement).setSelectionRange(1, 2));
+  await phone.press('8'); // replacement in middle of a complete phone is allowed.
+  await expect(phone).toHaveValue('78991234567');
+  await phone.fill('79991234567');
+  await phone.fill('8999123456');
+  await expect(save).toBeDisabled();
+  await expect(error).toContainText('полный российский номер');
+  await phone.fill('89991234567');
+  await page.getByTestId('sbp-bank-option-tbank').click();
+  await save.click();
+  await expect(page.getByText('Профиль обновлён!')).toBeVisible();
+  await page.reload({ waitUntil: 'networkidle' });
+  await expect(page.getByTestId('sbp-phone-input')).toHaveValue('+79991234567');
+  const again = page.getByTestId('sbp-phone-input');
+  await again.fill('79991234567');
+  await page.getByTestId('save-profile-btn').click();
+  await expect(page.getByText('Профиль обновлён!')).toBeVisible();
+  await page.reload({ waitUntil: 'networkidle' });
+  await expect(page.getByTestId('sbp-phone-input')).toHaveValue('+79991234567');
+  await page.addStyleTag({ content: 'html {font-size:20px !important}' });
+  for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
+    await page.setViewportSize({ width, height: 380 });
+    const current = page.getByTestId('sbp-phone-input');
+    await current.scrollIntoViewIfNeeded();
+    const rect = await current.boundingBox();
+    expect(rect).not.toBeNull();
+    expect(rect!.x + rect!.width).toBeLessThanOrEqual(width + 1);
+    await checkPhoneLayout(page, width);
+  }
+  // Restore the disposable seeded user's contact.
   await page.getByTestId('sbp-phone-input').fill('');
   await page.getByTestId('sbp-bank-option-none').click();
   await page.getByTestId('save-profile-btn').click();
