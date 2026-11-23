@@ -96,7 +96,9 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
             "locale: user.locale,",
         ):
             self.assertNotIn(unused, auth)
-        self.assertIn("sbpPhone: z.string().max(24)", auth)
+        # Issue #19.18 deliberately limits the raw phone to 11 digits
+        # plus an optional initial +; the legacy 24-char limit is obsolete.
+        self.assertIn("sbpPhone: z.string().max(12)", auth)
         self.assertIn("sbpBankId: z.string().max(40)", auth)
         self.assertIn("name: z.string().trim().min(1)", auth)
 
