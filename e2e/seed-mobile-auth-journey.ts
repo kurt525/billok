@@ -10,6 +10,7 @@ import { PrismaClient } from '../src/generated/prisma/client';
 import { assertDisposableQaDatabase } from '../scripts/qa-fixture-database';
 import { hashEmailVerificationToken } from '../src/server/lib/email-verification-token';
 import { SYSTEM_INVITE_TTL_MS } from '../src/server/lib/system-invite-lifetime';
+import { ACTUAL_RECEIPTS_PASSKEY_RESERVE } from './qa-passkey-reserve';
 
 async function main() {
   const url = assertDisposableQaDatabase(process.env);
@@ -64,9 +65,9 @@ async function main() {
       }
     > = {};
     for (const [alias, email, count] of [
-      ['alice', 'alice@qa.billok.ru', 150],
-      ['bob', 'bob@qa.billok.ru', 70],
-      ['charlie', 'charlie@qa.billok.ru', 40],
+      ['alice', 'alice@qa.billok.ru', 150 + ACTUAL_RECEIPTS_PASSKEY_RESERVE],
+      ['bob', 'bob@qa.billok.ru', 70 + ACTUAL_RECEIPTS_PASSKEY_RESERVE],
+      ['charlie', 'charlie@qa.billok.ru', 40 + ACTUAL_RECEIPTS_PASSKEY_RESERVE],
       ['recovery', 'recovery@mail.ru', 1],
       ['owner-qa', 'owner-qa@mail.ru', 3],
       ['login-probe', 'login-probe@mail.ru', 1],
