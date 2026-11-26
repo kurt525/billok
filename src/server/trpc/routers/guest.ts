@@ -2,6 +2,8 @@ import { GUEST_OWNER_COLOR_ID, GUEST_PALETTE_V2_BASE } from '@/lib/guest-visual-
 import { createHash, randomUUID } from 'crypto';
 import { z } from 'zod';
 import { AppError } from '@/server/lib/app-error';
+import { requireOwner } from '@/server/lib/owner-access';
+import { MAX_RECEIPT_TITLE_LENGTH, normalizeReceiptTitle } from '@/lib/receipt-title';
 import { isAllowedRegistrationEmailDomain } from '@/server/lib/registration-email-domain';
 import { Prisma, GuestSplitStatus } from '@/generated/prisma/client';
 import { createTRPCRouter, publicProcedure, protectedProcedure } from '../init';
@@ -673,7 +675,56 @@ function cleanupExpiredSplits(db: typeof import('@/server/db').db, logPrefix: st
     });
 }
 
+// Section 20: system owner identity is independent of the display-name
+// reservation and of all participant/payer roles.
+async function canRenameAsOwner(ctx: {
+  session?: { user?: { id?: string | null } | null } | null;
+  impersonating?: unknown;
+  db: Pick<Prisma.TransactionClient, 'ownerBootstrap' | 'user'>;
+}): Promise<boolean> {
+  if (!ctx.session?.user?.id || ctx.impersonating) return false;
+  try {
+    await requireOwner(ctx.db, ctx.session.user.id);
+    return true;
+  } catch (error) {
+    if (error instanceof AppError && error.code === 'FORBIDDEN') return false;
+    throw error;
+  }
+}
+
+async function canRenameReceipt(ctx: Parameters<typeof canRenameAsOwner>[0], authorId: string | null) {
+  if (!ctx.session?.user?.id || ctx.impersonating) return false;
+  return authorId === ctx.session.user.id || (await canRenameAsOwner(ctx));
+}
+
 export const guestRouter = createTRPCRouter({
+  renameReceipt: protectedProcedure
+    .input(z.strictObject({ id: z.string().min(1).max(128), title: z.string().max(4096) }))
+    .mutation(async ({ ctx, input }) => {
+      const title = normalizeReceiptTitle(input.title);
+      if (!title) throw new AppError('BAD_REQUEST', 'receiptTitleInvalid', { max: MAX_RECEIPT_TITLE_LENGTH });
+      if (ctx.impersonating) throw new AppError('FORBIDDEN');
+      if (!checkTokenRateLimit('receipt-title:' + ctx.user.id, 60, 60_000).allowed) {
+        throw new AppError('TOO_MANY_REQUESTS', 'tooManyRequests');
+      }
+      return guestTransaction(ctx.db, async (tx) => {
+        const split = await tx.guestSplit.findUnique({ where: { id: input.id } });
+        if (!split || !(await canRenameReceipt({ ...ctx, db: tx }, split.userId))) {
+          throw new AppError('NOT_FOUND', 'splitNotFound');
+        }
+        // Read/modify only the latest single GuestSplit row. Repeatable Read
+        // retries concurrent writers; keep every other JSON field verbatim.
+        const data = split.receiptData as Prisma.JsonObject;
+        if (data.merchantName !== title) {
+          await tx.guestSplit.update({
+            where: { id: split.id },
+            data: { receiptData: { ...data, merchantName: title } as Prisma.InputJsonValue },
+          });
+        }
+        return { id: split.id, title };
+      });
+    }),
+
   expireSession: protectedProcedure.input(z.object({ token: shareTokenSchema })).mutation(async ({ ctx, input }) => {
     const session = await ctx.db.guestSplit.findUnique({
       where: { shareToken: shareLookupHash(input.token) },
@@ -712,8 +763,9 @@ export const guestRouter = createTRPCRouter({
       }),
     )
     .query(async ({ ctx, input }) => {
+      const owner = await canRenameAsOwner(ctx);
       const splits = await ctx.db.guestSplit.findMany({
-        where: { userId: ctx.user.id },
+        where: owner ? {} : { userId: ctx.user.id },
         orderBy: { createdAt: 'desc' },
         take: input.limit + 1,
         ...(input.cursor ? { cursor: { id: input.cursor } } : {}),
@@ -728,13 +780,26 @@ export const guestRouter = createTRPCRouter({
       type PersonJson = Record<string, unknown>;
 
       return {
+        owner,
         splits: splits.map((s) => {
           const receipt = s.receiptData as ReceiptJson | null;
           const people = s.people as PersonJson[] | null;
           const items = s.items as PersonJson[] | null;
           return {
             id: s.id,
-            shareToken: revealGuestShareLink(s),
+            // Owners may manage all titles. Never expose expired foreign
+            // links or unavailable legacy bearer secrets through this list.
+            shareToken: (() => {
+              if (s.expiresAt < new Date() && (s.userId !== ctx.user.id || s.status !== GuestSplitStatus.FINALIZED))
+                return null;
+              try {
+                return revealGuestShareLink(s);
+              } catch {
+                return null;
+              }
+            })(),
+            canRename: !ctx.impersonating && (owner || s.userId === ctx.user.id),
+            canDelete: s.userId === ctx.user.id,
             status: s.status,
             merchantName: receipt?.merchantName as string | undefined,
             total: receipt?.total as number | undefined,
@@ -873,6 +938,7 @@ export const guestRouter = createTRPCRouter({
       }[],
       paidByIndex: split.paidByIndex,
       isCreator: !!split.userId && split.userId === ctx.session?.user?.id,
+      canRename: await canRenameReceipt(ctx, split.userId),
       archivedCreatorView: guestLinkExpired,
       isPayer: (() => {
         if (!ctx.session?.user?.name) return false;
@@ -2730,6 +2796,7 @@ export const guestRouter = createTRPCRouter({
       paidByIndex: session.paidByIndex,
       payerRevision: typeof parsedData.payerRevision === 'string' ? parsedData.payerRevision : null,
       isCreator: !!session.userId && session.userId === ctx.session?.user?.id && !ctx.impersonating,
+      canRename: await canRenameReceipt(ctx, session.userId),
       canFinalize: canFinalizeGuestSession(
         session.userId,
         parseExtractedData(session.receiptData),

@@ -1,5 +1,7 @@
 'use client';
 
+import { ReceiptTitleHeading } from '@/components/receipt-title-editor';
+
 import { use } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
@@ -27,7 +29,13 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
   const tr = useTranslations('split.roles');
   const ta = useTranslations('split.accountStatus');
   const tc = useTranslations('common');
-  const split = trpc.guest.getSplit.useQuery({ token });
+  const split = trpc.guest.getSplit.useQuery(
+    { token },
+    {
+      refetchInterval: (query) => (query.state.error?.data?.httpStatus === 404 ? false : 12000),
+      refetchOnWindowFocus: 'always',
+    },
+  );
   if (split.isLoading) {
     return (
       <div className="flex flex-col items-center justify-center gap-4 py-20">
@@ -37,7 +45,7 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
     );
   }
 
-  if (split.error) {
+  if (split.error && (!split.data || split.error.data?.httpStatus === 404)) {
     return (
       <div className="text-center space-y-6 py-20">
         <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-muted">
@@ -132,7 +140,11 @@ export default function SharedSplitPage({ params }: { params: Promise<{ token: s
 
       {/* Header */}
       <div className="text-center space-y-1 pt-4">
-        <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
+        <ReceiptTitleHeading
+          id={data.id}
+          title={data.receiptData.merchantName ?? t('billSplit')}
+          canRename={data.canRename}
+        />
         {data.receiptData.date && <p className="text-sm text-muted-foreground">{data.receiptData.date}</p>}
         <p className="text-sm text-muted-foreground">
           {t.rich('paidBy', {

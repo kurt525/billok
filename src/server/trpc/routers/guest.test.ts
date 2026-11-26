@@ -9067,3 +9067,127 @@ describe('Issue 3.25.4.3: finalized receipt reads', () => {
     expect(mockDb.guestSplit.findUnique).not.toHaveBeenCalled();
   });
 });
+
+describe('Issue #19 section 20: receipt title permissions and preservation', () => {
+  const id = 'receipt-rename-id';
+  const title = 'Новое название';
+  const ownerSession = { user: { id: 'billok-owner' } };
+  const verifiedOwner = {
+    email: 'owner@mail.ru',
+    emailVerified: new Date(),
+    suspendedAt: null,
+    isPlaceholder: false,
+    sessionSecurityVersion: 1,
+    name: 'Не имя владельца',
+  };
+  const fixture = (status: 'CLAIMING' | 'FINALIZED', expired = false) => ({
+    id,
+    userId: 'user-1',
+    status,
+    expiresAt: new Date(Date.now() + (expired ? -1000 : 600000)),
+    createdAt: new Date(),
+    shareToken: 'share-1',
+    receiptData: {
+      merchantName: 'Старое название',
+      subtotal: 1000,
+      total: 1000,
+      tax: 0,
+      tip: 0,
+      currency: 'RUB',
+      organizerPersonId: 'author',
+      partsApprovalHash: 'unchanged',
+      paymentSettlementLock: { digest: 'unchanged' },
+      custom: { value: 1 },
+    },
+    people: [
+      { id: 'author', name: 'Автор' },
+      { id: 'payer', accountUserId: 'payer-user', name: 'Плательщик' },
+    ],
+    items: [{ name: 'Чай', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
+    assignments: [{ itemIndex: 0, personIndices: [0] }],
+    summary: [{ personIndex: 0, total: 1000, tip: 0 }],
+    paidByIndex: 1,
+  });
+
+  test.each([
+    ['CLAIMING', false],
+    ['FINALIZED', false],
+    ['FINALIZED', true],
+  ] as const)('author edits %s (expired=%s) without changing the ledger', async (status, expired) => {
+    const row = fixture(status, expired);
+    mockDb.guestSplit.findUnique.mockResolvedValue(row);
+    const api = await caller(signedIn);
+    expect(await api.renameReceipt({ id, title: '  ' + title + '  ' })).toEqual({ id, title });
+    expect(mockDb.guestSplit.update).toHaveBeenCalledExactlyOnceWith({
+      where: { id },
+      data: { receiptData: { ...row.receiptData, merchantName: title } },
+    });
+    expect(mockDb.$transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: 'RepeatableRead' });
+  });
+
+  test('verified system owner can rename any receipt without participant binding or matching name', async () => {
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'billok-owner', completedAt: new Date() });
+    mockDb.user.findUnique.mockResolvedValue(verifiedOwner);
+    const row = fixture('FINALIZED', true);
+    mockDb.guestSplit.findUnique.mockResolvedValue(row);
+    expect(await (await caller(ownerSession)).renameReceipt({ id, title })).toEqual({ id, title });
+    expect(mockDb.guestSplit.update).toHaveBeenCalledExactlyOnceWith({
+      where: { id },
+      data: { receiptData: { ...row.receiptData, merchantName: title } },
+    });
+  });
+
+  test.each(['payer-user', 'member-user', 'fake-owner'])('foreign user %s denied', async (userId) => {
+    mockDb.guestSplit.findUnique.mockResolvedValue(fixture('FINALIZED'));
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'billok-owner', completedAt: new Date() });
+    mockDb.user.findUnique.mockResolvedValue({ ...verifiedOwner, name: 'Илья' });
+    await expect((await caller({ user: { id: userId } })).renameReceipt({ id, title })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('pending, unverified or suspended owner cannot rename', async () => {
+    mockDb.guestSplit.findUnique.mockResolvedValue(fixture('CLAIMING'));
+    const api = await caller(ownerSession);
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'billok-owner', completedAt: null });
+    mockDb.user.findUnique.mockResolvedValue(verifiedOwner);
+    await expect(api.renameReceipt({ id, title })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'billok-owner', completedAt: new Date() });
+    mockDb.user.findUnique.mockResolvedValue({ ...verifiedOwner, emailVerified: null });
+    await expect(api.renameReceipt({ id, title })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    mockDb.user.findUnique.mockResolvedValue({ ...verifiedOwner, suspendedAt: new Date() });
+    await expect(api.renameReceipt({ id, title })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('anonymous, missing, invalid and unchanged titles never write', async () => {
+    await expect((await caller()).renameReceipt({ id, title })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    const api = await caller(signedIn);
+    for (const value of ['', '   ', 'Я'.repeat(121)]) {
+      await expect(api.renameReceipt({ id, title: value })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    mockDb.guestSplit.findUnique.mockResolvedValue(null);
+    await expect(api.renameReceipt({ id, title })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    mockDb.guestSplit.findUnique.mockResolvedValue(fixture('CLAIMING'));
+    expect(await api.renameReceipt({ id, title: 'Старое название' })).toEqual({ id, title: 'Старое название' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('system owner list covers foreign receipts but does not grant deletion or expired link access', async () => {
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'billok-owner', completedAt: new Date() });
+    mockDb.user.findUnique.mockResolvedValue(verifiedOwner);
+    mockDb.guestSplit.findMany.mockResolvedValue([fixture('FINALIZED', true)]);
+    const ownerList = await (await caller(ownerSession)).mySplits({ limit: 20 });
+    expect(mockDb.guestSplit.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
+    expect(ownerList).toMatchObject({
+      owner: true,
+      splits: [{ id, canRename: true, canDelete: false, shareToken: null }],
+    });
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue(null);
+    await (await caller(signedIn)).mySplits({ limit: 20 });
+    expect(mockDb.guestSplit.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: { userId: 'user-1' } }),
+    );
+  });
+});

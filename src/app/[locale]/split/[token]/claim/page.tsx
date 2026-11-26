@@ -1,5 +1,7 @@
 'use client';
 
+import { ReceiptTitleHeading } from '@/components/receipt-title-editor';
+
 import { use, useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
@@ -369,13 +371,15 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       refetchOnWindowFocus: 'always',
       refetchOnReconnect: 'always',
       refetchInterval: (query) =>
-        claimLivePollInterval({
-          finalized: query.state.data?.status === 'FINALIZED',
-          error: query.state.error && { httpStatus: query.state.error.data?.httpStatus },
-          sseConnected: liveStreamConnected,
-          // Null is the guest view; undefined (loading) retains fallback.
-          presenceVisible: query.state.data?.presence !== null,
-        }),
+        query.state.data?.status === 'FINALIZED' && query.state.error?.data?.httpStatus !== 404
+          ? 12000
+          : claimLivePollInterval({
+              finalized: query.state.data?.status === 'FINALIZED',
+              error: query.state.error && { httpStatus: query.state.error.data?.httpStatus },
+              sseConnected: liveStreamConnected,
+              // Null is the guest view; undefined (loading) retains fallback.
+              presenceVisible: query.state.data?.presence !== null,
+            }),
     },
   );
 
@@ -1690,6 +1694,11 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
             <Check className="h-8 w-8 text-primary" />
           </div>
+          <ReceiptTitleHeading
+            id={data.id}
+            title={data.receiptData.merchantName ?? t('billSplit')}
+            canRename={data.canRename}
+          />
           <h2 className="text-xl font-bold">{t('sessionFinalized')}</h2>
           <p className="text-muted-foreground">{t('sessionFinalizedDescription')}</p>
         </div>
@@ -2056,7 +2065,11 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       <div className="space-y-6 pb-8">
         {/* Header */}
         <div className="text-center space-y-1 pt-4">
-          <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
+          <ReceiptTitleHeading
+            id={data.id}
+            title={data.receiptData.merchantName ?? t('billSplit')}
+            canRename={data.canRename}
+          />
           {data.receiptData.date && <p className="text-sm text-muted-foreground">{data.receiptData.date}</p>}
           <ReceiptLinkExpiry expiresAt={data.expiresAt} />
         </div>
@@ -2418,7 +2431,11 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     <div className="w-full min-w-0 max-w-full space-y-6 pb-[calc(4rem+env(safe-area-inset-bottom))]">
       {/* Header */}
       <div className="text-center space-y-1 pt-4">
-        <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
+        <ReceiptTitleHeading
+          id={data.id}
+          title={data.receiptData.merchantName ?? t('billSplit')}
+          canRename={data.canRename}
+        />
         {data.receiptData.date && <p className="text-sm text-muted-foreground">{data.receiptData.date}</p>}
         <ReceiptLinkExpiry expiresAt={data.expiresAt} />
       </div>
