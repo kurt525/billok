@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { trpc } from '@/lib/trpc';
 import { shouldNotifyGuestReceiptConfirmation } from '@/lib/guest-payment-notifications';
 import { formatCents } from '@/lib/money';
+import type { ActualReceiptReconciliation } from '@/lib/actual-receipt-payments';
 import { Button } from '@/components/ui/button';
 import { GuestWebPushControls } from '@/components/guest-web-push-controls';
 
@@ -36,6 +37,7 @@ export function GuestPaymentDeclaration({
   personToken,
   canDeclare = true,
   amountLabel,
+  onActualReceipt,
 }: {
   token: string;
   personId: string;
@@ -43,6 +45,7 @@ export function GuestPaymentDeclaration({
   canDeclare?: boolean;
   /** Exact finalized receipt/group amount, formatted by the receipt page. */
   amountLabel: string;
+  onActualReceipt: (receipt: ActualReceiptReconciliation | null, personId: string, personToken: string) => void;
 }) {
   const t = useTranslations('split.claim');
   const locale = useLocale();
@@ -55,13 +58,6 @@ export function GuestPaymentDeclaration({
   const [declaredAt, setDeclaredAt] = useState<string | null>(null);
   const [declaredAmountCents, setDeclaredAmountCents] = useState<number | null>(null);
   const [verifiedAt, setVerifiedAt] = useState<string | null>(null);
-  const [actualReceipt, setActualReceipt] = useState<{
-    receivedCents: number;
-    outstandingCents: number;
-    extraTipCents: number;
-    refundDueCents: number;
-    refundedCents: number;
-  } | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const lastVerified = useRef<string | null | undefined>(undefined);
@@ -140,14 +136,17 @@ export function GuestPaymentDeclaration({
           setDeclaredAt(data.declaredPaidAt);
           setDeclaredAmountCents(data.declaredAmountCents);
           setVerifiedAt(data.verifiedAt);
-          setActualReceipt(data.actualReceipt ?? null);
+          onActualReceipt(data.actualReceipt ?? null, personId, personToken);
           setReceiptNotification(data.notification ?? null);
           setCancellationNotifications(data.cancellationNotifications ?? []);
           setLoaded(true);
           setFailed(false);
         })
         .catch(() => {
-          if (!cancelled && !writeInFlight.current && readId === latestRead.current) setFailed(true);
+          if (!cancelled && !writeInFlight.current && readId === latestRead.current) {
+            onActualReceipt(null, personId, personToken);
+            setFailed(true);
+          }
         });
     };
     refreshCurrent.current = refresh;
@@ -168,7 +167,7 @@ export function GuestPaymentDeclaration({
       document.removeEventListener('visibilitychange', refreshOnVisible);
       refreshCurrent.current = () => {};
     };
-  }, [readStatus, token, personId, personToken, canDeclare, locale, t]);
+  }, [readStatus, token, personId, personToken, canDeclare, locale, t, onActualReceipt]);
 
   // 5.9: the recipient's manual attestation triggers an invalidation; the
   // participant's personal token fetches only their own confirmation state.
@@ -444,39 +443,11 @@ export function GuestPaymentDeclaration({
         </section>
       )}
       {canDeclare && <GuestWebPushControls token={token} personId={personId} personToken={personToken} />}
-      {actualReceipt && actualReceipt.receivedCents > 0 && (
-        <dl className="min-w-0 space-y-1 rounded-md border p-3 text-xs" data-testid="guest-actual-receipt-status">
-          <div className="flex flex-wrap justify-between gap-2">
-            <dt>{t('payerActuallyReceived')}</dt>
-            <dd className="tabular-nums">{formatCents(actualReceipt.receivedCents, 'RUB', locale)}</dd>
-          </div>
-          {actualReceipt.outstandingCents > 0 && (
-            <div className="flex flex-wrap justify-between gap-2">
-              <dt>{t('payerStillOwed')}</dt>
-              <dd className="tabular-nums">{formatCents(actualReceipt.outstandingCents, 'RUB', locale)}</dd>
-            </div>
-          )}
-          {actualReceipt.extraTipCents > 0 && (
-            <div className="flex flex-wrap justify-between gap-2">
-              <dt>{t('payerAdditionalTips')}</dt>
-              <dd className="tabular-nums">{formatCents(actualReceipt.extraTipCents, 'RUB', locale)}</dd>
-            </div>
-          )}
-          {actualReceipt.refundedCents > 0 && (
-            <div className="flex flex-wrap justify-between gap-2">
-              <dt>{t('payerRefundedTotal')}</dt>
-              <dd className="tabular-nums">{formatCents(actualReceipt.refundedCents, 'RUB', locale)}</dd>
-            </div>
-          )}
-          {actualReceipt.refundDueCents > 0 && (
-            <div className="flex flex-wrap justify-between gap-2">
-              <dt>{t('payerRefundDue')}</dt>
-              <dd className="tabular-nums">{formatCents(actualReceipt.refundDueCents, 'RUB', locale)}</dd>
-            </div>
-          )}
-        </dl>
-      )}
-      {verifiedAt ? (
+      {failed ? (
+        <p className="text-xs text-muted-foreground" role="status" data-testid="guest-payment-declaration-loading">
+          {t('paymentDeclarationLoadFailed')}
+        </p>
+      ) : verifiedAt ? (
         <>
           <p className="text-sm font-semibold text-green-700 dark:text-green-400" data-testid="guest-payment-verified">
             {t('paymentVerifiedByRecipient')}

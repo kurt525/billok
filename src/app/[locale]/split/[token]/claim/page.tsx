@@ -1,5 +1,7 @@
 'use client';
 
+import { ReceiptTitleHeading } from '@/components/receipt-title-editor';
+
 import { use, useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useLocale, useTranslations } from 'next-intl';
@@ -63,6 +65,8 @@ import { ConfirmDialog } from '@/components/confirm-dialog';
 import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
 import { GuestSbpReimbursementDetails } from '@/components/guest-sbp-reimbursement-details';
 import { GuestPaymentDeclaration } from '@/components/guest-payment-declaration';
+import { GuestSenderReceiptSummary } from '@/components/guest-sender-receipt-summary';
+import type { ActualReceiptReconciliation } from '@/lib/actual-receipt-payments';
 import { GuestPayerPaymentReview } from '@/components/guest-payer-payment-review';
 import { combinedWaiterTotals, type PayerActualTotals } from '@/lib/guest-payer-actual-summary';
 import { GuestPaymentGroupsEditor } from '@/components/guest-payment-groups-editor';
@@ -304,6 +308,26 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     [token],
   );
 
+  const [liveSenderReceipt, setLiveSenderReceipt] = useState<{
+    token: string;
+    personId: string;
+    personToken: string;
+    receipt: ActualReceiptReconciliation | null;
+  } | null>(null);
+  const onActualReceipt = useCallback(
+    (receipt: ActualReceiptReconciliation | null, personId: string, personToken: string) => {
+      setLiveSenderReceipt((previous) =>
+        previous?.token === token &&
+        previous.personId === personId &&
+        previous.personToken === personToken &&
+        JSON.stringify(previous.receipt) === JSON.stringify(receipt)
+          ? previous
+          : { token, personId, personToken, receipt },
+      );
+    },
+    [token],
+  );
+
   // The same, for mutation callbacks: they can run with an older render's closure (TanStack
   // Query only hands a pending mutation each render's options after that render commits), so
   // they read this device's identity from this ref, which setIdentity updates at once
@@ -347,13 +371,15 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       refetchOnWindowFocus: 'always',
       refetchOnReconnect: 'always',
       refetchInterval: (query) =>
-        claimLivePollInterval({
-          finalized: query.state.data?.status === 'FINALIZED',
-          error: query.state.error && { httpStatus: query.state.error.data?.httpStatus },
-          sseConnected: liveStreamConnected,
-          // Null is the guest view; undefined (loading) retains fallback.
-          presenceVisible: query.state.data?.presence !== null,
-        }),
+        query.state.data?.status === 'FINALIZED' && query.state.error?.data?.httpStatus !== 404
+          ? 12000
+          : claimLivePollInterval({
+              finalized: query.state.data?.status === 'FINALIZED',
+              error: query.state.error && { httpStatus: query.state.error.data?.httpStatus },
+              sseConnected: liveStreamConnected,
+              // Null is the guest view; undefined (loading) retains fallback.
+              presenceVisible: query.state.data?.presence !== null,
+            }),
     },
   );
 
@@ -1465,6 +1491,18 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           : null
         : data.summary!.find((person) => person.personIndex === myPersonIndex && person.total > 0)
       : null;
+  // Private, server-attested amounts belong only to the current sender.
+  // Never derive actual transfers from the public, immutable dish summary.
+  const senderReceipt =
+    canDeclareGroupPayment &&
+    personalReimbursement &&
+    personToken &&
+    liveSenderReceipt?.token === token &&
+    liveSenderReceipt.personId === myPersonId &&
+    liveSenderReceipt.personToken === personToken &&
+    liveSenderReceipt.receipt?.expectedCents === personalReimbursement.total
+      ? liveSenderReceipt.receipt
+      : null;
   // The tip target is chosen only inside this form, never by selecting a dish claimant.
   const canSelectGroupMemberTip = !!myPersonId && myPerson?.paymentGroupRepresentativeId === myPersonId;
   const requestedTipTarget =
@@ -1656,6 +1694,11 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
             <Check className="h-8 w-8 text-primary" />
           </div>
+          <ReceiptTitleHeading
+            id={data.id}
+            title={data.receiptData.merchantName ?? t('billSplit')}
+            canRename={data.canRename}
+          />
           <h2 className="text-xl font-bold">{t('sessionFinalized')}</h2>
           <p className="text-muted-foreground">{t('sessionFinalizedDescription')}</p>
         </div>
@@ -1840,6 +1883,9 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               >
                 {formatCents(personalReimbursement.total, currency, locale)}
               </p>
+              {senderReceipt && senderReceipt.receivedCents > 0 && (
+                <GuestSenderReceiptSummary receipt={senderReceipt} grouped={myPaymentGroup?.grouped ?? false} />
+              )}
               {canDeclareGroupPayment && (
                 <Button
                   type="button"
@@ -1870,6 +1916,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                   personId={myPersonId}
                   personToken={personToken}
                   canDeclare={canDeclareGroupPayment}
+                  onActualReceipt={onActualReceipt}
                   amountLabel={formatCents(personalReimbursement.total, currency, locale)}
                 />
               )}
@@ -1949,6 +1996,17 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           </span>
                         </div>
                       </div>
+                      {person.personIndex === myPersonIndex && senderReceipt && senderReceipt.extraTipCents > 0 && (
+                        <div
+                          className="mt-2 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm"
+                          data-testid="guest-own-finalized-extra-tip"
+                        >
+                          <span className="min-w-0 flex-1 break-words">{t('payerAdditionalTips')}</span>
+                          <span className="ml-auto shrink-0 whitespace-nowrap tabular-nums">
+                            {formatCents(senderReceipt.extraTipCents, currency, locale)}
+                          </span>
+                        </div>
+                      )}
                       {'roundingCorrectionCents' in person &&
                         typeof person.roundingCorrectionCents === 'number' &&
                         person.roundingCorrectionCents > 0 && (
@@ -2007,7 +2065,11 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       <div className="space-y-6 pb-8">
         {/* Header */}
         <div className="text-center space-y-1 pt-4">
-          <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
+          <ReceiptTitleHeading
+            id={data.id}
+            title={data.receiptData.merchantName ?? t('billSplit')}
+            canRename={data.canRename}
+          />
           {data.receiptData.date && <p className="text-sm text-muted-foreground">{data.receiptData.date}</p>}
           <ReceiptLinkExpiry expiresAt={data.expiresAt} />
         </div>
@@ -2369,7 +2431,11 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     <div className="w-full min-w-0 max-w-full space-y-6 pb-[calc(4rem+env(safe-area-inset-bottom))]">
       {/* Header */}
       <div className="text-center space-y-1 pt-4">
-        <h1 className="text-2xl font-bold">{data.receiptData.merchantName ?? t('billSplit')}</h1>
+        <ReceiptTitleHeading
+          id={data.id}
+          title={data.receiptData.merchantName ?? t('billSplit')}
+          canRename={data.canRename}
+        />
         {data.receiptData.date && <p className="text-sm text-muted-foreground">{data.receiptData.date}</p>}
         <ReceiptLinkExpiry expiresAt={data.expiresAt} />
       </div>

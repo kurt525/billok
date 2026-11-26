@@ -7060,6 +7060,62 @@ describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () =
     mockDb.guestSplit.update.mockResolvedValue({ id: base.id });
   });
 
+  test('Issue #19 section 19: private sender ledger reflects confirmed tips, corrections, partial payment and refunds', async () => {
+    const api = await caller();
+    const auth = { ...payerAuth, personId: debtorId, personToken: debtorToken };
+    const transfer = (id: string, amountCents: number) => ({
+      id,
+      amountCents,
+      confirmedAt: marked,
+      confirmedByPersonId: payerId,
+    });
+    const first = transfer('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 300);
+    const second = transfer('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 200);
+    const snapshot = async (transfers: object[], choice: 'tip' | 'refund' | null, refunds: object[] = []) => {
+      mockDb.guestSplit.findUnique.mockResolvedValue({
+        ...base,
+        people: [
+          {
+            ...base.people[0],
+            paymentReceivedTransfers: transfers,
+            paymentOverpaymentChoice: choice,
+            paymentRefunds: refunds,
+          },
+          ...base.people.slice(1),
+        ],
+      });
+      return (await api.getMyPaymentDeclaration(auth)).actualReceipt;
+    };
+    expect(await snapshot([first], null)).toMatchObject({
+      expectedCents: 459,
+      foodCents: 334,
+      declaredTipCents: 125,
+      receivedCents: 300,
+      outstandingCents: 159,
+      extraTipCents: 0,
+    });
+    expect(await snapshot([first, second], null)).toMatchObject({ pendingExcessCents: 41, extraTipCents: 0 });
+    expect(await snapshot([first, second], 'tip')).toMatchObject({
+      receivedCents: 500,
+      appliedToDebtCents: 459,
+      extraTipCents: 41,
+      outstandingCents: 0,
+    });
+    await expect(api.getMyPaymentDeclaration({ ...auth, personId: anotherId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(
+      (await api.getMyPaymentDeclaration({ ...auth, personId: anotherId, personToken: anotherToken })).actualReceipt,
+    ).toMatchObject({ receivedCents: 0, extraTipCents: 0 });
+    expect(
+      await snapshot([first, { ...second, cancelledAt: marked, cancelledByPersonId: payerId }], 'tip'),
+    ).toMatchObject({ receivedCents: 300, extraTipCents: 0, outstandingCents: 159 });
+    expect(
+      await snapshot([first, second], 'refund', [transfer('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 20)]),
+    ).toMatchObject({ extraTipCents: 0, refundedCents: 20, refundDueCents: 21 });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
   test('5.22.3: only payer records exact returned kopecks; retry and correction do not duplicate', async () => {
     const paymentId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const refundId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -8347,6 +8403,40 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
     mockDb.guestSplit.update.mockResolvedValue({ id: 'family-split-1' });
   });
 
+  test('Issue #19 section 19: only the representative receives the private extra tip ledger', async () => {
+    const original = start();
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...original,
+      people: original.people.map((person, index) =>
+        index === 1
+          ? {
+              ...person,
+              paymentReceivedTransfers: [
+                {
+                  id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+                  amountCents: 1051,
+                  confirmedAt: '2026-11-18T06:40:00.000Z',
+                  confirmedByPersonId: payerId,
+                },
+              ],
+              paymentOverpaymentChoice: 'tip',
+            }
+          : person,
+      ),
+    });
+    const api = await caller();
+    expect((await api.getMyPaymentDeclaration(wifeAuth)).actualReceipt).toMatchObject({
+      expectedCents: 951,
+      declaredTipCents: 50,
+      extraTipCents: 100,
+    });
+    expect(await api.getMyPaymentDeclaration(husbandAuth)).not.toHaveProperty('actualReceipt');
+    expect((await api.getMyPaymentDeclaration(soloAuth)).actualReceipt).toMatchObject({ extraTipCents: 0 });
+    await expect(api.getMyPaymentDeclaration({ ...wifeAuth, personToken: husbandToken })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+
   test('5.22.3: payer records group excess refund once, preserving each family member original share', async () => {
     const original = start();
     const transfer = {
@@ -8975,5 +9065,129 @@ describe('Issue 3.25.4.3: finalized receipt reads', () => {
     });
     expect(checkRateLimit).toHaveBeenCalledWith('guest-finalized-read:invented-share-link', 600, 60_000);
     expect(mockDb.guestSplit.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue #19 section 20: receipt title permissions and preservation', () => {
+  const id = 'receipt-rename-id';
+  const title = 'Новое название';
+  const ownerSession = { user: { id: 'billok-owner' } };
+  const verifiedOwner = {
+    email: 'owner@mail.ru',
+    emailVerified: new Date(),
+    suspendedAt: null,
+    isPlaceholder: false,
+    sessionSecurityVersion: 1,
+    name: 'Не имя владельца',
+  };
+  const fixture = (status: 'CLAIMING' | 'FINALIZED', expired = false) => ({
+    id,
+    userId: 'user-1',
+    status,
+    expiresAt: new Date(Date.now() + (expired ? -1000 : 600000)),
+    createdAt: new Date(),
+    shareToken: 'share-1',
+    receiptData: {
+      merchantName: 'Старое название',
+      subtotal: 1000,
+      total: 1000,
+      tax: 0,
+      tip: 0,
+      currency: 'RUB',
+      organizerPersonId: 'author',
+      partsApprovalHash: 'unchanged',
+      paymentSettlementLock: { digest: 'unchanged' },
+      custom: { value: 1 },
+    },
+    people: [
+      { id: 'author', name: 'Автор' },
+      { id: 'payer', accountUserId: 'payer-user', name: 'Плательщик' },
+    ],
+    items: [{ name: 'Чай', quantity: 1, unitPrice: 1000, totalPrice: 1000 }],
+    assignments: [{ itemIndex: 0, personIndices: [0] }],
+    summary: [{ personIndex: 0, total: 1000, tip: 0 }],
+    paidByIndex: 1,
+  });
+
+  test.each([
+    ['CLAIMING', false],
+    ['FINALIZED', false],
+    ['FINALIZED', true],
+  ] as const)('author edits %s (expired=%s) without changing the ledger', async (status, expired) => {
+    const row = fixture(status, expired);
+    mockDb.guestSplit.findUnique.mockResolvedValue(row);
+    const api = await caller(signedIn);
+    expect(await api.renameReceipt({ id, title: '  ' + title + '  ' })).toEqual({ id, title });
+    expect(mockDb.guestSplit.update).toHaveBeenCalledExactlyOnceWith({
+      where: { id },
+      data: { receiptData: { ...row.receiptData, merchantName: title } },
+    });
+    expect(mockDb.$transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: 'RepeatableRead' });
+  });
+
+  test('verified system owner can rename any receipt without participant binding or matching name', async () => {
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'billok-owner', completedAt: new Date() });
+    mockDb.user.findUnique.mockResolvedValue(verifiedOwner);
+    const row = fixture('FINALIZED', true);
+    mockDb.guestSplit.findUnique.mockResolvedValue(row);
+    expect(await (await caller(ownerSession)).renameReceipt({ id, title })).toEqual({ id, title });
+    expect(mockDb.guestSplit.update).toHaveBeenCalledExactlyOnceWith({
+      where: { id },
+      data: { receiptData: { ...row.receiptData, merchantName: title } },
+    });
+  });
+
+  test.each(['payer-user', 'member-user', 'fake-owner'])('foreign user %s denied', async (userId) => {
+    mockDb.guestSplit.findUnique.mockResolvedValue(fixture('FINALIZED'));
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'billok-owner', completedAt: new Date() });
+    mockDb.user.findUnique.mockResolvedValue({ ...verifiedOwner, name: 'Илья' });
+    await expect((await caller({ user: { id: userId } })).renameReceipt({ id, title })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('pending, unverified or suspended owner cannot rename', async () => {
+    mockDb.guestSplit.findUnique.mockResolvedValue(fixture('CLAIMING'));
+    const api = await caller(ownerSession);
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'billok-owner', completedAt: null });
+    mockDb.user.findUnique.mockResolvedValue(verifiedOwner);
+    await expect(api.renameReceipt({ id, title })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'billok-owner', completedAt: new Date() });
+    mockDb.user.findUnique.mockResolvedValue({ ...verifiedOwner, emailVerified: null });
+    await expect(api.renameReceipt({ id, title })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    mockDb.user.findUnique.mockResolvedValue({ ...verifiedOwner, suspendedAt: new Date() });
+    await expect(api.renameReceipt({ id, title })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('anonymous, missing, invalid and unchanged titles never write', async () => {
+    await expect((await caller()).renameReceipt({ id, title })).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    const api = await caller(signedIn);
+    for (const value of ['', '   ', 'Я'.repeat(121)]) {
+      await expect(api.renameReceipt({ id, title: value })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    mockDb.guestSplit.findUnique.mockResolvedValue(null);
+    await expect(api.renameReceipt({ id, title })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    mockDb.guestSplit.findUnique.mockResolvedValue(fixture('CLAIMING'));
+    expect(await api.renameReceipt({ id, title: 'Старое название' })).toEqual({ id, title: 'Старое название' });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
+  test('system owner list covers foreign receipts but does not grant deletion or expired link access', async () => {
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'billok-owner', completedAt: new Date() });
+    mockDb.user.findUnique.mockResolvedValue(verifiedOwner);
+    mockDb.guestSplit.findMany.mockResolvedValue([fixture('FINALIZED', true)]);
+    const ownerList = await (await caller(ownerSession)).mySplits({ limit: 20 });
+    expect(mockDb.guestSplit.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
+    expect(ownerList).toMatchObject({
+      owner: true,
+      splits: [{ id, canRename: true, canDelete: false, shareToken: null }],
+    });
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue(null);
+    await (await caller(signedIn)).mySplits({ limit: 20 });
+    expect(mockDb.guestSplit.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: { userId: 'user-1' } }),
+    );
   });
 });

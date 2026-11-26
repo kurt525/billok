@@ -64,7 +64,8 @@ describe('Issue #1 3.25.2.2: shared bearer is never stored in plaintext', () => 
     expect(router).not.toContain('where: { shareToken: input.token }');
     expect(router).not.toContain('shareToken: session.shareToken,');
     expect(router).not.toContain('shareToken: split.shareToken,');
-    expect(router).toContain('shareToken: revealGuestShareLink(s),');
+    expect(router).toContain('return revealGuestShareLink(s);');
+    expect(router).toContain('where: owner ? {} : { userId: ctx.user.id }');
     expect(router).toContain('shareToken: shareLookupHash(input.token)');
     expect(router).toContain('...share.stored');
     expect(sse).toContain('shareLookupHash(token)');

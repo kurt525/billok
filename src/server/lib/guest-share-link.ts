@@ -54,7 +54,7 @@ export function issueGuestShareLink(): { token: string; stored: StoredGuestShare
   };
 }
 
-/** Call only AFTER verifying registered receipt creator's account ownership. */
+/** Call only AFTER verifying receipt authorship or explicit authenticated system-owner authorization. */
 export function revealGuestShareLink(stored: StoredGuestShareLink): string {
   const encoded = stored.shareTokenSealed;
   if (typeof encoded !== 'string' || !encoded.startsWith(ENCRYPTION_VERSION + '.') || encoded.length > 200) {

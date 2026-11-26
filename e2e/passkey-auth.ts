@@ -8,6 +8,8 @@ import { createHash, createPrivateKey, sign } from 'node:crypto';
 import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { expect, request, test, type BrowserContext, type Page } from '@playwright/test';
 
+import { ACTUAL_RECEIPTS_PASSKEY_RESERVE } from './qa-passkey-reserve';
+
 type Entry = { id: string; privateKey: string; rowId?: string };
 type UserFixture = { userHandle: string; credentials: Entry[] };
 type Fixtures = Record<string, UserFixture>;
@@ -94,14 +96,18 @@ export async function installSeedPasskey(page: Page, email: string) {
     { spec: 'billok-mobile-wide.spec.ts', from: 0.9, to: 0.95 },
     { spec: 'billok-passkey-smoke.spec.ts', from: 0.95, to: 1 },
   ] as const;
+  const actualReceiptsSpec = 'billok-mobile-actual-receipts.spec.ts';
+  const actualReceipts = info.file.endsWith('/' + actualReceiptsSpec);
   const allocation = allocations.find(({ spec }) => info.file.endsWith('/' + spec));
-  if (!allocation) throw new Error('Unallocated disposable Passkey test file: ' + info.file);
-  const usable = user.credentials.length - 1;
-  const rangeStart = 1 + Math.floor(usable * allocation.from);
-  const rangeEnd = 1 + Math.floor(usable * allocation.to);
+  if (!actualReceipts && !allocation) throw new Error('Unallocated disposable Passkey test file: ' + info.file);
+  const usable = user.credentials.length - 1 - ACTUAL_RECEIPTS_PASSKEY_RESERVE;
+  if (usable <= 0) throw new Error('Disposable browser Passkey reserve missing for ' + email);
+  const spec = actualReceipts ? actualReceiptsSpec : allocation!.spec;
+  const rangeStart = actualReceipts ? 1 + usable : 1 + Math.floor(usable * allocation!.from);
+  const rangeEnd = actualReceipts ? user.credentials.length : 1 + Math.floor(usable * allocation!.to);
   const offset = Number.parseInt(process.env.BILLOK_QA_PASSKEY_OFFSET || '0', 10);
   if (!Number.isInteger(offset) || offset < 0 || offset > 20) throw new Error('Invalid test credential offset');
-  const leases = '/tmp/billok-qa-passkey-leases/' + allocation.spec + '/' + email.split('@', 1)[0];
+  const leases = '/tmp/billok-qa-passkey-leases/' + spec + '/' + email.split('@', 1)[0];
   mkdirSync(leases, { recursive: true });
   let selected: Entry | undefined;
   for (let i = rangeStart + offset; i < rangeEnd; i++) {
@@ -116,7 +122,7 @@ export async function installSeedPasskey(page: Page, email: string) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
   }
-  if (!selected) throw new Error('Exhausted disposable Passkeys for ' + allocation.spec + '/' + email);
+  if (!selected) throw new Error('Exhausted disposable Passkeys for ' + spec + '/' + email);
   const credential = selected;
   await cdp.send('WebAuthn.addCredential', {
     authenticatorId: id,
