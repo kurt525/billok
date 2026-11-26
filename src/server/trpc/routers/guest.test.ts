@@ -7060,6 +7060,62 @@ describe('BillOK payer verifies received guest payments (Issue #1 1.3.19)', () =
     mockDb.guestSplit.update.mockResolvedValue({ id: base.id });
   });
 
+  test('Issue #19 section 19: private sender ledger reflects confirmed tips, corrections, partial payment and refunds', async () => {
+    const api = await caller();
+    const auth = { ...payerAuth, personId: debtorId, personToken: debtorToken };
+    const transfer = (id: string, amountCents: number) => ({
+      id,
+      amountCents,
+      confirmedAt: marked,
+      confirmedByPersonId: payerId,
+    });
+    const first = transfer('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 300);
+    const second = transfer('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 200);
+    const snapshot = async (transfers: object[], choice: 'tip' | 'refund' | null, refunds: object[] = []) => {
+      mockDb.guestSplit.findUnique.mockResolvedValue({
+        ...base,
+        people: [
+          {
+            ...base.people[0],
+            paymentReceivedTransfers: transfers,
+            paymentOverpaymentChoice: choice,
+            paymentRefunds: refunds,
+          },
+          ...base.people.slice(1),
+        ],
+      });
+      return (await api.getMyPaymentDeclaration(auth)).actualReceipt;
+    };
+    expect(await snapshot([first], null)).toMatchObject({
+      expectedCents: 459,
+      foodCents: 334,
+      declaredTipCents: 125,
+      receivedCents: 300,
+      outstandingCents: 159,
+      extraTipCents: 0,
+    });
+    expect(await snapshot([first, second], null)).toMatchObject({ pendingExcessCents: 41, extraTipCents: 0 });
+    expect(await snapshot([first, second], 'tip')).toMatchObject({
+      receivedCents: 500,
+      appliedToDebtCents: 459,
+      extraTipCents: 41,
+      outstandingCents: 0,
+    });
+    await expect(api.getMyPaymentDeclaration({ ...auth, personId: anotherId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(
+      (await api.getMyPaymentDeclaration({ ...auth, personId: anotherId, personToken: anotherToken })).actualReceipt,
+    ).toMatchObject({ receivedCents: 0, extraTipCents: 0 });
+    expect(
+      await snapshot([first, { ...second, cancelledAt: marked, cancelledByPersonId: payerId }], 'tip'),
+    ).toMatchObject({ receivedCents: 300, extraTipCents: 0, outstandingCents: 159 });
+    expect(
+      await snapshot([first, second], 'refund', [transfer('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 20)]),
+    ).toMatchObject({ extraTipCents: 0, refundedCents: 20, refundDueCents: 21 });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
+  });
+
   test('5.22.3: only payer records exact returned kopecks; retry and correction do not duplicate', async () => {
     const paymentId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const refundId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -8345,6 +8401,40 @@ describe('Issue 3.24.1.4: one group debt is reimbursed and verified exactly once
   beforeEach(() => {
     mockDb.guestSplit.findUnique.mockImplementation(async () => structuredClone(start()));
     mockDb.guestSplit.update.mockResolvedValue({ id: 'family-split-1' });
+  });
+
+  test('Issue #19 section 19: only the representative receives the private extra tip ledger', async () => {
+    const original = start();
+    mockDb.guestSplit.findUnique.mockResolvedValue({
+      ...original,
+      people: original.people.map((person, index) =>
+        index === 1
+          ? {
+              ...person,
+              paymentReceivedTransfers: [
+                {
+                  id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+                  amountCents: 1051,
+                  confirmedAt: '2026-11-18T06:40:00.000Z',
+                  confirmedByPersonId: payerId,
+                },
+              ],
+              paymentOverpaymentChoice: 'tip',
+            }
+          : person,
+      ),
+    });
+    const api = await caller();
+    expect((await api.getMyPaymentDeclaration(wifeAuth)).actualReceipt).toMatchObject({
+      expectedCents: 951,
+      declaredTipCents: 50,
+      extraTipCents: 100,
+    });
+    expect(await api.getMyPaymentDeclaration(husbandAuth)).not.toHaveProperty('actualReceipt');
+    expect((await api.getMyPaymentDeclaration(soloAuth)).actualReceipt).toMatchObject({ extraTipCents: 0 });
+    await expect(api.getMyPaymentDeclaration({ ...wifeAuth, personToken: husbandToken })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
   });
 
   test('5.22.3: payer records group excess refund once, preserving each family member original share', async () => {

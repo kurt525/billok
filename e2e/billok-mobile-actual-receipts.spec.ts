@@ -1,4 +1,6 @@
 import { expect, test } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
+import { loginWithPasskey } from './passkey-auth';
 import {
   authedContext,
   joinGuestSession,
@@ -104,6 +106,8 @@ test('5.22: payer corrects actual incoming RUB amount and accounts for returned 
     await expect(page.getByTestId('finalized-bill-total')).toContainText('12,60', { timeout: 15_000 });
     await expect(privateReview.getByTestId('guest-payer-actual-received')).toContainText('6,60');
     await expect(privateReview.getByTestId('guest-payer-actual-credited')).toContainText('6,00');
+    await expect(senderPage.getByTestId('guest-sender-extra-tip')).toContainText('0,60', { timeout: 20_000 });
+    await expect(senderPage.getByTestId('guest-own-finalized-extra-tip')).toContainText('0,60');
     await expect(senderPage.getByTestId('guest-actual-receipt-status')).toContainText('6,60', {
       timeout: 15_000,
     });
@@ -125,6 +129,8 @@ test('5.22: payer corrects actual incoming RUB amount and accounts for returned 
     });
     await expect(page.getByTestId('finalized-combined-waiter-tips')).toContainText('0,95', { timeout: 15_000 });
     await expect(page.getByTestId('finalized-bill-total')).toContainText('12,95', { timeout: 15_000 });
+    await expect(senderPage.getByTestId('guest-sender-extra-tip')).toContainText('0,95', { timeout: 20_000 });
+    await expect(senderPage.getByTestId('guest-own-finalized-extra-tip')).toContainText('0,95');
     await expect(senderPage.getByTestId('guest-actual-receipt-status')).toContainText('6,95', {
       timeout: 15_000,
     });
@@ -152,6 +158,8 @@ test('5.22: payer corrects actual incoming RUB amount and accounts for returned 
     await expect(privateReview.getByTestId('guest-payer-actual-toRefund')).toContainText('0,55');
     await expect(privateReview.getByTestId('guest-payer-actual-refunded')).toContainText('0,40');
     await expect(page.getByTestId('finalized-bill-total')).toContainText('12,00');
+    await expect(senderPage.getByTestId('guest-sender-extra-tip')).toHaveCount(0, { timeout: 20_000 });
+    await expect(senderPage.getByTestId('guest-own-finalized-extra-tip')).toHaveCount(0);
     await expect(senderPage.getByTestId('guest-actual-receipt-status')).toContainText('0,40', {
       timeout: 15_000,
     });
@@ -266,6 +274,8 @@ test('Issue #19 12.3: actual 1000 RUB transfer includes 35 RUB waiter tips on 12
     await guestPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
     await expect(guestPage.getByTestId('guest-payer-payment-review')).toHaveCount(0);
     await expect(guestPage.getByTestId('finalized-extra-waiter-tips')).toHaveCount(0);
+    await expect(guestPage.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 20_000 });
+    await expect(guestPage.getByTestId('guest-sender-extra-tip')).toHaveCount(0);
     const row = review.getByTestId('guest-payer-payment-' + andrey.personId);
     await row.getByTestId('guest-payer-received-input-' + andrey.personId).fill('1000');
     await row.getByTestId('guest-payer-excess-choice-' + andrey.personId).selectOption('tip');
@@ -279,6 +289,41 @@ test('Issue #19 12.3: actual 1000 RUB transfer includes 35 RUB waiter tips on 12
     await expect(review.getByTestId('guest-payer-actual-credited')).toContainText('965,00');
     await expect(review.getByTestId('guest-payer-summary-outstanding')).toContainText('0,00');
     await expect(guestPage.getByTestId('finalized-bill-total')).toContainText('1 265,00');
+    // Issue #19 section 19: the sender sees their own confirmed excess, not
+    // the payer's aggregate, without reloading or increasing the original debt.
+    const personalTip = guestPage.getByTestId('guest-sender-extra-tip');
+    await expect(personalTip).toContainText('35,00', { timeout: 20_000 });
+    await expect(personalTip).toContainText('Дополнительные чаевые');
+    await expect(guestPage.getByTestId('guest-own-finalized-extra-tip')).toContainText('35,00');
+    await expect(guestPage.getByTestId('guest-sender-food')).toContainText('965,00');
+    await expect(guestPage.getByTestId('guest-sender-declared-tip')).toContainText('0,00');
+    await expect(guestPage.getByTestId('guest-sender-received')).toContainText('1 000,00');
+    await expect(guestPage.getByTestId('guest-personal-reimbursement-amount')).toContainText('965,00');
+    await expect(guestPage.getByTestId('guest-payment-verified')).toBeVisible();
+    await guestPage.reload({ waitUntil: 'domcontentloaded' });
+    await expect(personalTip).toContainText('35,00', { timeout: 20_000 });
+    await expect(guestPage.getByTestId('guest-own-finalized-extra-tip')).toContainText('35,00');
+    await guestPage.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
+      await guestPage.setViewportSize({ width, height: 760 });
+      for (const control of [
+        personalTip,
+        guestPage.getByTestId('guest-sender-received'),
+        guestPage.getByTestId('guest-own-finalized-extra-tip'),
+      ]) {
+        await expect(async () => {
+          const bounds = await control.evaluate((element) => {
+            element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            const box = element.getBoundingClientRect();
+            return { left: box.left, right: box.right };
+          });
+          expect(bounds.left).toBeGreaterThanOrEqual(-1);
+          expect(bounds.right).toBeLessThanOrEqual(width + 1);
+        }).toPass({ timeout: 10_000 });
+      }
+      expect(await guestPage.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
+    }
+
     const saved = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
     expect(saved.receiptData.total).toBe(126500);
     expect(saved.summary).toEqual(original.summary);
@@ -299,6 +344,140 @@ test('Issue #19 12.3: actual 1000 RUB transfer includes 35 RUB waiter tips on 12
   } finally {
     if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
     await guestDevice.close();
+    await owner.dispose();
+  }
+});
+
+test('Issue #19 section 19: registered group representative alone sees actual tips, partial payment and cancellation', async ({
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const owner = await authedContext(users.alice.email, users.alice.password);
+  const sender = await browser.newContext({ viewport: { width: 320, height: 760 }, isMobile: true, hasTouch: true });
+  const member = await browser.newContext({ viewport: { width: 320, height: 760 }, isMobile: true, hasTouch: true });
+  let token: string | undefined;
+  try {
+    const create = await trpcMutation(owner, 'guest.createClaimSession', {
+      receiptData: { merchantName: 'Чаевые группы', subtotal: 126500, total: 126500, tax: 0, tip: 0, currency: 'RUB' },
+      items: [
+        { name: 'Плательщик', quantity: 1, unitPrice: 30000, totalPrice: 30000 },
+        { name: 'Первое блюдо', quantity: 1, unitPrice: 50000, totalPrice: 50000 },
+        { name: 'Второе блюдо', quantity: 1, unitPrice: 46500, totalPrice: 46500 },
+      ],
+      guestCount: 2,
+      joinCreator: true,
+    });
+    expect(create.ok(), await create.text()).toBe(true);
+    const created = (await create.json()).result.data.json as {
+      shareToken: string;
+      creator: { personId: string; personToken: string; name: string };
+    };
+    token = created.shareToken;
+    const initial = await trpcResult(await trpcQuery(owner, 'guest.getSession', { token }));
+    const senderPage = await sender.newPage();
+    await loginWithPasskey(senderPage, users.bob.email);
+    const joined = await trpcMutation(sender.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[1].id,
+      name: users.bob.name,
+      joinKey: randomUUID(),
+    });
+    expect(joined.ok(), await joined.text()).toBe(true);
+    const representative = (await joined.json()).result.data.json;
+    const joinedMember = await trpcMutation(member.request, 'guest.joinGuestSlot', {
+      token,
+      slotId: initial.people[2].id,
+      name: 'Член группы',
+      joinKey: randomUUID(),
+    });
+    expect(joinedMember.ok(), await joinedMember.text()).toBe(true);
+    const participant = (await joinedMember.json()).result.data.json;
+    const groups = await trpcMutation(owner, 'guest.setPaymentGroups', {
+      token,
+      groups: [
+        { representativeId: representative.personId, memberIds: [representative.personId, participant.personId] },
+      ],
+    });
+    expect(groups.ok(), await groups.text()).toBe(true);
+    for (const [itemIndex, personId] of [
+      created.creator.personId,
+      representative.personId,
+      participant.personId,
+    ].entries()) {
+      const assigned = await trpcMutation(owner, 'guest.setReceiptItemParts', {
+        token,
+        itemIndex,
+        changes: [{ personId, parts: 1 }],
+        requestKey: randomUUID(),
+      });
+      expect(assigned.ok(), await assigned.text()).toBe(true);
+    }
+    const tip = await trpcMutation(sender.request, 'guest.setPersonalTip', {
+      token,
+      personId: representative.personId,
+      personToken: representative.personToken,
+      tipCents: 500,
+    });
+    expect(tip.ok(), await tip.text()).toBe(true);
+    const approval = await trpcMutation(owner, 'guest.confirmSessionParts', { token });
+    expect(approval.ok(), await approval.text()).toBe(true);
+    const final = await trpcMutation(owner, 'guest.finalizeSession', { token });
+    expect(final.ok(), await final.text()).toBe(true);
+    await rememberClaimIdentity(sender, token, representative);
+    await rememberClaimIdentity(member, token, participant);
+    const memberPage = await member.newPage();
+    await senderPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    await memberPage.goto('/split/' + token + '/claim', { waitUntil: 'domcontentloaded' });
+    await expect(
+      senderPage.getByTestId('finalized-person-badges-1').getByTestId('account-status-registered'),
+    ).toBeVisible();
+    await expect(senderPage.getByTestId('guest-mark-paid')).toBeVisible({ timeout: 20_000 });
+    await expect(memberPage.getByTestId('guest-group-payment-readonly')).toBeVisible({ timeout: 20_000 });
+    const payer = {
+      token,
+      personId: created.creator.personId,
+      personToken: created.creator.personToken,
+      debtorId: representative.personId,
+    };
+    const first = await trpcMutation(owner, 'guest.recordGuestPaymentReceived', {
+      ...payer,
+      requestId: randomUUID(),
+      receivedAmountCents: 60000,
+    });
+    expect(first.ok(), await first.text()).toBe(true);
+    await expect(senderPage.getByTestId('guest-sender-received')).toContainText('600,00', { timeout: 20_000 });
+    await expect(senderPage.getByTestId('guest-sender-outstanding')).toContainText('370,00');
+    await expect(senderPage.getByTestId('guest-payment-verified')).toHaveCount(0);
+    const secondId = randomUUID();
+    const second = await trpcMutation(owner, 'guest.recordGuestPaymentReceived', {
+      ...payer,
+      requestId: secondId,
+      receivedAmountCents: 40500,
+      overpaymentChoice: 'tip',
+    });
+    expect(second.ok(), await second.text()).toBe(true);
+    await expect(senderPage.getByTestId('guest-sender-extra-tip')).toContainText('35,00', { timeout: 20_000 });
+    await expect(senderPage.getByTestId('guest-own-finalized-extra-tip')).toContainText('35,00');
+    await expect(senderPage.getByTestId('guest-sender-declared-tip')).toContainText('5,00');
+    await expect(senderPage.getByTestId('guest-sender-food')).toContainText('965,00');
+    await expect(senderPage.getByTestId('guest-sender-received')).toContainText('1 005,00');
+    await expect(senderPage.getByTestId('guest-personal-reimbursement-amount')).toContainText('970,00');
+    await expect(memberPage.getByTestId('guest-payment-verified')).toBeVisible({ timeout: 20_000 });
+    await expect(memberPage.getByTestId('guest-actual-receipt-status')).toHaveCount(0);
+    await expect(memberPage.getByTestId('guest-own-finalized-extra-tip')).toHaveCount(0);
+    const cancelled = await trpcMutation(owner, 'guest.cancelGuestReceivedTransfer', {
+      ...payer,
+      transferId: secondId,
+    });
+    expect(cancelled.ok(), await cancelled.text()).toBe(true);
+    await expect(senderPage.getByTestId('guest-sender-outstanding')).toContainText('370,00', { timeout: 20_000 });
+    await expect(senderPage.getByTestId('guest-sender-extra-tip')).toHaveCount(0);
+    await expect(senderPage.getByTestId('guest-own-finalized-extra-tip')).toHaveCount(0);
+    await expect(senderPage.getByTestId('guest-payment-verified')).toHaveCount(0);
+  } finally {
+    if (token) await trpcMutation(owner, 'guest.expireSession', { token }).catch(() => undefined);
+    await sender.close();
+    await member.close();
     await owner.dispose();
   }
 });

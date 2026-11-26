@@ -63,6 +63,8 @@ import { ConfirmDialog } from '@/components/confirm-dialog';
 import { GuestPayerSbpForm } from '@/components/guest-payer-sbp-form';
 import { GuestSbpReimbursementDetails } from '@/components/guest-sbp-reimbursement-details';
 import { GuestPaymentDeclaration } from '@/components/guest-payment-declaration';
+import { GuestSenderReceiptSummary } from '@/components/guest-sender-receipt-summary';
+import type { ActualReceiptReconciliation } from '@/lib/actual-receipt-payments';
 import { GuestPayerPaymentReview } from '@/components/guest-payer-payment-review';
 import { combinedWaiterTotals, type PayerActualTotals } from '@/lib/guest-payer-actual-summary';
 import { GuestPaymentGroupsEditor } from '@/components/guest-payment-groups-editor';
@@ -299,6 +301,26 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         previous?.identity === identity && JSON.stringify(previous.totals) === JSON.stringify(totals)
           ? previous
           : { identity, totals },
+      );
+    },
+    [token],
+  );
+
+  const [liveSenderReceipt, setLiveSenderReceipt] = useState<{
+    token: string;
+    personId: string;
+    personToken: string;
+    receipt: ActualReceiptReconciliation | null;
+  } | null>(null);
+  const onActualReceipt = useCallback(
+    (receipt: ActualReceiptReconciliation | null, personId: string, personToken: string) => {
+      setLiveSenderReceipt((previous) =>
+        previous?.token === token &&
+        previous.personId === personId &&
+        previous.personToken === personToken &&
+        JSON.stringify(previous.receipt) === JSON.stringify(receipt)
+          ? previous
+          : { token, personId, personToken, receipt },
       );
     },
     [token],
@@ -1465,6 +1487,18 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           : null
         : data.summary!.find((person) => person.personIndex === myPersonIndex && person.total > 0)
       : null;
+  // Private, server-attested amounts belong only to the current sender.
+  // Never derive actual transfers from the public, immutable dish summary.
+  const senderReceipt =
+    canDeclareGroupPayment &&
+    personalReimbursement &&
+    personToken &&
+    liveSenderReceipt?.token === token &&
+    liveSenderReceipt.personId === myPersonId &&
+    liveSenderReceipt.personToken === personToken &&
+    liveSenderReceipt.receipt?.expectedCents === personalReimbursement.total
+      ? liveSenderReceipt.receipt
+      : null;
   // The tip target is chosen only inside this form, never by selecting a dish claimant.
   const canSelectGroupMemberTip = !!myPersonId && myPerson?.paymentGroupRepresentativeId === myPersonId;
   const requestedTipTarget =
@@ -1840,6 +1874,9 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
               >
                 {formatCents(personalReimbursement.total, currency, locale)}
               </p>
+              {senderReceipt && senderReceipt.receivedCents > 0 && (
+                <GuestSenderReceiptSummary receipt={senderReceipt} grouped={myPaymentGroup?.grouped ?? false} />
+              )}
               {canDeclareGroupPayment && (
                 <Button
                   type="button"
@@ -1870,6 +1907,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                   personId={myPersonId}
                   personToken={personToken}
                   canDeclare={canDeclareGroupPayment}
+                  onActualReceipt={onActualReceipt}
                   amountLabel={formatCents(personalReimbursement.total, currency, locale)}
                 />
               )}
@@ -1949,6 +1987,17 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                           </span>
                         </div>
                       </div>
+                      {person.personIndex === myPersonIndex && senderReceipt && senderReceipt.extraTipCents > 0 && (
+                        <div
+                          className="mt-2 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm"
+                          data-testid="guest-own-finalized-extra-tip"
+                        >
+                          <span className="min-w-0 flex-1 break-words">{t('payerAdditionalTips')}</span>
+                          <span className="ml-auto shrink-0 whitespace-nowrap tabular-nums">
+                            {formatCents(senderReceipt.extraTipCents, currency, locale)}
+                          </span>
+                        </div>
+                      )}
                       {'roundingCorrectionCents' in person &&
                         typeof person.roundingCorrectionCents === 'number' &&
                         person.roundingCorrectionCents > 0 && (
