@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+## Приоритет действующих правил BillOK
+
+Перед любой задачей прочитать [AGENTS.md](AGENTS.md) и [регламент версионирования](docs/versioning.md). Классификация Issue, согласование MAJOR, синхронное повышение версии в обоих пакетных файлах, CHANGELOG и описание PR обязательны. Ниже сохранены исторические технические заметки; они не отменяют текущие правила BillOK и не разрешают возвращать удалённые возможности исходного проекта.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project
