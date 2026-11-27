@@ -61,6 +61,7 @@ const mockDb = {
   },
   guestSplit: {
     findMany: vi.fn(),
+    groupBy: vi.fn(),
   },
   expense: {
     count: vi.fn(),
@@ -228,7 +229,7 @@ describe('admin router procedures existence', () => {
     expect(procedures).toContain('revokeSystemInvite');
     expect(procedures).toContain('getAnnouncement');
     expect(procedures).toContain('setAnnouncement');
-    expect(procedures).toContain('getGlobalActivity');
+    expect(procedures).not.toContain('getGlobalActivity');
     expect(procedures).toContain('sendTestEmail');
     expect(procedures).toContain('getImpersonationStatus');
   });
@@ -338,13 +339,13 @@ describe('listGroups input schema', () => {
 
 const adminSession = { user: { id: 'admin-1', email: 'admin@example.com' } };
 
-async function callerAs(session: { user: { id: string; email: string } }) {
+async function callerAs(session: { user: { id: string; email: string } } | null, impersonating: unknown = null) {
   const { adminRouter } = await import('./admin');
   const ctx = {
     session,
     db: mockDb,
-    headers: new Headers({ cookie: 'authjs.session-token=mock-' + session.user.id }),
-    impersonating: null,
+    headers: new Headers({ cookie: 'authjs.session-token=mock-' + (session?.user.id ?? 'anonymous') }),
+    impersonating,
   };
   return adminRouter.createCaller(ctx as unknown as Parameters<typeof adminRouter.createCaller>[0]);
 }
@@ -704,17 +705,67 @@ describe('unused receipts', () => {
     vi.unstubAllEnvs();
   });
 
-  test('storage stats count only orphaned receipt records', async () => {
-    mockDb.receipt.count.mockResolvedValue(5);
-    countUnusedReceipts.mockResolvedValue({ count: 2 });
+  test.each([
+    { claiming: 0, finalized: 0, unused: 0 },
+    { claiming: 1, finalized: 0, unused: 0 },
+    { claiming: 0, finalized: 1, unused: 0 },
+    { claiming: 3, finalized: 5, unused: 2 },
+    { claiming: 2, finalized: 5, unused: 2 },
+  ])('counts all manual split statuses in one snapshot: %j', async ({ claiming, finalized, unused }) => {
+    mockDb.guestSplit.groupBy.mockResolvedValue([
+      ...(claiming ? [{ status: 'CLAIMING', _count: { _all: claiming } }] : []),
+      ...(finalized ? [{ status: 'FINALIZED', _count: { _all: finalized } }] : []),
+    ]);
+    countUnusedReceipts.mockResolvedValue({ count: unused });
     const api = await callerAs(adminSession);
-
     await expect(api.getStorageStats()).resolves.toEqual({
-      receiptCount: 5,
-      unusedReceiptCount: 2,
+      receiptCount: claiming + finalized,
+      claimingCount: claiming,
+      finalizedCount: finalized,
+      unusedReceiptCount: unused,
     });
+    expect(mockDb.guestSplit.groupBy).toHaveBeenCalledExactlyOnceWith({ by: ['status'], _count: { _all: true } });
     expect(countUnusedReceipts).toHaveBeenCalledWith(mockDb);
+    expect(mockDb.receipt.count).not.toHaveBeenCalled();
     expect(mockDb.receipt.findMany).not.toHaveBeenCalled();
+  });
+
+  test('does not present a failed aggregation as zero receipts', async () => {
+    mockDb.guestSplit.groupBy.mockRejectedValueOnce(new Error('database query failed'));
+    countUnusedReceipts.mockResolvedValue({ count: 0 });
+    const api = await callerAs(adminSession);
+    await expect(api.getStorageStats()).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+  });
+
+  test('system info no longer issues a redundant SELECT 1', async () => {
+    const api = await callerAs(adminSession);
+    const info = await api.getSystemHealth();
+    expect(info).toEqual({
+      version: expect.stringMatching(/^\d+\.\d+\.\d+$/),
+      commitSha: expect.any(String),
+      serverStartTime: expect.any(String),
+      uptime: expect.any(Number),
+    });
+    expect(mockDb.$queryRaw).not.toHaveBeenCalled();
+    expect(mockDb.ownerBootstrap.findUnique).toHaveBeenCalled();
+  });
+
+  test('statistics and system info are restricted to the verified owner', async () => {
+    const api = await callerAs({ user: { id: 'user-1', email: 'user@mail.ru' } });
+    await expect(api.getStorageStats()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.getSystemHealth()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.groupBy).not.toHaveBeenCalled();
+    expect(countUnusedReceipts).not.toHaveBeenCalled();
+  });
+
+  test('anonymous and impersonated sessions cannot access system information or statistics', async () => {
+    const anonymous = await callerAs(null);
+    await expect(anonymous.getStorageStats()).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    await expect(anonymous.getSystemHealth()).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    const impersonated = await callerAs(adminSession, { userId: 'admin-1' });
+    await expect(impersonated.getStorageStats()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(impersonated.getSystemHealth()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockDb.guestSplit.groupBy).not.toHaveBeenCalled();
   });
 
   test('cleaning up deletes them in batches and records it in the audit log', async () => {

@@ -17,12 +17,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Shield, Database, Package, Clock, Loader2, RefreshCw, ReceiptText, Users } from 'lucide-react';
+import { Shield, Package, Clock, Loader2, RefreshCw, ReceiptText, Users } from 'lucide-react';
 
 import { AuditLogSection } from '@/components/admin/audit-log-section';
 import { RegistrationControlSection } from '@/components/admin/registration-control-section';
 import { AnnouncementSection } from '@/components/admin/announcement-section';
-import { ActivityFeedSection } from '@/components/admin/activity-feed-section';
 import { ToolsSection } from '@/components/admin/tools-section';
 import { ServerLogsSection } from '@/components/admin/server-logs-section';
 import { UserManagementSection } from '@/components/admin/user-management-section';
@@ -52,8 +51,6 @@ export default function AdminPage() {
         <RegistrationControlSection />
         <Separator />
         <AnnouncementSection />
-        <Separator />
-        <ActivityFeedSection />
         <Separator />
         <ToolsSection />
         <Separator />
@@ -115,25 +112,6 @@ function SystemHealthSection() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <Database className="h-4 w-4" />
-              {t('systemHealth.database')}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2">
-              <span
-                className={`h-2.5 w-2.5 rounded-full ${data?.dbStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'}`}
-              />
-              <span className="min-w-0 text-sm font-medium capitalize [overflow-wrap:anywhere]">
-                {data?.dbStatus ?? 'unknown'}
-              </span>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
               <Package className="h-4 w-4" />
               {t('systemHealth.version')}
             </CardTitle>
@@ -183,7 +161,7 @@ function StorageStatsSection() {
   const t = useTranslations('admin');
   const tc = useTranslations('common');
   const [cleanupOpen, setCleanupOpen] = useState(false);
-  const storage = trpc.admin.getStorageStats.useQuery();
+  const storage = trpc.admin.getStorageStats.useQuery(undefined, { refetchOnMount: 'always' });
   const utils = trpc.useUtils();
   const cleanupUnused = trpc.admin.cleanupUnusedReceipts.useMutation({
     onSuccess: () => {
@@ -194,25 +172,56 @@ function StorageStatsSection() {
   });
 
   if (storage.isLoading) return <SectionSkeleton title={t('storage.title')} />;
+  if (storage.isError || !storage.data) {
+    return (
+      <section className="min-w-0" data-testid="admin-storage-stats">
+        <h2 className="mb-4 text-lg font-semibold">{t('storage.title')}</h2>
+        <Card>
+          <CardContent className="space-y-3">
+            <p role="alert" className="text-sm text-destructive">
+              {t('storage.loadError')}
+            </p>
+            <Button
+              variant="outline"
+              className="min-h-11 whitespace-normal"
+              disabled={storage.isFetching}
+              onClick={() => void storage.refetch()}
+              data-testid="admin-storage-retry"
+            >
+              {t('storage.retry')}
+            </Button>
+          </CardContent>
+        </Card>
+      </section>
+    );
+  }
   const data = storage.data;
-
   return (
     <section className="min-w-0" data-testid="admin-storage-stats">
       <h2 className="mb-4 min-w-0 text-lg font-semibold [overflow-wrap:anywhere]">{t('storage.title')}</h2>
       <div className="grid min-w-0 gap-4 @2xl:grid-cols-2 [&>*]:min-w-0">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <ReceiptText className="h-4 w-4" />
-              {t('storage.receipts')}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="min-w-0 text-2xl font-bold [overflow-wrap:anywhere]">{data?.receiptCount ?? 0}</p>
-            <p className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">{t('storage.inDatabase')}</p>
-          </CardContent>
-        </Card>
-
+        {(
+          [
+            ['total', 'receipts', data.receiptCount],
+            ['claiming', 'claiming', data.claimingCount],
+            ['finalized', 'finalized', data.finalizedCount],
+          ] as const
+        ).map(([id, label, count]) => (
+          <Card key={id} data-testid={`admin-receipt-count-${id}`}>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex min-w-0 items-center gap-2 text-sm font-medium text-muted-foreground [overflow-wrap:anywhere]">
+                <ReceiptText className="h-4 w-4 shrink-0" />
+                {t(`storage.${label}`)}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="min-w-0 text-2xl font-bold [overflow-wrap:anywhere]">{count}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      <h3 className="mb-3 mt-6 text-base font-semibold">{t('storage.technicalTitle')}</h3>
+      <div className="grid min-w-0 gap-4">
         <Card data-testid="unused-receipts-card">
           <CardHeader className="pb-2">
             <CardTitle className="flex min-w-0 flex-wrap items-center justify-between gap-2 [overflow-wrap:anywhere]">
@@ -220,7 +229,7 @@ function StorageStatsSection() {
                 <ReceiptText className="h-4 w-4" />
                 {t('storage.unusedReceipts')}
               </span>
-              {(data?.unusedReceiptCount ?? 0) > 0 && (
+              {data.unusedReceiptCount > 0 && (
                 <Button
                   size="sm"
                   variant="destructive"
@@ -240,7 +249,7 @@ function StorageStatsSection() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="min-w-0 text-2xl font-bold [overflow-wrap:anywhere]">{data?.unusedReceiptCount ?? 0}</p>
+            <p className="min-w-0 text-2xl font-bold [overflow-wrap:anywhere]">{data.unusedReceiptCount}</p>
             <p className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
               {t('storage.unusedDescription')}
             </p>
@@ -270,7 +279,7 @@ function StorageStatsSection() {
           <DialogHeader className="min-w-0 pr-11">
             <DialogTitle className="[overflow-wrap:anywhere]">{t('storage.confirmUnusedTitle')}</DialogTitle>
             <DialogDescription className="[overflow-wrap:anywhere]">
-              {t('storage.confirmUnusedDescription', { count: data?.unusedReceiptCount ?? 0 })}
+              {t('storage.confirmUnusedDescription', { count: data.unusedReceiptCount })}
             </DialogDescription>
           </DialogHeader>
           {cleanupUnused.isError && (
@@ -292,9 +301,9 @@ function StorageStatsSection() {
               variant="destructive"
               className="min-h-11 min-w-11"
               data-testid="admin-storage-cleanup-confirm"
-              disabled={cleanupUnused.isPending || (data?.unusedReceiptCount ?? 0) === 0}
+              disabled={cleanupUnused.isPending || data.unusedReceiptCount === 0}
               onClick={() => {
-                if ((data?.unusedReceiptCount ?? 0) > 0) cleanupUnused.mutate();
+                if (data.unusedReceiptCount > 0) cleanupUnused.mutate();
               }}
             >
               {cleanupUnused.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

@@ -270,22 +270,6 @@ test.describe('Announcement banner', () => {
   });
 });
 
-test.describe('Global activity feed', () => {
-  test('admin page shows activity feed section', async ({ page }) => {
-    await login(page, users.alice.email, users.alice.password);
-    await page.goto('/en/admin');
-
-    await expect(page.getByRole('heading', { name: 'Global Activity Feed' })).toBeVisible();
-  });
-
-  test('global activity API returns data', async () => {
-    const ctx = await authedContext(users.alice.email, users.alice.password);
-    const data = await trpcResult(await trpcQuery(ctx, 'admin.getGlobalActivity', { limit: 5 }));
-    expect(data.items).toBeInstanceOf(Array);
-    await ctx.dispose();
-  });
-});
-
 test.describe('AI usage statistics', () => {
   test('admin page shows AI usage section', async ({ page }) => {
     await login(page, users.alice.email, users.alice.password);

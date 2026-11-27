@@ -162,24 +162,12 @@ export const adminRouter = createTRPCRouter({
       };
     }),
 
-  getSystemHealth: adminProcedure.query(async ({ ctx }) => {
-    // DB status
-    let dbStatus: 'connected' | 'disconnected' = 'disconnected';
-    try {
-      await ctx.db.$queryRaw`SELECT 1`;
-      dbStatus = 'connected';
-    } catch {
-      // disconnected
-    }
-
-    return {
-      dbStatus,
-      version: cachedVersion,
-      commitSha: cachedCommitSha,
-      serverStartTime: serverStartTime.toISOString(),
-      uptime: Math.floor((Date.now() - serverStartTime.getTime()) / 1000),
-    };
-  }),
+  getSystemHealth: adminProcedure.query(() => ({
+    version: cachedVersion,
+    commitSha: cachedCommitSha,
+    serverStartTime: serverStartTime.toISOString(),
+    uptime: Math.floor((Date.now() - serverStartTime.getTime()) / 1000),
+  })),
 
   listUsers: adminProcedure
     .input(
@@ -734,48 +722,6 @@ export const adminRouter = createTRPCRouter({
       });
     }),
 
-  // ─── Global Activity Feed ────────────────────────────────
-
-  getGlobalActivity: adminProcedure
-    .input(
-      z.object({
-        cursor: z.string().optional(),
-        limit: z.number().min(1).max(100).default(50),
-      }),
-    )
-    .query(async ({ ctx, input }) => {
-      const items = await ctx.db.activityLog.findMany({
-        take: input.limit + 1,
-        ...(input.cursor ? { cursor: { id: input.cursor } } : {}),
-        orderBy: { createdAt: 'desc' },
-        include: {
-          user: { select: { id: true, name: true, email: true } },
-          group: { select: { id: true, name: true } },
-        },
-      });
-
-      let nextCursor: string | undefined;
-      if (items.length > input.limit) {
-        const next = items.pop();
-        nextCursor = next?.id;
-      }
-
-      return {
-        items: items.map((item) => ({
-          id: item.id,
-          type: item.type,
-          entityId: item.entityId,
-          metadata: item.metadata as Record<string, unknown> | null,
-          userName: item.user?.name ?? item.user?.email ?? 'Deleted user',
-          userEmail: item.user?.email ?? null,
-          groupName: item.group.name,
-          groupId: item.group.id,
-          createdAt: item.createdAt,
-        })),
-        nextCursor,
-      };
-    }),
-
   // ─── Announcement Banner ─────────────────────────────────
 
   getAnnouncement: publicProcedure.query(async ({ ctx }) => {
@@ -871,11 +817,19 @@ export const adminRouter = createTRPCRouter({
 
   // ─── Storage ────────────────────────────────────────────
 
-  // Only DB records are relevant to manual BillOK receipts.
+  // One grouped query gives a consistent snapshot of all manual split receipts.
+  // Linked Receipt rows are not additional user-facing checks.
   getStorageStats: adminProcedure.query(async ({ ctx }) => {
-    const [receiptCount, unused] = await Promise.all([ctx.db.receipt.count(), countUnusedReceipts(ctx.db)]);
+    const [statuses, unused] = await Promise.all([
+      ctx.db.guestSplit.groupBy({ by: ['status'], _count: { _all: true } }),
+      countUnusedReceipts(ctx.db),
+    ]);
+    const claimingCount = statuses.find((row) => row.status === GuestSplitStatus.CLAIMING)?._count._all ?? 0;
+    const finalizedCount = statuses.find((row) => row.status === GuestSplitStatus.FINALIZED)?._count._all ?? 0;
     return {
-      receiptCount,
+      receiptCount: claimingCount + finalizedCount,
+      claimingCount,
+      finalizedCount,
       unusedReceiptCount: unused.count,
     };
   }),

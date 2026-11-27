@@ -54,14 +54,14 @@ class NoLegacyPhotoAdminTests(unittest.TestCase):
         ):
             self.assertNotIn(dead, storage)
         for kept in (
-            "receipts", "inDatabase", "unusedReceipts",
+            "receipts", "claiming", "finalized", "unusedReceipts",
             "confirmUnusedTitle", "confirmUnusedDescription", "unusedCleanedUp",
         ):
             self.assertIn(kept, storage)
 
     def test_six_width_chromium_checks_must_remain(self):
         e2e = read("e2e/billok-mobile-authenticated.spec.ts")
-        self.assertIn("section === health ? 3 : 2", e2e)
+        self.assertIn("section === health ? 2 : 4", e2e)
         self.assertIn("toHaveCount(1)", e2e)
         self.assertIn("closing", e2e.lower())
         self.assertIn("admin.cleanupUnusedReceipts", e2e)

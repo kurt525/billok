@@ -1050,7 +1050,7 @@ test('mobile admin announcement controls remain accessible at six widths', async
   expect(writes).toBe(0);
 });
 
-test('mobile admin activity and audit tables scroll inside cards at six widths', async ({ page }) => {
+test('mobile admin audit tables scroll inside cards at six widths', async ({ page }) => {
   test.setTimeout(170_000);
   await signInAsOwnerAdmin(page);
   let mockedQueries = 0;
@@ -1063,35 +1063,15 @@ test('mobile admin activity and audit tables scroll inside cards at six widths',
       await route.abort();
       return;
     }
-    const activityIndex = procedures.indexOf('admin.getGlobalActivity');
+    expect(procedures).not.toContain('admin.getGlobalActivity');
     const auditIndex = procedures.indexOf('admin.getAuditLog');
-    if (activityIndex < 0 && auditIndex < 0) {
+    if (auditIndex < 0) {
       await route.continue();
       return;
     }
     const response = await route.fetch();
     const body = await response.json();
     const entries = Array.isArray(body) ? body : [body];
-    if (activityIndex >= 0) {
-      const item = entries[activityIndex];
-      expect(item?.result?.data).toBeDefined();
-      item.result.data.json = {
-        items: [
-          {
-            id: 'mobile-activity-row',
-            type: 'EXPENSE_CREATED',
-            userName: longName,
-            groupName: longName,
-            createdAt: '2026-10-27T10:00:00.000Z',
-          },
-        ],
-        nextCursor: 'mobile-activity-next',
-      };
-      // Drop the response's old SuperJSON metadata: a real query without a next
-      // page marks nextCursor as undefined, overriding the mocked cursor.
-      item.result.data = { json: item.result.data.json };
-      mockedQueries++;
-    }
     if (auditIndex >= 0) {
       const item = entries[auditIndex];
       expect(item?.result?.data).toBeDefined();
@@ -1121,7 +1101,6 @@ test('mobile admin activity and audit tables scroll inside cards at six widths',
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
 
     for (const ids of [
-      { section: 'admin-activity-section', scroll: 'admin-activity-scroll', load: 'admin-activity-load-more' },
       { section: 'admin-audit-section', scroll: 'admin-audit-scroll', load: 'admin-audit-load-more' },
     ]) {
       const section = page.getByTestId(ids.section);
@@ -1145,10 +1124,11 @@ test('mobile admin activity and audit tables scroll inside cards at six widths',
       expect(button!.width, ids.load + ' width at ' + width).toBeGreaterThanOrEqual(44);
       expect(button!.x + button!.width, ids.load + ' right at ' + width).toBeLessThanOrEqual(width + 1);
     }
+    await expect(page.getByTestId('admin-activity-section')).toHaveCount(0);
     await checkPhoneLayout(page, width, true);
     expect(writes, 'Audit E2E must not change persistent data').toBe(0);
   }
-  expect(mockedQueries).toBeGreaterThanOrEqual(12);
+  expect(mockedQueries).toBeGreaterThanOrEqual(6);
   expect(writes).toBe(0);
 });
 
@@ -1339,7 +1319,7 @@ test('mobile admin group deletion dialog is safe at six widths', async ({ page }
   }
 });
 
-test('mobile admin health and manual receipt cards fit six widths', async ({ page }) => {
+test('mobile admin health and manual receipt cards fit eight widths', async ({ page }) => {
   test.setTimeout(170_000);
   await signInAsOwnerAdmin(page);
   const longValue = 'АдаптивнаяПроверкаОченьДлинногоЗначенияБезПробелов'.repeat(3);
@@ -1357,7 +1337,6 @@ test('mobile admin health and manual receipt cards fit six widths', async ({ pag
       expect(entries[healthIndex]?.result?.data).toBeDefined();
       entries[healthIndex].result.data = {
         json: {
-          dbStatus: 'connected',
           version: longValue,
           commitSha: 'a'.repeat(96),
           uptime: 3600,
@@ -1371,6 +1350,8 @@ test('mobile admin health and manual receipt cards fit six widths', async ({ pag
       entries[storageIndex].result.data = {
         json: {
           receiptCount: 5,
+          claimingCount: 2,
+          finalizedCount: 3,
           unusedReceiptCount: 0,
         },
       };
@@ -1379,7 +1360,7 @@ test('mobile admin health and manual receipt cards fit six widths', async ({ pag
     await route.fulfill({ response, json: Array.isArray(body) ? entries : entries[0] });
   });
 
-  for (const width of [320, 360, 430, 480, 600, 720]) {
+  for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
     await page.setViewportSize({ width, height: 380 });
     await page.goto('/admin', { waitUntil: 'networkidle' });
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
@@ -1388,13 +1369,18 @@ test('mobile admin health and manual receipt cards fit six widths', async ({ pag
     const storage = page.getByTestId('admin-storage-stats');
     await expect(health.getByTestId('admin-system-version')).toContainText(longValue);
     await expect(health.getByTestId('admin-system-commit')).toContainText('a'.repeat(96));
+    await expect(health.getByText('База данных', { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId('admin-activity-section')).toHaveCount(0);
+    await expect(storage.getByTestId('admin-receipt-count-total')).toContainText('5');
+    await expect(storage.getByTestId('admin-receipt-count-claiming')).toContainText('2');
+    await expect(storage.getByTestId('admin-receipt-count-finalized')).toContainText('3');
     const unusedReceiptsCard = storage.getByTestId('unused-receipts-card');
-    await expect(unusedReceiptsCard).toContainText('Неиспользуемые чеки');
-    await expect(unusedReceiptsCard).toContainText('чеки старше суток');
+    await expect(unusedReceiptsCard).toContainText('Неиспользуемые записи чеков');
+    await expect(unusedReceiptsCard).toContainText('Технические записи старше суток');
     for (const section of [health, storage]) {
       await expect(section).toBeVisible();
       const cards = section.locator('[data-slot="card"]');
-      await expect(cards).toHaveCount(section === health ? 3 : 2);
+      await expect(cards).toHaveCount(section === health ? 2 : 4);
       for (const card of await cards.all()) {
         const bounds = await card.boundingBox();
         expect(bounds).not.toBeNull();
@@ -1410,11 +1396,41 @@ test('mobile admin health and manual receipt cards fit six widths', async ({ pag
     }
     await checkPhoneLayout(page, width, true);
   }
-  expect(healthReads).toBeGreaterThanOrEqual(6);
-  expect(storageReads).toBeGreaterThanOrEqual(6);
+  expect(healthReads).toBeGreaterThanOrEqual(8);
+  expect(storageReads).toBeGreaterThanOrEqual(8);
 });
 
-test('mobile unused receipt cleanup confirmation cancels without deleting at six widths', async ({ page }) => {
+test('TASK-BILLOK-008 statistics failure is not displayed as zero and can be retried', async ({ page }) => {
+  await signInAsOwnerAdmin(page);
+  let fail = true;
+  await page.route('**/api/trpc/**', async (route) => {
+    const procedures = new URL(route.request().url()).pathname.split('/api/trpc/')[1]?.split(',') ?? [];
+    const index = procedures.indexOf('admin.getStorageStats');
+    if (index < 0) return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    const entries = Array.isArray(body) ? body : [body];
+    entries[index] = fail
+      ? {
+          error: {
+            json: { message: 'Test failure', code: -32603, data: { code: 'INTERNAL_SERVER_ERROR', httpStatus: 500 } },
+          },
+        }
+      : { result: { data: { json: { receiptCount: 0, claimingCount: 0, finalizedCount: 0, unusedReceiptCount: 0 } } } };
+    await route.fulfill({ response, json: Array.isArray(body) ? entries : entries[0] });
+  });
+  await page.goto('/admin');
+  const storage = page.getByTestId('admin-storage-stats');
+  await expect(storage.getByRole('alert')).toContainText('Не удалось загрузить статистику чеков');
+  await expect(storage.getByTestId('admin-receipt-count-total')).toHaveCount(0);
+  fail = false;
+  await storage.getByTestId('admin-storage-retry').click();
+  await expect(storage.getByTestId('admin-receipt-count-total').locator('p')).toHaveText('0');
+  await expect(storage.getByTestId('admin-receipt-count-claiming').locator('p')).toHaveText('0');
+  await expect(storage.getByTestId('admin-receipt-count-finalized').locator('p')).toHaveText('0');
+});
+
+test('mobile unused receipt cleanup confirmation cancels without deleting at eight widths', async ({ page }) => {
   test.setTimeout(170_000);
   await signInAsOwnerAdmin(page);
   let cleanupMutations = 0;
@@ -1435,13 +1451,15 @@ test('mobile unused receipt cleanup confirmation cancels without deleting at six
     entries[index].result.data = {
       json: {
         receiptCount: 12,
+        claimingCount: 4,
+        finalizedCount: 8,
         unusedReceiptCount: 4,
       },
     };
     await route.fulfill({ response, json: Array.isArray(data) ? entries : entries[0] });
   });
 
-  for (const width of [320, 360, 430, 480, 600, 720]) {
+  for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
     await page.setViewportSize({ width, height: 380 });
     await page.goto('/admin', { waitUntil: 'networkidle' });
     await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
@@ -1457,7 +1475,7 @@ test('mobile unused receipt cleanup confirmation cancels without deleting at six
       await trigger.click();
       const dialog = page.getByTestId('admin-storage-cleanup-dialog');
       await expect(dialog).toBeVisible();
-      await expect(dialog).toContainText('Неиспользуемых чеков: 4');
+      await expect(dialog).toContainText('Записей: 4');
       const rect = await dialog.boundingBox();
       expect(rect).not.toBeNull();
       expect(rect!.x).toBeGreaterThanOrEqual(-1);
