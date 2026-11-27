@@ -1,6 +1,6 @@
 {
   "name": "billok",
-  "version": "0.8.0",
+  "version": "1.0.0",
   "description": "BillOK — ручное разделение общих чеков и расходов без OCR и AI",
   "author": "Carlos Cristobal",
   "license": "MIT",

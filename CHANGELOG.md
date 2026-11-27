@@ -1,4 +1,14 @@
-# Changelog
+# История версий BillOK
+
+## 1.0.0 — начало самостоятельного версионирования
+
+- Первая собственная версия BillOK: ручное разделение чеков в RUB, Passkey, приглашения, группы участников, учёт поступлений и чаевых, отдельная вкладка ссылок.
+- Переход от номера исходного проекта 0.8.0 к 1.0.0 не изменяет данные, авторизацию или расчёты.
+- Правила последующих выпусков: [MAJOR.MINOR.PATCH](docs/versioning.md). Фактический выпуск определяется успешным развёртыванием проверенного main; наличие версии в ветке PR не означает публикацию.
+
+## Архив истории upstream (ShareTab)
+
+Следующий исторический материал относится к исходному проекту и не описывает текущие возможности BillOK.
 
 ShareTab stopped publishing numbered (semver) versions after v0.8.0. Each push to `main` is now released as a build: see [GitHub Releases](https://github.com/sw-carlos-cristobal/sharetab/releases) (tags `build/YYYY.MM.DD.N`) for the commits in each build. This file is no longer updated per release; the section below summarizes notable changes since v0.8.0.
 
