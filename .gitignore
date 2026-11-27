@@ -84,3 +84,6 @@ test-pg-data/
 *.key
 *.p12
 *.pfx
+
+# Confirmed deployment metadata is created by the production operator, never in Git.
+/.billok-deployment.json

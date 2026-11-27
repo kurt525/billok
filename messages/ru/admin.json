@@ -2,22 +2,29 @@
   "title": "Панель администратора",
   "systemHealth": {
     "title": "Состояние системы",
-    "database": "База данных",
     "version": "Версия",
     "uptime": "Время работы",
-    "started": "Запущено: {time}"
+    "started": "Запущено: {time}",
+    "releaseTask": "Последняя реализованная задача",
+    "pullRequest": "Запрос на слияние (PR)",
+    "deployedAt": "Дата и время развёртывания",
+    "notAvailable": "Нет сведений"
   },
   "storage": {
-    "title": "Статистика хранилища",
-    "receipts": "Чеки",
-    "inDatabase": "в базе данных",
+    "title": "Статистика чеков",
+    "receipts": "Всего чеков",
     "cleanUp": "Очистить",
     "cancel": "Отмена",
-    "confirmUnusedTitle": "Удалить неиспользуемые чеки?",
-    "confirmUnusedDescription": "Неиспользуемых чеков: {count}. Удаляются только чеки старше суток, которые не используются группами, расходами или разделением. Действие невозможно отменить.",
-    "unusedReceipts": "Неиспользуемые чеки",
-    "unusedDescription": "чеки старше суток, которые не используются группами, расходами или разделением чека",
-    "unusedCleanedUp": "Удалено чеков: {count}"
+    "confirmUnusedTitle": "Удалить неиспользуемые технические записи?",
+    "confirmUnusedDescription": "Записей: {count}. Удаляются только записи старше суток, не связанные с группами, расходами или разделением. Действие невозможно отменить.",
+    "unusedReceipts": "Неиспользуемые записи чеков",
+    "unusedDescription": "Технические записи старше суток, не связанные с группами, расходами или разделением чека. Не входят в статистику чеков.",
+    "unusedCleanedUp": "Удалено записей: {count}",
+    "claiming": "На распределении",
+    "finalized": "Распределение завершено",
+    "technicalTitle": "Техническая очистка",
+    "loadError": "Не удалось загрузить статистику чеков.",
+    "retry": "Повторить"
   },
   "users": {
     "title": "Управление пользователями",
@@ -118,28 +125,6 @@
     "charCount": "Символов: {count}/500",
     "clear": "Очистить",
     "save": "Сохранить"
-  },
-  "activity": {
-    "title": "Лента действий",
-    "noActivity": "Действий пока нет.",
-    "colType": "Тип",
-    "colUser": "Пользователь",
-    "colGroup": "Группа",
-    "colTime": "Время",
-    "loadMore": "Показать ещё",
-    "typeExpenseCreated": "Добавлен расход",
-    "typeExpenseUpdated": "Изменён расход",
-    "typeExpenseDeleted": "Удалён расход",
-    "typeMemberJoined": "Присоединился участник",
-    "typeMemberLeft": "Вышел участник",
-    "typeGroupUpdated": "Изменена группа",
-    "typePlaceholderMerged": "Объединены участники",
-    "typeGroupArchived": "Группа архивирована",
-    "typeGroupUnarchived": "Группа восстановлена",
-    "typeOwnershipTransferred": "Передано владение",
-    "typePlaceholderCreated": "Добавлен участник без аккаунта",
-    "typeSettlementCreated": "Отмечен перевод",
-    "typeSettlementDeleted": "Удалён перевод"
   },
   "tools": {
     "title": "Инструменты администратора",

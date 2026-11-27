@@ -98,7 +98,7 @@ describe('Wide Android and Galaxy S23 mobile layout', () => {
     expect(admin).toContain('onClick={() => setCleanupOpen(true)}');
     expect(admin).toContain('data-testid="admin-storage-cleanup-dialog"');
     expect(admin).toContain('data-testid="admin-storage-cleanup-confirm"');
-    expect(admin).toContain('if ((data?.unusedReceiptCount ?? 0) > 0) cleanupUnused.mutate();');
+    expect(admin).toContain('if (data.unusedReceiptCount > 0) cleanupUnused.mutate();');
     expect(admin).not.toContain('cleanupOrphans');
     expect(admin).not.toContain('onClick={() => cleanupUnused.mutate()}');
   });
