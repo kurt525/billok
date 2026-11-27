@@ -6,7 +6,7 @@
     "uptime": "Время работы",
     "started": "Запущено: {time}",
     "releaseTask": "Последняя реализованная задача",
-    "pullRequest": "Pull Request",
+    "pullRequest": "Запрос на слияние (PR)",
     "deployedAt": "Дата и время развёртывания",
     "notAvailable": "Нет сведений"
   },
