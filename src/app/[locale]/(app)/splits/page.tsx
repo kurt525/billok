@@ -85,7 +85,9 @@ export default function SplitsPage() {
                     <Link
                       className="min-w-0 flex-1 [overflow-wrap:anywhere] after:absolute after:inset-0"
                       href={
-                        split.status === 'FINALIZED' ? `/split/${split.shareToken}` : `/split/${split.shareToken}/claim`
+                        split.status === 'FINALIZED' && !split.canOpenClaim
+                          ? `/split/${split.shareToken}`
+                          : `/split/${split.shareToken}/claim`
                       }
                     >
                       {split.merchantName ?? t('untitled')}

@@ -800,6 +800,9 @@ export const guestRouter = createTRPCRouter({
             })(),
             canRename: !ctx.impersonating && (owner || s.userId === ctx.user.id),
             canDelete: s.userId === ctx.user.id,
+            // Active author receipts reopen the private receipt, not the public
+            // result; expired history remains accessible only in the archive view.
+            canOpenClaim: !ctx.impersonating && s.userId === ctx.user.id && s.expiresAt >= new Date(),
             status: s.status,
             merchantName: receipt?.merchantName as string | undefined,
             total: receipt?.total as number | undefined,

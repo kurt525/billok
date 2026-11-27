@@ -151,7 +151,7 @@ async function requireNoPaintedPayerReviewDuplicates(page: Page) {
   }
 }
 
-async function ensureReceiptTab(page: Page, tab: 'people' | 'items') {
+async function ensureReceiptTab(page: Page, tab: 'people' | 'items' | 'links') {
   if (!/\/split\/[^/]+\/claim(?:\?|$)/.test(new URL(page.url()).pathname + new URL(page.url()).search)) return;
   const control = page.getByTestId('claim-tab-' + tab);
   await expect(control).toBeVisible({ timeout: 20_000 });
@@ -1620,6 +1620,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       }
       await fitsPhone(page);
       for (const testId of ['guest-view-summary-link', 'copy-link-btn', 'personal-link-btn']) {
+        await ensureReceiptTab(page, testId === 'guest-view-summary-link' ? 'items' : 'links');
         const bounds = await page.getByTestId(testId).evaluate((element) => {
           const rect = element.getBoundingClientRect();
           return { left: rect.left, right: rect.right, height: rect.height };
@@ -1629,6 +1630,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
         expect(bounds.height, testId + ' touch height at ' + width + 'px').toBeGreaterThanOrEqual(44);
       }
 
+      await ensureReceiptTab(page, 'items');
       await page.getByTestId('guest-view-summary-link').click();
       await expect(page.getByTestId('split-result')).toBeVisible({ timeout: 15_000 });
       await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
@@ -1637,6 +1639,7 @@ test('mobile guest finalization reconciles personal tips for three dining partic
       await expect(page.getByTestId('split-result-personal-tips')).toContainText('2,00');
       await fitsPhone(page);
       for (const testId of ['split-result-back-to-claim', 'copy-link-btn', 'share-btn']) {
+        if (testId !== 'split-result-back-to-claim') await page.getByTestId('claim-tab-links').click();
         const bounds = await page.getByTestId(testId).evaluate((element) => {
           const rect = element.getBoundingClientRect();
           return { left: rect.left, right: rect.right, height: rect.height };
@@ -2692,7 +2695,7 @@ test('anonymous mobile guest selects a partial portion and keeps it after reopen
         'Card is clipped at right on ' + width + 'px: ' + JSON.stringify(geometry),
       ).toBeGreaterThanOrEqual(0);
       for (const testId of ['personal-link-btn', 'dish-person-0-1']) {
-        await ensureReceiptTab(page, testId === 'personal-link-btn' ? 'people' : 'items');
+        await ensureReceiptTab(page, testId === 'personal-link-btn' ? 'links' : 'items');
         const bounds = await page.getByTestId(testId).evaluate((element) => {
           const rect = element.getBoundingClientRect();
           return { left: rect.left, right: rect.right, height: rect.height };
@@ -3485,7 +3488,7 @@ test('Issue 3.8.2: only a receipt creator can reveal and copy a saved guest link
   browser,
   page,
 }) => {
-  test.setTimeout(150_000);
+  test.setTimeout(240_000);
   const creator = await authedContext(users.alice.email, users.alice.password);
   const creatorBrowser = await browser.newContext({
     viewport: { width: 320, height: 740 },
@@ -3539,21 +3542,123 @@ test('Issue 3.8.2: only a receipt creator can reveal and copy a saved guest link
     // The public invitation preview has a separate tab state. Wait for the
     // creator's restored identity before selecting the member-only People tab.
     await expect(ownerPage.getByTestId('claim-people-panel')).toBeAttached({ timeout: 20_000 });
-    await ensureReceiptTab(ownerPage, 'people');
+    await expect(ownerPage.getByTestId('claim-tab-items')).toHaveAttribute('aria-selected', 'true', {
+      timeout: 20_000,
+    });
+    await ensureReceiptTab(ownerPage, 'links');
     await expect(ownerPage.getByTestId('creator-guest-link-open-1')).toBeVisible({ timeout: 20_000 });
-    await ensureReceiptTab(ownerPage, 'people');
+    await ensureReceiptTab(ownerPage, 'links');
     await ownerPage.getByTestId('creator-guest-link-open-1').click();
-    await ensureReceiptTab(ownerPage, 'people');
+    await ensureReceiptTab(ownerPage, 'links');
     const revealed = ownerPage.getByTestId('creator-guest-link-url-1');
     await expect(revealed).toBeVisible();
     const personalUrl = await revealed.inputValue();
     expect(personalUrl).toContain('/split/' + token + '/claim#me=');
     expect(personalUrl).toContain(joined.personToken);
-    await ensureReceiptTab(ownerPage, 'people');
+    await ensureReceiptTab(ownerPage, 'links');
     await ownerPage.getByTestId('creator-guest-link-copy-1').click();
     await expect(ownerPage.getByText('Персональная ссылка гостя скопирована.')).toBeVisible();
     expect(await ownerPage.evaluate(() => navigator.clipboard.readText())).toBe(personalUrl);
     await fitsPhone(ownerPage);
+
+    // TASK-BILLOK-006: keep the same ready credential after finalization,
+    // even when the author is not the payer. No implicit rotation or financial mutation.
+    const payer = await trpcMutation(creator, 'guest.changePayer', {
+      token,
+      personId: guestId,
+      expectedRevision: after.payerRevision,
+    });
+    expect(payer.ok(), await payer.text()).toBe(true);
+    const assigned = await trpcMutation(creator, 'guest.setReceiptItemParts', {
+      token,
+      itemIndex: 0,
+      requestKey: randomUUID(),
+      changes: [
+        { personId: initial.people[0].id, parts: 1 },
+        { personId: guestId, parts: 1 },
+      ],
+    });
+    expect(assigned.ok(), await assigned.text()).toBe(true);
+    const confirmed = await trpcMutation(creator, 'guest.confirmSessionParts', { token });
+    expect(confirmed.ok(), await confirmed.text()).toBe(true);
+    const finalized = await trpcMutation(creator, 'guest.finalizeSession', { token });
+    expect(finalized.ok(), await finalized.text()).toBe(true);
+    const snapshot = await trpcResult(await trpcQuery(creator, 'guest.getSplit', { token }));
+    await ownerPage.reload({ waitUntil: 'domcontentloaded' });
+    await expect(ownerPage.getByTestId('finalized-bill-total')).toBeVisible({ timeout: 20_000 });
+    await expect(ownerPage.getByTestId('creator-guest-link-open-1')).toBeHidden();
+    await ensureReceiptTab(ownerPage, 'links');
+    await expect(ownerPage.getByTestId('finalized-bill-total')).toBeHidden();
+    await ownerPage.getByTestId('creator-guest-link-open-1').click();
+    await expect(ownerPage.getByTestId('creator-guest-link-url-1')).toHaveValue(personalUrl);
+    await ownerPage.getByTestId('creator-guest-link-copy-1').click();
+    expect(await ownerPage.evaluate(() => navigator.clipboard.readText())).toBe(personalUrl);
+    await ownerPage.getByTestId('copy-link-btn').click();
+    expect(await ownerPage.evaluate(() => navigator.clipboard.readText())).toBe(
+      new URL('/split/' + token, ownerPage.url()).toString(),
+    );
+    await ownerPage.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+    for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
+      await ownerPage.setViewportSize({ width, height: 740 });
+      await fitsPhone(ownerPage);
+      await expect(ownerPage.getByTestId('creator-guest-link-copy-1')).toBeVisible();
+    }
+    await ownerPage.getByTestId('claim-tab-links').press('Home');
+    await expect(ownerPage.getByTestId('claim-tab-items')).toHaveAttribute('aria-selected', 'true');
+    await ownerPage.getByTestId('claim-tab-items').press('End');
+    await expect(ownerPage.getByTestId('claim-tab-links')).toHaveAttribute('aria-selected', 'true');
+    await page.goto(personalUrl);
+    await expect(page.getByTestId('personal-link-offer')).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId('personal-link-accept').click();
+    await expect(page.getByTestId('finalized-bill-total')).toBeVisible();
+    await ensureReceiptTab(page, 'links');
+    await expect(page.getByTestId('personal-link-btn')).toBeVisible();
+    await expect(page.getByTestId('creator-personal-links')).toHaveCount(0);
+    const unchanged = await trpcResult(await trpcQuery(creator, 'guest.getSplit', { token }));
+    expect(unchanged.summary).toEqual(snapshot.summary);
+    expect(unchanged.assignments).toEqual(snapshot.assignments);
+    expect(unchanged.people).toEqual(snapshot.people);
+    // Partial and fully received payments (author is a debtor, guest is the payer).
+    const debt = snapshot.summary.find((row: { personIndex: number }) => row.personIndex === 0).total;
+    expect(debt).toBeGreaterThan(1);
+    const payment = { token, personId: guestId, personToken: joined.personToken, debtorId: initial.people[0].id };
+    const amounts = [1, debt - 1];
+    for (const receivedAmountCents of amounts) {
+      const transfer = await trpcMutation(page.request, 'guest.recordGuestPaymentReceived', {
+        ...payment,
+        requestId: randomUUID(),
+        receivedAmountCents,
+      });
+      expect(transfer.ok(), await transfer.text()).toBe(true);
+      const review = await trpcResult(
+        await trpcMutation(page.request, 'guest.getMyPayerPaymentReview', {
+          token,
+          personId: guestId,
+          personToken: joined.personToken,
+        }),
+      );
+      await ownerPage.reload({ waitUntil: 'domcontentloaded' });
+      await expect(ownerPage.getByTestId('finalized-bill-total')).toBeVisible({ timeout: 20_000 });
+      await ensureReceiptTab(ownerPage, 'links');
+      await ownerPage.getByTestId('creator-guest-link-open-1').click();
+      await expect(ownerPage.getByTestId('creator-guest-link-url-1')).toHaveValue(personalUrl);
+      const again = await trpcResult(
+        await trpcMutation(page.request, 'guest.getMyPayerPaymentReview', {
+          token,
+          personId: guestId,
+          personToken: joined.personToken,
+        }),
+      );
+      expect(again).toEqual(review);
+    }
+    await ownerPage.goto('/splits');
+    const card = ownerPage.getByTestId('split-card-' + snapshot.id);
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    await card.locator('a').first().click();
+    await expect(ownerPage.getByTestId('finalized-bill-total')).toBeVisible({ timeout: 20_000 });
+    await ensureReceiptTab(ownerPage, 'links');
+    await ownerPage.getByTestId('creator-guest-link-open-1').click();
+    await expect(ownerPage.getByTestId('creator-guest-link-url-1')).toHaveValue(personalUrl);
   } finally {
     if (token) await trpcMutation(creator, 'guest.expireSession', { token }).catch(() => undefined);
     await creatorBrowser.close();
@@ -6474,6 +6579,7 @@ test('Issue 3.25.4.1: secret-bearing receipt URLs have no referrer and clean sha
 
     await expect(page.getByTestId('claim-join-form')).toHaveCount(0, { timeout: 20_000 });
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await ensureReceiptTab(page, 'links');
     await expect(page.getByTestId('copy-link-btn')).toBeVisible();
     await page.getByTestId('copy-link-btn').click();
     const clipboard = await page.evaluate(() => navigator.clipboard.readText());
@@ -6591,12 +6697,14 @@ test('Issue 10.31: mobile tabs keep receipt data and draft edits', async ({ page
     await page.getByTestId('claim-tab-people').click();
     await expect(page.getByTestId('guest-color-person-0')).toBeVisible();
     await expect(page.getByTestId('claim-item-0')).toBeHidden();
+    await page.getByTestId('claim-tab-links').click();
+    await expect(page.getByTestId('claim-item-0')).toBeHidden();
     await page.getByTestId('claim-tab-items').click();
     await expect(page.getByTestId('dish-parts-input-0-0')).toHaveValue('4');
     await page.getByTestId('dish-parts-cancel-0').click();
     for (const width of [320, 375, 720]) {
       await page.setViewportSize({ width, height: 740 });
-      for (const tab of ['people', 'items']) {
+      for (const tab of ['people', 'items', 'links']) {
         await page.getByTestId('claim-tab-' + tab).click();
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
         expect(overflow).toBeLessThanOrEqual(1);

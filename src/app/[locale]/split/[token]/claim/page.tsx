@@ -1,6 +1,7 @@
 'use client';
 
 import { ReceiptTitleHeading } from '@/components/receipt-title-editor';
+import { ReceiptTabs, type ReceiptTab } from '@/components/receipt-tabs';
 
 import { use, useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
@@ -193,76 +194,6 @@ function CreatorAddGuestPlace({ token }: { token: string }) {
       <Users className="mr-2 size-4 shrink-0" />
       {addPlace.isPending ? t('saving') : t('creatorAddGuestPlace')}
     </Button>
-  );
-}
-
-type ReceiptTab = 'people' | 'items';
-
-// Both panels remain mounted when hidden. Pending requests and unsaved editor
-// drafts must survive tab changes, including switches during an SSE update.
-function ReceiptTabs({
-  activeTab,
-  onSelect,
-  peopleCount,
-  itemCount,
-}: {
-  activeTab: ReceiptTab;
-  onSelect: (tab: ReceiptTab) => void;
-  peopleCount: number;
-  itemCount: number;
-}) {
-  const t = useTranslations('split.claim');
-  const tabs: { id: ReceiptTab; label: string; count: number }[] = [
-    { id: 'people', label: t('tabsPeople'), count: peopleCount },
-    { id: 'items', label: t('tabsItems'), count: itemCount },
-  ];
-
-  return (
-    <div
-      role="tablist"
-      aria-label={t('tabsLabel')}
-      className="grid min-w-0 grid-cols-2 gap-1 rounded-xl border bg-muted/40 p-1"
-      data-testid="claim-receipt-tabs"
-    >
-      {tabs.map(({ id, label, count }) => (
-        <button
-          key={id}
-          type="button"
-          role="tab"
-          id={'claim-' + id + '-tab'}
-          aria-controls={'claim-' + id + '-panel'}
-          aria-selected={activeTab === id}
-          tabIndex={activeTab === id ? 0 : -1}
-          data-testid={'claim-tab-' + id}
-          className={
-            'flex min-h-12 min-w-0 items-center justify-center gap-1 rounded-lg px-2 py-2 text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ' +
-            (activeTab === id
-              ? 'bg-background text-foreground shadow-sm'
-              : 'text-muted-foreground hover:bg-background/70')
-          }
-          onClick={() => onSelect(id)}
-          onKeyDown={(event) => {
-            const next: ReceiptTab | null =
-              event.key === 'ArrowLeft' || event.key === 'Home'
-                ? 'people'
-                : event.key === 'ArrowRight' || event.key === 'End'
-                  ? 'items'
-                  : null;
-            if (!next) return;
-            event.preventDefault();
-            onSelect(next);
-            event.currentTarget.parentElement
-              ?.querySelector<HTMLButtonElement>('[data-testid="claim-tab-' + next + '"]')
-              ?.focus();
-          }}
-        >
-          <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>
-          <span className="rounded-md border bg-muted px-1.5 text-xs tabular-nums" aria-hidden="true">
-            {count}
-          </span>
-        </button>
-      ))}
-    </div>
   );
 }
 
@@ -1166,15 +1097,26 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     }
   }
 
-  async function copyLink() {
-    // Construct the public share link from the origin and pathname only.
-    // Neither a private personal-link fragment nor arbitrary query parameters belong in it.
+  function commonLink(finalized: boolean) {
     const url = new URL(window.location.origin + window.location.pathname);
-    if (await copyToClipboard(url.toString())) {
-      toast.success(t('linkCopied'));
-    } else {
-      toast.error(tc('actions.copyFailed'));
-    }
+    if (finalized) url.pathname = url.pathname.replace(/\/claim$/, '');
+    return url.toString();
+  }
+
+  async function copyLink(finalized: boolean) {
+    if (await copyToClipboard(commonLink(finalized))) toast.success(t('linkCopied'));
+    else toast.error(tc('actions.copyFailed'));
+  }
+
+  async function shareCommonLink(finalized: boolean) {
+    const url = commonLink(finalized);
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: t('tabsLinks'), url });
+      } catch {
+        // User cancelled.
+      }
+    } else await copyLink(finalized);
   }
 
   // Share this person's own link, so they can continue as themselves on another device
@@ -1198,18 +1140,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
     }
     if (await copyToClipboard(link)) {
       toast.success(t('personalLinkCopied'));
-    } else {
-      toast.error(tc('actions.copyFailed'));
-    }
-  }
-
-  async function copyResultLink() {
-    const url = new URL(window.location.href);
-    url.pathname = url.pathname.replace(/\/claim$/, '');
-    url.search = '';
-    url.hash = '';
-    if (await copyToClipboard(url.toString())) {
-      toast.success(t('linkCopied'));
     } else {
       toast.error(tc('actions.copyFailed'));
     }
@@ -1553,6 +1483,72 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
       )
     );
 
+  const linksPanel = (activeTab: ReceiptTab, finalized = false) => (
+    <section
+      id="claim-links-panel"
+      role="tabpanel"
+      aria-labelledby="claim-links-tab"
+      hidden={activeTab !== 'links'}
+      className="min-w-0 space-y-4"
+      data-testid="claim-links-panel"
+    >
+      <Card className="min-w-0">
+        <CardContent className="min-w-0 space-y-3 py-4">
+          <h3 className="font-semibold">{t('commonLinkTitle')}</h3>
+          <div className="flex min-w-0 flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11 min-w-0 flex-1 whitespace-normal"
+              onClick={() => copyLink(finalized)}
+              data-testid="copy-link-btn"
+            >
+              <Copy className="mr-2 size-4 shrink-0" />
+              {t('copyLink')}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11 min-w-0 flex-1 whitespace-normal"
+              onClick={() => shareCommonLink(finalized)}
+              data-testid="share-common-link-btn"
+            >
+              {t('shareCommonLink')}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+      {personToken && (
+        <Card className="min-w-0">
+          <CardContent className="min-w-0 space-y-3 py-4">
+            <h3 className="font-semibold">{t('myPersonalLinkTitle')}</h3>
+            {personalLinkButton}
+            {personalLinkHint}
+          </CardContent>
+        </Card>
+      )}
+      {data.isCreator && data.receiptData.guestSlotsMode && (
+        <Card className="min-w-0" data-testid="creator-personal-links">
+          <CardContent className="min-w-0 space-y-3 py-4">
+            <h3 className="font-semibold">{t('participantLinksTitle')}</h3>
+            {data.people.map((person, idx) =>
+              person.guestSlotNumber === undefined ? null : (
+                <div
+                  key={person.id}
+                  className="min-w-0 space-y-2 border-t pt-3"
+                  data-testid={'creator-link-person-' + idx}
+                >
+                  <p className="font-medium [overflow-wrap:anywhere]">{person.name}</p>
+                  {creatorGuestLinkControls(person, idx)}
+                </div>
+              ),
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </section>
+  );
+
   // Asks before this device becomes the person a personal link names. If this device joined
   // as someone else, says so: continuing replaces them here, and only their own personal link
   // brings them back.
@@ -1686,6 +1682,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
   );
 
   if (data.status === 'FINALIZED') {
+    const finalizedTab = receiptTab === 'links' ? 'links' : 'items';
     return (
       <div className="space-y-6 pb-8">
         {linkOfferCard}
@@ -1703,358 +1700,373 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           <p className="text-muted-foreground">{t('sessionFinalizedDescription')}</p>
         </div>
 
-        {/* The finalized settlement must distinguish the original food bill
+        <ReceiptTabs
+          activeTab={finalizedTab}
+          onSelect={setReceiptTab}
+          peopleCount={data.people.length}
+          itemCount={data.items.length}
+          finalized
+        />
+        <section
+          id="claim-items-panel"
+          role="tabpanel"
+          aria-labelledby="claim-items-tab"
+          hidden={finalizedTab !== 'items'}
+          className="min-w-0 space-y-6"
+        >
+          {/* The finalized settlement must distinguish the original food bill
             from everyone's individual voluntary tips. For the RUB manual flow
             this is also the amount the sole payer passes on to the waiter. */}
-        <Card className="bg-primary/5 border-primary/20">
-          <CardContent className="space-y-3 py-4">
-            {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0 && (
-              <>
-                <div className="flex min-w-0 justify-between gap-3 text-sm">
-                  <span>{t('dishesTotal')}</span>
-                  <span className="shrink-0 tabular-nums" data-testid="finalized-food-total">
-                    {formatCents(data.receiptData.total, currency, locale)}
-                  </span>
-                </div>
-                <div className="flex min-w-0 justify-between gap-3 text-sm">
-                  <span>{isPrivatePayerView ? t('tipDeclaredBeforeFinalize') : t('tipForWaiter')}</span>
-                  <span className="shrink-0 tabular-nums" data-testid="finalized-waiter-tip-total">
-                    {formatCents(finalizedPersonalTips, currency, locale)}
-                  </span>
-                </div>
-                {isPrivatePayerView && (
-                  <>
-                    <div className="flex min-w-0 justify-between gap-3 text-sm">
-                      <span className="min-w-0 [overflow-wrap:anywhere]">{t('tipAddedFromTransfers')}</span>
-                      <span className="shrink-0 tabular-nums" data-testid="finalized-extra-waiter-tips">
-                        {combinedTotals ? formatCents(payerActual!.extraTips, currency, locale) : '—'}
-                      </span>
-                    </div>
-                    <div className="flex min-w-0 justify-between gap-3 font-semibold text-sm">
-                      <span className="min-w-0 [overflow-wrap:anywhere]">{t('tipForWaiter')}</span>
-                      <span className="shrink-0 tabular-nums" data-testid="finalized-combined-waiter-tips">
-                        {combinedTotals ? formatCents(combinedTotals.tipCents, currency, locale) : '—'}
-                      </span>
-                    </div>
-                  </>
-                )}
-                <Separator />
-              </>
-            )}
-            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-              <span className="font-semibold text-lg">
-                {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0
-                  ? isPrivatePayerView
-                    ? t('totalWithAllTips')
-                    : t('totalWithTips')
-                  : t('totalBill')}
-              </span>
-              <span className="text-2xl font-bold text-primary" data-testid="finalized-bill-total">
-                {isPrivatePayerView
-                  ? combinedTotals
-                    ? formatCents(combinedTotals.totalCents, currency, locale)
-                    : '—'
-                  : formatCents(finalizedTotal, currency, locale)}
-              </span>
-            </div>
-            {isPrivatePayerView && !combinedTotals && (
-              <p className="text-xs text-muted-foreground" role="status" data-testid="finalized-live-tips-unavailable">
-                {t('payerLiveTotalsUnavailable')}
-              </p>
-            )}
-            {!isPrivatePayerView && (
-              <p className="text-xs text-muted-foreground">{t('payerOriginalTotalsWithoutExtra')}</p>
-            )}
-          </CardContent>
-        </Card>
-
-        {payerReimbursements && (
-          <Card data-testid="guest-payer-reimbursements">
+          <Card className="bg-primary/5 border-primary/20">
             <CardContent className="space-y-3 py-4">
-              <h3 className="font-semibold">{t('payerReimbursementsTitle')}</h3>
-              <p className="text-xs text-muted-foreground">{t('payerReimbursementsNote')}</p>
-              <div className="min-w-0 divide-y divide-border/70" data-testid="guest-payer-reimbursement-rows">
-                {payerReimbursements.map((person) => (
-                  <div
-                    key={person.personIndex}
-                    className="min-w-0 space-y-1 py-3 first:pt-1 last:pb-1"
-                    data-testid={'guest-payer-reimbursement-row-' + person.personIndex}
-                  >
-                    {/* A two-column layout that wraps the ENTIRE amount if the
+              {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0 && (
+                <>
+                  <div className="flex min-w-0 justify-between gap-3 text-sm">
+                    <span>{t('dishesTotal')}</span>
+                    <span className="shrink-0 tabular-nums" data-testid="finalized-food-total">
+                      {formatCents(data.receiptData.total, currency, locale)}
+                    </span>
+                  </div>
+                  <div className="flex min-w-0 justify-between gap-3 text-sm">
+                    <span>{isPrivatePayerView ? t('tipDeclaredBeforeFinalize') : t('tipForWaiter')}</span>
+                    <span className="shrink-0 tabular-nums" data-testid="finalized-waiter-tip-total">
+                      {formatCents(finalizedPersonalTips, currency, locale)}
+                    </span>
+                  </div>
+                  {isPrivatePayerView && (
+                    <>
+                      <div className="flex min-w-0 justify-between gap-3 text-sm">
+                        <span className="min-w-0 [overflow-wrap:anywhere]">{t('tipAddedFromTransfers')}</span>
+                        <span className="shrink-0 tabular-nums" data-testid="finalized-extra-waiter-tips">
+                          {combinedTotals ? formatCents(payerActual!.extraTips, currency, locale) : '—'}
+                        </span>
+                      </div>
+                      <div className="flex min-w-0 justify-between gap-3 font-semibold text-sm">
+                        <span className="min-w-0 [overflow-wrap:anywhere]">{t('tipForWaiter')}</span>
+                        <span className="shrink-0 tabular-nums" data-testid="finalized-combined-waiter-tips">
+                          {combinedTotals ? formatCents(combinedTotals.tipCents, currency, locale) : '—'}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                  <Separator />
+                </>
+              )}
+              <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-lg">
+                  {currency === 'RUB' && data.receiptData.tax === 0 && data.receiptData.tip === 0
+                    ? isPrivatePayerView
+                      ? t('totalWithAllTips')
+                      : t('totalWithTips')
+                    : t('totalBill')}
+                </span>
+                <span className="text-2xl font-bold text-primary" data-testid="finalized-bill-total">
+                  {isPrivatePayerView
+                    ? combinedTotals
+                      ? formatCents(combinedTotals.totalCents, currency, locale)
+                      : '—'
+                    : formatCents(finalizedTotal, currency, locale)}
+                </span>
+              </div>
+              {isPrivatePayerView && !combinedTotals && (
+                <p
+                  className="text-xs text-muted-foreground"
+                  role="status"
+                  data-testid="finalized-live-tips-unavailable"
+                >
+                  {t('payerLiveTotalsUnavailable')}
+                </p>
+              )}
+              {!isPrivatePayerView && (
+                <p className="text-xs text-muted-foreground">{t('payerOriginalTotalsWithoutExtra')}</p>
+              )}
+            </CardContent>
+          </Card>
+
+          {payerReimbursements && (
+            <Card data-testid="guest-payer-reimbursements">
+              <CardContent className="space-y-3 py-4">
+                <h3 className="font-semibold">{t('payerReimbursementsTitle')}</h3>
+                <p className="text-xs text-muted-foreground">{t('payerReimbursementsNote')}</p>
+                <div className="min-w-0 divide-y divide-border/70" data-testid="guest-payer-reimbursement-rows">
+                  {payerReimbursements.map((person) => (
+                    <div
+                      key={person.personIndex}
+                      className="min-w-0 space-y-1 py-3 first:pt-1 last:pb-1"
+                      data-testid={'guest-payer-reimbursement-row-' + person.personIndex}
+                    >
+                      {/* A two-column layout that wraps the ENTIRE amount if the
                         available width cannot fit a readable name and amount.
                         Group member names always occupy a separate line. */}
-                    <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm">
-                      <span
-                        className="min-w-[min(100%,7rem)] flex-1 break-words"
-                        data-testid={'guest-payer-reimbursement-name-' + person.personIndex}
-                      >
-                        {person.name}
-                      </span>
-                      <span
-                        className="ml-auto shrink-0 whitespace-nowrap text-right tabular-nums"
-                        data-testid={'guest-payer-reimbursement-' + person.personIndex}
-                      >
-                        {formatCents(person.total, currency, locale)}
-                      </span>
+                      <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm">
+                        <span
+                          className="min-w-[min(100%,7rem)] flex-1 break-words"
+                          data-testid={'guest-payer-reimbursement-name-' + person.personIndex}
+                        >
+                          {person.name}
+                        </span>
+                        <span
+                          className="ml-auto shrink-0 whitespace-nowrap text-right tabular-nums"
+                          data-testid={'guest-payer-reimbursement-' + person.personIndex}
+                        >
+                          {formatCents(person.total, currency, locale)}
+                        </span>
+                      </div>
+                      {'memberNames' in person && person.memberNames && person.memberNames.length > 1 && (
+                        <p
+                          className="min-w-0 break-words text-xs leading-relaxed text-muted-foreground"
+                          data-testid={'guest-payer-group-members-' + person.personIndex}
+                        >
+                          {t('paymentGroupMembers', { names: person.memberNames.join(', ') })}
+                        </p>
+                      )}
                     </div>
-                    {'memberNames' in person && person.memberNames && person.memberNames.length > 1 && (
-                      <p
-                        className="min-w-0 break-words text-xs leading-relaxed text-muted-foreground"
-                        data-testid={'guest-payer-group-members-' + person.personIndex}
-                      >
-                        {t('paymentGroupMembers', { names: person.memberNames.join(', ') })}
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <Separator />
-              <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm">
-                <span className="min-w-0 flex-1 break-words">{t('payerOwnShare')}</span>
-                <span
-                  className="ml-auto shrink-0 whitespace-nowrap text-right tabular-nums"
-                  data-testid="guest-payer-own-share"
-                >
-                  {formatCents(payerSummary?.total ?? 0, currency, locale)}
-                </span>
-              </div>
-              <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 font-semibold">
-                <span className="min-w-0 flex-1 break-words">{t('payerFromOthers')}</span>
-                <span
-                  className="ml-auto shrink-0 whitespace-nowrap text-right tabular-nums"
-                  data-testid="guest-payer-reimbursement-total"
-                >
-                  {formatCents(payerReimbursementTotal, currency, locale)}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {payerReimbursements && myPersonId && personToken && (
-          <GuestPayerPaymentReview
-            key={`payer-review:${personToken}`}
-            token={token}
-            personId={myPersonId}
-            personToken={personToken}
-            people={data.people}
-            onActualTotals={onActualTotals}
-          />
-        )}
-
-        {payerReimbursements && myPersonId && personToken && (
-          <GuestPayerSbpForm
-            key={`payer-sbp:${personToken}`}
-            token={token}
-            personId={myPersonId}
-            personToken={personToken}
-          />
-        )}
-
-        {/* The participant's own receipt amount is not a verified SBP payment.
-            The payer's personal token sees the payer summary instead. */}
-        {personalReimbursement && (
-          <Card data-testid="guest-personal-reimbursement">
-            <CardContent className="space-y-2 py-4">
-              <p className="text-sm font-medium">
-                {t('personalReimbursementTo', {
-                  name: data.people[data.paidByIndex]?.name ?? t('personFallback', { index: data.paidByIndex + 1 }),
-                })}
-              </p>
-              {myPaymentGroup?.grouped && (
-                <div className="min-w-0 space-y-1" data-testid="guest-group-reimbursement-detail">
-                  <p className="text-sm font-semibold">{t('paymentGroupTotal')}</p>
-                  <p className="break-words text-xs text-muted-foreground">
-                    {t('paymentGroupMembers', {
-                      names: myPaymentGroup.memberIndices.map((index) => data.people[index]!.name).join(', '),
-                    })}
-                  </p>
-                  {myPaymentGroup.members.map((member) => (
-                    <p key={member.personId} className="flex min-w-0 flex-wrap justify-between gap-2 text-xs">
-                      <span className="min-w-0 break-words">{data.people[member.personIndex]!.name}</span>
-                      <span className="tabular-nums">{formatCents(member.amountCents, currency, locale)}</span>
-                    </p>
                   ))}
                 </div>
-              )}
-              <p
-                className="min-w-0 max-w-full select-text text-2xl font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
-                data-testid="guest-personal-reimbursement-amount"
-              >
-                {formatCents(personalReimbursement.total, currency, locale)}
-              </p>
-              {senderReceipt && senderReceipt.receivedCents > 0 && (
-                <GuestSenderReceiptSummary receipt={senderReceipt} grouped={myPaymentGroup?.grouped ?? false} />
-              )}
-              {canDeclareGroupPayment && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="min-h-11 w-full"
-                  onClick={() => copyReimbursementAmount(personalReimbursement.total)}
-                  data-testid="guest-copy-reimbursement-amount"
-                >
-                  <Copy className="mr-2 size-4" aria-hidden="true" />
-                  {t('copyReimbursementAmount')}
-                </Button>
-              )}
-              {canDeclareGroupPayment && myPersonId && personToken && (
-                <GuestSbpReimbursementDetails
-                  key={`reimbursement-details:${personToken}`}
-                  token={token}
-                  personId={myPersonId}
-                  personToken={personToken}
-                  payerName={
-                    data.people[data.paidByIndex]?.name ?? t('personFallback', { index: data.paidByIndex + 1 })
-                  }
-                />
-              )}
-              {myPersonId && personToken && (
-                <GuestPaymentDeclaration
-                  key={`payment-declaration:${personToken}`}
-                  token={token}
-                  personId={myPersonId}
-                  personToken={personToken}
-                  canDeclare={canDeclareGroupPayment}
-                  onActualReceipt={onActualReceipt}
-                  amountLabel={formatCents(personalReimbursement.total, currency, locale)}
-                />
-              )}
-              <p className="text-xs text-muted-foreground">{t('personalReimbursementNote')}</p>
-            </CardContent>
-          </Card>
-        )}
+                <Separator />
+                <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm">
+                  <span className="min-w-0 flex-1 break-words">{t('payerOwnShare')}</span>
+                  <span
+                    className="ml-auto shrink-0 whitespace-nowrap text-right tabular-nums"
+                    data-testid="guest-payer-own-share"
+                  >
+                    {formatCents(payerSummary?.total ?? 0, currency, locale)}
+                  </span>
+                </div>
+                <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 font-semibold">
+                  <span className="min-w-0 flex-1 break-words">{t('payerFromOthers')}</span>
+                  <span
+                    className="ml-auto shrink-0 whitespace-nowrap text-right tabular-nums"
+                    data-testid="guest-payer-reimbursement-total"
+                  >
+                    {formatCents(payerReimbursementTotal, currency, locale)}
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
-        {/* Per-person summary */}
-        {data.summary && data.summary.length > 0 && (
-          <div className="space-y-3">
-            <h3 className="font-semibold text-base">{t('perPersonTotals')}</h3>
-            {personalReceiptSections(data.summary, data.people, displayActorId, data.isCreator).map((section) => (
-              <div
-                key={section.key}
-                className={section.representativeId ? 'min-w-0 space-y-2 rounded-xl border bg-muted/20 p-3' : 'min-w-0'}
-                data-testid={section.representativeId ? 'finalized-group-' + section.representativeId : undefined}
-              >
-                {section.representativeId && (
-                  <div className="min-w-0 space-y-1">
-                    <p className="font-semibold text-sm">Группа</p>
-                    <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                      {t('paymentGroupResponsible')}:{' '}
-                      {section.representativeNameIndex === null
-                        ? '—'
-                        : data.people[section.representativeNameIndex]?.name}
+          {payerReimbursements && myPersonId && personToken && (
+            <GuestPayerPaymentReview
+              key={`payer-review:${personToken}`}
+              token={token}
+              personId={myPersonId}
+              personToken={personToken}
+              people={data.people}
+              onActualTotals={onActualTotals}
+            />
+          )}
+
+          {payerReimbursements && myPersonId && personToken && (
+            <GuestPayerSbpForm
+              key={`payer-sbp:${personToken}`}
+              token={token}
+              personId={myPersonId}
+              personToken={personToken}
+            />
+          )}
+
+          {/* The participant's own receipt amount is not a verified SBP payment.
+            The payer's personal token sees the payer summary instead. */}
+          {personalReimbursement && (
+            <Card data-testid="guest-personal-reimbursement">
+              <CardContent className="space-y-2 py-4">
+                <p className="text-sm font-medium">
+                  {t('personalReimbursementTo', {
+                    name: data.people[data.paidByIndex]?.name ?? t('personFallback', { index: data.paidByIndex + 1 }),
+                  })}
+                </p>
+                {myPaymentGroup?.grouped && (
+                  <div className="min-w-0 space-y-1" data-testid="guest-group-reimbursement-detail">
+                    <p className="text-sm font-semibold">{t('paymentGroupTotal')}</p>
+                    <p className="break-words text-xs text-muted-foreground">
+                      {t('paymentGroupMembers', {
+                        names: myPaymentGroup.memberIndices.map((index) => data.people[index]!.name).join(', '),
+                      })}
                     </p>
-                    {section.detachedOwnMember && (
-                      <p className="text-xs text-muted-foreground">Вы состоите в этой группе</p>
-                    )}
+                    {myPaymentGroup.members.map((member) => (
+                      <p key={member.personId} className="flex min-w-0 flex-wrap justify-between gap-2 text-xs">
+                        <span className="min-w-0 break-words">{data.people[member.personIndex]!.name}</span>
+                        <span className="tabular-nums">{formatCents(member.amountCents, currency, locale)}</span>
+                      </p>
+                    ))}
                   </div>
                 )}
-                {section.members.map(({ person, muted }) => (
-                  <Card
-                    key={person.personIndex}
-                    className="border-l-4"
-                    data-testid={'finalized-person-card-' + person.personIndex}
-                    style={{
-                      borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex),
-                      opacity: muted ? 0.5 : 1,
-                    }}
+                <p
+                  className="min-w-0 max-w-full select-text text-2xl font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
+                  data-testid="guest-personal-reimbursement-amount"
+                >
+                  {formatCents(personalReimbursement.total, currency, locale)}
+                </p>
+                {senderReceipt && senderReceipt.receivedCents > 0 && (
+                  <GuestSenderReceiptSummary receipt={senderReceipt} grouped={myPaymentGroup?.grouped ?? false} />
+                )}
+                {canDeclareGroupPayment && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11 w-full"
+                    onClick={() => copyReimbursementAmount(personalReimbursement.total)}
+                    data-testid="guest-copy-reimbursement-amount"
                   >
-                    <CardContent className="py-3">
-                      <div className="min-w-0 space-y-2" data-testid={'finalized-person-layout-' + person.personIndex}>
-                        <div className="flex min-w-0 items-start gap-3">
-                          <Avatar className="h-8 w-8 shrink-0">
-                            <AvatarFallback
-                              className="text-xs font-semibold"
-                              style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
-                            >
-                              {getInitials(person.name)}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div className="min-w-0 flex-1 space-y-1">
-                            <span
-                              className="block min-w-0 font-medium [overflow-wrap:anywhere]"
-                              data-testid={'finalized-person-name-' + person.personIndex}
-                            >
-                              {person.name}
-                              {person.personIndex === displayActorIndex && ' ' + t('you')}
-                            </span>
-                            <div
-                              className="flex min-w-0 flex-wrap items-center gap-1"
-                              data-testid={'finalized-person-badges-' + person.personIndex}
-                            >
-                              {roleMarks(person.personIndex)}
-                              {accountMark(person.personIndex)}
+                    <Copy className="mr-2 size-4" aria-hidden="true" />
+                    {t('copyReimbursementAmount')}
+                  </Button>
+                )}
+                {canDeclareGroupPayment && myPersonId && personToken && (
+                  <GuestSbpReimbursementDetails
+                    key={`reimbursement-details:${personToken}`}
+                    token={token}
+                    personId={myPersonId}
+                    personToken={personToken}
+                    payerName={
+                      data.people[data.paidByIndex]?.name ?? t('personFallback', { index: data.paidByIndex + 1 })
+                    }
+                  />
+                )}
+                {myPersonId && personToken && (
+                  <GuestPaymentDeclaration
+                    key={`payment-declaration:${personToken}`}
+                    token={token}
+                    personId={myPersonId}
+                    personToken={personToken}
+                    canDeclare={canDeclareGroupPayment}
+                    onActualReceipt={onActualReceipt}
+                    amountLabel={formatCents(personalReimbursement.total, currency, locale)}
+                  />
+                )}
+                <p className="text-xs text-muted-foreground">{t('personalReimbursementNote')}</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Per-person summary */}
+          {data.summary && data.summary.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="font-semibold text-base">{t('perPersonTotals')}</h3>
+              {personalReceiptSections(data.summary, data.people, displayActorId, data.isCreator).map((section) => (
+                <div
+                  key={section.key}
+                  className={
+                    section.representativeId ? 'min-w-0 space-y-2 rounded-xl border bg-muted/20 p-3' : 'min-w-0'
+                  }
+                  data-testid={section.representativeId ? 'finalized-group-' + section.representativeId : undefined}
+                >
+                  {section.representativeId && (
+                    <div className="min-w-0 space-y-1">
+                      <p className="font-semibold text-sm">Группа</p>
+                      <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                        {t('paymentGroupResponsible')}:{' '}
+                        {section.representativeNameIndex === null
+                          ? '—'
+                          : data.people[section.representativeNameIndex]?.name}
+                      </p>
+                      {section.detachedOwnMember && (
+                        <p className="text-xs text-muted-foreground">Вы состоите в этой группе</p>
+                      )}
+                    </div>
+                  )}
+                  {section.members.map(({ person, muted }) => (
+                    <Card
+                      key={person.personIndex}
+                      className="border-l-4"
+                      data-testid={'finalized-person-card-' + person.personIndex}
+                      style={{
+                        borderLeftColor: guestVisualColorBorder(data.people[person.personIndex], person.personIndex),
+                        opacity: muted ? 0.5 : 1,
+                      }}
+                    >
+                      <CardContent className="py-3">
+                        <div
+                          className="min-w-0 space-y-2"
+                          data-testid={'finalized-person-layout-' + person.personIndex}
+                        >
+                          <div className="flex min-w-0 items-start gap-3">
+                            <Avatar className="h-8 w-8 shrink-0">
+                              <AvatarFallback
+                                className="text-xs font-semibold"
+                                style={guestVisualColorStyle(data.people[person.personIndex], person.personIndex)}
+                              >
+                                {getInitials(person.name)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <span
+                                className="block min-w-0 font-medium [overflow-wrap:anywhere]"
+                                data-testid={'finalized-person-name-' + person.personIndex}
+                              >
+                                {person.name}
+                                {person.personIndex === displayActorIndex && ' ' + t('you')}
+                              </span>
+                              <div
+                                className="flex min-w-0 flex-wrap items-center gap-1"
+                                data-testid={'finalized-person-badges-' + person.personIndex}
+                              >
+                                {roleMarks(person.personIndex)}
+                                {accountMark(person.personIndex)}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                        <div className="flex min-w-0 justify-end border-t pt-2">
-                          <span
-                            data-testid={'finalized-person-total-' + person.personIndex}
-                            className="max-w-full text-right text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
-                          >
-                            {formatCents(person.total, currency, locale)}
-                          </span>
-                        </div>
-                      </div>
-                      {person.personIndex === myPersonIndex && senderReceipt && senderReceipt.extraTipCents > 0 && (
-                        <div
-                          className="mt-2 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm"
-                          data-testid="guest-own-finalized-extra-tip"
-                        >
-                          <span className="min-w-0 flex-1 break-words">{t('payerAdditionalTips')}</span>
-                          <span className="ml-auto shrink-0 whitespace-nowrap tabular-nums">
-                            {formatCents(senderReceipt.extraTipCents, currency, locale)}
-                          </span>
-                        </div>
-                      )}
-                      {'roundingCorrectionCents' in person &&
-                        typeof person.roundingCorrectionCents === 'number' &&
-                        person.roundingCorrectionCents > 0 && (
-                          <div
-                            className="mt-2 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
-                            data-testid={'guest-finalized-rounding-correction-' + person.personIndex}
-                          >
-                            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-                              {t('organizerRoundingCorrection')}
+                          <div className="flex min-w-0 justify-end border-t pt-2">
+                            <span
+                              data-testid={'finalized-person-total-' + person.personIndex}
+                              className="max-w-full text-right text-lg font-bold text-primary tabular-nums [overflow-wrap:anywhere]"
+                            >
+                              {formatCents(person.total, currency, locale)}
                             </span>
-                            <span className="shrink-0 tabular-nums">
-                              {formatCents(person.roundingCorrectionCents, currency, locale)}
+                          </div>
+                        </div>
+                        {person.personIndex === myPersonIndex && senderReceipt && senderReceipt.extraTipCents > 0 && (
+                          <div
+                            className="mt-2 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm"
+                            data-testid="guest-own-finalized-extra-tip"
+                          >
+                            <span className="min-w-0 flex-1 break-words">{t('payerAdditionalTips')}</span>
+                            <span className="ml-auto shrink-0 whitespace-nowrap tabular-nums">
+                              {formatCents(senderReceipt.extraTipCents, currency, locale)}
                             </span>
                           </div>
                         )}
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
+                        {'roundingCorrectionCents' in person &&
+                          typeof person.roundingCorrectionCents === 'number' &&
+                          person.roundingCorrectionCents > 0 && (
+                            <div
+                              className="mt-2 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
+                              data-testid={'guest-finalized-rounding-correction-' + person.personIndex}
+                            >
+                              <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                                {t('organizerRoundingCorrection')}
+                              </span>
+                              <span className="shrink-0 tabular-nums">
+                                {formatCents(person.roundingCorrectionCents, currency, locale)}
+                              </span>
+                            </div>
+                          )}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
 
-        {/* Actions */}
-        <div className="space-y-3">
-          <Link
-            href={'/split/' + token}
-            className={buttonVariants({
-              className: 'min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center leading-tight',
-            })}
-            data-testid="guest-view-summary-link"
-          >
-            <ArrowRight className="mr-2 h-4 w-4" />
-            {t('viewSummary')}
-          </Link>
-          <Button
-            variant="outline"
-            className="min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center leading-tight"
-            onClick={copyResultLink}
-            data-testid="copy-link-btn"
-          >
-            <Link2 className="mr-2 h-4 w-4" />
-            {t('copyLink')}
-          </Button>
-          {personalLinkButton}
-          {personalLinkHint}
-          <ReceiptLinkExpiry expiresAt={data.expiresAt} />
-        </div>
+          {/* Actions */}
+          <div className="space-y-3">
+            <Link
+              href={'/split/' + token}
+              className={buttonVariants({
+                className:
+                  'min-h-11 w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] text-center leading-tight',
+              })}
+              data-testid="guest-view-summary-link"
+            >
+              <ArrowRight className="mr-2 h-4 w-4" />
+              {t('viewSummary')}
+            </Link>
+            <ReceiptLinkExpiry expiresAt={data.expiresAt} />
+          </div>
+        </section>
+        {linksPanel(finalizedTab, true)}
       </div>
     );
   }
@@ -2099,12 +2111,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
           hidden={joinTab !== 'people'}
           className="min-w-0 space-y-6"
         >
-          {/* Copy link */}
-          <Button type="button" variant="outline" size="sm" onClick={copyLink} data-testid="copy-link-btn">
-            <Link2 className="mr-2 h-4 w-4" />
-            {t('copyLink')}
-          </Button>
-
           {data.isCreator && data.status === 'CLAIMING' && <CreatorAddGuestPlace token={token} />}
 
           {payerChangePanel}
@@ -2202,7 +2208,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                             )}
                           </>
                         )}
-                        {creatorGuestLinkControls(person, idx)}
                       </div>
                     );
                   })}
@@ -2422,6 +2427,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
             </Card>
           ))}
         </section>
+        {linksPanel(joinTab)}
       </div>
     );
   }
@@ -2458,15 +2464,7 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
         peopleCount={data.people.length}
         itemCount={data.items.length}
       />
-      {/* Copy link, and this person's own link for their other devices */}
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={copyLink} data-testid="copy-link-btn">
-          <Link2 className="mr-2 h-4 w-4" />
-          {t('copyLink')}
-        </Button>
-        {personalLinkButton}
-      </div>
-      {personalLinkHint}
+      {linksPanel(receiptTab)}
 
       <section
         id="claim-people-panel"
@@ -2616,7 +2614,6 @@ export default function ClaimPage({ params }: { params: Promise<{ token: string 
                             )}
                         </div>
                       )}
-                      {creatorGuestLinkControls(person, idx)}
                     </div>
                   );
                 })}
