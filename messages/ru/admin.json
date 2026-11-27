@@ -4,7 +4,11 @@
     "title": "Состояние системы",
     "version": "Версия",
     "uptime": "Время работы",
-    "started": "Запущено: {time}"
+    "started": "Запущено: {time}",
+    "releaseTask": "Последняя реализованная задача",
+    "pullRequest": "Pull Request",
+    "deployedAt": "Дата и время развёртывания",
+    "notAvailable": "Нет сведений"
   },
   "storage": {
     "title": "Статистика чеков",

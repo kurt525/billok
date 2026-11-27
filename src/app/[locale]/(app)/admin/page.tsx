@@ -121,7 +121,7 @@ function SystemHealthSection() {
               className="block min-w-0 text-sm font-medium [overflow-wrap:anywhere]"
               data-testid="admin-system-version"
             >
-              v{data?.version}
+              {data?.version ? 'v' + data.version : t('systemHealth.notAvailable')}
             </span>
             {data?.commitSha && data.commitSha !== 'unknown' && (
               <span
@@ -131,6 +131,54 @@ function SystemHealthSection() {
                 ({data.commitSha})
               </span>
             )}
+            <dl className="mt-3 min-w-0 space-y-3 text-sm [overflow-wrap:anywhere]">
+              <div>
+                <dt className="text-xs text-muted-foreground">{t('systemHealth.releaseTask')}</dt>
+                <dd data-testid="admin-system-release-task">
+                  {data?.release ? (
+                    <>
+                      <span className="block font-medium">{data.release.taskId}</span>
+                      <span className="block">{data.release.taskTitle}</span>
+                    </>
+                  ) : (
+                    t('systemHealth.notAvailable')
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">{t('systemHealth.pullRequest')}</dt>
+                <dd data-testid="admin-system-release-pr">
+                  {data?.release ? (
+                    <a
+                      className="inline-flex min-h-11 items-center text-primary underline [overflow-wrap:anywhere]"
+                      href={`https://github.com/kurt525/billok/pull/${data.release.pullRequest}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      #{data.release.pullRequest}
+                    </a>
+                  ) : (
+                    t('systemHealth.notAvailable')
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">{t('systemHealth.deployedAt')}</dt>
+                <dd data-testid="admin-system-deployed-at">
+                  {data?.deployedAt
+                    ? new Date(data.deployedAt).toLocaleString(locale, {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        timeZoneName: 'short',
+                      })
+                    : t('systemHealth.notAvailable')}
+                </dd>
+              </div>
+            </dl>
           </CardContent>
         </Card>
 

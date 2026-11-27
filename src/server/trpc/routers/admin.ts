@@ -10,7 +10,7 @@ import { getRecentLogs } from '@/server/lib/logger';
 import { deleteGroupWithData } from '@/server/lib/group-delete';
 import { lockGroupMembers } from '@/server/lib/group-balances';
 import { countUnusedReceipts, deleteExpiredSplits, deleteUnusedReceipts } from '@/server/lib/receipt-cleanup';
-import { getBuildInfo } from '@/server/lib/build-info';
+import { getBuildInfo, getDeploymentDate } from '@/server/lib/build-info';
 import { REGISTRATION_MODES, readRegistrationMode } from '@/server/lib/registration-mode';
 import { activeSystemInviteWindow, SYSTEM_INVITE_TTL_MS } from '@/server/lib/system-invite-lifetime';
 import { totalsInGroupCurrency } from '@/server/lib/group-expense-totals';
@@ -21,7 +21,8 @@ import { systemInviteCreateApprovalTarget } from '@/lib/system-invite-approval-t
 import { registrationModeApprovalTarget, announcementApprovalTarget } from '@/lib/admin-setting-approval-target';
 
 const serverStartTime = new Date();
-const { version: cachedVersion, commitSha: cachedCommitSha } = getBuildInfo();
+const buildInfo = getBuildInfo();
+const { version: cachedVersion, commitSha: cachedCommitSha } = buildInfo;
 
 // All admin procedures, including the 6.11 registered-user page,
 // share one owner policy. Impersonation never grants owner authority.
@@ -165,6 +166,8 @@ export const adminRouter = createTRPCRouter({
   getSystemHealth: adminProcedure.query(() => ({
     version: cachedVersion,
     commitSha: cachedCommitSha,
+    release: buildInfo.release,
+    deployedAt: getDeploymentDate(buildInfo),
     serverStartTime: serverStartTime.toISOString(),
     uptime: Math.floor((Date.now() - serverStartTime.getTime()) / 1000),
   })),

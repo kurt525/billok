@@ -743,6 +743,12 @@ describe('unused receipts', () => {
     expect(info).toEqual({
       version: expect.stringMatching(/^\d+\.\d+\.\d+$/),
       commitSha: expect.any(String),
+      release: expect.objectContaining({
+        taskId: expect.stringMatching(/^TASK-BILLOK-\d{3,}$/),
+        taskTitle: expect.any(String),
+        pullRequest: expect.any(Number),
+      }),
+      deployedAt: null,
       serverStartTime: expect.any(String),
       uptime: expect.any(Number),
     });

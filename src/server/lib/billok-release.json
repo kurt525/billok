@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "version": "1.1.0",
+  "taskId": "TASK-BILLOK-008",
+  "taskTitle": "Переработка панели администрирования",
+  "pullRequest": 33
+}

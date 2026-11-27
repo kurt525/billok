@@ -1339,6 +1339,8 @@ test('mobile admin health and manual receipt cards fit eight widths', async ({ p
         json: {
           version: longValue,
           commitSha: 'a'.repeat(96),
+          release: { taskId: 'TASK-BILLOK-008', taskTitle: longValue, pullRequest: 33 },
+          deployedAt: '2026-10-19T10:00:00.000Z',
           uptime: 3600,
           serverStartTime: '2026-10-20T10:00:00.000Z',
         },
@@ -1369,6 +1371,14 @@ test('mobile admin health and manual receipt cards fit eight widths', async ({ p
     const storage = page.getByTestId('admin-storage-stats');
     await expect(health.getByTestId('admin-system-version')).toContainText(longValue);
     await expect(health.getByTestId('admin-system-commit')).toContainText('a'.repeat(96));
+    await expect(health.getByTestId('admin-system-release-task')).toContainText('TASK-BILLOK-008');
+    await expect(health.getByTestId('admin-system-release-task')).toContainText(longValue);
+    const pr = health.getByTestId('admin-system-release-pr').getByRole('link', { name: '#33' });
+    await expect(pr).toHaveAttribute('href', 'https://github.com/kurt525/billok/pull/33');
+    expect((await pr.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await expect(health.getByTestId('admin-system-deployed-at')).not.toContainText('Нет сведений');
+    await expect(health.getByTestId('admin-system-deployed-at')).toContainText('19.10.2026');
+
     await expect(health.getByText('База данных', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('admin-activity-section')).toHaveCount(0);
     await expect(storage.getByTestId('admin-receipt-count-total')).toContainText('5');
@@ -1398,6 +1408,24 @@ test('mobile admin health and manual receipt cards fit eight widths', async ({ p
   }
   expect(healthReads).toBeGreaterThanOrEqual(8);
   expect(storageReads).toBeGreaterThanOrEqual(8);
+});
+
+test('TASK-BILLOK-008 release metadata is local and an unconfirmed deployment date stays unknown', async ({ page }) => {
+  await signInAsOwnerAdmin(page);
+  let githubRequests = 0;
+  await page.route('https://github.com/**', async (route) => {
+    githubRequests++;
+    await route.abort();
+  });
+  await page.goto('/admin', { waitUntil: 'networkidle' });
+  const health = page.getByTestId('admin-system-health');
+  await expect(health.getByTestId('admin-system-release-task')).toContainText('TASK-BILLOK-');
+  await expect(health.getByTestId('admin-system-release-pr').getByRole('link')).toHaveAttribute(
+    'href',
+    /^https:\/\/github\.com\/kurt525\/billok\/pull\/\d+$/,
+  );
+  await expect(health.getByTestId('admin-system-deployed-at')).toHaveText('Нет сведений');
+  expect(githubRequests).toBe(0);
 });
 
 test('TASK-BILLOK-008 statistics failure is not displayed as zero and can be retried', async ({ page }) => {
