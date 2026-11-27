@@ -160,6 +160,7 @@ test.describe('BillOK — share-link UI of the unified receipt', () => {
       await page.goto('/split/' + receipt.shareToken + '/claim');
       await expect(page.getByText('Пиццерия').first()).toBeVisible();
       await expect(page.getByText('Большая пицца').first()).toBeVisible();
+      await page.getByTestId('claim-tab-links').click();
       await expect(page.getByTestId('copy-link-btn')).toBeVisible();
     } finally {
       await ctx.dispose();

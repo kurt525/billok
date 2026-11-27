@@ -252,7 +252,9 @@ test.describe('Claim page — continue on another device', () => {
     await phonePage.getByTestId('rejoin-person-0').click();
     await expect(phonePage.locator('[data-testid^="claim-item-"]').first()).toBeVisible({ timeout: 15000 });
     // The warning is on screen before anything is sent
+    await phonePage.getByTestId('claim-tab-links').click();
     await expect(phonePage.getByTestId('personal-link-hint')).toContainText('Only open it on your own devices');
+    await phonePage.getByTestId('claim-tab-links').click();
     await phonePage.getByTestId('personal-link-btn').click();
     await expect(phonePage.getByText('Personal link copied')).toBeVisible({ timeout: 10000 });
     const personalLink = await phonePage.evaluate(() => navigator.clipboard.readText());
@@ -448,6 +450,7 @@ test.describe('Claim page — continue on another device', () => {
     // And the finalized view ("View summary" is only there) offers this person's own link
     await expect(page.getByText('View summary')).toBeVisible();
     await expect(page.locator('[data-testid^="claim-item-"]')).toHaveCount(0);
+    await page.getByTestId('claim-tab-links').click();
     await expect(page.getByTestId('personal-link-btn')).toBeVisible();
 
     await pc.close();
@@ -534,11 +537,13 @@ test.describe('Claim page — continue on another device', () => {
     expect(finalize.ok(), await finalize.text()).toBe(true);
     // "View summary" is only on the finalized view, so the page has picked up the new status
     await expect(page.getByText('View summary')).toBeVisible({ timeout: 15000 });
+    await page.getByTestId('claim-tab-links').click();
     await expect(page.getByTestId('personal-link-btn')).toBeVisible();
     await expect(page.getByTestId('personal-link-offer')).toHaveCount(0);
     // Still Dave after a reload, with no card
     await page.reload();
     await expect(page.getByText('View summary')).toBeVisible({ timeout: 15000 });
+    await page.getByTestId('claim-tab-links').click();
     await expect(page.getByTestId('personal-link-btn')).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId('personal-link-offer')).toHaveCount(0);
     const stored = await page.evaluate((key) => window.localStorage.getItem(key), claimStorageKey(shareToken));
@@ -710,6 +715,7 @@ test.describe('Claim page — continue on another device', () => {
     await page.getByTestId('rejoin-person-0').click();
     await expect(page.locator('[data-testid^="claim-item-"]').first()).toBeVisible({ timeout: 15000 });
     expect(page.url()).toContain('#foo=1');
+    await page.getByTestId('claim-tab-links').click();
     await page.getByTestId('copy-link-btn').click();
     const copied = await page.evaluate(() => navigator.clipboard.readText());
     expect(copied).toContain(`/split/${shareToken}/claim`);

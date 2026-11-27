@@ -41,6 +41,7 @@ test.describe('Unified BillOK receipt — finalized result and historic reader',
     await expect(page.getByRole('heading', { name: 'Семейный ужин' })).toBeVisible();
     await expect(page.getByTestId('split-result-total')).toContainText('45');
     await expect(page.getByTestId('person-card-0')).toBeVisible();
+    await page.getByTestId('claim-tab-links').click();
     await expect(page.getByTestId('copy-link-btn')).toBeVisible();
   });
 

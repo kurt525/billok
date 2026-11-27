@@ -14,33 +14,34 @@ describe('Mobile manual receipt action bar and Android keyboard', () => {
   });
 });
 
-describe('Responsive guest sharing actions with large Android system text', () => {
-  it('stacks buttons only on narrow phones and prevents overflow on larger mobile screens', () => {
+describe('Responsive guest sharing actions in a separate tab', () => {
+  it('keeps links reachable in normal flow without a fixed footer', () => {
     const ui = read('src/app/[locale]/split/[token]/page.tsx');
     expect(ui).toContain('max-[399px]:flex-col');
-    expect(ui).toContain('max-[399px]:pb-[calc(11rem+env(safe-area-inset-bottom))]');
+    expect(ui).toContain('pb-[calc(1rem+env(safe-area-inset-bottom))]');
     expect(
       ui.match(/className="min-h-14 min-w-0 w-full flex-1 whitespace-normal text-center leading-tight"/g),
     ).toHaveLength(2);
-    expect(ui).not.toContain('className="flex-1 h-14"');
+    expect(ui).toContain('data-testid="split-result-actions"');
+    expect(ui).toContain('aria-labelledby="claim-links-tab"');
+    expect(ui).toContain("hidden={tab !== 'links'}");
+    expect(ui).not.toContain('fixed inset-x-0 bottom-0 z-10');
+    expect(ui).not.toContain('copyToClipboard(window.location.href)');
   });
-});
 
-describe('Android guest result and claim actions', () => {
-  for (const [file, testid, bottomSpace] of [
-    ['src/app/[locale]/split/[token]/page.tsx', 'split-result-actions', '7rem'],
-  ] as const) {
-    it(file + ': keeps bottom actions reachable above Android navigation and small keyboard viewports', () => {
-      const ui = read(file);
-      expect(ui).toContain('data-testid="' + testid + '"');
-      expect(ui).toContain('fixed inset-x-0 bottom-0 z-10');
-      expect(ui).toContain('max-h-[calc(100dvh-1rem)]');
-      expect(ui).toContain('overflow-y-auto overscroll-contain');
-      expect(ui).toContain('pb-[calc(1rem+env(safe-area-inset-bottom))]');
-      expect(ui).toContain('pb-[calc(' + bottomSpace + '+env(safe-area-inset-bottom))]');
-      expect(ui).not.toContain('fixed bottom-0 left-0 right-0 p-4 bg-background border-t');
-    });
-  }
+  it('keeps links separate from both distribution tabs and the finalized settlement', () => {
+    const claim = read('src/app/[locale]/split/[token]/claim/page.tsx');
+    const tabs = read('src/components/receipt-tabs.tsx');
+    expect(tabs).toContain("'grid-cols-3'");
+    expect(tabs).toContain("label: t('tabsLinks')");
+    expect(claim).toContain('data-testid="claim-links-panel"');
+    expect(claim).toContain("hidden={activeTab !== 'links'}");
+    expect(claim).toContain('{linksPanel(finalizedTab, true)}');
+    expect(claim).toContain('{linksPanel(joinTab)}');
+    expect(claim).toContain('{linksPanel(receiptTab)}');
+    expect(claim.match(/creatorGuestLinkControls\(person, idx\)/g)).toHaveLength(1);
+    expect(claim.match(/data-testid="copy-link-btn"/g)).toHaveLength(1);
+  });
 });
 
 describe('Standard BillOK dialogs on small Android viewports', () => {

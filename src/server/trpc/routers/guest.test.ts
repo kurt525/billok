@@ -2307,6 +2307,10 @@ describe('Issue 3.8.2: creator retrieves a guest personal link only with verifie
     await expect((await caller(signedIn)).getGuestPersonalLink(request)).resolves.toMatchObject({
       personToken: ALICE_TOKEN,
     });
+    await expect((await caller(signedIn)).getGuestPersonalLink(request)).resolves.toMatchObject({
+      personToken: ALICE_TOKEN,
+    });
+    expect(mockDb.guestSplit.update).not.toHaveBeenCalled();
     claimSession(people, { receiptData: data, expiresAt: new Date(0) });
     await expect((await caller(signedIn)).getGuestPersonalLink(request)).rejects.toMatchObject({
       code: 'NOT_FOUND',
@@ -9182,10 +9186,14 @@ describe('Issue #19 section 20: receipt title permissions and preservation', () 
     expect(mockDb.guestSplit.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
     expect(ownerList).toMatchObject({
       owner: true,
-      splits: [{ id, canRename: true, canDelete: false, shareToken: null }],
+      splits: [{ id, canRename: true, canDelete: false, canOpenClaim: false, shareToken: null }],
     });
     mockDb.ownerBootstrap.findUnique.mockResolvedValue(null);
-    await (await caller(signedIn)).mySplits({ limit: 20 });
+    const archived = await (await caller(signedIn)).mySplits({ limit: 20 });
+    expect(archived.splits[0]).toMatchObject({ canOpenClaim: false });
+    mockDb.guestSplit.findMany.mockResolvedValue([fixture('FINALIZED')]);
+    const active = await (await caller(signedIn)).mySplits({ limit: 20 });
+    expect(active.splits[0]).toMatchObject({ canOpenClaim: true });
     expect(mockDb.guestSplit.findMany).toHaveBeenLastCalledWith(
       expect.objectContaining({ where: { userId: 'user-1' } }),
     );
