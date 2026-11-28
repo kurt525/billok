@@ -125,8 +125,8 @@ export const adminRouter = createTRPCRouter({
   getAuditLog: adminProcedure
     .input(
       z.object({
-        cursor: z.string().optional(),
-        limit: z.number().min(1).max(100).default(50),
+        cursor: z.string().max(128).optional(),
+        limit: z.number().int().min(1).max(100).default(50),
         action: z.string().optional(),
       }),
     )
@@ -135,7 +135,7 @@ export const adminRouter = createTRPCRouter({
         take: input.limit + 1,
         ...(input.cursor ? { cursor: { id: input.cursor } } : {}),
         ...(input.action ? { where: { action: input.action as AdminAction } } : {}),
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         include: {
           admin: {
             select: { id: true, name: true, email: true },
@@ -143,6 +143,7 @@ export const adminRouter = createTRPCRouter({
         },
       });
 
+      // Cursor is the first unseen row (inclusive), preserving the existing API.
       let nextCursor: string | undefined;
       if (items.length > input.limit) {
         const next = items.pop();

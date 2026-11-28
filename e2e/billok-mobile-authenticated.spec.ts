@@ -1050,14 +1050,39 @@ test('mobile admin announcement controls remain accessible at six widths', async
   expect(writes).toBe(0);
 });
 
-test('mobile admin audit tables scroll inside cards at six widths', async ({ page }) => {
-  test.setTimeout(170_000);
+test('TASK-BILLOK-010 mobile journals fit all widths and preserve paginated records', async ({ page }) => {
+  test.setTimeout(220_000);
   await signInAsOwnerAdmin(page);
-  let mockedQueries = 0;
   let writes = 0;
+  let failInitial = true;
+  let failNext = true;
+  const requestedCursors: string[] = [];
   const longName = 'МобильныйЖурналОченьДлинноеНазваниеБезПробелов'.repeat(6);
+  const label = 'ДлинноеПримечаниеБезПробелов'.repeat(3);
+  const timestamp = '2026-11-28T10:00:32.000Z';
+  const expiry = '2026-12-05T10:00:32.000Z';
+  const rows = Array.from({ length: 43 }, (_, index) => ({
+    id: 'audit-fixture-' + index,
+    action:
+      index === 0
+        ? 'INVITE_CREATED'
+        : index === 1
+          ? 'OWNER_PASSKEY_APPROVAL_VERIFIED'
+          : index === 2
+            ? 'UNKNOWN_EVENT_FIXTURE'
+            : 'OWNER_PASSKEY_RENAMED',
+    adminName: index === 0 ? longName : 'Тестовый владелец',
+    metadata:
+      index === 0
+        ? { label, expiresAt: expiry, code: 'qa-invitation-secret-never-render' }
+        : index === 1
+          ? { action: 'RENAME', expiresInSeconds: 30 }
+          : null,
+    createdAt: index < 41 ? timestamp : '2026-11-27T10:00:32.000Z',
+  }));
   await page.route('**/api/trpc/**', async (route) => {
-    const procedures = new URL(route.request().url()).pathname.split('/api/trpc/')[1]?.split(',') ?? [];
+    const url = new URL(route.request().url());
+    const procedures = url.pathname.split('/api/trpc/')[1]?.split(',') ?? [];
     if (route.request().method() !== 'GET') {
       writes++;
       await route.abort();
@@ -1065,9 +1090,25 @@ test('mobile admin audit tables scroll inside cards at six widths', async ({ pag
     }
     expect(procedures).not.toContain('admin.getGlobalActivity');
     const auditIndex = procedures.indexOf('admin.getAuditLog');
-    if (auditIndex < 0) {
+    const securityIndex = procedures.indexOf('admin.getSecurityEvents');
+    if (auditIndex < 0 && securityIndex < 0) {
       await route.continue();
       return;
+    }
+    const input = JSON.parse(url.searchParams.get('input') ?? '{}');
+    const cursor = auditIndex < 0 ? undefined : (input[String(auditIndex)]?.json ?? input.json)?.cursor;
+    if (auditIndex >= 0) {
+      requestedCursors.push(cursor ?? 'initial');
+      if (!cursor && failInitial) {
+        failInitial = false;
+        await route.abort('failed');
+        return;
+      }
+      if (cursor === rows[20]!.id && failNext) {
+        failNext = false;
+        await route.abort('failed');
+        return;
+      }
     }
     const response = await route.fetch();
     const body = await response.json();
@@ -1075,61 +1116,173 @@ test('mobile admin audit tables scroll inside cards at six widths', async ({ pag
     if (auditIndex >= 0) {
       const item = entries[auditIndex];
       expect(item?.result?.data).toBeDefined();
-      item.result.data.json = {
-        items: [
-          {
-            id: 'mobile-audit-row',
-            action: 'INVITE_CREATED',
-            adminName: longName,
-            metadata: { name: longName },
-            createdAt: '2026-10-27T10:00:00.000Z',
-          },
-        ],
-        nextCursor: 'mobile-audit-next',
+      const start = cursor ? rows.findIndex((entry) => entry.id === cursor) : 0;
+      expect(start).toBeGreaterThanOrEqual(0);
+      item.result.data = { json: { items: rows.slice(start, start + 20), nextCursor: rows[start + 20]?.id } };
+    }
+    if (securityIndex >= 0) {
+      const item = entries[securityIndex];
+      expect(item?.result?.data).toBeDefined();
+      item.result.data = {
+        json: {
+          items: [
+            {
+              id: 'security-1',
+              action: 'OWNER_PASSKEY_ADD_STARTED',
+              actorId: 'a'.repeat(128),
+              targetFingerprint: 'b'.repeat(64),
+              outcome: 'DENIED',
+              createdAt: timestamp,
+            },
+            {
+              id: 'security-2',
+              action: 'admin.createSystemInvite',
+              actorId: null,
+              targetFingerprint: null,
+              outcome: 'ALLOWED',
+              createdAt: timestamp,
+            },
+            {
+              id: 'security-3',
+              action: 'UNKNOWN_SECURITY_FIXTURE',
+              actorId: null,
+              targetFingerprint: null,
+              outcome: 'DENIED',
+              createdAt: timestamp,
+            },
+          ],
+        },
       };
-      // Drop the response's old SuperJSON metadata: a real query without a next
-      // page marks nextCursor as undefined, overriding the mocked cursor.
-      item.result.data = { json: item.result.data.json };
-      mockedQueries++;
     }
     await route.fulfill({ response, json: Array.isArray(body) ? entries : entries[0] });
   });
 
-  for (const width of [320, 360, 430, 480, 600, 720]) {
-    await page.setViewportSize({ width, height: 380 });
-    await page.goto('/admin', { waitUntil: 'networkidle' });
-    await page.addStyleTag({ content: 'html { font-size: 20px !important; }' });
+  await page.evaluate(() => localStorage.setItem('theme', 'light'));
+  await page.goto('/admin', { waitUntil: 'networkidle' });
+  const section = page.getByTestId('admin-audit-section');
+  const audit = section.getByTestId('admin-audit-list');
+  const security = section.getByTestId('admin-security-list');
+  const load = section.getByTestId('admin-audit-load-more');
+  await expect(section.getByText('Не удалось загрузить журнал.', { exact: true }).last()).toBeVisible();
+  await expect(section.getByText('Записей аудита пока нет.', { exact: true })).toHaveCount(0);
+  // An aborted batch can also fail the security query: retry both separately.
+  const auditRetry = section.getByRole('alert').filter({ hasText: 'Не удалось загрузить журнал.' }).last();
+  await auditRetry.getByRole('button', { name: 'Повторить', exact: true }).click();
+  await expect(audit.getByTestId('journal-entry')).toHaveCount(20);
+  const securityRetry = section
+    .getByTestId('admin-security-events')
+    .getByRole('button', { name: 'Повторить', exact: true });
+  if (await securityRetry.count()) await securityRetry.click();
+  await expect(audit.getByTestId('journal-entry')).toHaveCount(20);
+  await expect(security.getByTestId('journal-entry')).toHaveCount(3);
 
-    for (const ids of [
-      { section: 'admin-audit-section', scroll: 'admin-audit-scroll', load: 'admin-audit-load-more' },
-    ]) {
-      const section = page.getByTestId(ids.section);
-      await expect(section).toBeVisible({ timeout: 15_000 });
-      const scroll = section.getByTestId(ids.scroll);
-      await expect(scroll).toBeVisible();
-      await expect(scroll.getByText(longName, { exact: true }).first()).toBeVisible();
-      await expect(scroll).toHaveAttribute('tabindex', '0');
-      await expect(scroll).toHaveAttribute('role', 'region');
-      const metrics = await scroll.evaluate((el) => ({ clientWidth: el.clientWidth, scrollWidth: el.scrollWidth }));
-      expect(metrics.scrollWidth, ids.scroll + ' must scroll inside its card').toBeGreaterThan(metrics.clientWidth);
-      const rect = await scroll.boundingBox();
-      expect(rect).not.toBeNull();
-      expect(rect!.x, ids.scroll + ' left at ' + width).toBeGreaterThanOrEqual(-1);
-      expect(rect!.x + rect!.width, ids.scroll + ' right at ' + width).toBeLessThanOrEqual(width + 1);
-      const load = section.getByTestId(ids.load);
-      await expect(load).toBeVisible();
-      const button = await load.boundingBox();
-      expect(button).not.toBeNull();
-      expect(button!.height, ids.load + ' height at ' + width).toBeGreaterThanOrEqual(44);
-      expect(button!.width, ids.load + ' width at ' + width).toBeGreaterThanOrEqual(44);
-      expect(button!.x + button!.width, ids.load + ' right at ' + width).toBeLessThanOrEqual(width + 1);
+  const expectedExpiry = await page.evaluate((value) => {
+    const date = new Date(value);
+    const d = new Intl.DateTimeFormat('ru', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+    const time = new Intl.DateTimeFormat('ru', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).format(date);
+    return d + ', ' + time;
+  }, expiry);
+
+  for (const theme of ['light', 'dark']) {
+    if (theme === 'dark') {
+      await page.evaluate(() => localStorage.setItem('theme', 'dark'));
+      await page.reload({ waitUntil: 'networkidle' });
     }
-    await expect(page.getByTestId('admin-activity-section')).toHaveCount(0);
-    await checkPhoneLayout(page, width, true);
-    expect(writes, 'Audit E2E must not change persistent data').toBe(0);
+    await expect(page.locator('html')).toHaveClass(new RegExp('(?:^|\\s)' + theme + '(?:\\s|$)'));
+    await expect(audit.getByTestId('journal-entry')).toHaveCount(20);
+    await expect(security.getByTestId('journal-entry')).toHaveCount(3);
+    for (const fontSize of [16, 20]) {
+      await page.evaluate(
+        (size) => document.documentElement.style.setProperty('font-size', size + 'px', 'important'),
+        fontSize,
+      );
+      for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
+        await page.setViewportSize({ width, height: 800 });
+        await expect(audit.getByTestId('journal-action').first()).toHaveText('Создано приглашение');
+        await expect(audit.getByTestId('journal-actor').first()).toContainText(longName);
+        await expect(audit.getByTestId('journal-details').first()).toContainText(label);
+        await expect(audit.getByTestId('journal-details').first()).toContainText('Действует до: ' + expectedExpiry);
+        await expect(audit.getByTestId('journal-time').first()).toHaveAttribute('datetime', timestamp);
+        await expect(audit.getByTestId('journal-time').first()).toHaveText(/^\d{2}:\d{2}:32$/u);
+        await expect(audit.getByText('Подтверждена операция с ключом доступа', { exact: true })).toBeVisible();
+        await expect(audit.getByText('Неизвестное событие', { exact: true })).toBeVisible();
+        await expect(security.getByText('Начало добавления ключа доступа владельца', { exact: true })).toBeVisible();
+        await expect(security.getByText('Отклонено', { exact: true })).toHaveCount(2);
+        await expect(security.getByText('Отпечаток объекта: ' + 'b'.repeat(16), { exact: true })).toBeVisible();
+        await expect(section.getByText('qa-invitation-secret-never-render', { exact: false })).toHaveCount(0);
+        for (const list of [audit, security]) {
+          const metrics = await list.evaluate((el) => {
+            const bounds = el.getBoundingClientRect();
+            const clipped: string[] = [];
+            for (const text of el.querySelectorAll(
+              'p,time,h3,[data-testid="journal-actor"],[data-testid="journal-details"]',
+            )) {
+              const rect = text.getBoundingClientRect();
+              if (
+                rect.left < bounds.left - 1 ||
+                rect.right > bounds.right + 1 ||
+                text.scrollWidth > text.clientWidth + 1 ||
+                text.scrollHeight > text.clientHeight + 1
+              ) {
+                clipped.push((text.textContent ?? '').slice(0, 40));
+              }
+              const range = document.createRange();
+              range.selectNodeContents(text);
+              for (const r of range.getClientRects()) {
+                if (
+                  r.width > 0 &&
+                  (r.left < rect.left - 1 ||
+                    r.right > rect.right + 1 ||
+                    r.top < rect.top - 2 ||
+                    r.bottom > rect.bottom + 2)
+                ) {
+                  clipped.push('range:' + (text.textContent ?? '').slice(0, 40));
+                }
+              }
+            }
+            return { scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, clipped };
+          });
+          expect(metrics.scrollWidth, theme + '/' + fontSize + '/' + width).toBeLessThanOrEqual(
+            metrics.clientWidth + 1,
+          );
+          expect(metrics.clipped, theme + '/' + fontSize + '/' + width).toEqual([]);
+        }
+        const rect = await load.boundingBox();
+        expect(rect).not.toBeNull();
+        expect(rect!.height).toBeGreaterThanOrEqual(44);
+        expect(rect!.width).toBeGreaterThanOrEqual(44);
+        expect(rect!.x).toBeGreaterThanOrEqual(-1);
+        expect(rect!.x + rect!.width).toBeLessThanOrEqual(width + 1);
+        await checkPhoneLayout(page, width, true);
+      }
+    }
   }
-  expect(mockedQueries).toBeGreaterThanOrEqual(6);
-  expect(writes).toBe(0);
+  await load.focus();
+  await expect(load).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(section.getByText('Не удалось загрузить следующие записи.', { exact: true })).toBeVisible();
+  await expect(audit.getByTestId('journal-entry')).toHaveCount(20);
+  await expect(load).toHaveText('Повторить');
+  await load.click();
+  await expect(audit.getByTestId('journal-entry')).toHaveCount(40);
+  await expect(audit.getByTestId('journal-date')).toHaveCount(1);
+  await load.click();
+  await expect(audit.getByTestId('journal-entry')).toHaveCount(43);
+  await expect(audit.getByTestId('journal-date')).toHaveCount(2);
+  await expect(load).toHaveCount(0);
+  const ids = await audit
+    .getByTestId('journal-entry')
+    .evaluateAll((els) => els.map((el) => el.getAttribute('data-entry-id')));
+  expect(ids).toEqual(rows.map((row) => row.id));
+  expect(requestedCursors.filter((cursor) => cursor === rows[20]!.id)).toHaveLength(2);
+  expect(requestedCursors.filter((cursor) => cursor === rows[40]!.id)).toHaveLength(1);
+  await expect(page.getByTestId('admin-activity-section')).toHaveCount(0);
+  expect(writes, 'Audit E2E must not change persistent data').toBe(0);
 });
 
 test('mobile admin group search and status filters are touch-friendly at six widths', async ({ page }) => {

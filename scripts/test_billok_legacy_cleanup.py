@@ -214,7 +214,7 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
 
     def test_unused_legacy_audit_labels_removed_but_security_log_kept(self):
         admin = json.loads(source("messages/ru/admin.json"))
-        audit = source("src/components/admin/audit-log-section.tsx")
+        audit = source("src/components/admin/audit-log-section.tsx") + source("src/components/admin/audit-log-format.ts")
         for action, key in (
             ("MERIDIAN_LOGIN_STARTED", "actionMeridianLogin"),
             ("MERIDIAN_LOGIN_COMPLETED", "actionMeridianLoggedIn"),
@@ -227,8 +227,9 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
             self.assertNotIn(key, admin["audit"])
             self.assertNotIn(action, audit)
         self.assertIn("trpc.admin.getSecurityEvents.useQuery", audit)
-        self.assertIn("trpc.admin.getAuditLog.useQuery", audit)
-        self.assertIn("label: entry.action", audit)
+        self.assertIn("trpc.admin.getAuditLog.useInfiniteQuery", audit)
+        self.assertIn("actionPresentation(entry.action, security)", audit)
+        self.assertNotIn("label: entry.action", audit)
         for current in ("actionUserDeleted", "actionInviteCreated", "actionExportCreated"):
             self.assertIn(current, admin["audit"])
 
