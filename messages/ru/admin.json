@@ -301,7 +301,11 @@
     "uuidReset": "Сбросить",
     "uuidInvalid": "Введите полный корректный UUID.",
     "uuidActive": "Активный фильтр: {value}",
-    "uuidEmpty": "Событий с таким UUID нет."
+    "uuidEmpty": "Событий с таким UUID нет.",
+    "securityEmailChangeStarted": "Запуск смены электронной почты",
+    "securityEmailChangeRequested": "Запрос смены электронной почты",
+    "securityEmailChangeCancelled": "Отмена смены электронной почты",
+    "securityEmailChangeCompleted": "Подтверждение смены электронной почты"
   },
   "impersonation": {
     "impersonating": "Вы вошли от имени <strong>{name}</strong>",

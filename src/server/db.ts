@@ -1,5 +1,6 @@
 import { PrismaClient } from '@/generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { logger } from './lib/logger';
 import { revealGuestSplitResult, sealGuestPeopleTokens } from './lib/guest-person-secret';
 
 const globalForPrisma = globalThis as unknown as {
@@ -10,8 +11,16 @@ function createPrismaClient() {
   const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
   const prisma = new PrismaClient({
     adapter,
-    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+    errorFormat: 'minimal',
+    log: [
+      { emit: 'event', level: 'error' },
+      { emit: 'event', level: 'warn' },
+    ],
   });
+  // Database diagnostics may contain account addresses or credential material.
+  // Keep the failure category, never Prisma's invocation arguments or message.
+  prisma.$on('error', () => logger.error('db.query_failed'));
+  prisma.$on('warn', () => logger.warn('db.query_warning'));
   // Every real GuestSplit query, including interactive transactions, must seal
   // personal credentials before writes and unseal only inside server memory.
   return prisma.$extends({

@@ -1,6 +1,9 @@
 import { DefaultSession } from 'next-auth';
 
 declare module 'next-auth' {
+  interface User {
+    sessionSecurityVersion?: number;
+  }
   interface Session {
     user: {
       id: string;

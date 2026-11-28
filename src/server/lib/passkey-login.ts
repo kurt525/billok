@@ -82,7 +82,16 @@ export async function finishPasskeyLogin(input: {
   const passkey = await input.db.passkeyCredential.findUnique({
     where: { credentialId: input.response.id },
     include: {
-      user: { select: { id: true, email: true, emailVerified: true, suspendedAt: true, isPlaceholder: true } },
+      user: {
+        select: {
+          id: true,
+          email: true,
+          emailVerified: true,
+          suspendedAt: true,
+          isPlaceholder: true,
+          sessionSecurityVersion: true,
+        },
+      },
     },
   });
   if (
@@ -142,7 +151,16 @@ export async function finishPasskeyLogin(input: {
     const current = await tx.passkeyCredential.findUnique({
       where: { id: passkey.id },
       include: {
-        user: { select: { id: true, email: true, emailVerified: true, suspendedAt: true, isPlaceholder: true } },
+        user: {
+          select: {
+            id: true,
+            email: true,
+            emailVerified: true,
+            suspendedAt: true,
+            isPlaceholder: true,
+            sessionSecurityVersion: true,
+          },
+        },
       },
     });
     if (
@@ -152,6 +170,8 @@ export async function finishPasskeyLogin(input: {
       !isAllowedRegistrationEmailDomain(current.user.email) ||
       current.user.suspendedAt ||
       current.user.isPlaceholder ||
+      current.user.email !== passkey.user.email ||
+      current.user.sessionSecurityVersion !== passkey.user.sessionSecurityVersion ||
       current.credentialId !== passkey.credentialId ||
       current.signCount !== passkey.signCount
     ) {
@@ -211,6 +231,7 @@ export async function consumePasskeyLoginTicket(input: { db: PrismaClient; token
         emailVerified: true,
         suspendedAt: true,
         isPlaceholder: true,
+        sessionSecurityVersion: true,
         passkeyCredentials: { where: { revokedAt: null }, select: { id: true }, take: 1 },
       },
     });
@@ -220,6 +241,8 @@ export async function consumePasskeyLoginTicket(input: { db: PrismaClient; token
       !isAllowedRegistrationEmailDomain(user.email) ||
       user.suspendedAt ||
       user.isPlaceholder ||
+      !Number.isSafeInteger(user.sessionSecurityVersion) ||
+      user.sessionSecurityVersion < 0 ||
       !user.passkeyCredentials.length
     ) {
       return null;
@@ -229,6 +252,12 @@ export async function consumePasskeyLoginTicket(input: { db: PrismaClient; token
       data: { consumedAt: now },
     });
     if (result.count !== 1) return null;
-    return { id: user.id, name: user.name, email: user.email, image: user.image };
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      image: user.image,
+      sessionSecurityVersion: user.sessionSecurityVersion,
+    };
   });
 }

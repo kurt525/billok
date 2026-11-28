@@ -1,4 +1,10 @@
-import { authedPasskeyContext, signedQaAssertion } from './passkey-auth';
+import {
+  authedPasskeyContext,
+  signedQaAssertion,
+  installSelectedQaPasskey,
+  loginWithPasskey,
+  enableVirtualPasskey,
+} from './passkey-auth';
 import { expect, test, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
 import { auditMobileViewport, auditMobileTarget } from './billok-mobile-viewport-audit';
 import { createTestGroup, trpcMutation, trpcQuery, trpcResult, users } from './helpers';
@@ -2736,5 +2742,189 @@ test('Issue 6.12.3: real Passkey owner impersonation cannot access owner APIs', 
   } finally {
     await ordinary.dispose();
     await owner.dispose();
+  }
+});
+
+test('TASK-BILLOK-012 real Passkey email change and mobile profile in 32 combinations', async ({ page, browser }) => {
+  test.setTimeout(220_000);
+  const mailbox = process.env.BILLOK_QA_MAILBOX_URL;
+  if (!mailbox) throw new Error('Disposable SMTP mailbox is required');
+  const oldEmail = 'email-change@mail.ru';
+  const newEmail = 'qa-' + 'long'.repeat(13) + '@mail.su';
+  const api = '/api/webauthn/email-change/';
+  const section = page.getByTestId('email-change-section');
+  const oldNoticeCount = async () => {
+    const response = await page.request.get(mailbox + '/messages?to=' + encodeURIComponent(oldEmail));
+    expect(response.ok()).toBe(true);
+    return ((await response.json()) as { messages: unknown[] }).messages.length;
+  };
+  const initialNotices = await oldNoticeCount();
+  // Owner is a real separate signed session, not a client role flag.
+  const owner = await browser.newContext({ viewport: { width: 320, height: 780 } });
+  try {
+    await owner.addCookies(await signedQaCookies('owner-qa@mail.ru'));
+    const ownerPage = await owner.newPage();
+    await ownerPage.goto('/settings', { waitUntil: 'networkidle' });
+    await expect(ownerPage.getByTestId('email-change-owner-blocked')).toBeVisible();
+    await expect(ownerPage.getByTestId('email-change-open')).toHaveCount(0);
+    for (const [action, data] of [
+      ['start', { email: newEmail }],
+      ['approve', { response: { id: 'invalid' } }],
+      ['complete', { token: 'X'.repeat(43) }],
+      ['cancel', {}],
+    ] as const) {
+      expect((await owner.request.post(api + action, { data })).status()).toBe(403);
+    }
+    await expect(ownerPage.locator('#email')).toHaveValue('owner-qa@mail.ru');
+  } finally {
+    await owner.close();
+  }
+
+  expect((await page.request.post(api + 'start', { data: { email: newEmail } })).status()).toBe(403);
+  await installSelectedQaPasskey(page, oldEmail, 0);
+  await loginWithPasskey(page);
+  await page.goto('/settings', { waitUntil: 'networkidle' });
+  await expect(page.getByTestId('email-change-open')).toBeVisible();
+  const previous = await trpcResult(await trpcQuery(page.request, 'auth.getProfile', undefined));
+  const keysBefore = await trpcResult(await trpcQuery(page.request, 'auth.listPasskeys', undefined));
+  expect(previous.email).toBe(oldEmail);
+  expect(keysBefore.activeCount).toBe(1);
+  // A raw POST or a cross-origin request cannot act as the current Passkey.
+  expect(
+    (
+      await page.request.post(api + 'start', {
+        data: { email: newEmail },
+        headers: { Origin: 'https://foreign.invalid' },
+      })
+    ).status(),
+  ).toBe(403);
+  expect((await page.request.post(api + 'complete', { data: { token: 'X'.repeat(43) } })).status()).toBe(403);
+  expect((await page.request.post(api + 'start', { data: { email: 'other@example.com' } })).status()).toBe(400);
+  expect((await page.request.post(api + 'start', { data: { email: 'OWNER-QA@MAIL.RU' } })).status()).toBe(409);
+  expect((await page.request.post(api + 'start', { data: { email: oldEmail.toUpperCase() } })).status()).toBe(400);
+  await page.getByTestId('email-change-open').click();
+  await section.getByLabel('Новый адрес электронной почты').fill(newEmail);
+  for (const theme of ['light', 'dark']) {
+    if (theme === 'dark') {
+      await page.evaluate(() => localStorage.setItem('theme', 'dark'));
+      await page.reload({ waitUntil: 'networkidle' });
+      await page.getByTestId('email-change-open').click();
+      await section.getByLabel('Новый адрес электронной почты').fill(newEmail);
+    } else {
+      await page.evaluate(() => localStorage.setItem('theme', 'light'));
+      await page.reload({ waitUntil: 'networkidle' });
+      await page.getByTestId('email-change-open').click();
+      await section.getByLabel('Новый адрес электронной почты').fill(newEmail);
+    }
+    await expect(page.locator('html')).toHaveClass(new RegExp('(?:^|\\s)' + theme + '(?:\\s|$)'));
+    for (const size of [16, 20]) {
+      await page.evaluate((s) => document.documentElement.style.setProperty('font-size', s + 'px', 'important'), size);
+      for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
+        await page.setViewportSize({ width, height: 800 });
+        await checkPhoneLayout(page, width);
+        for (const target of await section.locator('button,input').all()) {
+          const rect = await target.boundingBox();
+          expect(rect!.height, theme + '/' + size + '/' + width).toBeGreaterThanOrEqual(44);
+          expect(rect!.width).toBeGreaterThanOrEqual(44);
+          expect(rect!.x).toBeGreaterThanOrEqual(-1);
+          expect(rect!.x + rect!.width).toBeLessThanOrEqual(width + 1);
+        }
+      }
+    }
+  }
+  async function mailLinks(count: number) {
+    let matches: string[] = [];
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(mailbox + '/messages?to=' + encodeURIComponent(newEmail));
+          if (!response.ok()) return 0;
+          const body = (await response.json()) as { messages: { links: string[] }[] };
+          matches = body.messages
+            .flatMap((m) => m.links)
+            .filter((link) => new URL(link).hash.startsWith('#email-change='));
+          return matches.length;
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(count);
+    return matches[count - 1]!;
+  }
+  await section.getByRole('button', { name: 'Подтвердить ключом доступа' }).click();
+  await expect(page.getByTestId('email-change-pending')).toContainText(newEmail);
+  const first = await mailLinks(1);
+  expect((await trpcResult(await trpcQuery(page.request, 'auth.getProfile', undefined))).email).toBe(oldEmail);
+  // Resending requires a new actual browser assertion, and replaces the token.
+  await section.getByRole('button', { name: 'Отправить письмо повторно' }).click();
+  const second = await mailLinks(2);
+  expect(second).not.toBe(first);
+  expect(
+    (await page.request.post(api + 'complete', { data: { token: new URL(first).hash.split('=')[1] } })).status(),
+  ).toBe(403);
+  // A mail scanner or an authenticated GET cannot consume a confirmation.
+  expect((await page.request.get(new URL(second).origin + '/settings')).ok()).toBe(true);
+  expect((await page.request.get(api + 'complete')).status()).toBe(405);
+  expect((await trpcResult(await trpcQuery(page.request, 'auth.getProfile', undefined))).email).toBe(oldEmail);
+  const stale = await browser.newContext({ storageState: await page.context().storageState() });
+  try {
+    await page.goto(second, { waitUntil: 'networkidle' });
+    await expect(page.getByTestId('email-change-confirm')).toBeVisible();
+    expect(new URL(page.url()).hash).toBe('');
+    expect((await trpcResult(await trpcQuery(page.request, 'auth.getProfile', undefined))).email).toBe(oldEmail);
+    await page.getByTestId('email-change-confirm').click();
+    await expect(page.getByTestId('email-change-completed')).toBeVisible();
+    expect(
+      (await stale.request.post(api + 'complete', { data: { token: new URL(second).hash.split('=')[1] } })).status(),
+    ).toBe(403);
+    expect((await trpcQuery(stale.request, 'auth.getProfile', undefined)).ok()).toBe(false);
+    await expect.poll(oldNoticeCount, { timeout: 80_000 }).toBeGreaterThan(initialNotices);
+    await page.getByRole('button', { name: 'Войти снова' }).click();
+    await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
+    // Keep the original virtual authenticator; the key ID has not changed.
+    await loginWithPasskey(page);
+    await page.goto('/settings', { waitUntil: 'networkidle' });
+    await expect(page.locator('#email')).toHaveValue(newEmail);
+    const current = await trpcResult(await trpcQuery(page.request, 'auth.getProfile', undefined));
+    expect(current).toMatchObject({ ...previous, email: newEmail });
+    const keysAfter = await trpcResult(await trpcQuery(page.request, 'auth.listPasskeys', undefined));
+    expect(keysAfter.activeCount).toBe(1);
+    expect(keysAfter.credentials.map((key: { id: string }) => key.id)).toEqual(
+      keysBefore.credentials.map((key: { id: string }) => key.id),
+    );
+    expect(
+      (await page.request.post(api + 'complete', { data: { token: new URL(second).hash.split('=')[1] } })).status(),
+    ).toBe(403);
+
+    // Recovery must now resolve the new address, never the former address.
+    const recovery = await browser.newContext();
+    try {
+      const recovered = await recovery.newPage();
+      const recoveryLinks = async (email: string): Promise<string[]> => {
+        const response = await page.request.get(mailbox + '/messages?to=' + encodeURIComponent(email));
+        if (!response.ok()) return [];
+        const body = (await response.json()) as { messages: { links: string[] }[] };
+        return body.messages.flatMap((m) => m.links).filter((link) => new URL(link).pathname === '/recover-passkey');
+      };
+      expect(
+        (await recovery.request.post('/api/webauthn/recovery/request', { data: { email: oldEmail } })).status(),
+      ).toBe(202);
+      expect(await recoveryLinks(oldEmail)).toEqual([]);
+      expect(
+        (await recovery.request.post('/api/webauthn/recovery/request', { data: { email: newEmail } })).status(),
+      ).toBe(202);
+      await expect.poll(async () => (await recoveryLinks(newEmail)).length, { timeout: 20_000 }).toBe(1);
+      const link = (await recoveryLinks(newEmail))[0]!;
+      await enableVirtualPasskey(recovered);
+      await recovered.goto(link, { waitUntil: 'networkidle' });
+      await recovered.getByTestId('create-recovered-passkey').click();
+      await expect(recovered.getByRole('status')).toContainText('Новый Passkey создан', { timeout: 30_000 });
+      await loginWithPasskey(recovered);
+      const recoveredProfile = await trpcResult(await trpcQuery(recovered.request, 'auth.getProfile', undefined));
+      expect(recoveredProfile).toMatchObject({ ...previous, email: newEmail });
+    } finally {
+      await recovery.close();
+    }
+  } finally {
+    await stale.close();
   }
 });

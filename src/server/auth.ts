@@ -29,7 +29,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // The passkey login ticket is already verified and single-use.
         token.id = user.id;
         token.impersonationSessionNonce = issueAuthSessionNonce();
-        token.sessionSecurityVersion = undefined; // assign from DB, never from a browser claim
+        token.sessionSecurityVersion = user.sessionSecurityVersion; // proven under the ticket transaction lock
       }
       if (typeof token.id !== 'string') return token;
       try {
@@ -47,15 +47,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           token.sessionSecurityValid = false;
           return token;
         }
-        if (user?.id) {
-          token.sessionSecurityVersion = fresh.sessionSecurityVersion;
-        }
         // Fail closed for a legacy JWT, a revoked JWT, or a malformed version.
         token.sessionSecurityValid =
           typeof token.sessionSecurityVersion === 'number' &&
           token.sessionSecurityVersion === fresh.sessionSecurityVersion;
         if (token.sessionSecurityValid) {
           token.name = fresh.name;
+          token.email = fresh.email;
         }
       } catch (error) {
         token.sessionSecurityValid = false;
@@ -73,12 +71,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       ) {
         // Security-version rotation can terminate old JWTs even before their
         // cookie expires; middleware and protected endpoints see no user.
+        // NextAuth's server-side auth() merges { user: token, ...session }.
+        // Override that fallback with an enumerable undefined before JSON
+        // serialization. Define it explicitly because DefaultSession uses
+        // exact optional property types (an absent serialized user).
         const { user: _ignored, ...withoutUser } = session;
         void _ignored;
-        return withoutUser;
+        return Object.defineProperty(withoutUser, 'user', { value: undefined, enumerable: true });
       }
       if (session.user) {
         session.user.id = token.id;
+        session.user.email = token.email as string;
         session.user.name = (token.name as string | null | undefined) ?? session.user.name ?? null;
       }
       return session;

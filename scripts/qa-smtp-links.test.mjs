@@ -48,3 +48,28 @@ test('QA mailbox ignores non-loopback hosts, malformed and missing tokens', () =
   assert.deepEqual(linksInMessage('http://127.0.0.1:33589/verify-email?token=invalid'), []);
   assert.deepEqual(linksInMessage('http://localhost:33589/recover-passkey?token=short'), []);
 });
+
+test('QA mailbox finds email-change confirmation fragment, not a query token', async () => {
+  const url = 'http://localhost:33589/settings#email-change=' + 'A'.repeat(43);
+  const raw = await compile({
+    subject: 'BillOK — смена почты',
+    text: 'Откройте ссылку:\n\n' + url + '\n\nПодтвердите изменение.',
+  });
+  assert.deepEqual(linksInMessage(raw), [url]);
+  assert.deepEqual(linksInMessage('https://billok.ru/settings#email-change=' + 'A'.repeat(43)), []);
+});
+
+test('QA mailbox decodes the complete single-part Russian confirmation with trailing MIME headers', async () => {
+  const url = 'http://localhost:33589/settings#email-change=' + 'Q'.repeat(43);
+  const raw = await compile({
+    subject: 'BillOK — подтверждение нового адреса электронной почты',
+    text: [
+      'Для изменения электронной почты откройте ссылку в том же браузере, где подтвердили операцию ключом доступа.',
+      url,
+      'Ссылка действует 30 минут. Подтвердите изменение в настройках. Если вы не запрашивали смену, проигнорируйте письмо.',
+    ].join('\n\n'),
+  });
+  assert.match(raw, /Content-Transfer-Encoding: base64/i);
+  assert.deepEqual(linksInMessage(raw), [url]);
+  assert.deepEqual(linksInMessage(raw.trimEnd()), [url]);
+});
