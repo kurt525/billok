@@ -49,6 +49,8 @@ jobs:
         run: python3 scripts/test_billok_release_gates.py
       - name: Verify runner maintenance guard (Issue #1 8.8)
         run: python3 scripts/test_ci_runner_maintenance.py
+      - name: Verify safe mobile QA resource lifecycle (TASK-BILLOK-009)
+        run: python3 scripts/test_billok_qa_resources.py
       - name: Verify BillOK container isolation and backup/restore safety (Issue #1 8.9)
         run: python3 scripts/test_billok_container_isolation.py
       - name: Verify loopback-only Nginx/HTTPS predeploy configuration (Issue #1 8.10)
@@ -154,15 +156,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          qa_db="billok-mobile-qa-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          echo "BILLOK_QA_DB_CONTAINER=$qa_db" >> "$GITHUB_ENV"
-          docker run -d --rm --name "$qa_db" \
-            -e POSTGRES_USER=billokqa -e POSTGRES_PASSWORD=billokqa_local_only \
-            -e POSTGRES_DB=billokqa -p 127.0.0.1::5432 \
-            postgres:16-alpine
-          db_port="$(docker port "$qa_db" 5432/tcp | sed -n 's/.*://p')"
-          test -n "$db_port"
-          echo "DATABASE_URL=postgresql://billokqa:billokqa_local_only@127.0.0.1:$db_port/billokqa" >> "$GITHUB_ENV"
+          python3 ops/ci-runner/billok-qa-resources.py start
       - name: Prepare isolated test schema
         shell: bash
         run: |
@@ -437,12 +431,13 @@ jobs:
           if [[ -n "${BILLOK_QA_SMTP_PID:-}" ]]; then
             kill -- "-$BILLOK_QA_SMTP_PID" 2>/dev/null || true
           fi
-          if [[ -n "${BILLOK_QA_DB_CONTAINER:-}" ]]; then
-            docker rm -f "$BILLOK_QA_DB_CONTAINER" >/dev/null 2>&1 || true
-          fi
           if [[ -n "${UPLOAD_DIR:-}" && "$UPLOAD_DIR" == "$RUNNER_TEMP"/billok-mobile-upload-* ]]; then
             rm -rf -- "$UPLOAD_DIR"
           fi
+      - name: Clean up identified mobile QA database and volume
+        if: always()
+        shell: bash
+        run: python3 ops/ci-runner/billok-qa-resources.py cleanup
 
   coverage-regression:
     permissions:
