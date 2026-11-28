@@ -68,8 +68,12 @@ before_pct_root="$(disk_pct /)"
 before_pct_ci="$(disk_pct "$CI_DISK")"
 log "START mode=$MODE dry_run=$DRY_RUN $(disk_summary)"
 if runner_busy; then log 'RESULT=DEFERRED active Runner.Worker; no deletion';exit 0;fi
+# Keep pressure-only scratch/log policy, but inspect marked QA orphans every
+# scheduled cycle even below 80%. The helper must be installed as trusted root code.
+qa_only=0
 if [[ "$MODE" == pressure ]] && (( before_pct_root < 80 && before_pct_ci < 80 )); then
-  log 'RESULT=HEALTHY both / and /srv/ci-storage below 80%; no cleanup needed';exit 0
+  qa_only=1
+  log 'Both disks below 80%; only preventive QA resource check'
 fi
 if [[ "$MODE" == pressure ]]; then diag_days=7;tmp_age_minutes=4320
 else diag_days=14;tmp_age_minutes=10080;fi
@@ -120,19 +124,36 @@ clean_labeled_volumes() {
     else log "REMOVE labeled CI volume $v";docker volume rm "$v";fi
   done < <(docker volume ls -q --filter 'label=billok.ci.ephemeral=true')
 }
-clean_logs
-clean_billok_tmp
+if (( qa_only == 0 ));then
+  clean_logs
+  clean_billok_tmp
+fi
+qa_error=0
 if docker info >/dev/null 2>&1;then
-  clean_labeled_volumes
+  if (( qa_only == 0 ));then clean_labeled_volumes;fi
+  qa_helper=/usr/local/sbin/billok-qa-resources.py
+  if [[ -f "$qa_helper" && ! -L "$qa_helper" && "$(stat -c '%u:%g:%a' "$qa_helper")" == '0:0:755' ]];then
+    qa_args=(orphans)
+    if [[ "$DRY_RUN" == 1 ]];then qa_args+=(--dry-run);fi
+    if ! /usr/bin/python3 -I "$qa_helper" "${qa_args[@]}";then
+      log 'WARNING QA orphan check incomplete; protected resources retained'
+      qa_error=1
+    fi
+  else
+    log 'WARNING trusted QA helper unavailable; no QA resource deletion'
+    qa_error=1
+  fi
   log 'PROTECTED shared Docker build cache, images and containers: never prune globally'
 else
   log 'WARNING Docker unavailable; skip labeled temporary volumes'
+  qa_error=1
 fi
 after_free_root="$(disk_free /)"
 after_free_ci="$(disk_free "$CI_DISK")"
 after_pct_root="$(disk_pct /)"
 after_pct_ci="$(disk_pct "$CI_DISK")"
 log "FINISH $(disk_summary); root_delta_bytes=$((after_free_root-before_free_root)); ci_delta_bytes=$((after_free_ci-before_free_ci))"
+if (( qa_error != 0 ));then log 'RESULT=QA_CHECK_INCOMPLETE';exit 2;fi
 if [[ "$DRY_RUN" == 1 ]];then log 'RESULT=DRY_RUN';exit 0;fi
 if (( after_pct_root >= 90 || after_pct_ci >= 90 ));then
   log 'RESULT=INSUFFICIENT one or more disks >=90%; protected data intentionally retained; operator review needed'
