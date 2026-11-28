@@ -80,6 +80,7 @@ const mockDb = {
     create: vi.fn(),
     findMany: vi.fn().mockResolvedValue([]),
   },
+  securityEvent: { findMany: vi.fn().mockResolvedValue([]) },
   systemSetting: {
     findUnique: vi.fn(),
     upsert: vi.fn(),
@@ -436,6 +437,81 @@ describe('Issue #1 6.12.1: immutable owner ID, never ADMIN_EMAIL authorization',
     const api = adminRouter.createCaller(ctx as unknown as Parameters<typeof adminRouter.createCaller>[0]);
     await expect(api.getAuditLog({ limit: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mockDb.adminAuditLog.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('TASK-BILLOK-010: journal pagination and access', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDb.user.findUnique.mockResolvedValue({
+      email: 'admin@mail.ru',
+      suspendedAt: null,
+      emailVerified: new Date(),
+      isPlaceholder: false,
+      sessionSecurityVersion: 0,
+    });
+    mockDb.ownerBootstrap.findUnique.mockResolvedValue({ userId: 'admin-1', completedAt: new Date() });
+  });
+  afterEach(() => {
+    mockDb.adminAuditLog.findMany.mockReset().mockResolvedValue([]);
+  });
+
+  test('three inclusive cursor pages remain stable across a newly inserted event and tied timestamps', async () => {
+    const rows = Array.from({ length: 43 }, (_, index) => ({
+      id: String(index).padStart(3, '0'),
+      action: 'INVITE_CREATED',
+      targetId: null,
+      metadata: null,
+      createdAt: new Date('2026-11-28T12:00:00.000Z'),
+      admin: { id: 'admin-1', name: 'Тестовый владелец', email: 'admin@mail.ru' },
+    }));
+    const ordered = [...rows].reverse();
+    mockDb.adminAuditLog.findMany.mockImplementation(
+      async (args: { take: number; cursor?: { id: string }; orderBy: unknown; skip?: number }) => {
+        expect(args.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
+        expect(args.skip).toBeUndefined();
+        const start = args.cursor ? ordered.findIndex((row) => row.id === args.cursor?.id) : 0;
+        expect(start).toBeGreaterThanOrEqual(0);
+        return ordered.slice(start, start + args.take);
+      },
+    );
+    const api = await callerAs(adminSession);
+    const first = await api.getAuditLog({ limit: 20 });
+    expect(first.items).toHaveLength(20);
+    expect(first.nextCursor).toBe('022');
+    ordered.unshift({ ...rows[0]!, id: 'new', createdAt: new Date('2026-11-29T12:00:00.000Z') });
+    const second = await api.getAuditLog({ limit: 20, cursor: first.nextCursor! });
+    expect(second.items[0]?.id).toBe('022');
+    expect(second.nextCursor).toBe('002');
+    const third = await api.getAuditLog({ limit: 20, cursor: second.nextCursor! });
+    expect(third.nextCursor).toBeUndefined();
+    const seen = [...first.items, ...second.items, ...third.items].map((row) => row.id);
+    expect(seen).toEqual([...rows].reverse().map((row) => row.id));
+    expect(new Set(seen).size).toBe(43);
+  });
+
+  test('rejects invalid limits and excessively long cursor', async () => {
+    const api = await callerAs(adminSession);
+    await expect(api.getAuditLog({ limit: 1.5 })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(api.getAuditLog({ limit: 101 })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(api.getAuditLog({ cursor: 'x'.repeat(129) })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mockDb.adminAuditLog.findMany).not.toHaveBeenCalled();
+  });
+
+  test('both journals deny ordinary users and unauthenticated guests, owner may read', async () => {
+    for (const [session, code] of [
+      [{ user: { id: 'ordinary-1', email: 'ordinary@mail.ru' } }, 'FORBIDDEN'],
+      [null, 'UNAUTHORIZED'],
+    ] as const) {
+      const api = await callerAs(session);
+      await expect(api.getAuditLog({ limit: 20 })).rejects.toMatchObject({ code });
+      await expect(api.getSecurityEvents({ limit: 20 })).rejects.toMatchObject({ code });
+    }
+    expect(mockDb.adminAuditLog.findMany).not.toHaveBeenCalled();
+    expect(mockDb.securityEvent.findMany).not.toHaveBeenCalled();
+    const owner = await callerAs(adminSession);
+    await expect(owner.getAuditLog({ limit: 20 })).resolves.toMatchObject({ items: [] });
+    await expect(owner.getSecurityEvents({ limit: 20 })).resolves.toMatchObject({ items: [] });
   });
 });
 

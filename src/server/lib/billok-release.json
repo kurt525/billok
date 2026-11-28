@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "version": "1.1.1",
-  "taskId": "TASK-BILLOK-009",
-  "taskTitle": "Предотвращение накопления временных ресурсов CI",
-  "pullRequest": 36
+  "version": "1.1.2",
+  "taskId": "TASK-BILLOK-010",
+  "taskTitle": "Переработка журнала аудита",
+  "pullRequest": 38
 }
