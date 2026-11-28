@@ -226,7 +226,7 @@ class DeadApplicationCodeCleanupTests(unittest.TestCase):
         ):
             self.assertNotIn(key, admin["audit"])
             self.assertNotIn(action, audit)
-        self.assertIn("trpc.admin.getSecurityEvents.useQuery", audit)
+        self.assertIn("trpc.admin.getSecurityEvents.useInfiniteQuery", audit)
         self.assertIn("trpc.admin.getAuditLog.useInfiniteQuery", audit)
         self.assertIn("actionPresentation(entry.action, security)", audit)
         self.assertNotIn("label: entry.action", audit)

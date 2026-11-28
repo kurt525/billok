@@ -12,11 +12,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/confirm-dialog';
-import { Loader2, ShieldCheck, Plus, Copy, Ban, Check } from 'lucide-react';
+import { Loader2, ShieldCheck, Plus, Copy, Ban, Check, Ticket } from 'lucide-react';
+import { createAuditDateFormatter } from './audit-log-format';
+import { invitationDisplay } from './invitation-display';
 
 export function RegistrationControlSection() {
   const t = useTranslations('admin');
   const locale = useLocale();
+  const dates = createAuditDateFormatter(locale);
   const utils = trpc.useUtils();
   const regMode = trpc.admin.getRegistrationMode.useQuery();
   const setMode = trpc.admin.setRegistrationMode.useMutation({
@@ -37,7 +40,7 @@ export function RegistrationControlSection() {
   });
 
   const [inviteLabel, setInviteLabel] = useState('');
-  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<{ id: string; codePreview: string } | null>(null);
   const [approvingInvite, setApprovingInvite] = useState(false);
   const [approvingMode, setApprovingMode] = useState(false);
@@ -191,105 +194,148 @@ export function RegistrationControlSection() {
       </div>
 
       {invites.data && invites.data.length > 0 && (
-        <Card className="mt-4 min-w-0">
-          <CardContent className="p-0">
-            <div data-testid="admin-invites-scroll" className="min-w-0 max-w-full overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-muted-foreground">
-                    <th className="px-4 py-3 font-medium">{t('registration.colCode')}</th>
-                    <th className="px-4 py-3 font-medium">{t('registration.colLabel')}</th>
-                    <th className="px-4 py-3 font-medium">{t('registration.colStatus')}</th>
-                    <th className="px-4 py-3 font-medium">{t('registration.colCreated')}</th>
-                    <th className="px-4 py-3 font-medium" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {invites.data.map((inv) => (
-                    <tr key={inv.id} data-testid="admin-invitation-row" className="border-b last:border-0">
-                      <td className="px-4 py-3 font-mono text-xs">
-                        <div className="flex min-w-0 items-center gap-1">
-                          {inv.code.slice(0, 12)}...
-                          <button
-                            type="button"
-                            className="flex size-11 shrink-0 items-center justify-center rounded-md hover:bg-muted"
-                            aria-label={t('registration.copyCode')}
-                            title={t('registration.copyCode')}
-                            onClick={() => {
-                              navigator.clipboard.writeText(inv.code);
-                              setCopiedCode(inv.code);
-                              setTimeout(() => setCopiedCode(null), 2000);
-                            }}
-                          >
-                            {copiedCode === inv.code ? (
-                              <Check className="h-3 w-3 text-green-600" />
-                            ) : (
-                              <Copy className="h-3 w-3" />
-                            )}
-                          </button>
-                        </div>
-                      </td>
-                      <td className="max-w-48 px-4 py-3 text-muted-foreground [overflow-wrap:anywhere]">
-                        {inv.label ?? '---'}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex min-w-0 flex-col items-start gap-1">
-                          {inv.revokedAt ? (
-                            <Badge variant="destructive">{t('registration.statusRevoked')}</Badge>
-                          ) : inv.usedAt ? (
-                            <Badge variant="secondary" className="max-w-48 whitespace-normal [overflow-wrap:anywhere]">
-                              {inv.usedBy
-                                ? t('registration.statusUsedBy', { name: inv.usedBy.name ?? inv.usedBy.email ?? '' })
-                                : t('registration.statusUsed')}
-                            </Badge>
-                          ) : inv.isReserved ? (
-                            <Badge variant="outline">{t('registration.statusReserved')}</Badge>
-                          ) : inv.isActive ? (
-                            <Badge variant="default">{t('registration.statusActive')}</Badge>
-                          ) : (
-                            <Badge variant="outline">{t('registration.statusExpired')}</Badge>
-                          )}
-                          {inv.usedAt ? (
-                            <span className="text-xs text-muted-foreground" data-testid="admin-invitation-used-at">
-                              {t('registration.usedAt', { date: new Date(inv.usedAt).toLocaleString(locale) })}
-                            </span>
-                          ) : inv.revokedAt ? (
-                            <span className="text-xs text-muted-foreground">
-                              {t('registration.revokedAt', { date: new Date(inv.revokedAt).toLocaleString(locale) })}
-                            </span>
-                          ) : inv.expiresAt ? (
-                            <span className="text-xs text-muted-foreground">
-                              {t('registration.expiresAt', { date: new Date(inv.expiresAt).toLocaleString(locale) })}
-                            </span>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {new Date(inv.createdAt).toLocaleDateString(locale)}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {inv.canRevoke && (
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            className="size-11 shrink-0"
-                            data-testid="admin-registration-revoke-invite"
-                            onClick={() => setRevokeTarget({ id: inv.id, codePreview: inv.code.slice(0, 12) + '…' })}
-                            disabled={revokeInvite.isPending || approvingInvite || createInvite.isPending}
-                            aria-label={t('registration.revoke')}
-                            title={t('registration.revoke')}
-                          >
-                            <Ban className="h-4 w-4 text-destructive" />
-                          </Button>
+        <ul
+          className="mt-4 min-w-0 space-y-3"
+          data-testid="admin-invites-list"
+          aria-label={t('registration.invitesTitle')}
+        >
+          {invites.data.map((inv) => {
+            const info = invitationDisplay(inv);
+            const usedName = inv.usedBy?.name?.trim() || inv.usedBy?.email || '';
+            const status =
+              info.status === 'revoked'
+                ? t('registration.statusRevoked')
+                : info.status === 'used'
+                  ? t('registration.statusUsed')
+                  : info.status === 'reserved'
+                    ? t('registration.statusReserved')
+                    : info.status === 'active'
+                      ? t('registration.statusActive')
+                      : t('registration.statusExpired');
+            const expiryLabel =
+              info.status === 'used' || info.status === 'revoked'
+                ? t('registration.originalExpiry')
+                : info.status === 'expired'
+                  ? t('registration.expiredAtLabel')
+                  : t('registration.validUntil');
+            return (
+              <li key={inv.id} className="min-w-0" data-testid="admin-invitation-row">
+                <Card className="min-w-0">
+                  <CardContent className="min-w-0 space-y-3 px-3 py-3">
+                    <div className="flex min-w-0 items-start gap-2">
+                      <Ticket className="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <p className="font-medium [overflow-wrap:anywhere]">
+                          {inv.label?.trim() || t('registration.inviteUntitled')}
+                        </p>
+                        <p
+                          data-testid="admin-invitation-status"
+                          className={
+                            'text-sm font-semibold [overflow-wrap:anywhere] ' +
+                            (info.status === 'revoked' ? 'text-destructive' : 'text-foreground')
+                          }
+                        >
+                          {status}
+                        </p>
+                        {inv.usedAt && usedName && (
+                          <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">
+                            {t('registration.usedUser', { name: usedName })}
+                          </p>
                         )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
+                      </div>
+                    </div>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <p className="min-w-0 flex-1 text-xs [overflow-wrap:anywhere]">
+                        {t('registration.colCode')}: <span className="font-mono">{inv.code.slice(0, 12)}…</span>
+                      </p>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        className="size-11 shrink-0"
+                        aria-label={t('registration.copyCode')}
+                        title={t('registration.copyCode')}
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(inv.code);
+                            setCopiedId(inv.id);
+                            setTimeout(() => setCopiedId((id) => (id === inv.id ? null : id)), 2000);
+                            toast.success(t('registration.copySuccess'));
+                          } catch {
+                            toast.error(t('registration.copyFailed'));
+                          }
+                        }}
+                      >
+                        {copiedId === inv.id ? <Check className="size-4" /> : <Copy className="size-4" />}
+                      </Button>
+                    </div>
+                    <dl className="min-w-0 space-y-2 border-t pt-2 text-sm [overflow-wrap:anywhere]">
+                      <div>
+                        <dt className="text-xs text-muted-foreground">{t('registration.createdLabel')}</dt>
+                        <dd data-testid="admin-invitation-created-at">
+                          {info.created ? (
+                            <time dateTime={info.created.toISOString()}>{dates.full(info.created)}</time>
+                          ) : (
+                            t('registration.dateUnknown')
+                          )}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-muted-foreground">{expiryLabel}</dt>
+                        <dd data-testid="admin-invitation-expires-at">
+                          {info.expiry ? (
+                            <time dateTime={info.expiry.toISOString()}>{dates.full(info.expiry)}</time>
+                          ) : (
+                            t('registration.dateUnknown')
+                          )}
+                        </dd>
+                      </div>
+                      {inv.usedAt && (
+                        <div data-testid="admin-invitation-used-at">
+                          <dt className="text-xs text-muted-foreground">{t('registration.usedLabel')}</dt>
+                          <dd>
+                            {info.used ? (
+                              <time dateTime={info.used.toISOString()}>{dates.full(info.used)}</time>
+                            ) : (
+                              t('registration.dateUnknown')
+                            )}
+                          </dd>
+                        </div>
+                      )}
+                      {inv.revokedAt && (
+                        <div data-testid="admin-invitation-revoked-at">
+                          <dt className="text-xs text-muted-foreground">{t('registration.revokedLabel')}</dt>
+                          <dd>
+                            {info.revoked ? (
+                              <time dateTime={info.revoked.toISOString()}>{dates.full(info.revoked)}</time>
+                            ) : (
+                              t('registration.dateUnknown')
+                            )}
+                          </dd>
+                        </div>
+                      )}
+                    </dl>
+                    {inv.canRevoke && (info.status === 'active' || info.status === 'reserved') && (
+                      <div className="border-t pt-2">
+                        <Button
+                          variant="ghost"
+                          className="h-auto min-h-11 min-w-11 max-w-full whitespace-normal text-destructive [overflow-wrap:anywhere]"
+                          data-testid="admin-registration-revoke-invite"
+                          onClick={() => setRevokeTarget({ id: inv.id, codePreview: inv.code.slice(0, 12) + '…' })}
+                          disabled={revokeInvite.isPending || approvingInvite || createInvite.isPending}
+                          aria-label={t('registration.revoke')}
+                        >
+                          <Ban className="size-4 shrink-0" />
+                          {t('registration.revoke')}
+                        </Button>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </li>
+            );
+          })}
+        </ul>
       )}
       <ConfirmDialog
         open={revokeTarget !== null}

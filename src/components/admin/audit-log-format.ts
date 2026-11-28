@@ -112,7 +112,7 @@ export function createAuditDateFormatter(locale: string, timeZone?: string) {
 }
 export type AuditDateFormatter = ReturnType<typeof createAuditDateFormatter>;
 
-function validDate(value: unknown): Date | null {
+export function validDate(value: unknown): Date | null {
   if (value instanceof Date) return Number.isFinite(value.getTime()) ? value : null;
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)) return null;
   const parsed = new Date(value);

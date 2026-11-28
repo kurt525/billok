@@ -878,6 +878,350 @@ test('mobile invitation management keeps registration controls accessible at six
   await expect(row.getByTestId('admin-registration-revoke-invite')).toHaveCount(0);
 });
 
+test('TASK-BILLOK-011 invitation cards and UUID journal fit 32 mobile combinations', async ({ page }) => {
+  test.setTimeout(220_000);
+  await signInAsOwnerAdmin(page);
+  const a = 'abcdef12-1234-4abc-8def-123456789abc';
+  const b = 'abcdef12-4321-4abc-8def-123456789abc';
+  const missing = '01234567-4321-4abc-8def-123456789abc';
+  const none = '12345678-4321-4abc-8def-123456789abc';
+  const longName = 'ОченьДлинноеИмяБезПробелов'.repeat(7);
+  const longEmail = 'a'.repeat(64) + '@' + 'b'.repeat(60) + '.mail.ru';
+  const label = 'ПримечаниеБезПробелов'.repeat(7);
+  const createdAt = '2026-11-28T22:15:32.000Z';
+  const expiresAt = '2026-12-05T22:15:32.000Z';
+  const usedAt = '2026-11-29T01:02:03.000Z';
+  const revokedAt = '2026-11-29T01:02:04.000Z';
+  const code = 'synthetic-invite-qa-code-for-clipboard-only';
+  const baseInvite = {
+    id: 'active',
+    label,
+    code,
+    createdAt,
+    expiresAt,
+    usedAt: null,
+    revokedAt: null,
+    usedBy: null,
+    isActive: true,
+    isReserved: false,
+    canRevoke: true,
+  };
+  const invites = [
+    baseInvite,
+    { ...baseInvite, id: 'reserved', label: 'Резерв', isActive: false, isReserved: true, code: 'reserved-qa-code' },
+    {
+      ...baseInvite,
+      id: 'used',
+      label: 'Использованный',
+      usedAt,
+      usedBy: { name: longName, email: longEmail },
+      isActive: false,
+      canRevoke: false,
+    },
+    { ...baseInvite, id: 'revoked', label: 'Отозванный', revokedAt, isActive: false, canRevoke: false },
+    {
+      ...baseInvite,
+      id: 'expired',
+      label: 'Исторический',
+      expiresAt: '2027-01-01T00:00:00.000Z',
+      isActive: false,
+      canRevoke: false,
+    },
+    { ...baseInvite, id: 'invalid', label: null, expiresAt: null, isActive: false, canRevoke: false },
+    {
+      ...baseInvite,
+      id: 'email-fallback',
+      label: 'Без имени',
+      usedAt,
+      usedBy: { name: null, email: longEmail },
+      isActive: false,
+      canRevoke: false,
+    },
+  ];
+  const baseEvent = { action: 'OWNER_PASSKEY_RENAMED', outcome: 'ALLOWED', targetFingerprint: null, createdAt };
+  const accounts = {
+    a: { name: 'Гость', email: longEmail, isOwner: true },
+    b: { name: 'Гость', email: 'second-qa@mail.ru', isOwner: false },
+  };
+  const initial = [
+    { ...baseEvent, id: 'owner', actorId: a, actor: accounts.a },
+    { ...baseEvent, id: 'regular', actorId: b, actor: accounts.b },
+    { ...baseEvent, id: 'missing', actorId: missing, actor: null },
+    { ...baseEvent, id: 'legacy', actorId: 'legacy-identifier-' + 'x'.repeat(100), actor: null },
+    { ...baseEvent, id: 'unknown', actorId: null, actor: null },
+  ];
+  const filtered = Array.from({ length: 43 }, (_, i) => ({
+    ...baseEvent,
+    id: 'filtered-' + i,
+    actorId: a,
+    actor: { ...accounts.a, name: longName },
+  }));
+  let failNext = true;
+  let delayFirst = false;
+  let releaseDelayed: (() => void) | undefined;
+  const calls: Array<{ actorId?: string; cursor?: string }> = [];
+  let writes = 0;
+  // Clipboard is isolated per browser page, never the CI host clipboard.
+  await page.addInitScript(() => {
+    let value = '';
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: async (text: string) => {
+          value = text;
+        },
+        readText: async () => value,
+      },
+      configurable: true,
+    });
+  });
+  await page.route('**/api/trpc/**', async (route) => {
+    const url = new URL(route.request().url());
+    const procedures = url.pathname.split('/api/trpc/')[1]?.split(',') ?? [];
+    const invitesIndex = procedures.indexOf('admin.listSystemInvites');
+    const securityIndex = procedures.indexOf('admin.getSecurityEvents');
+    if (route.request().method() !== 'GET') {
+      writes++;
+      await route.abort();
+      return;
+    }
+    if (invitesIndex < 0 && securityIndex < 0) {
+      await route.continue();
+      return;
+    }
+    const input = JSON.parse(url.searchParams.get('input') ?? '{}');
+    const query = securityIndex < 0 ? {} : { ...(input[String(securityIndex)]?.json ?? input.json ?? {}) };
+    if (securityIndex >= 0) {
+      calls.push({ actorId: query.actorId, cursor: query.cursor });
+      if (query.actorId === a && query.cursor === 'p20' && failNext) {
+        failNext = false;
+        await route.abort('failed');
+        return;
+      }
+      // Preserve the actual server authorization check. Mock cursors are not
+      // valid real signed cursors, so the forwarded request reads page one.
+      if (query.cursor) {
+        if (input[String(securityIndex)]?.json) delete input[String(securityIndex)].json.cursor;
+        else delete input.json.cursor;
+        url.searchParams.set('input', JSON.stringify(input));
+      }
+    }
+    const response = await route.fetch({ url: url.toString() });
+    const body = await response.json();
+    const entries = Array.isArray(body) ? body : [body];
+    if (invitesIndex >= 0) {
+      expect(entries[invitesIndex]?.result?.data).toBeDefined();
+      entries[invitesIndex].result.data = { json: invites };
+    }
+    if (securityIndex >= 0) {
+      expect(entries[securityIndex]?.result?.data).toBeDefined();
+      const start = query.cursor === 'p20' ? 20 : query.cursor === 'p40' ? 40 : 0;
+      const rows =
+        query.actorId === a
+          ? filtered
+          : query.actorId === b
+            ? [initial[1]]
+            : query.actorId === missing
+              ? [initial[2]]
+              : query.actorId
+                ? []
+                : initial;
+      entries[securityIndex].result.data = {
+        json: {
+          items: rows.slice(start, start + 20),
+          ...(start + 20 < rows.length ? { nextCursor: 'p' + (start + 20) } : {}),
+        },
+      };
+      if (query.actorId === a && !query.cursor && delayFirst) {
+        delayFirst = false;
+        await new Promise<void>((resolve) => {
+          releaseDelayed = resolve;
+        });
+      }
+    }
+    await route.fulfill({ response, json: Array.isArray(body) ? entries : entries[0] });
+  });
+  const dateText = (value: string) =>
+    page.evaluate((v) => {
+      const date = new Date(v);
+      return (
+        new Intl.DateTimeFormat('ru', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(date) +
+        ', ' +
+        new Intl.DateTimeFormat('ru', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hourCycle: 'h23',
+        }).format(date)
+      );
+    }, value);
+  const expectedCreated = await dateText(createdAt),
+    expectedExpiry = await dateText(expiresAt);
+  const expectedUsed = await dateText(usedAt),
+    expectedRevoked = await dateText(revokedAt);
+  await page.evaluate(() => localStorage.setItem('theme', 'light'));
+  await page.goto('/admin', { waitUntil: 'networkidle' });
+  const invitationList = page.getByTestId('admin-invites-list');
+  const security = page.getByTestId('admin-security-events');
+  const entries = security.getByTestId('journal-entry');
+  const filterInput = security.getByTestId('security-uuid-input');
+  const apply = security.getByTestId('security-uuid-apply');
+  const reset = security.getByTestId('security-uuid-reset');
+  const load = security.getByTestId('admin-security-load-more');
+  const row = invitationList.getByTestId('admin-invitation-row');
+  for (const theme of ['light', 'dark']) {
+    if (theme === 'dark') {
+      await page.evaluate(() => localStorage.setItem('theme', 'dark'));
+      await page.reload({ waitUntil: 'networkidle' });
+    }
+    await expect(page.locator('html')).toHaveClass(new RegExp('(?:^|\\s)' + theme + '(?:\\s|$)'));
+    await expect(row).toHaveCount(7);
+    await expect(entries).toHaveCount(5);
+    // Expand the legacy ID as well as a UUID to check both wrapping cases.
+    await entries.nth(0).getByTestId('security-actor-toggle').click();
+    await entries.nth(3).getByTestId('security-actor-toggle').click();
+    for (const size of [16, 20]) {
+      await page.evaluate((s) => document.documentElement.style.setProperty('font-size', s + 'px', 'important'), size);
+      for (const width of [320, 360, 393, 412, 430, 480, 600, 720]) {
+        await page.setViewportSize({ width, height: 800 });
+        expect(await row.getByTestId('admin-invitation-status').allTextContents()).toEqual([
+          'Действует',
+          'Ожидает подтверждения email',
+          'Использовано',
+          'Отозвано',
+          'Срок истёк',
+          'Срок истёк',
+          'Использовано',
+        ]);
+        for (let i = 0; i < 7; i++)
+          await expect(row.nth(i).getByTestId('admin-invitation-created-at')).toHaveText(expectedCreated);
+        for (let i = 0; i < 5; i++)
+          await expect(row.nth(i).getByTestId('admin-invitation-expires-at')).toHaveText(expectedExpiry);
+        await expect(row.nth(5).getByTestId('admin-invitation-expires-at')).toHaveText('Дата и время не определены');
+        await expect(row.nth(2)).toContainText(longName);
+        await expect(row.nth(6)).toContainText(longEmail);
+        await expect(row.nth(6).getByTestId('admin-invitation-expires-at')).toHaveText(expectedExpiry);
+        await expect(row.nth(2).getByTestId('admin-invitation-used-at')).toContainText(expectedUsed);
+        await expect(row.nth(3).getByTestId('admin-invitation-revoked-at')).toContainText(expectedRevoked);
+        await expect(invitationList.getByTestId('admin-registration-revoke-invite')).toHaveCount(2);
+        await expect(invitationList).not.toContainText(code);
+        await expect(entries.nth(0)).toContainText(longEmail);
+        await expect(entries.nth(0)).toContainText('Владелец проекта');
+        await expect(entries.nth(1)).toContainText('second-qa@mail.ru');
+        await expect(entries.nth(2)).toContainText('Учётная запись не найдена');
+        await expect(entries.nth(4)).toContainText('Личность не установлена');
+        await expect(entries.nth(4).getByTestId('security-actor-toggle')).toHaveCount(0);
+        await expect(entries.nth(3).getByTestId('security-actor-filter')).toHaveCount(0);
+        await expect(entries.nth(0).getByTestId('security-actor-full-id')).toHaveText(a);
+        await expect(entries.nth(1).getByTestId('security-actor-full-id')).toHaveCount(0);
+        for (const section of [invitationList, security]) {
+          const metrics = await section.evaluate((el) => {
+            const bounds = el.getBoundingClientRect();
+            const clipped: string[] = [];
+            for (const node of el.querySelectorAll('p,dt,dd,button')) {
+              const rect = node.getBoundingClientRect();
+              if (
+                rect.left < bounds.left - 1 ||
+                rect.right > bounds.right + 1 ||
+                node.scrollWidth > node.clientWidth + 1 ||
+                node.scrollHeight > node.clientHeight + 1
+              )
+                clipped.push((node.textContent ?? '').slice(0, 40));
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              for (const r of range.getClientRects()) {
+                if (
+                  r.width > 0 &&
+                  (r.left < rect.left - 1 ||
+                    r.right > rect.right + 1 ||
+                    r.top < rect.top - 2 ||
+                    r.bottom > rect.bottom + 2)
+                )
+                  clipped.push('range:' + (node.textContent ?? '').slice(0, 40));
+              }
+            }
+            return { scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, clipped };
+          });
+          expect(metrics.scrollWidth, theme + '/' + size + '/' + width).toBeLessThanOrEqual(metrics.clientWidth + 1);
+          expect(metrics.clipped, theme + '/' + size + '/' + width).toEqual([]);
+          for (const button of await section.getByRole('button').all()) {
+            const rect = await button.boundingBox();
+            expect(rect!.height, theme + '/' + size + '/' + width).toBeGreaterThanOrEqual(44);
+            expect(rect!.width).toBeGreaterThanOrEqual(44);
+            expect(rect!.x).toBeGreaterThanOrEqual(-1);
+            expect(rect!.x + rect!.width).toBeLessThanOrEqual(width + 1);
+          }
+        }
+        await checkPhoneLayout(page, width, true);
+      }
+    }
+  }
+  await row.first().getByRole('button', { name: 'Скопировать код приглашения' }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(code);
+  await row.nth(1).getByTestId('admin-registration-revoke-invite').click();
+  await expect(page.getByRole('alertdialog')).toBeVisible();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Отмена' }).click();
+  await expect(page.getByRole('alertdialog')).toBeHidden();
+  await entries.first().getByTestId('security-actor-copy').click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(a);
+  await filterInput.fill(a.slice(0, 8));
+  await apply.click();
+  await expect(security.getByText('Введите полный корректный UUID.')).toBeVisible();
+  const before = calls.length;
+  await filterInput.fill(' ' + a.toUpperCase() + ' ');
+  expect(calls.length).toBe(before);
+  await apply.click();
+  await expect(security.getByTestId('security-uuid-active')).toContainText(a);
+  await expect(entries).toHaveCount(20);
+  await expect(entries.first()).toContainText(longName);
+  await load.click();
+  await expect(security.getByText('Не удалось загрузить следующие записи.')).toBeVisible();
+  await expect(entries).toHaveCount(20);
+  await load.click();
+  await expect(entries).toHaveCount(40);
+  await load.click();
+  await expect(entries).toHaveCount(43);
+  await expect(load).toHaveCount(0);
+  expect(await entries.evaluateAll((els) => els.map((el) => el.getAttribute('data-entry-id')))).toEqual(
+    filtered.map((e) => e.id),
+  );
+  await reset.click();
+  await expect(entries).toHaveCount(5);
+  await entries.nth(2).getByTestId('security-actor-filter').click();
+  await expect(filterInput).toHaveValue(missing);
+  await expect(entries).toHaveCount(1);
+  await expect(entries.first()).toContainText('Учётная запись не найдена');
+  await reset.click();
+  await expect(entries).toHaveCount(5);
+  await entries.nth(1).getByTestId('security-actor-filter').click();
+  await expect(filterInput).toHaveValue(b);
+  await expect(entries).toHaveCount(1);
+  await expect(entries.first()).toContainText('second-qa@mail.ru');
+  await filterInput.fill(none);
+  await apply.click();
+  await expect(security.getByText('Событий с таким UUID нет.')).toBeVisible();
+  // Returning to a previously visited UUID starts at page one. A delayed
+  // response for that UUID must not replace the results of a newer filter.
+  delayFirst = true;
+  await filterInput.fill(a);
+  await apply.click();
+  await expect.poll(() => Boolean(releaseDelayed)).toBe(true);
+  await filterInput.fill(b);
+  await apply.click();
+  await expect(entries).toHaveCount(1);
+  releaseDelayed?.();
+  await page.waitForLoadState('networkidle');
+  await expect(entries.first()).toContainText('second-qa@mail.ru');
+  await filterInput.fill(a);
+  await apply.click();
+  await expect(entries).toHaveCount(20);
+  await expect(load).toBeVisible();
+  await reset.click();
+  await expect(filterInput).toHaveValue('');
+  await expect(entries).toHaveCount(5);
+  await expect(load).toHaveCount(0);
+  expect(writes).toBe(0);
+});
+
 test('mobile server log filters and search remain reachable at six widths', async ({ page }) => {
   test.setTimeout(170_000);
   await signInAsOwnerAdmin(page);
