@@ -1,8 +1,16 @@
 'use client';
 
 import { useLocale, useTranslations } from 'next-intl';
+import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { getQueryKey } from '@trpc/react-query';
+import { toast } from 'sonner';
+import { Input } from '@/components/ui/input';
+import { normalizeSecurityActorUuid, securityActorPreview } from '@/lib/security-actor-uuid';
 import {
   Bell,
+  Copy,
+  Filter,
   FileDown,
   KeyRound,
   Mail,
@@ -45,16 +53,112 @@ type JournalEntry = {
   action: string;
   createdAt: Date | string;
 };
-type DisplayEntry = JournalEntry & { actor: string; details: string[]; outcome?: string };
+type ActorAccount = { name: string | null; email: string; isOwner: boolean };
+type DisplayEntry = JournalEntry & {
+  actor: string;
+  details: string[];
+  outcome?: string;
+  actorId?: string | null;
+  account?: ActorAccount | null;
+};
+
+const touchButton = 'h-auto min-h-11 min-w-11 max-w-full whitespace-normal [overflow-wrap:anywhere]';
+
+function SecurityActor({ entry, onFilter }: { entry: DisplayEntry; onFilter: (id: string) => void }) {
+  const t = useTranslations('admin.audit');
+  const [expanded, setExpanded] = useState(false);
+  const id = entry.actorId;
+  if (!id)
+    return (
+      <p className="text-xs text-muted-foreground" data-testid="journal-actor">
+        {t('actorUnknownIdentity')}
+      </p>
+    );
+  const account = entry.account;
+  const uuid = normalizeSecurityActorUuid(id);
+  return (
+    <div className="min-w-0 space-y-1">
+      {account ? (
+        <>
+          <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{t('actorCurrentAccount')}</p>
+          <p className="text-sm font-medium [overflow-wrap:anywhere]" data-testid="journal-actor">
+            {account.name?.trim() || t('actorUnnamed')}
+          </p>
+          <p className="text-xs [overflow-wrap:anywhere]">{account.email}</p>
+          <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+            {t(account.isOwner ? 'actorOwner' : 'actorRegistered')}
+          </p>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]" data-testid="journal-actor">
+          {t('actorMissingAccount')}
+        </p>
+      )}
+      <div className="flex min-w-0 flex-wrap items-center gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          className={touchButton + ' justify-start px-2 text-xs tabular-nums'}
+          aria-label={t(expanded ? 'actorHideId' : 'actorShowId')}
+          aria-expanded={expanded}
+          data-testid="security-actor-toggle"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {t('actorIdPreview', { value: securityActorPreview(id) })}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="size-11"
+          aria-label={t('actorCopyId')}
+          title={t('actorCopyId')}
+          data-testid="security-actor-copy"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(id);
+              toast.success(t('actorCopySuccess'));
+            } catch {
+              toast.error(t('actorCopyFailed'));
+            }
+          }}
+        >
+          <Copy className="size-4" />
+        </Button>
+        {uuid && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="size-11"
+            aria-label={t('actorFilterFromEntry')}
+            title={t('actorFilterFromEntry')}
+            data-testid="security-actor-filter"
+            onClick={() => onFilter(uuid)}
+          >
+            <Filter className="size-4" />
+          </Button>
+        )}
+      </div>
+      {expanded && (
+        <p className="min-w-0 text-xs font-mono [overflow-wrap:anywhere]" data-testid="security-actor-full-id">
+          {id}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function JournalList({
   entries,
   dates,
   security = false,
+  onFilter,
 }: {
   entries: DisplayEntry[];
   dates: AuditDateFormatter;
   security?: boolean;
+  onFilter?: (id: string) => void;
 }) {
   const t = useTranslations('admin.audit');
   const groups = groupAuditEntries(entries, dates, t('unknownDate'));
@@ -118,12 +222,16 @@ function JournalList({
                         </span>
                       )}
                     </div>
-                    <p
-                      className="text-xs leading-normal text-muted-foreground [overflow-wrap:anywhere]"
-                      data-testid="journal-actor"
-                    >
-                      {entry.actor}
-                    </p>
+                    {security && onFilter ? (
+                      <SecurityActor entry={entry} onFilter={onFilter} />
+                    ) : (
+                      <p
+                        className="text-xs leading-normal text-muted-foreground [overflow-wrap:anywhere]"
+                        data-testid="journal-actor"
+                      >
+                        {entry.actor}
+                      </p>
+                    )}
                     {entry.details.length > 0 && (
                       <div
                         className="space-y-0.5 text-xs leading-normal [overflow-wrap:anywhere]"
@@ -162,6 +270,144 @@ function RetryState({ message, retry, busy }: { message: string; retry: () => vo
   );
 }
 
+function SecurityJournal({ dates }: { dates: AuditDateFormatter }) {
+  const t = useTranslations('admin.audit');
+  const client = useQueryClient();
+  const [draft, setDraft] = useState('');
+  const [active, setActive] = useState<string | null>(null);
+  const [invalid, setInvalid] = useState(false);
+  function inputFor(value: string | null) {
+    return { limit: 20, ...(value ? { actorId: value } : {}) };
+  }
+  const security = trpc.admin.getSecurityEvents.useInfiniteQuery(inputFor(active), {
+    getNextPageParam: (lastPage) => (active ? lastPage.nextCursor : undefined),
+    retry: false,
+  });
+  function apply(value: string | null) {
+    setDraft(value ?? '');
+    setInvalid(false);
+    if (value === active) return;
+    // Inactive cached pages for the next filter must never be reused after a
+    // filter switch. Requests for the old key can only affect the old cache.
+    client.removeQueries({
+      queryKey: getQueryKey(trpc.admin.getSecurityEvents, inputFor(value), 'infinite'),
+      exact: true,
+    });
+    setActive(value);
+  }
+  const entries = (security.data?.pages.flatMap((page) => page.items) ?? []).map((entry) => ({
+    ...entry,
+    actor: '',
+    account: entry.actor,
+    details:
+      entry.targetFingerprint && /^[a-f0-9]{64}$/u.test(entry.targetFingerprint)
+        ? [t('objectFingerprint', { value: entry.targetFingerprint.slice(0, 16) })]
+        : [],
+  }));
+  return (
+    <div className="mb-5 min-w-0" data-testid="admin-security-events">
+      <h2 className="mb-2 text-lg font-semibold [overflow-wrap:anywhere]">{t('securityTitle')}</h2>
+      <p className="mb-3 text-xs leading-normal text-muted-foreground [overflow-wrap:anywhere]">
+        {t('securityDescription')}
+      </p>
+      <form
+        className="mb-3 min-w-0 space-y-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const value = normalizeSecurityActorUuid(draft);
+          if (!value) {
+            setInvalid(true);
+            return;
+          }
+          apply(value);
+        }}
+      >
+        <label htmlFor="security-uuid-filter" className="text-sm font-medium">
+          {t('uuidLabel')}
+        </label>
+        <Input
+          id="security-uuid-filter"
+          data-testid="security-uuid-input"
+          value={draft}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setInvalid(false);
+          }}
+          placeholder={t('uuidPlaceholder')}
+          maxLength={128}
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          aria-invalid={invalid}
+          aria-describedby={invalid ? 'security-uuid-error' : undefined}
+          className="min-h-11 min-w-0 w-full text-base"
+        />
+        {invalid && (
+          <p id="security-uuid-error" role="alert" className="text-sm text-destructive">
+            {t('uuidInvalid')}
+          </p>
+        )}
+        <div className="flex min-w-0 flex-wrap gap-2">
+          <Button type="submit" className={touchButton} data-testid="security-uuid-apply">
+            {t('uuidApply')}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className={touchButton}
+            data-testid="security-uuid-reset"
+            onClick={() => apply(null)}
+          >
+            {t('uuidReset')}
+          </Button>
+        </div>
+        {active && (
+          <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]" data-testid="security-uuid-active">
+            {t('uuidActive', { value: active })}
+          </p>
+        )}
+      </form>
+      <Card className="min-w-0">
+        <CardContent className="min-w-0 p-0">
+          {security.isLoading ? (
+            <p className="px-3 py-4 text-sm text-muted-foreground" role="status">
+              {t('loading')}
+            </p>
+          ) : security.isError && !security.data ? (
+            <RetryState message={t('loadError')} retry={() => void security.refetch()} busy={security.isFetching} />
+          ) : entries.length === 0 ? (
+            <p className="px-3 py-4 text-sm text-muted-foreground">{t(active ? 'uuidEmpty' : 'securityEmpty')}</p>
+          ) : (
+            <JournalList key={active ?? 'all'} entries={entries} dates={dates} security onFilter={apply} />
+          )}
+          {security.data && security.isFetchNextPageError && (
+            <p className="px-3 pt-3 text-sm text-destructive [overflow-wrap:anywhere]" role="alert">
+              {t('moreError')}
+            </p>
+          )}
+          {security.data && security.isRefetchError && !security.isFetchNextPageError && (
+            <RetryState message={t('refreshError')} retry={() => void security.refetch()} busy={security.isFetching} />
+          )}
+          {active && security.hasNextPage && (
+            <div className="border-t px-3 py-2">
+              <Button
+                type="button"
+                variant="ghost"
+                className={touchButton + ' w-full'}
+                data-testid="admin-security-load-more"
+                disabled={security.isFetching}
+                onClick={() => void security.fetchNextPage({ cancelRefetch: false })}
+              >
+                {t(security.isFetchingNextPage ? 'loadingMore' : security.isFetchNextPageError ? 'retry' : 'loadMore')}
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export function AuditLogSection() {
   const t = useTranslations('admin.audit');
   const locale = useLocale();
@@ -173,50 +419,14 @@ export function AuditLogSection() {
       retry: false,
     },
   );
-  const security = trpc.admin.getSecurityEvents.useQuery({ limit: 20 }, { retry: false });
   const auditEntries = (auditLog.data?.pages.flatMap((page) => page.items) ?? []).map((entry) => ({
     ...entry,
     actor: t('administrator', { value: entry.adminName }),
     details: auditDetails(entry.action, entry.metadata, t, dates),
   }));
-  const securityEntries = (security.data?.items ?? []).map((entry) => ({
-    ...entry,
-    actor: entry.actorId ? t('actor', { value: entry.actorId }) : t('unknownActor'),
-    details:
-      entry.targetFingerprint && /^[a-f0-9]{64}$/u.test(entry.targetFingerprint)
-        ? [t('objectFingerprint', { value: entry.targetFingerprint.slice(0, 16) })]
-        : [],
-  }));
   return (
     <section className="min-w-0" data-testid="admin-audit-section">
-      <div className="mb-5 min-w-0" data-testid="admin-security-events">
-        <h2 className="mb-2 text-lg font-semibold [overflow-wrap:anywhere]">{t('securityTitle')}</h2>
-        <p className="mb-3 text-xs leading-normal text-muted-foreground [overflow-wrap:anywhere]">
-          {t('securityDescription')}
-        </p>
-        <Card className="min-w-0">
-          <CardContent className="min-w-0 p-0">
-            {security.isLoading ? (
-              <p className="px-3 py-4 text-sm text-muted-foreground" role="status">
-                {t('loading')}
-              </p>
-            ) : security.isError && !security.data ? (
-              <RetryState message={t('loadError')} retry={() => void security.refetch()} busy={security.isFetching} />
-            ) : securityEntries.length === 0 ? (
-              <p className="px-3 py-4 text-sm text-muted-foreground">{t('securityEmpty')}</p>
-            ) : (
-              <JournalList entries={securityEntries} dates={dates} security />
-            )}
-            {security.isError && security.data && (
-              <RetryState
-                message={t('refreshError')}
-                retry={() => void security.refetch()}
-                busy={security.isFetching}
-              />
-            )}
-          </CardContent>
-        </Card>
-      </div>
+      <SecurityJournal dates={dates} />
       <div className="mb-3 flex min-w-0 items-center gap-2">
         <ScrollText className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <h2 className="min-w-0 text-lg font-semibold [overflow-wrap:anywhere]">{t('title')}</h2>

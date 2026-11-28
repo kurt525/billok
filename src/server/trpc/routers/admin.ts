@@ -17,6 +17,7 @@ import { totalsInGroupCurrency } from '@/server/lib/group-expense-totals';
 import { listOwnerRegisteredUsers, changeRegisteredUserSuspension } from '@/server/lib/owner-user-admin';
 import { decodeOwnerUserCursor, encodeOwnerUserCursor, ownerUserCursorScope } from '@/server/lib/owner-user-cursor';
 import { ownerSessionFingerprint, consumeOwnerPasskeyActionProof } from '@/server/lib/owner-passkey-action-approval';
+import { normalizeSecurityActorUuid } from '@/lib/security-actor-uuid';
 import { systemInviteCreateApprovalTarget } from '@/lib/system-invite-approval-target';
 import { registrationModeApprovalTarget, announcementApprovalTarget } from '@/lib/admin-setting-approval-target';
 
@@ -99,14 +100,32 @@ export const adminRouter = createTRPCRouter({
   getSecurityEvents: adminProcedure
     .input(
       z.strictObject({
-        cursor: z.string().max(128).optional(),
+        cursor: z.string().max(512).optional(),
+        // tRPC infinite queries send this transport field. Only forward paging is supported.
+        direction: z.literal('forward').optional(),
         limit: z.number().int().min(1).max(50).default(20),
+        actorId: z
+          .string()
+          .max(128)
+          .trim()
+          .refine((value) => normalizeSecurityActorUuid(value) !== null)
+          .transform((value) => normalizeSecurityActorUuid(value)!)
+          .optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
+      // Filtered cursors are bound to owner, UUID and page size; keep the
+      // historical raw ID cursor contract for the unfiltered endpoint.
+      const scope = ownerUserCursorScope('security-events', { actorId: input.actorId, limit: input.limit });
+      const cursor =
+        input.cursor && input.actorId ? decodeOwnerUserCursor(input.cursor, ctx.user.id, scope) : input.cursor;
+      if (!input.actorId && cursor && (cursor.startsWith('u1.') || cursor.length > 128)) {
+        throw new AppError('BAD_REQUEST');
+      }
       const entries = await ctx.db.securityEvent.findMany({
         take: input.limit + 1,
-        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+        ...(input.actorId ? { where: { actorId: { equals: input.actorId, mode: 'insensitive' as const } } } : {}),
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         select: {
           id: true,
@@ -119,7 +138,41 @@ export const adminRouter = createTRPCRouter({
       });
       const more = entries.length > input.limit;
       const page = more ? entries.slice(0, input.limit) : entries;
-      return { items: page, nextCursor: more ? page.at(-1)?.id : undefined };
+      const ids = [
+        ...new Set(
+          page.flatMap((entry) =>
+            entry.actorId ? [entry.actorId, normalizeSecurityActorUuid(entry.actorId) ?? entry.actorId] : [],
+          ),
+        ),
+      ];
+      // Only resolve already-recorded account IDs in this bounded page.
+      // No matching by email, name, or target fingerprint.
+      const accounts = ids.length
+        ? await ctx.db.user.findMany({
+            where: { id: { in: ids }, isPlaceholder: false },
+            select: { id: true, name: true, email: true },
+          })
+        : [];
+      const byId = new Map(accounts.map((account) => [account.id, account]));
+      const last = more ? page.at(-1)?.id : undefined;
+      return {
+        items: page.map((entry) => {
+          const account = entry.actorId
+            ? (byId.get(entry.actorId) ?? byId.get(normalizeSecurityActorUuid(entry.actorId) ?? entry.actorId))
+            : undefined;
+          return {
+            ...entry,
+            actor: account
+              ? {
+                  name: account.name,
+                  email: account.email,
+                  isOwner: account.id === ctx.user.id,
+                }
+              : null,
+          };
+        }),
+        nextCursor: last && input.actorId ? encodeOwnerUserCursor(last, ctx.user.id, scope) : last,
+      };
     }),
 
   getAuditLog: adminProcedure

@@ -45,6 +45,11 @@ describe('BillOK Russian-only translations', () => {
       for (const [key, text] of Object.entries(russian)) {
         expect(text.trim(), 'Empty: ' + namespace + '.' + key).not.toBe('');
         expect(text, 'Upstream brand: ' + namespace + '.' + key).not.toMatch(/ShareTab/iu);
+        // ID is the agreed compact technical abbreviation; require its exact format.
+        if (namespace === 'admin' && key === 'audit.actorIdPreview') {
+          expect(text).toBe('ID: {value}');
+          continue;
+        }
         if (
           ![
             'brand.name',
