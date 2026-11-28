@@ -182,6 +182,43 @@ model PasskeyRecoveryRequest {
 
 // ─── CORE MODELS ───────────────────────────────────────────
 
+// TASK-BILLOK-012: purpose-specific authenticated email change.
+model EmailChangeRequest {
+  id                     String   @id @default(uuid())
+  userId                 String   @unique
+  oldEmailHash           String   @db.VarChar(64)
+  newEmail               String   @db.VarChar(254)
+  sessionBindingHash     String   @db.VarChar(64)
+  sessionSecurityVersion Int
+  challengeHash          String   @unique @db.VarChar(64)
+  signerCredentialRowId  String?
+  tokenHash              String?  @unique @db.VarChar(64)
+  challengeExpiresAt     DateTime
+  approvedAt             DateTime?
+  expiresAt              DateTime
+  createdAt              DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([expiresAt])
+}
+
+// Durable, bounded delivery of the OLD-address security notice, independent
+// of the atomic account mutation. Recipient is encrypted, not a login token.
+model EmailChangeNotification {
+  id                 String   @id
+  userId             String
+  encryptedRecipient String
+  attempts           Int      @default(0)
+  nextAttemptAt      DateTime @default(now())
+  expiresAt          DateTime
+  leaseUntil         DateTime?
+  leaseId            String?
+  createdAt          DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([nextAttemptAt, expiresAt])
+  @@index([expiresAt])
+  @@index([userId])
+}
+
 model User {
   // Issue #1 6.13.1: cryptographically random RFC 4122 UUIDv4. Created by
   // Prisma on first INSERT and never regenerated on update/recovery.
@@ -213,6 +250,8 @@ model User {
   webAuthnChallenges WebAuthnChallenge[]
   emailVerificationRequests EmailVerificationRequest[]
   passkeyRecoveryRequests PasskeyRecoveryRequest[]
+  emailChangeRequest EmailChangeRequest?
+  emailChangeNotifications EmailChangeNotification[]
   groupMembers    GroupMember[]
   expensesPaid    Expense[]          @relation("PaidBy")
   expensesAdded   Expense[]          @relation("AddedBy")

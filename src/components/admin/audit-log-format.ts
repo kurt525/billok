@@ -34,6 +34,10 @@ export const auditActions = {
 } satisfies Record<AdminAction, Presentation>;
 
 export const securityActions = {
+  EMAIL_CHANGE_STARTED: { key: 'securityEmailChangeStarted', category: 'mail' },
+  EMAIL_CHANGE_REQUESTED: { key: 'securityEmailChangeRequested', category: 'mail' },
+  EMAIL_CHANGE_CANCELLED: { key: 'securityEmailChangeCancelled', category: 'mail' },
+  EMAIL_CHANGE_COMPLETED: { key: 'securityEmailChangeCompleted', category: 'mail' },
   'admin.ownerSetUserSuspended': { key: 'securityUserAccess', category: 'user' },
   'admin.suspendUser': { key: 'securitySuspendUser', category: 'user' },
   'admin.unsuspendUser': { key: 'securityUnsuspendUser', category: 'user' },

@@ -25,7 +25,7 @@ interface AuthConfig {
   callbacks: {
     jwt: (input: {
       token: Record<string, unknown>;
-      user?: { id: string; name?: string };
+      user?: { id: string; name?: string; sessionSecurityVersion?: number };
     }) => Promise<Record<string, unknown>>;
     session: (input: { session: { user: { id?: string; name?: string | null } }; token: Record<string, unknown> }) => {
       user: { id?: string; name?: string | null };
@@ -126,7 +126,10 @@ describe('Issue #1 6.9: no hidden provider can be enabled by configuration', () 
 
   test('profile refresh remains supported without an external linking callback', async () => {
     const config = await loadAuth(externalEnv);
-    const token = await config.callbacks.jwt({ token: {}, user: { id: 'user-1', name: 'Анна' } });
+    const token = await config.callbacks.jwt({
+      token: {},
+      user: { id: 'user-1', name: 'Анна', sessionSecurityVersion: 0 },
+    });
     expect(token).toMatchObject({
       id: 'user-1',
       name: 'Анна',
@@ -134,7 +137,7 @@ describe('Issue #1 6.9: no hidden provider can be enabled by configuration', () 
       sessionSecurityValid: true,
     });
     const session = config.callbacks.session({ session: { user: {} }, token });
-    expect(session.user).toMatchObject({ id: 'user-1', name: 'Анна' });
+    expect(session.user).toMatchObject({ id: 'user-1', name: 'Анна', email: 'anna@mail.ru' });
     expect(session.user).not.toHaveProperty('locale');
     expect(token).not.toHaveProperty('locale');
     expect(db.user.findUnique).toHaveBeenCalledWith({
@@ -153,7 +156,7 @@ describe('Issue #1 6.9: no hidden provider can be enabled by configuration', () 
 describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
   test('6.14.2: a previously valid JWT immediately loses its user when stored email moves outside .ru/.su', async () => {
     const config = await loadAuth();
-    const signed = await config.callbacks.jwt({ token: {}, user: { id: 'user-1' } });
+    const signed = await config.callbacks.jwt({ token: {}, user: { id: 'user-1', sessionSecurityVersion: 0 } });
     expect(signed.sessionSecurityValid).toBe(true);
     for (const email of ['anna@example.com', 'anna@mail.ru.evil.com', 'anna@domain.рф']) {
       db.user.findUnique.mockResolvedValueOnce({
@@ -171,7 +174,10 @@ describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
 
   test('rejects all prior sessions after the database security version rotates', async () => {
     const config = await loadAuth();
-    const previous = await config.callbacks.jwt({ token: {}, user: { id: 'user-1', name: 'Анна' } });
+    const previous = await config.callbacks.jwt({
+      token: {},
+      user: { id: 'user-1', name: 'Анна', sessionSecurityVersion: 0 },
+    });
     expect(config.callbacks.session({ session: { user: {} }, token: previous }).user?.id).toBe('user-1');
     db.user.findUnique.mockResolvedValueOnce({
       name: 'Анна',
@@ -182,7 +188,26 @@ describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
     });
     const invalidated = await config.callbacks.jwt({ token: previous });
     expect(invalidated.sessionSecurityValid).toBe(false);
-    expect(config.callbacks.session({ session: { user: {} }, token: invalidated }).user).toBeUndefined();
+    const rejectedSession = config.callbacks.session({ session: { user: {} }, token: invalidated });
+    expect(rejectedSession.user).toBeUndefined();
+    // NextAuth's server wrapper uses this merge, unlike the public session endpoint.
+    const serverSession = Object.assign({ user: invalidated }, rejectedSession);
+    expect(serverSession.user).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(serverSession))).not.toHaveProperty('user');
+  });
+
+  test('rejects a login ticket consumed before a concurrent account security rotation', async () => {
+    const config = await loadAuth();
+    db.user.findUnique.mockResolvedValueOnce({
+      name: 'Анна',
+      email: 'new@mail.ru',
+      emailVerified: new Date(),
+      suspendedAt: null,
+      sessionSecurityVersion: 1,
+    });
+    const token = await config.callbacks.jwt({ token: {}, user: { id: 'user-1', sessionSecurityVersion: 0 } });
+    expect(token.sessionSecurityValid).toBe(false);
+    expect(config.callbacks.session({ session: { user: {} }, token }).user).toBeUndefined();
   });
 
   test('rejects JWTs without an issued security version even if they contain a user id', async () => {
@@ -194,7 +219,7 @@ describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
 
   test('fails closed during database outage and for suspended or unverified users', async () => {
     const config = await loadAuth();
-    const token = await config.callbacks.jwt({ token: {}, user: { id: 'user-1' } });
+    const token = await config.callbacks.jwt({ token: {}, user: { id: 'user-1', sessionSecurityVersion: 0 } });
     for (const state of [
       { name: 'Анна', emailVerified: null, suspendedAt: null, sessionSecurityVersion: 0 },
       { name: 'Анна', emailVerified: new Date(), suspendedAt: new Date(), sessionSecurityVersion: 0 },
@@ -218,7 +243,7 @@ describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
       suspendedAt: null,
       sessionSecurityVersion: 3,
     });
-    const renewed = await config.callbacks.jwt({ token: {}, user: { id: 'user-1' } });
+    const renewed = await config.callbacks.jwt({ token: {}, user: { id: 'user-1', sessionSecurityVersion: 3 } });
     expect(renewed.sessionSecurityVersion).toBe(3);
     expect(config.callbacks.session({ session: { user: {} }, token: renewed }).user?.id).toBe('user-1');
   });
@@ -227,13 +252,13 @@ describe('Issue #1 6.8.1.1: JWT revocation after recovery', () => {
 describe('Issue #1 6.12.3: Passkey login has an independent impersonation binding', () => {
   test('fresh login rotates nonce, JWT refresh preserves it, session response does not expose it', async () => {
     const config = await loadAuth();
-    const first = await config.callbacks.jwt({ token: {}, user: { id: 'owner-1' } });
+    const first = await config.callbacks.jwt({ token: {}, user: { id: 'owner-1', sessionSecurityVersion: 0 } });
     const nonce = first.impersonationSessionNonce;
     expect(typeof nonce).toBe('string');
     expect(Buffer.from(nonce as string, 'base64url')).toHaveLength(32);
     const refresh = await config.callbacks.jwt({ token: first });
     expect(refresh.impersonationSessionNonce).toBe(nonce);
-    const second = await config.callbacks.jwt({ token: {}, user: { id: 'owner-1' } });
+    const second = await config.callbacks.jwt({ token: {}, user: { id: 'owner-1', sessionSecurityVersion: 0 } });
     expect(second.impersonationSessionNonce).not.toBe(nonce);
     const visible = config.callbacks.session({ session: { user: {} }, token: first });
     expect(JSON.stringify(visible)).not.toContain(nonce as string);

@@ -44,6 +44,7 @@ function fixture() {
     suspendedAt: null,
     isPlaceholder: false,
     image: null,
+    sessionSecurityVersion: 0,
     passkeyCredentials: [{ id: 'credential-row' }],
   };
   const passkey = {
@@ -337,7 +338,11 @@ describe('Issue #1 6.3.2.2: browser-bound passkey authentication', () => {
     const validTicket = 'z'.repeat(43);
     proof.tokenHash = hash(validTicket);
     const redeemed = await consumePasskeyLoginTicket({ db: asDb(db), token: validTicket, now });
-    expect(redeemed).toMatchObject({ id: user.id, email: user.email });
+    expect(redeemed).toMatchObject({
+      id: user.id,
+      email: user.email,
+      sessionSecurityVersion: user.sessionSecurityVersion,
+    });
     expect(redeemed).not.toHaveProperty('locale');
     expect(db.user.findUnique.mock.calls[0]![0].select).not.toHaveProperty('locale');
     expect(db.$queryRawUnsafe).toHaveBeenCalledWith('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', proof.userId);

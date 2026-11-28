@@ -7,6 +7,11 @@ export async function register() {
 
       const { logger } = await import('@/server/lib/logger');
       logger.info('app.startup', { version, commitSha });
+      if (process.env.NEXT_PHASE !== 'phase-production-build') {
+        const { db } = await import('@/server/db');
+        const { startEmailChangeMaintenance } = await import('@/server/lib/email-change-notification');
+        startEmailChangeMaintenance(db);
+      }
     } catch (error) {
       // Isolate startup failures so the app can still boot (Finding #23).
       // Use console.error as logger may not be available if the import itself failed.

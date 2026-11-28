@@ -21,6 +21,7 @@ import { Label } from '@/components/ui/label';
 import { localizedTrpcError } from '@/lib/localized-trpc-error';
 import { SBP_BANKS, searchSbpBanks, normalizeSbpPhone } from '@/lib/sbp-banks';
 import { SbpBankLogo } from '@/components/sbp-bank-logo';
+import { EmailChangeSettings } from '@/components/email-change-settings';
 
 // Rendered only once the profile has loaded, so all fields can be
 // initialized directly from the data (no sync-from-query effects that
@@ -650,6 +651,7 @@ export default function SettingsPage() {
               ))}
             </div>
           )}
+          {profile.data && <EmailChangeSettings />}
         </CardContent>
       </Card>
       <PasskeyInventory />
