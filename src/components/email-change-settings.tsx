@@ -114,7 +114,7 @@ export function EmailChangeSettings() {
       setEmail('');
       setNotice(t('cancelled'));
     } catch (error) {
-      setError(error instanceof Error ? error.message : t('statusError'));
+      setError(error instanceof EmailChangeApiError ? error.message : t('statusError'));
     } finally {
       setBusy(false);
     }
@@ -132,7 +132,7 @@ export function EmailChangeSettings() {
       // The server already invalidated all older sessions. Never silently
       // retain or renew the previous cookie after the security-version rotation.
     } catch (error) {
-      setError(error instanceof Error ? error.message : t('statusError'));
+      setError(error instanceof EmailChangeApiError ? error.message : t('statusError'));
     } finally {
       setBusy(false);
     }
